@@ -715,58 +715,74 @@ test('CR25-B01: روابط التصحيح بنطاق القارئ — تكميل
   assert.equal(full.totalNet, money(mixed.totalNet))
 })
 
-test('CR25-B01: إعفاء منقول لتكميلي موظف اتنقل لفرع تاني — النسخة بمكانه الجديد، ومانح الإعفاء الأصلي في الفرع القديم مايشوفهاش ولا يلغيها ولا يفتح بيها التكميلي، ورقم التكميلي مايتقالش في سجلاته', { timeout: 900000 }, async () => {
+test('CR25-B01 / CR26: إعفاء منقول لتكميلي فيه موظف اتنقل لفرع تاني — مكان النسخة من عضوية التكميلي نفسه، فقارئ ومانح الفرع القديم مايشوفوهاش ولا يلغوها، وسجلات الإعفاء والمسير مابتسمّيهاش', { timeout: 900000 }, async () => {
   const exemptionPerms = ['financial_exemption.view', 'financial_exemption.grant', 'financial_exemption.approve', 'financial_exemption.override_limits']
-  const grantor = await repo('User').save({ email: 'r25-grantor@payroll-corrections-test.invalid', displayName: 'r25-grantor', passwordHash: 'test-only', role: 'hr_manager',
-    branchId: org.branch.id, permissions: JSON.stringify(['payroll.view', 'payroll.calculate', 'payroll.reverse', ...exemptionPerms]) })
+  const make = (label, branch, permissions) => repo('User').save({ email: `${label}@payroll-corrections-test.invalid`, displayName: label, passwordHash: 'test-only', role: 'hr_manager',
+    branchId: branch.id, permissions: JSON.stringify(permissions) })
+  const grantor = await make('r25-grantor', org.branch, ['payroll.view', 'payroll.calculate', 'payroll.reverse', ...exemptionPerms])
+  const otherHr = await make('r26-other-hr', org.other, ['payroll.view', ...exemptionPerms])
   await setConfig('financial_exemptions.max_pct_per_grantor', '0')
   await setConfig('financial_exemptions.max_per_employee_year', '5')
   const createdPolicy = expectStatus(await request(users.admin, 'POST', '/payroll/policies', { name: 'مجموعة الشركة للإعفاء المنقول', effectiveFrom: policyStart, settings: { ...cycle23 } }), 201)
   const published = expectStatus(await request(users.admin, 'POST', `/payroll/policies/${createdPolicy.policy.id}/versions/${createdPolicy.versions[0].id}/publish`,
     { expectedRevision: createdPolicy.versions[0].revision, reason: 'نشر مجموعة الشركة لاختبار الإعفاء المنقول' }), 200)
-  const emp = await employee(6100, org.branch, { date: '2026-08-03', minutes: 60 })
+  const stay = await employee(6100, org.branch, { date: '2026-08-03', minutes: 60 })
+  const mover = await employee(6200, org.branch, { date: '2026-08-03', minutes: 60 })
   const reason = 'عطل بوابة البصمة صباح يوم الواقعة بمحضر الموارد البشرية الرسمي رقم 25'
-  const grantInput = target => ({ runId: target.id, employeeId: emp.id, reason, scopeKind: 'DEDUCTION_TYPE', targetKind: 'LATENESS' })
+  const grantInput = (target, emp) => ({ runId: target.id, employeeId: emp.id, reason, scopeKind: 'DEDUCTION_TYPE', targetKind: 'LATENESS' })
 
-  let run = expectStatus(await request(grantor, 'POST', '/payroll/runs', { name: 'مسير الإعفاء قبل النقل', policyVersionId: published.version.id, period, filters: { employeeIds: [emp.id] } }), 201)
+  let run = expectStatus(await request(grantor, 'POST', '/payroll/runs', { name: 'مسير الإعفاء قبل النقل', policyVersionId: published.version.id, period,
+    filters: { employeeIds: [stay.id, mover.id] } }), 201)
   run = await calculate(run, grantor)
-  const shown = expectStatus(await request(grantor, 'POST', '/payroll/exemptions/preview', grantInput(run)), 201)
-  const exemption = expectStatus(await request(grantor, 'POST', '/payroll/exemptions', { ...grantInput(run), previewHash: shown.previewHash }), 201)
+  const sources = {}
+  for (const emp of [stay, mover]) {
+    const shown = expectStatus(await request(grantor, 'POST', '/payroll/exemptions/preview', grantInput(run, emp)), 201)
+    sources[emp.id] = expectStatus(await request(grantor, 'POST', '/payroll/exemptions', { ...grantInput(run, emp), previewHash: shown.previewHash }), 201)
+  }
   run = expectStatus(await request(grantor, 'POST', `/payroll/runs/${run.id}/recalculate`, { reason: 'إعادة حساب بعد قرار الإعفاء من خصم التأخير' }), 201)
   await acknowledge(run, users.approver)
   expectStatus(await request(users.approver, 'POST', `/payroll/runs/${run.id}/approve`), 201)
   expectStatus(await request(users.approver, 'POST', `/payroll/runs/${run.id}/pay`, { channel: 'BANK_TRANSFER', reference: 'TRX-R25-EXEMPT' }), 201)
-  const preview = expectStatus(await request(grantor, 'POST', `/payroll/runs/${run.id}/reversal-preview`, { employeeIds: [emp.id] }), 201)
-  const reversal = expectStatus(await request(grantor, 'POST', `/payroll/runs/${run.id}/reversals`, { employeeIds: [emp.id], reason: REASON, previewHash: preview.previewHash }), 201)
+  const preview = expectStatus(await request(grantor, 'POST', `/payroll/runs/${run.id}/reversal-preview`, { employeeIds: [stay.id, mover.id] }), 201)
+  const reversal = expectStatus(await request(grantor, 'POST', `/payroll/runs/${run.id}/reversals`, { employeeIds: [stay.id, mover.id], reason: REASON, previewHash: preview.previewHash }), 201)
   expectStatus(await request(users.approver, 'POST', `/payroll/runs/${reversal.id}/approve`), 201)
   expectStatus(await request(users.approver, 'POST', `/payroll/runs/${reversal.id}/pay`, { channel: 'BANK_TRANSFER', reference: 'REFUND-R25-EXEMPT' }), 201)
 
-  // الموظف اتنقل للفرع التاني، وحساب الشركة عمل له التكميلي: النسخة المنقولة بمكانه الجديد
-  await repo('Employee').update(emp.id, { branchId: org.other.id })
-  const supplementary = expectStatus(await request(users.admin, 'POST', `/payroll/runs/${run.id}/supplementary`, { employeeIds: [emp.id], reason: REASON }), 201)
-  const [copy] = await repo('PayrollFinancialExemption').find({ where: { runId: supplementary.id } })
-  assert.ok(copy, 'الإعفاء اتنقل للتكميلي')
-  assert.deepEqual([JSON.parse(copy.evaluation).org.branchId, copy.grantedByUserId, JSON.parse(copy.evaluation).carriedFrom.exemptionId], [org.other.id, grantor.id, exemption.id])
+  // واحد من الاتنين اتنقل للفرع التاني، وحساب الشركة عمل التكميلي للاتنين: النسخ اتنقلت بقرارها الأصلي ولقطة منحها زي ما هي
+  await repo('Employee').update(mover.id, { branchId: org.other.id })
+  let supplementary = expectStatus(await request(users.admin, 'POST', `/payroll/runs/${run.id}/supplementary`, { employeeIds: [stay.id, mover.id], reason: REASON }), 201)
+  const copies = Object.fromEntries((await repo('PayrollFinancialExemption').find({ where: { runId: supplementary.id } })).map(row => [row.employeeId, row]))
+  assert.deepEqual([JSON.parse(copies[mover.id].evaluation).org.branchId, copies[mover.id].grantedByUserId, JSON.parse(copies[mover.id].evaluation).carriedFrom.exemptionId],
+    [org.branch.id, grantor.id, sources[mover.id].id])
+  // قبل حساب التكميلي مكان النسخ مش معروف: حساب الشركة بس
+  for (const user of [grantor, otherHr]) for (const copy of Object.values(copies)) expectStatus(await request(user, 'GET', `/payroll/exemptions/${copy.id}`), 403, 'EXEMPTION_FORBIDDEN')
+  expectStatus(await request(users.admin, 'GET', `/payroll/exemptions/${copies[mover.id].id}`), 200)
 
-  // المانح في الفرع القديم: مايشوفش النسخة ولا يلغيها ولا يفتح بيها إعفاءات التكميلي
-  expectStatus(await request(grantor, 'GET', `/payroll/exemptions/${copy.id}`), 403, 'EXEMPTION_FORBIDDEN')
-  expectStatus(await request(grantor, 'POST', `/payroll/exemptions/${copy.id}/revoke`, { reason: 'إلغاء من حساب الفرع القديم', expectedRevision: copy.revision }), 403, 'EXEMPTION_FORBIDDEN')
-  expectStatus(await request(grantor, 'GET', `/payroll/exemptions/runs/${supplementary.id}`), 403, 'EXEMPTION_RUN_OUT_OF_SCOPE')
-  assert.equal((await repo('PayrollFinancialExemption').findOneByOrFail({ id: copy.id })).status, 'ACTIVE')
-  // وسجل إعفائه الأصلي وسجل مسيره بيقولوا إنه اتنقل من غير رقم التكميلي ولا رقم النسخة
-  const source = expectStatus(await request(grantor, 'GET', `/payroll/exemptions/${exemption.id}`), 200)
-  const carriedTo = source.events.find(event => event.eventType === 'CARRIED_TO_SUPPLEMENTARY')
-  assert.deepEqual([carriedTo.payload.supplementaryRunId, carriedTo.payload.carriedExemptionId], [null, null])
-  assert.ok(!carriedTo.reason.includes(`#${supplementary.id}`) && carriedTo.reason.includes('مسير تكميلي خارج نطاق صلاحيتك'), carriedTo.reason)
+  // بعد الحساب: مكان كل نسخة = مكان موظفها في عضوية التكميلي
+  supplementary = await calculate(supplementary, users.admin)
+  assert.deepEqual(supplementary.members.map(row => [row.employeeId, row.snapshot.branchId]).sort((a, b) => a[0] - b[0]),
+    [[stay.id, org.branch.id], [mover.id, org.other.id]].sort((a, b) => a[0] - b[0]))
+  expectStatus(await request(grantor, 'GET', `/payroll/exemptions/${copies[stay.id].id}`), 200)
+  expectStatus(await request(otherHr, 'GET', `/payroll/exemptions/${copies[mover.id].id}`), 200)
+  expectStatus(await request(grantor, 'GET', `/payroll/exemptions/${copies[mover.id].id}`), 403, 'EXEMPTION_FORBIDDEN')
+  expectStatus(await request(otherHr, 'GET', `/payroll/exemptions/${copies[stay.id].id}`), 403, 'EXEMPTION_FORBIDDEN')
+  expectStatus(await request(grantor, 'POST', `/payroll/exemptions/${copies[mover.id].id}/revoke`, { reason: 'إلغاء من حساب الفرع القديم', expectedRevision: copies[mover.id].revision }), 403, 'EXEMPTION_FORBIDDEN')
+  assert.equal((await repo('PayrollFinancialExemption').findOneByOrFail({ id: copies[mover.id].id })).status, 'ACTIVE')
+
+  // سجل الإعفاء الأصلي لموظف الفرع التاني: من غير رقم التكميلي ولا رقم النسخة؛ وسجل موظف الفرع زي ما هو
+  const moved = expectStatus(await request(grantor, 'GET', `/payroll/exemptions/${sources[mover.id].id}`), 200).events.find(event => event.eventType === 'CARRIED_TO_SUPPLEMENTARY')
+  assert.deepEqual([moved.payload.supplementaryRunId, moved.payload.carriedExemptionId], [null, null])
+  assert.ok(!moved.reason.includes(`#${supplementary.id}`) && moved.reason.includes('مسير تكميلي خارج نطاق صلاحيتك'), moved.reason)
+  const kept = expectStatus(await request(grantor, 'GET', `/payroll/exemptions/${sources[stay.id].id}`), 200).events.find(event => event.eventType === 'CARRIED_TO_SUPPLEMENTARY')
+  assert.deepEqual([kept.payload.supplementaryRunId, kept.payload.carriedExemptionId], [supplementary.id, copies[stay.id].id])
+  // CR26-B02: سجل المسير الأصلي — التكميلي مختلط (رأسه ظاهر) ونسخة موظف الفرع بس
   const created = expectStatus(await request(grantor, 'GET', `/payroll/runs/${run.id}/events`), 200).find(event => event.eventType === 'SUPPLEMENTARY_CREATED')
-  assert.deepEqual([created.payload.supplementaryRunId, created.payload.name, created.payload.carriedExemptions], [null, null, []])
-  for (const body of [source, created]) assert.ok(!JSON.stringify(body).includes(supplementary.name), JSON.stringify(body))
+  assert.deepEqual([created.payload.supplementaryRunId, created.payload.carriedExemptions.map(row => [row.employeeId, row.exemptionId])],
+    [supplementary.id, [[stay.id, copies[stay.id].id]]])
 
   // حساب الشركة: كل حاجة زي ما هي
-  const full = expectStatus(await request(users.admin, 'GET', `/payroll/exemptions/${exemption.id}`), 200).events.find(event => event.eventType === 'CARRIED_TO_SUPPLEMENTARY')
-  assert.deepEqual([full.payload.supplementaryRunId, full.payload.carriedExemptionId], [supplementary.id, copy.id])
-  assert.ok(full.reason.includes(`#${supplementary.id}`))
   const fullEvent = expectStatus(await request(users.admin, 'GET', `/payroll/runs/${run.id}/events`), 200).find(event => event.eventType === 'SUPPLEMENTARY_CREATED')
-  assert.deepEqual([fullEvent.payload.supplementaryRunId, fullEvent.payload.carriedExemptions.map(row => row.exemptionId)], [supplementary.id, [copy.id]])
-  expectStatus(await request(users.admin, 'GET', `/payroll/exemptions/${copy.id}`), 200)
+  assert.deepEqual(fullEvent.payload.carriedExemptions.map(row => row.exemptionId).sort((a, b) => a - b), [copies[stay.id].id, copies[mover.id].id].sort((a, b) => a - b))
+  const full = expectStatus(await request(users.admin, 'GET', `/payroll/exemptions/${sources[mover.id].id}`), 200).events.find(event => event.eventType === 'CARRIED_TO_SUPPLEMENTARY')
+  assert.deepEqual([full.payload.supplementaryRunId, full.payload.carriedExemptionId], [supplementary.id, copies[mover.id].id])
 })

@@ -1807,8 +1807,10 @@ export class PayrollService {
     const branch = branchScopeOf(user)
     if (branch !== null) {
       // CR25-B01: «اتعمل منه مسير تكميلي» — التكميلي اللي مفيهوش حاجة من نطاق القارئ (الموظف اتنقل لفرع تاني) مايتسمّاش
-      const supplementary = await this.linkedRunViews(user, em, events.filter(event => event.eventType === 'SUPPLEMENTARY_CREATED')
-        .map(event => Number(event.payload?.supplementaryRunId)))
+      const supplementaryIds = events.filter(event => event.eventType === 'SUPPLEMENTARY_CREATED').map(event => Number(event.payload?.supplementaryRunId))
+      const supplementary = await this.linkedRunViews(user, em, supplementaryIds)
+      // CR26-B02: تكميلي مختلط (رأسه بس) ← نسخ الإعفاءات المنقولة لموظفي نطاق القارئ فيه بس
+      const inSupplementary = supplementaryIds.length ? await this.itemScopeOf(user, supplementaryIds.filter(id => Number.isSafeInteger(id) && id > 0), em) : () => false
       // نسخة سابقة من مسير مخصّص قد تضم فرعًا آخر؛ لا تُكشف بمجرد تغير عضويته الحالية.
       const legacyInScope = this.legacyBranchesInScope(run, branch)
       for (const event of events) {
@@ -1836,9 +1838,13 @@ export class PayrollService {
           event.payload = visible
         }
       }
-      if (event.eventType === 'SUPPLEMENTARY_CREATED' && event.payload?.supplementaryRunId != null
-        && (supplementary.get(Number(event.payload.supplementaryRunId)) ?? 'hidden') === 'hidden') {
-        event.payload = { ...event.payload, supplementaryRunId: null, name: null, carriedExemptions: [] }
+      if (event.eventType === 'SUPPLEMENTARY_CREATED' && event.payload?.supplementaryRunId != null) {
+        const runId = Number(event.payload.supplementaryRunId), view = supplementary.get(runId) ?? 'hidden'
+        if (view === 'hidden') event.payload = { ...event.payload, supplementaryRunId: null, name: null, carriedExemptions: [] }
+        else if (view === 'head' && Array.isArray(event.payload.carriedExemptions)) {
+          event.payload = { ...event.payload, carriedExemptions: (event.payload.carriedExemptions as Array<{ employeeId?: unknown }>)
+            .filter(row => inSupplementary(runId, Number(row.employeeId))) }
+        }
       }
       for (const phase of ['before', 'after']) {
         const members = (event.payload?.[phase] as { members?: Array<{ snapshot?: PayrollMemberSnapshot | null }> } | null)?.members ?? []

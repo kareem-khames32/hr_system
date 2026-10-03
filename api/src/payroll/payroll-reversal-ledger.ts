@@ -1,6 +1,5 @@
 import { ConflictException } from '@nestjs/common'
 import { EntityManager, In, Not } from 'typeorm'
-import { Employee } from '../employees/employee.entity'
 import { EmployeeObligation } from '../requests/entities/financial.entities'
 import { OvertimeEntry } from '../requests/entities/attendance.entities'
 import { OvertimeEntryEvent } from '../requests/entities/overtime-workflow.entities'
@@ -415,10 +414,7 @@ export async function carryReversedRunExemptions(em: EntityManager, input: { par
   const repo = em.getRepository(PayrollFinancialExemption)
   const sources = (await repo.find({ where: { runId: input.parentRun.id, employeeId: In([...new Set(lines.map(line => line.employeeId))]), status: 'APPLIED' }, order: { id: 'ASC' } }))
     .filter(row => payrollExemptionCarriesToSupplementary(row))
-  if (!sources.length) return []
-  // CR25: النسخة بمكان الموظف الحالي (منه بتتحسب عضوية التكميلي) مش بمكانه في المسير الأصلي — فرؤيتها ونطاقها زي مسيرها لو اتنقل لفرع تاني
-  const places = new Map((await em.getRepository(Employee).find({ where: { id: In([...new Set(sources.map(row => row.employeeId))]) },
-    select: { id: true, fullName: true, employeeCode: true, branchId: true, departmentId: true, teamId: true } })).map(row => [row.id, row]))
+  // مكان النسخة لفصل الفروع مش بيتحفظ هنا: بيتقري من عضوية التكميلي نفسه وقت القراءة (financial-exemptions.service orgOfRow)
   const carried: Array<{ fromExemptionId: number; exemptionId: number; employeeId: number }> = []
   for (const source of sources) {
     const line = lines.filter(row => row.employeeId === source.employeeId).pop()!
@@ -430,7 +426,7 @@ export async function carryReversedRunExemptions(em: EntityManager, input: { par
       targetKind: source.targetKind, deductionTypeId: source.deductionTypeId, targetRef: source.targetRef, disposition: source.disposition, reason: source.reason,
       attachmentRef: source.attachmentRef, status: 'ACTIVE', grantorBasis: source.grantorBasis, grantedByUserId: source.grantedByUserId, grantedByEmployeeId: source.grantedByEmployeeId,
       estimatedAmount: source.exemptedAmountSnapshot ?? source.estimatedAmount, exemptedAmountSnapshot: null, appliedLines: null, appliedSnapshotVersion: null,
-      evaluation: JSON.stringify({ ...evaluation, org: placeOf(places.get(source.employeeId)) ?? evaluation.org, runSnapshotVersion: 0, carriedFrom }), overrides: null, approvedByUserId: source.approvedByUserId, approvedAt: source.approvedAt,
+      evaluation: JSON.stringify({ ...evaluation, runSnapshotVersion: 0, carriedFrom }), overrides: null, approvedByUserId: source.approvedByUserId, approvedAt: source.approvedAt,
       decidedByUserId: null, decidedAt: null, decisionReason: null, supersededById: null, revision: 1, updatedAt: null }))
     const note = `نُقل إعفاء خصومات الحضور #${source.id} من المسير #${input.parentRun.id} (عُكس صرف بنده بمسير العكس #${line.reversalRunId}) إلى المسير التكميلي #${input.supplementaryRun.id} بقراره الأصلي`
     await recordExemptionEvent(em, copy, 'CARRIED_FROM_REVERSED_RUN', input.actorUserId, null, 'ACTIVE', note, carriedFrom)
@@ -439,10 +435,6 @@ export async function carryReversedRunExemptions(em: EntityManager, input: { par
   }
   return carried
 }
-
-const placeOf = (employee: Pick<Employee, 'id' | 'fullName' | 'employeeCode' | 'branchId' | 'departmentId' | 'teamId'> | undefined) => employee
-  ? { employeeId: employee.id, fullName: employee.fullName ?? null, employeeCode: employee.employeeCode ?? null, branchId: employee.branchId ?? null,
-    departmentId: employee.departmentId ?? null, teamId: employee.teamId ?? null } : null
 
 const effectsSummary = (effects: string | null) => {
   if (!effects) return null
