@@ -419,7 +419,7 @@ export class HolidayWorkService {
     if (current.status !== 'ACTIVE') throw new ConflictException('الأمر ملغي')
     this.assertWrite(user, current)
     const values = await this.normalize(user, input)
-    await this.em.transaction(async em => {
+    const saved = await this.em.transaction(async em => {
       await this.lockNamedTargets(em, values)
       const locked = await em.getRepository(HolidayWorkOrder).findOne({ where: { id }, lock: { mode: 'pessimistic_write' } })
       // CR30-B01 (مراجعة Codex الجولة 30): الأمر نفسه ممكن يكون اتنقل لفرع تاني (تعديل من حساب الشركة) بعد الفحص اللي فوق —
@@ -430,8 +430,10 @@ export class HolidayWorkService {
       await em.getRepository(HolidayWorkOrder).update({ id }, { ...values, updatedByUserId: user.sub, updatedAt: new Date() })
       // القيود المستحقة في المسودات تتلغي وإعادة حساب المسير بتبنيها بالأمر الجديد؛ المحجوز/المصروف ما يتلمسش
       await cancelHolidayWorkObligations(em, id)
+      // CR31-B01 (مراجعة Codex الجولة 31): اللي اتحفظ بيتقرا هنا جوه المعاملة وتحت قفل الصف — قراية بعد الـcommit ممكن تجيب
+      // تعديل حساب الشركة اللي بعدها على طول (نقل لفرع تاني واسم جديد)، والرد البديل كان بيكشف الاسم ده
+      return em.getRepository(HolidayWorkOrder).findOneByOrFail({ id })
     })
-    const saved = await this.orders.findOneByOrFail({ id })
     const overtime = await this.clearCoveredOvertime(saved)
     return { ...(await this.detailAfterWrite(user, saved)), overtime }
   }
@@ -455,7 +457,7 @@ export class HolidayWorkService {
   }
 
   // رد التعديل أو الإلغاء بعد ما اتحفظ تحت القفل: لو حساب الشركة نقل الأمر لفرع تاني بعد الحفظ على طول، العرض بقى برّه النطاق —
-  // الرد بيقول اللي اتحفظ (الأمر وحالته) بدل «مش موجود» عن عملية نجحت
+  // الرد بيقول اللي اتحفظ (الأمر وحالته) بدل «مش موجود» عن عملية نجحت. saved لازم يكون الصف من جوه معاملة الكتابة نفسها (CR31-B01)
   private async detailAfterWrite(user: JwtPayload, saved: HolidayWorkOrder) {
     try {
       return await this.detail(user, saved.id)
