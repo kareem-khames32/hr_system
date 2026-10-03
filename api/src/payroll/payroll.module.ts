@@ -70,6 +70,8 @@ import { PayrollApprovalChainController } from './payroll-approval-chain.control
 import { PayrollItemDisbursement } from './payroll-disbursement.entities'
 import { PayrollDisbursementService } from './payroll-disbursement.service'
 import { PayrollDisbursementController } from './payroll-disbursement.controller'
+import { APP_INTERCEPTOR } from '@nestjs/core'
+import { HiddenRunPeriodsInterceptor } from './hidden-run-periods.interceptor'
 
 @Module({
   imports: [
@@ -142,6 +144,8 @@ import { PayrollDisbursementController } from './payroll-disbursement.controller
     PayrollDailyAccrualController, PayrollApprovalChainController, PayrollDisbursementController],
   providers: [PayrollService, ObligationsService, PayrollRulesService, PayrollPolicyService, PayrollSalaryHistoryService, TypedDeductionsService, TypedDeductionsScheduler, BonusesService,
     FinancialExemptionsService, PayrollCorrectionsService, SocialInsuranceService, PayrollOverviewService, PayrollAllowancesService,
-    PayrollDailyAccrualService, PayrollDailyAccrualScheduler, PayrollApprovalChainService, PayrollDisbursementService],
+    PayrollDailyAccrualService, PayrollDailyAccrualScheduler, PayrollApprovalChainService, PayrollDisbursementService,
+    // CR40: شبكة أمان على كل رد JSON لحساب فرع — فترة مسير مخفي له في أي نص بتتحجب (hidden-run-periods.interceptor.ts)
+    { provide: APP_INTERCEPTOR, useClass: HiddenRunPeriodsInterceptor }],
 })
 export class PayrollModule {}

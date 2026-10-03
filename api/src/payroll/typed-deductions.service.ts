@@ -26,6 +26,7 @@ import { PayrollDecimal } from './payroll-decimal'
 import { salaryPayrollPeriodBounds } from './payroll-period-salary'
 import { PAYROLL_SALARY_EVIDENCE_MODE_KEY, parsePayrollSalaryEvidenceMode, PayrollSalaryEvidenceMode, selectPayrollRunSalary } from './payroll-run-salary'
 import { lockPayrollEmployees } from './payroll-settlement-boundary'
+import { hiddenRunPeriodsByEmployee, maskPayloadRunRefs, payloadRunIds, payrollRunPeriods, payrollRunRefVisibility, scrubEventReferences, scrubRunPeriods } from './payroll-run-visibility'
 // C8 / الخطوة 31: بند مسير عُكس صرفه بسطر منفذ لا يُغلق شهر الموظف ولا يُعد آخر مسير له
 import { payrollLineNotReversedSql } from './payroll-reversal-sql'
 import { PayrollItem, PayrollRun } from './payroll.entities'
@@ -473,7 +474,11 @@ export class TypedDeductionsService {
       incidentAgeOverride = true
     }
     const closedRunId = await this.closedRun(em, employee.id, ctx.input.targetPeriod)
-    if (closedRunId) return failed(400, 'DEDUCTION_PERIOD_CLOSED', `مسير ${ctx.input.targetPeriod} للموظف معتمد أو مصروف (#${closedRunId})؛ اختر شهرًا مفتوحًا`, { runId: closedRunId })
+    // CR33-B01: رقم المسير بيظهر بس لو المسير مرئي للحساب (payroll-run-visibility)
+    if (closedRunId) {
+      const shown = (await this.runShown(em, user, [closedRunId], [employee.id]))(closedRunId, employee.id)
+      return failed(400, 'DEDUCTION_PERIOD_CLOSED', `مسير ${ctx.input.targetPeriod} للموظف معتمد أو مصروف${shown ? ` (#${closedRunId})` : ''}؛ اختر شهرًا مفتوحًا`, shown ? { runId: closedRunId } : undefined)
+    }
     const basis = DEDUCTION_CREATOR_BASES.find(item => bases.includes(item))!
     // DD-03 قاعدة 1/5: حد التصعيد من مصفوفة دور المُنشئ، وإلا حد النوع
     const escalationDays = deductionEscalationDaysFor(ctx.rules, basis)
@@ -630,7 +635,10 @@ export class TypedDeductionsService {
       }
       if (ctx.facts.employeeId !== employee.id && !this.scopedBases(user, ctx, employee).length) throw this.outOfScope()
       await lockPayrollEmployees(em, [employee.id])
-      const evaluation = await this.evaluate(em, user, ctx, employee)
+      // CR28-B01: النطاق من جديد على ملف الموظف بعد قفله المالي — النقل بياخد نفس القفل، فاللي فوق ممكن يكون قبل نقل اتحفظ
+      const current = await em.getRepository(Employee).findOneBy({ id: employee.id })
+      if (!current || (ctx.facts.employeeId !== current.id && !this.scopedBases(user, ctx, current).length)) throw this.outOfScope()
+      const evaluation = await this.evaluate(em, user, ctx, current)
       if (!evaluation.ok) throw this.exception(evaluation)
       const saved = await this.persist(em, user, ctx, evaluation, null)
       if (hasHrOverride(user)) await this.approveInstantly(em, user, saved, ctx, evaluation)
@@ -671,9 +679,18 @@ export class TypedDeductionsService {
         : mode === 'DEPARTMENT' ? await repo.find({ where: { departmentId: In([...this.descendants(ctx.facts.departmentRows, new Set(ids))]), isActive: true }, order })
           : await repo.find({ where: { branchId: In(ids), isActive: true }, order })
     // DD-04: من خارج نطاق المُنشئ لهذا النوع لا يُعرض ولا يُعد ولا يُقفل؛ نفسه يبقى ليُرفض بسبب «نفسك»
-    const employees = loaded.filter(row => row.id === ctx.facts.employeeId || this.scopedBases(user, ctx, row).length > 0)
+    let employees = loaded.filter(row => row.id === ctx.facts.employeeId || this.scopedBases(user, ctx, row).length > 0)
     if (employees.length > ctx.settings.bulkMaxEmployees) bad('DEDUCTION_BULK_LIMIT', `الاختيار يضم ${employees.length} موظفًا في نطاقك والحد ${ctx.settings.bulkMaxEmployees} في الدفعة الواحدة`)
-    if (lock) await lockPayrollEmployees(em, employees.filter(row => !excluded.has(row.id)).map(row => row.id))
+    if (lock) {
+      await lockPayrollEmployees(em, employees.filter(row => !excluded.has(row.id)).map(row => row.id))
+      // CR28-B01: الملفات من جديد بعد القفل المالي (النقل بياخده) — اللي اتنقل برا النطاق قبله بيطلع من الدفعة، فالبصمة بتختلف
+      // والإرسال بيترفض كمعاينة قديمة من غير ما يتنشئ له طلب
+      const current = new Map((await repo.find({ where: { id: In(employees.map(row => row.id)) } })).map(row => [row.id, row]))
+      employees = employees.flatMap(row => {
+        const fresh = current.get(row.id)
+        return fresh && (fresh.id === ctx.facts.employeeId || this.scopedBases(user, ctx, fresh).length > 0) ? [fresh] : []
+      })
+    }
     const names = await this.orgNames(em)
     const evaluations: ReadyEvaluation[] = []
     const outcomes: Array<{ employee: Employee | null; employeeId: number; status: string; message: string | null; evaluation: ReadyEvaluation | null }> = []
@@ -790,10 +807,13 @@ export class TypedDeductionsService {
     return { visible, steps, people }
   }
 
-  private obligationView(item: EmployeeObligation) {
-    return { id: item.id, type: item.type, category: item.category, label: item.label, amount: money(item.amount), status: item.status,
+  private obligationView(item: EmployeeObligation, shown: (runId: number | null | undefined, employeeId: number) => boolean = () => true, hiddenPeriods?: ReadonlySet<string>) {
+    // CR38-B02: اسم القيد من غير فترة مسير مخفي («مرحّل من قيد … (مسير 2026-07)»، «مؤجَّل من مسير …»)
+    return { id: item.id, type: item.type, category: item.category, label: scrubRunPeriods(item.label, hiddenPeriods ?? []) ?? item.label, amount: money(item.amount), status: item.status,
       statusLabel: DEDUCTION_LABELS.obligationStatuses[item.status] ?? item.status, targetPeriod: item.targetPeriod, effectiveDate: item.effectiveDate,
-      reservedPayrollRunId: item.reservedPayrollRunId, appliedPayrollRunId: item.appliedPayrollRunId, appliedAmount: money(item.appliedAmount),
+      // CR33-B01: رقم المسير للحساب اللي يشوفه بس
+      reservedPayrollRunId: shown(item.reservedPayrollRunId, item.employeeId) ? item.reservedPayrollRunId : null,
+      appliedPayrollRunId: shown(item.appliedPayrollRunId, item.employeeId) ? item.appliedPayrollRunId : null, appliedAmount: money(item.appliedAmount),
       carriedFromObligationId: item.carriedFromObligationId }
   }
 
@@ -813,6 +833,8 @@ export class TypedDeductionsService {
     const ids = visible.map(row => row.id)
     const obligations = await this.inChunks(ids, chunk => em.getRepository(EmployeeObligation).find({ where: { deductionRequestId: In(chunk) }, order: { id: 'ASC' } }))
     const events = await this.inChunks(ids, chunk => em.getRepository(DeductionRequestEvent).find({ where: { requestId: In(chunk), eventType: In(OBJECTION_EVENTS) }, order: { id: 'ASC' } }))
+    const shown = await this.runShown(em, user, obligations.flatMap(item => [item.appliedPayrollRunId, item.reservedPayrollRunId]), obligations.map(item => item.employeeId))
+    const hiddenPeriods = await hiddenRunPeriodsByEmployee(em, branchScopeOf(user), visible.map(row => row.employeeId), user.employeeId ?? null)
     return visible.map(row => {
       const chain = steps.get(row.id)!, employee = people.get(row.employeeId), step = currentDeductionStep(chain)
       const snapshot = json<Record<string, any>>(row.typeSnapshot, {})
@@ -837,7 +859,7 @@ export class TypedDeductionsService {
           fallbackFromLabel: item.fallbackFrom ? DEDUCTION_LABELS.roles[item.fallbackFrom] : null,
           approverName: item.approverEmployeeId ? people.get(item.approverEmployeeId)?.fullName ?? null : null })),
         currentStepOrder: step?.order ?? null, escalated: row.escalated, outOfScope: row.outOfScope, overrides: json(row.overrides, null),
-        obligations: rowObligations.map(item => this.obligationView(item)),
+        obligations: rowObligations.map(item => this.obligationView(item, shown, hiddenPeriods.get(item.employeeId))),
         collectedAmount: totals.collected, reversedAmount: totals.reversed,
         objections, openObjection: open,
         decisionReason: row.decisionReason, decidedByUserId: row.decidedByUserId, decidedAt: row.decidedAt, createdAt: row.createdAt, updatedAt: row.updatedAt,
@@ -895,12 +917,47 @@ export class TypedDeductionsService {
   }
 
   async detail(user: JwtPayload, id: number) {
-    const row = await this.requests.findOneBy({ id })
-    if (!row) throw this.notFound()
-    const [view] = await this.views(this.manager, user, [row], 'all')
+    const view = await this.detailIn(this.manager, user, id)
     if (!view) throw this.notFound()
-    const events = await this.manager.getRepository(DeductionRequestEvent).find({ where: { requestId: id }, order: { id: 'ASC' } })
-    return { ...view, events: events.map(event => ({ ...event, payload: json(event.payload, null) })) }
+    return view
+  }
+
+  // null = الطلب مش موجود أو صاحب الإجراء مايشوفوش
+  private async detailIn(em: EntityManager, user: JwtPayload, id: number) {
+    const row = await em.getRepository(DeductionRequest).findOneBy({ id })
+    if (!row) return null
+    const [view] = await this.views(em, user, [row], 'all')
+    if (!view) return null
+    const events = await em.getRepository(DeductionRequestEvent).find({ where: { requestId: id }, order: { id: 'ASC' } })
+    // CR33-B01 وCR34-B01: كل مرجع مسير في حمولة الأحداث (runId في الترحيل والإعفاء، وdeferredPastClosedRunId، …) بيظهر بس لو المسير
+    // مرئي للحساب لموظف الطلب؛ والحدث اللي مسيره مخفي بتتشال منه مراجع الإعفاء و«#رقم» من نصه. السجل المخزن زي ما هو
+    const payloads = events.map(event => json<Record<string, unknown> | null>(event.payload, null))
+    const runIds = payloads.flatMap(payload => payloadRunIds(payload))
+    const shown = runIds.length ? await this.runShown(em, user, runIds, [row.employeeId]) : () => true
+    // CR38-B02: فترة المسير المخفي كمان («عكس صرف مسير 2026-07» ← «عكس صرف مسير خارج نطاق صلاحيتك»)
+    const hiddenIds = runIds.filter(runId => !shown(runId, row.employeeId))
+    const periods = hiddenIds.length ? await payrollRunPeriods(em, hiddenIds) : new Map<number, string>()
+    return { ...view, events: events.map((event, index) => {
+      const { payload, hidden } = maskPayloadRunRefs(payloads[index], runId => shown(runId, row.employeeId))
+      const eventPeriods = payloadRunIds(payloads[index]).filter(runId => !shown(runId, row.employeeId)).map(runId => periods.get(runId))
+      return { ...event, payload, reason: hidden ? scrubEventReferences(event.reason, eventPeriods) : event.reason }
+    }) }
+  }
+
+  // CR33-B01: مرجع المسير للحساب ده (لقطة عضوية الموظف المعني، والموظف نفسه بيشوف مسيراته، والشركة بتشوف الكل)
+  private runShown(em: EntityManager, user: JwtPayload, runIds: Array<number | null | undefined>, employeeIds: number[]) {
+    return payrollRunRefVisibility(em, branchScopeOf(user), runIds, employeeIds, user.employeeId ?? null)
+  }
+
+  // CR28-B01: الإجراء ورده في معاملة واحدة — الرد بيتبني والقفل المالي لسه ماسك، فمفيش نقل يدخل بين الحفظ والرد والرد هو اللي
+  // اتحفظ (قبل كده كان بيتقرا بعد المعاملة بنطاق ممكن يكون اتغيّر). لو صاحب الإجراء مابقاش يشوف الطلب بإجرائه نفسه (معتمد تنفيذي
+  // خلّص آخر خطوة) الإجراء بيتحفظ والرد زي الأول بعد المعاملة
+  private async act<T>(user: JwtPayload, id: number, work: (em: EntityManager) => Promise<T>) {
+    const { result, view } = await this.manager.transaction(async em => {
+      const result = await work(em)
+      return { result, view: await this.detailIn(em, user, id) }
+    })
+    return { result, view: view ?? await this.detail(user, id) }
   }
 
   // DD-08: الموظف يرى خصوماته فقط بحالتها واعتراضه والرد عليه، دون ملاحظات المعتمدين الداخلية
@@ -964,9 +1021,9 @@ export class TypedDeductionsService {
   async respondObjection(user: JwtPayload, id: number, dto: DeductionObjectionDto) {
     const text = dto.text?.trim() ?? ''
     if (text.length < 5) bad('DEDUCTION_OBJECTION_RESPONSE_TOO_SHORT', 'اكتب الرد على الاعتراض (5 أحرف على الأقل)')
-    await this.manager.transaction(async em => {
+    return (await this.act(user, id, async em => {
       const row = await this.lockedRequest(em, id, undefined, user)
-      const employee = await em.getRepository(Employee).findOneBy({ id: row.employeeId })
+      const employee = await this.employeeUnderFinanceLock(em, row, user)
       const step = currentDeductionStep(parseDeductionSteps(row.steps))
       const currentApprover =row.status === 'IN_APPROVAL' && !!step && !this.actorProblem(user, row, step, employee)
       const hr = (userHasPerm(user, MANAGE) || userHasPerm(user, APPROVE)) && this.inBranchScope(user, employee)
@@ -976,8 +1033,7 @@ export class TypedDeductionsService {
       row.revision += 1; row.updatedAt = new Date()
       await em.getRepository(DeductionRequest).save(row)
       await this.event(em, row.id, 'OBJECTION_RESPONDED', user.sub, row.status, row.status, step?.order ?? null, text, { objectionEventId: objection.id })
-    })
-    return this.detail(user, id)
+    })).view
   }
 
   // ===== دورة الاعتماد (DD-06) =====
@@ -992,6 +1048,17 @@ export class TypedDeductionsService {
     return row
   }
 
+  // CR28-B01 (مراجعة Codex الجولة 28): نقل الموظف لفرع تاني (تعديل الملف أو تنفيذ طلب النقل) بياخد قفله المالي لآخر معاملته،
+  // ففرع الموظف اللي صلاحية الإجراء متعلقة بيه بيتقرا بعد القفل ده ويفضل ثابت لحد ما الإجراء يتحفظ. قبل كده كان بيتقرا قبل القفل،
+  // فنقل بيتحفظ في النص والإجراء بيكمل بصلاحية الفرع القديم (إلغاء القيد المالي، ورد «غير موجود» بعده). صفة صاحب الإجراء على
+  // الخصم بتتراجع على الفرع الحالي: مابقاش له صفة = نفس رد الطلب الغايب، من غير ما الطلب ولا قيده يتغيروا
+  private async employeeUnderFinanceLock(em: EntityManager, row: DeductionRequest, actor: JwtPayload) {
+    await lockPayrollEmployees(em, [row.employeeId])
+    const employee = await em.getRepository(Employee).findOneBy({ id: row.employeeId })
+    if (!this.knows(actor, row, employee)) throw this.notFound()
+    return employee
+  }
+
   private async creatorStillInScope(em: EntityManager, row: DeductionRequest, employee: Employee, settings: Settings, rules: DeductionTypeRules) {
     if (!row.creatorEmployeeId) return false
     const creator = { sub: row.creatorUserId, employeeId: row.creatorEmployeeId, role: 'employee', permissions: [] } as unknown as JwtPayload
@@ -1000,7 +1067,7 @@ export class TypedDeductionsService {
   }
 
   async approve(user: JwtPayload, id: number, dto: DeductionDecisionDto) {
-    const notice = await this.manager.transaction(async em => {
+    const { result: notice, view } = await this.act(user, id, async em => {
       const row = await this.lockedRequest(em, id, dto.expectedRevision, user)
       await lockPayrollEmployees(em, [row.employeeId])
       if (row.status !== 'IN_APPROVAL') throw new ConflictException({ code: 'DEDUCTION_STATE', message: `لا يمكن اعتماد خصم حالته «${DEDUCTION_LABELS.statuses[row.status] ?? row.status}»` })
@@ -1059,7 +1126,7 @@ export class TypedDeductionsService {
       await em.getRepository(DeductionRequest).save(row)
       return null
     })
-    return { ...(await this.detail(user, id)), notice }
+    return { ...view, notice }
   }
 
   // اعتماد خطوة واحدة بالمبلغ المسعّر، وعند آخر خطوة: قيود الدفتر بأقساطها والحالة «معتمد» — دالة واحدة للاعتماد
@@ -1112,20 +1179,19 @@ export class TypedDeductionsService {
   async reject(user: JwtPayload, id: number, dto: DeductionDecisionDto) {
     const reason = dto.reason?.trim() ?? ''
     if (reason.length < 5) bad('DEDUCTION_REASON_REQUIRED', 'سبب الرفض مطلوب (5 أحرف على الأقل)')
-    await this.manager.transaction(async em => {
+    return (await this.act(user, id, async em => {
       const row = await this.lockedRequest(em, id, dto.expectedRevision, user)
       if (row.status !== 'IN_APPROVAL') throw new ConflictException({ code: 'DEDUCTION_STATE', message: `لا يمكن رفض خصم حالته «${DEDUCTION_LABELS.statuses[row.status] ?? row.status}»` })
       const steps = parseDeductionSteps(row.steps), step = currentDeductionStep(steps)
       if (!step) throw new ConflictException({ code: 'DEDUCTION_CHAIN_INVALID', message: 'لا توجد خطوة اعتماد معلقة' })
-      const employee = await em.getRepository(Employee).findOneBy({ id: row.employeeId })
+      const employee = await this.employeeUnderFinanceLock(em, row, user)
       const problem = this.actorProblem(user, row, step, employee)
       if (problem) throw new ForbiddenException({ code: 'DEDUCTION_NOT_CURRENT_APPROVER', message: problem })
       step.status = 'REJECTED'; step.actedByUserId = user.sub; step.actedAt = new Date().toISOString(); step.reason = reason
       Object.assign(row, { status: 'REJECTED', steps: JSON.stringify(steps), decisionReason: reason, decidedByUserId: user.sub, decidedAt: new Date(), revision: row.revision + 1, updatedAt: new Date() })
       await em.getRepository(DeductionRequest).save(row)
       await this.event(em, row.id, 'REJECTED', user.sub, 'IN_APPROVAL', 'REJECTED', step.order, reason, { role: step.role })
-    })
-    return this.detail(user, id)
+    })).view
   }
 
   async withdraw(user: JwtPayload, id: number, dto: DeductionDecisionDto) {
@@ -1144,21 +1210,24 @@ export class TypedDeductionsService {
   // DD-12: الإلغاء بسبب موثق قبل الاستهلاك؛ المحجوز في مسير معتمد يحتاج إعادة فتح المسير أولًا، والمستهلك يُعكس بقيد موجب
   async cancel(user: JwtPayload, id: number, dto: DeductionDecisionDto) {
     if (!userHasPerm(user, MANAGE)) throw new ForbiddenException({ code: 'DEDUCTION_CANCEL_FORBIDDEN', message: 'إلغاء الخصم يتطلب صلاحية إدارة الخصومات' })
-    await this.manager.transaction(async em => {
+    return (await this.act(user, id, async em => {
       const settings = await this.settings(em)
       const reason = dto.reason?.trim() ?? ''
       if (reason.length < settings.reasonMinLength) bad('DEDUCTION_REASON_TOO_SHORT', `سبب الإلغاء لا يقل عن ${settings.reasonMinLength} حرفًا`, { minLength: settings.reasonMinLength })
       const row = await this.lockedRequest(em, id, dto.expectedRevision, user)
-      const employee = await em.getRepository(Employee).findOneBy({ id: row.employeeId })
+      const employee = await this.employeeUnderFinanceLock(em, row, user)
       if (!this.inBranchScope(user, employee)) throw new ForbiddenException({ code: 'DEDUCTION_FORBIDDEN', message: 'طلب الخصم خارج نطاق فرعك' })
       if (!['IN_APPROVAL', 'APPROVED'].includes(row.status)) throw new ConflictException({ code: 'DEDUCTION_STATE', message: `لا يمكن إلغاء خصم حالته «${DEDUCTION_LABELS.statuses[row.status] ?? row.status}»` })
-      await lockPayrollEmployees(em, [row.employeeId])
       let cancelledObligationIds: number[] = [], appliedObligationIds: number[] = []
       if (row.status === 'APPROVED') {
         // قيود الخصم المدينة فقط؛ قيد العكس الموجب لا يُلغى بإلغاء الطلب
         const obligations = (await em.getRepository(EmployeeObligation).findBy({ deductionRequestId: row.id })).filter(item => item.type === 'DEBIT')
         const reserved = obligations.find(item => item.status === 'PENDING' && item.reservedPayrollRunId != null)
-        if (reserved) throw new ConflictException({ code: 'DEDUCTION_RESERVED', message: `أحد أقساط الخصم محجوز في مسير معتمد (#${reserved.reservedPayrollRunId})؛ أعد فتح المسير أو اصرفه أولًا` })
+        // CR33-B01: رقم المسير بيظهر بس لو المسير مرئي للحساب (payroll-run-visibility)
+        if (reserved) {
+          const shown = (await this.runShown(em, user, [reserved.reservedPayrollRunId], [row.employeeId]))(reserved.reservedPayrollRunId, row.employeeId)
+          throw new ConflictException({ code: 'DEDUCTION_RESERVED', message: `أحد أقساط الخصم محجوز في مسير معتمد${shown ? ` (#${reserved.reservedPayrollRunId})` : ' برّه نطاق صلاحيتك'}؛ أعد فتح المسير أو اصرفه أولًا` })
+        }
         const pending = obligations.filter(item => item.status === 'PENDING' || item.status === 'SUSPENDED')
         appliedObligationIds = obligations.filter(item => item.status === 'APPLIED').map(item => item.id)
         if (!pending.length) throw new ConflictException({ code: 'DEDUCTION_CONSUMED', message: 'الخصم استُهلك بالكامل في مسير مصروف؛ استخدم «عكس الخصم» بقيد موجب في المسير التالي' })
@@ -1171,22 +1240,20 @@ export class TypedDeductionsService {
       Object.assign(row, { status: 'CANCELLED', decisionReason: reason, decidedByUserId: user.sub, decidedAt: new Date(), revision: row.revision + 1, updatedAt: new Date() })
       await em.getRepository(DeductionRequest).save(row)
       await this.event(em, row.id, 'CANCELLED', user.sub, fromStatus, 'CANCELLED', null, reason, { cancelledObligationIds, appliedObligationIds })
-    })
-    return this.detail(user, id)
+    })).view
   }
 
   // DD-12 قاعدة 3/4: عكس المستهلك في مسير مصروف بقيد موجب (كلي أو جزئي) يُستهلك في المسير التالي؛ المسير المصروف لا يتغير
   async reverse(user: JwtPayload, id: number, dto: DeductionReverseDto) {
     if (!userHasPerm(user, MANAGE)) throw new ForbiddenException({ code: 'DEDUCTION_REVERSE_FORBIDDEN', message: 'عكس الخصم يتطلب صلاحية إدارة الخصومات' })
-    await this.manager.transaction(async em => {
+    return (await this.act(user, id, async em => {
       const settings = await this.settings(em)
       const reason = dto.reason?.trim() ?? ''
       if (reason.length < settings.reasonMinLength) bad('DEDUCTION_REASON_TOO_SHORT', `سبب العكس لا يقل عن ${settings.reasonMinLength} حرفًا`, { minLength: settings.reasonMinLength })
       const row = await this.lockedRequest(em, id, dto.expectedRevision, user)
-      const employee = await em.getRepository(Employee).findOneBy({ id: row.employeeId })
+      const employee = await this.employeeUnderFinanceLock(em, row, user)
       if (!this.inBranchScope(user, employee)) throw new ForbiddenException({ code: 'DEDUCTION_FORBIDDEN', message: 'طلب الخصم خارج نطاق فرعك' })
       if (row.status !== 'APPROVED') throw new ConflictException({ code: 'DEDUCTION_STATE', message: 'العكس متاح لخصم معتمد استُهلك في مسير مصروف' })
-      await lockPayrollEmployees(em, [row.employeeId])
       const obligations = await em.getRepository(EmployeeObligation).findBy({ deductionRequestId: row.id })
       const totals = this.ledgerTotals(obligations)
       const remaining = dec(totals.collected).subtract(dec(totals.reversed))
@@ -1206,14 +1273,13 @@ export class TypedDeductionsService {
       await em.getRepository(DeductionRequest).save(row)
       await this.event(em, row.id, 'REVERSED', user.sub, row.status, row.status, null, reason,
         { amount: money(amount), obligationId: saved.id, collected: totals.collected, reversedBefore: totals.reversed, targetPeriod: period, runPeriods })
-    })
-    return this.detail(user, id)
+    })).view
   }
 
   // DD-11 قاعدة 4: قرار الموارد البشرية على قسط معلق بعد تجاوز حد الترحيل: استئناف لشهر محدد أو إسقاط موثق
   async decideSuspended(user: JwtPayload, obligationId: number, dto: DeductionObligationDecisionDto) {
     if (!userHasPerm(user, MANAGE)) throw new ForbiddenException({ code: 'DEDUCTION_DECISION_FORBIDDEN', message: 'قرار القسط المعلق يتطلب صلاحية إدارة الخصومات' })
-    const requestId = await this.manager.transaction(async em => {
+    const { requestId, view } = await this.manager.transaction(async em => {
       const settings = await this.settings(em)
       const reason = dto.reason?.trim() ?? ''
       if (reason.length < settings.reasonMinLength) bad('DEDUCTION_REASON_TOO_SHORT', `سبب القرار لا يقل عن ${settings.reasonMinLength} حرفًا`, { minLength: settings.reasonMinLength })
@@ -1226,12 +1292,18 @@ export class TypedDeductionsService {
       if (!this.inBranchScope(user, employee)) throw missing()
       if (obligation.status !== 'SUSPENDED') throw new ConflictException({ code: 'DEDUCTION_OBLIGATION_STATE', message: 'القرار متاح لقسط معلق فقط' })
       await lockPayrollEmployees(em, [row.employeeId])
+      // CR28-B01: فرع الموظف من جديد بعد قفله المالي (النقل بياخده) — اتنقل لفرع تاني قبله = نفس رد القسط الغايب
+      if (!this.inBranchScope(user, await em.getRepository(Employee).findOneBy({ id: row.employeeId }))) throw missing()
       const currentPeriod = payrollPeriodForDate(this.today(), settings.cycleStartDay)
       if (dto.action === 'RESUME') {
         const target = dto.targetPeriod ?? currentPeriod
         if (target < currentPeriod) bad('DEDUCTION_PERIOD_PAST', `الاستئناف لشهر ${currentPeriod} أو بعده`)
         const closed = await this.closedRun(em, row.employeeId, target)
-        if (closed) bad('DEDUCTION_PERIOD_CLOSED', `مسير ${target} للموظف معتمد أو مصروف (#${closed})؛ اختر شهرًا مفتوحًا`, { runId: closed })
+        // CR33-B01: رقم المسير بيظهر بس لو المسير مرئي للحساب (payroll-run-visibility)
+        if (closed) {
+          const shown = (await this.runShown(em, user, [closed], [row.employeeId]))(closed, row.employeeId)
+          bad('DEDUCTION_PERIOD_CLOSED', `مسير ${target} للموظف معتمد أو مصروف${shown ? ` (#${closed})` : ''}؛ اختر شهرًا مفتوحًا`, shown ? { runId: closed } : undefined)
+        }
         await em.getRepository(EmployeeObligation).update({ id: obligation.id, status: 'SUSPENDED' }, { status: 'PENDING', targetPeriod: target,
           effectiveDate: salaryPayrollPeriodBounds(target, settings.cycleStartDay).startDate })
         await this.event(em, row.id, 'CARRY_RESUMED', user.sub, row.status, row.status, null, reason, { obligationId: obligation.id, targetPeriod: target, amount: money(obligation.amount) })
@@ -1241,9 +1313,9 @@ export class TypedDeductionsService {
       }
       row.revision += 1; row.updatedAt = new Date()
       await em.getRepository(DeductionRequest).save(row)
-      return row.id
+      return { requestId: row.id, view: await this.detailIn(em, user, row.id) }
     })
-    return this.detail(user, requestId)
+    return view ?? this.detail(user, requestId)
   }
 
   // ===== مهلة الخطوة (DD-06 قاعدة 1): تُشغَّل دوريًا من TypedDeductionsScheduler =====
@@ -1372,7 +1444,10 @@ export class TypedDeductionsService {
           AND ${payrollLineNotReversedSql('r.[id]', 'i.[employeeId]')} GROUP BY i.[employeeId]`, chunk)
       for (const row of rows) lastRuns.set(Number(row.employeeId), String(row.lastPeriod))
     }
-    const ledgerRow = (item: EmployeeObligation, reason: string | null = null) => {
+    // CR38-B02: «دخل الموظف مسير 2026-07 …» من غير فترة مسير مخفي للحساب لموظف القيد (آخر مسير ممكن يكون في فرع تاني قبل النقل)
+    const ledgerHidden = await hiddenRunPeriodsByEmployee(em, branchScopeOf(user), openDebits.map(item => item.employeeId), user.employeeId ?? null)
+    const ledgerRow = (item: EmployeeObligation, rawReason: string | null = null) => {
+      const reason = scrubRunPeriods(rawReason, ledgerHidden.get(item.employeeId) ?? [])
       const row = byId.get(item.deductionRequestId ?? -1)
       return { obligationId: item.id, requestId: item.deductionRequestId, employeeId: item.employeeId, fullName: personName(item.employeeId), employeeCode: people.get(item.employeeId)?.employeeCode ?? null,
         typeName: row ? snapshots.get(row.id)?.nameAr ?? null : null, amount: money(item.amount), targetPeriod: item.targetPeriod, status: item.status,
@@ -1418,8 +1493,9 @@ export class TypedDeductionsService {
       const runs = (await em.getRepository(PayrollRun).find({ where: { status: In(['APPROVED', 'PAID']) }, order: { id: 'ASC' } })).filter(run => run.period >= fromPeriod && run.period <= toPeriod)
       for (const run of runs) {
         const items = await em.getRepository(PayrollItem).find({ where: { runId: run.id }, select: { id: true, employeeId: true, breakdown: true } })
-        const branches = scope === null ? null : await this.employeeBriefs(em, items.map(item => item.employeeId))
-        const inScope = (employeeId: number) => scope === null || scopeHasBranch(scope, branches?.get(employeeId)?.branchId)
+        // CR33-B01: البند في نطاق الحساب بلقطة عضوية الموظف في المسير (مش فرعه النهارده) — مسير فرع تاني لموظف اتنقل بعده مابيظهرش
+        const shown = await this.runShown(em, user, [run.id], items.map(item => item.employeeId))
+        const inScope = (employeeId: number) => scope === null || shown(run.id, employeeId)
         const lines = items.filter(item => inScope(item.employeeId)).flatMap(item => {
           try {
             const breakdown = JSON.parse(item.breakdown || '{}')

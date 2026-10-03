@@ -293,7 +293,8 @@ export class PayrollApprovalChainService {
     const items = await em.getRepository(PayrollItem).find({ where: { runId }, order: { employeeId: 'ASC' } })
     const members = await em.getRepository(PayrollRunMember).find({ where: { runId } })
     const snapshots = new Map(members.map(member => [member.employeeId, member.snapshot]))
-    const lines = await describePayrollItemsLines(em, items)
+    // CR40-B02: أسماء السطور ومفاتيحها من غير فترة أي مسير مخفي للمعتمد لموظفي المسير (نفس جدول المسير والقسيمة)
+    const lines = await describePayrollItemsLines(em, items, user)
     // B1.1: البند بعملة فرع الموظف في لقطة المسير، والإجماليات لكل عملة لوحدها (مسير فيه فرعين بعملتين)
     const currencyOfBranch = await readBranchCurrencyOf(em)
     let earnings = 0, deductions = 0, net = 0

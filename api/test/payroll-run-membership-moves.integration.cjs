@@ -217,3 +217,38 @@ test('(ج) «شيل خصم» لموظف واحد من مسار شاشة المس
   const linesAfter = expectStatus(await request(admin, 'GET', `/payroll/runs/${run.id}/lines`), 200)
   assert.ok(!linesAfter.rows.find(row => row.itemId === item.id).deductions.some(line => line.key === 'DEBIT:fine'), 'البند اختفى من صف الموظف')
 })
+
+test('(د) CR25-B02: امتداد الضم للشهور اللاحقة بحساب فرع — مسير محسوب الحساب مايقدرش يقراه مايتكتبش فيه، والمسودة الفاضية بتعريف جوه نطاقه بتتعدّل', async () => {
+  const branchB = await repo('Branch').save({ code: 'MOV_B', name: 'فرع الدقي' })
+  const deptB = await repo('Department').save({ name: 'قسم الدقي', branchId: branchB.id, isActive: true })
+  const desk = await repo('User').save({ email: 'desk@membership-moves-test.invalid', displayName: 'محاسب المعادي', passwordHash: 'test-only',
+    role: 'hr_manager', branchId: branchA.id, permissions: JSON.stringify(['payroll.view', 'payroll.calculate']) })
+  const first = await employee(deptOps), traveller = await employee(deptB, { branchId: branchB.id }), joiner = await employee(deptSales), late = await employee(deptSales)
+  const name = 'مسير امتداد الفرع'
+  const anchor = await draft(name, '2027-07', { branchIds: [branchA.id], departmentIds: [deptOps.id] })
+  const foreign = await draft(name, '2027-08', { employeeIds: [traveller.id] })
+  const calculated = expectStatus(await request(admin, 'POST', `/payroll/runs/${foreign.id}/calculate`, {}), 201)
+  assert.equal(calculated.members.find(row => row.employeeId === traveller.id).snapshot.branchId, branchB.id)
+  const empty = await draft(name, '2027-09', { employeeIds: [first.id] })
+  // ملف الموظف اتنقل لفرع الحساب بعد الحساب، ولقطة أغسطس فضلت على الفرع التاني — فالحساب مايقدرش يقرا أغسطس
+  await repo('Employee').update(traveller.id, { branchId: branchA.id, departmentId: deptOps.id })
+  expectStatus(await request(desk, 'GET', `/payroll/runs/${foreign.id}`), 403)
+  const foreignBefore = await runRow(foreign.id)
+  const changes = async id => (await ds.query(`SELECT COUNT(*) AS [n] FROM [payroll_run_events] WHERE [runId] = @0 AND [eventType] = 'MEMBERSHIP_CHANGED'`, [id]))[0].n
+  const listed = run => { const { filters } = definitionOf(run); return [...filters.employeeIds, ...filters.includeEmployeeIds] }
+
+  const added = expectStatus(await request(desk, 'POST', `/payroll/runs/${anchor.id}/members`, { employeeIds: [joiner.id], reason: 'ضم موظف جديد لمسير الامتداد' }), 201)
+  assert.deepEqual(added.added, [joiner.id])
+  assert.ok(listed(await runRow(anchor.id)).includes(joiner.id), 'مسير الشهر نفسه اتعدّل')
+  const foreignAfter = await runRow(foreign.id)
+  assert.deepEqual([foreignAfter.definition, foreignAfter.scopeIds, foreignAfter.status, await changes(foreign.id)],
+    [foreignBefore.definition, foreignBefore.scopeIds, 'CALCULATED', 0], 'المسير المحسوب اللي الحساب مايقدرش يقراه ما اتكتبش فيه ولا اتسجل عليه حدث')
+  assert.ok(!added.recalculateRuns.some(row => row.id === foreign.id))
+  assert.ok(listed(await runRow(empty.id)).includes(joiner.id), 'المسودة الفاضية بتعريف جوه نطاق الحساب اتعدّلت (العضوية الدائمة لمحاسب الفرع)')
+
+  // حساب الشركة: نفس الامتداد بيوصل للمسير المحسوب زي الأول، وبيتقال إنه محتاج إعادة حساب
+  const company = expectStatus(await request(admin, 'POST', `/payroll/runs/${anchor.id}/members`, { employeeIds: [late.id], reason: 'ضم موظف بحساب الشركة' }), 201)
+  assert.ok(listed(await runRow(foreign.id)).includes(late.id), 'حساب الشركة بيمد العضوية للمسير المحسوب')
+  assert.equal(await changes(foreign.id), 1)
+  assert.ok(company.recalculateRuns.some(row => row.id === foreign.id), JSON.stringify(company.recalculateRuns))
+})

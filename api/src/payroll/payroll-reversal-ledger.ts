@@ -31,7 +31,8 @@ function requireTransaction(em: EntityManager) {
   if (!em.queryRunner?.isTransactionActive) throw new Error('Payroll reversal ledger requires a transaction')
 }
 
-export interface PayrollReversalBlocker { code: string; message: string; employeeId: number; details?: Record<string, unknown> }
+// redactedMessage: نص المانع من غير مرجع المسير (رقمه وحالته) — للحساب اللي مايشوفش المسير ده (CR35-B01)؛ مابيطلعش في الرد
+export interface PayrollReversalBlocker { code: string; message: string; employeeId: number; details?: Record<string, unknown>; redactedMessage?: string }
 export interface PayrollReversalPlan {
   employeeId: number; itemId: number; netPay: string
   snapshot: ReturnType<typeof payrollReversalItemSnapshot>['snapshot']; hash: string
@@ -89,7 +90,8 @@ export async function lockPayrollRunForCorrection(em: EntityManager, runId: numb
 export async function planPayrollItemReversal(em: EntityManager, run: PayrollRun, item: PayrollItem, options: { ownReversalRunId?: number } = {}): Promise<PayrollReversalPlan> {
   const blockers: PayrollReversalBlocker[] = []
   const employeeId = item.employeeId
-  const block = (code: string, message: string, details: Record<string, unknown> = {}) => blockers.push({ code, message, employeeId, details })
+  const block = (code: string, message: string, details: Record<string, unknown> = {}, redactedMessage?: string) =>
+    blockers.push({ code, message, employeeId, details, ...(redactedMessage ? { redactedMessage } : {}) })
   const { snapshot, hash } = payrollReversalItemSnapshot(item)
   const result: PayrollReversalPlan = { employeeId, itemId: item.id, netPay: snapshot.amounts.netPay, snapshot, hash, overtime: [], installments: [], settledLoanIds: [], loanRestores: [], obligations: [],
     preserved: { exemptedObligations: [], exemptionDeferredInstallments: [], carriedObligations: [] }, exemptionIds: [], exemptions: [], blockers }
@@ -98,7 +100,8 @@ export async function planPayrollItemReversal(em: EntityManager, run: PayrollRun
   if (payrollRunTypeOf(run) === 'REVERSAL') block('PAYRUN-REVERSAL-OF-REVERSAL', 'مسير العكس لا يُعكس؛ صحح أثره بمسير تكميلي مربوط بالمسير الأصلي')
   const live = await em.getRepository(PayrollRunReversalLine).findOne({ where: { originalItemId: item.id, status: Not('CANCELLED') }, order: { id: 'DESC' } })
   if (live && live.reversalRunId !== options.ownReversalRunId) {
-    block('PAYRUN-REVERSAL-EXISTS', `بند الموظف #${employeeId} في هذا المسير معكوس بالفعل بمسير العكس #${live.reversalRunId} (${PAYROLL_REVERSAL_LINE_STATUS_LABELS[live.status] ?? live.status})`, { reversalRunId: live.reversalRunId })
+    block('PAYRUN-REVERSAL-EXISTS', `بند الموظف #${employeeId} في هذا المسير معكوس بالفعل بمسير العكس #${live.reversalRunId} (${PAYROLL_REVERSAL_LINE_STATUS_LABELS[live.status] ?? live.status})`, { reversalRunId: live.reversalRunId },
+      `بند الموظف #${employeeId} في هذا المسير معكوس بالفعل بمسير عكس برّه نطاق صلاحيتك`)
   }
   let breakdown: Record<string, any> = {}
   try { breakdown = item.breakdown ? JSON.parse(item.breakdown) : {} } catch { block('PAYRUN-REVERSAL-BREAKDOWN-INVALID', `تفصيل بند الموظف #${employeeId} غير صالح؛ لا يُعكس آليًا`); return result }
@@ -169,7 +172,8 @@ export async function planPayrollItemReversal(em: EntityManager, run: PayrollRun
       const claimed = await em.query(`SELECT TOP (1) [payrollRunId],[status] FROM [loan_installment_allocations] WHERE [installmentId]=@0 AND [releasedAt] IS NULL`, [continuationId])
       if (claimed.length) {
         block('PAYRUN-REVERSAL-DOWNSTREAM', `قسط الترحيل #${continuationId} دخل المسير #${claimed[0].payrollRunId} (${claimed[0].status === 'HELD' ? 'معتمد' : 'مصروف'})؛ اعكس ذلك المسير أو أعد فتحه أولًا`,
-          { installmentId: continuationId, runId: Number(claimed[0].payrollRunId) })
+          { installmentId: continuationId, runId: Number(claimed[0].payrollRunId) },
+          `قسط الترحيل #${continuationId} دخل مسير لاحق برّه نطاق صلاحيتك؛ لازم يتعكس أو يتفتح من الحساب اللي يشوفه قبل عكس المسير ده`)
       }
       const childEvents = await em.query(`SELECT TOP (1) [id],[action] FROM [loan_installment_events] WHERE [installmentId]=@0 AND [id]>@1 ORDER BY [id]`, [continuationId, event.id])
       if (childEvents.length) block('PAYRUN-REVERSAL-DOWNSTREAM', `لقسط الترحيل #${continuationId} حركة لاحقة (${childEvents[0].action})`, { installmentId: continuationId })
@@ -213,7 +217,11 @@ export async function planPayrollItemReversal(em: EntityManager, run: PayrollRun
       block('PAYRUN-REVERSAL-OBLIGATION-CHANGED', `قيد الدفتر #${id} لم يعد مستهلكًا بهذا المسير؛ راجعه قبل العكس`, { obligationId: id })
       continue
     }
-    if (row.payrollReversalRunId != null) { block('PAYRUN-REVERSAL-EXISTS', `قيد الدفتر #${id} عُكس صرفه بالفعل بمسير العكس #${row.payrollReversalRunId}`, { obligationId: id }); continue }
+    if (row.payrollReversalRunId != null) {
+      block('PAYRUN-REVERSAL-EXISTS', `قيد الدفتر #${id} عُكس صرفه بالفعل بمسير العكس #${row.payrollReversalRunId}`, { obligationId: id, reversalRunId: Number(row.payrollReversalRunId) },
+        `قيد الدفتر #${id} عُكس صرفه بالفعل بمسير عكس برّه نطاق صلاحيتك`)
+      continue
+    }
     // عكس DD-12 اليدوي القائم يمنع إعادة أصل الخصم أو المكافأة. قيد العكس اليدوي نفسه (deduction_reversal / bonus_reversal) يُعاد كأي قيد،
     // وقيد العكس المستهلك في هذا المسير نفسه يُعاد مع أصله فلا يمنع؛ المانع عكس يدوي خارج هذا المسير.
     const manualReversal = async (column: 'deductionRequestId' | 'bonusRequestId', requestId: number, type: 'CREDIT' | 'DEBIT', category: string) =>
@@ -414,6 +422,7 @@ export async function carryReversedRunExemptions(em: EntityManager, input: { par
   const repo = em.getRepository(PayrollFinancialExemption)
   const sources = (await repo.find({ where: { runId: input.parentRun.id, employeeId: In([...new Set(lines.map(line => line.employeeId))]), status: 'APPLIED' }, order: { id: 'ASC' } }))
     .filter(row => payrollExemptionCarriesToSupplementary(row))
+  // مكان النسخة لفصل الفروع مش بيتحفظ هنا: بيتقري من عضوية التكميلي نفسه وقت القراءة (financial-exemptions.service orgOfRow)
   const carried: Array<{ fromExemptionId: number; exemptionId: number; employeeId: number }> = []
   for (const source of sources) {
     const line = lines.filter(row => row.employeeId === source.employeeId).pop()!

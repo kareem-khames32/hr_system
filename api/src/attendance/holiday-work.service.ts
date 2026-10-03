@@ -8,6 +8,7 @@ import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { AttendanceService } from './attendance.service'
 // تراكم المسير يومًا بيوم: أمر دوام العطلة بيغيّر أيام الموظفين المشمولين
 import { markPayrollDaysDirty } from '../payroll/payroll-daily-accrual'
+import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
 import { HolidayWorkOrder } from './holiday-work.entities'
 import { departmentPathOf, holidayAudienceMatches } from './holiday-audience'
 import { branchLocalParentOfRows } from '../org/department-tree'
@@ -389,9 +390,25 @@ export class HolidayWorkService {
     return false
   }
 
+  // CR29-B01 (مراجعة Codex الجولة 29): أمر «موظفين بالاسم» بيتطبق على الموظف أيًا كان فرعه وقت الحساب (زي «شيل خصم»)، فبيتحفظ تحت
+  // قفل الموظفين المالي (النقل بياخده) وبعد ما فرعهم يتقرا تاني تحته — اللي اتنقل لفرع تاني قبل القفل بيرفض الأمر كله من غير ما يتحفظ
+  private async lockNamedTargets(em: EntityManager, values: { targetLevel: string; branchId: number | null; targetIds: string | null }) {
+    if (values.targetLevel !== 'employees') return
+    const ids = uniqueIds(JSON.parse(values.targetIds ?? '[]'))
+    await lockPayrollEmployees(em, ids)
+    for (const chunk of chunks(ids)) {
+      const rows = await em.query(`SELECT [id] FROM [employees] WHERE [branchId] = @0 AND [id] IN (${inList(chunk, 1)})`, [values.branchId, ...chunk])
+      if (rows.length !== chunk.length) throw new BadRequestException('في موظف مختار مش تبع الفرع ده')
+    }
+  }
+
   async create(user: JwtPayload, input: HolidayWorkOrderInput) {
     const values = await this.normalize(user, input)
-    const saved = await this.orders.save(this.orders.create({ ...values, kind: 'ORDER', status: 'ACTIVE', sourceRequestId: null, createdByUserId: user.sub }))
+    const saved = await this.em.transaction(async em => {
+      await this.lockNamedTargets(em, values)
+      const orders = em.getRepository(HolidayWorkOrder)
+      return orders.save(orders.create({ ...values, kind: 'ORDER', status: 'ACTIVE', sourceRequestId: null, createdByUserId: user.sub }))
+    })
     const overtime = await this.clearCoveredOvertime(saved)
     return { ...(await this.detail(user, saved.id)), overtime }
   }
@@ -402,16 +419,23 @@ export class HolidayWorkService {
     if (current.status !== 'ACTIVE') throw new ConflictException('الأمر ملغي')
     this.assertWrite(user, current)
     const values = await this.normalize(user, input)
-    await this.em.transaction(async em => {
+    const saved = await this.em.transaction(async em => {
+      await this.lockNamedTargets(em, values)
       const locked = await em.getRepository(HolidayWorkOrder).findOne({ where: { id }, lock: { mode: 'pessimistic_write' } })
-      if (!locked || locked.status !== 'ACTIVE') throw new ConflictException('الأمر اتغير أو اتلغى — حدّث الشاشة')
+      // CR30-B01 (مراجعة Codex الجولة 30): الأمر نفسه ممكن يكون اتنقل لفرع تاني (تعديل من حساب الشركة) بعد الفحص اللي فوق —
+      // الرؤية وصلاحية الكتابة من جديد على الصف المقفول، فالتعديل بصلاحية فرع قديم مابيتحفظش
+      if (!locked || !this.visible(locked, this.scope(user))) throw new NotFoundException('الأمر مش موجود')
+      this.assertWrite(user, locked)
+      if (locked.status !== 'ACTIVE') throw new ConflictException('الأمر اتغير أو اتلغى — حدّث الشاشة')
       await em.getRepository(HolidayWorkOrder).update({ id }, { ...values, updatedByUserId: user.sub, updatedAt: new Date() })
       // القيود المستحقة في المسودات تتلغي وإعادة حساب المسير بتبنيها بالأمر الجديد؛ المحجوز/المصروف ما يتلمسش
       await cancelHolidayWorkObligations(em, id)
+      // CR31-B01 (مراجعة Codex الجولة 31): اللي اتحفظ بيتقرا هنا جوه المعاملة وتحت قفل الصف — قراية بعد الـcommit ممكن تجيب
+      // تعديل حساب الشركة اللي بعدها على طول (نقل لفرع تاني واسم جديد)، والرد البديل كان بيكشف الاسم ده
+      return em.getRepository(HolidayWorkOrder).findOneByOrFail({ id })
     })
-    const saved = await this.orders.findOneByOrFail({ id })
     const overtime = await this.clearCoveredOvertime(saved)
-    return { ...(await this.detail(user, id)), overtime }
+    return { ...(await this.detailAfterWrite(user, saved)), overtime }
   }
 
   async cancel(user: JwtPayload, id: number, reason?: unknown) {
@@ -419,13 +443,28 @@ export class HolidayWorkService {
     this.assertWrite(user, current)
     if (current.status !== 'ACTIVE') return this.detail(user, id)
     const text = String(reason ?? '').trim().slice(0, 300) || null
-    await this.em.transaction(async em => {
-      const done = await em.getRepository(HolidayWorkOrder).update({ id, status: 'ACTIVE' },
-        { status: 'CANCELLED', cancelledByUserId: user.sub, cancelledAt: new Date(), cancelReason: text })
-      if (!done.affected) throw new ConflictException('الأمر اتغير — حدّث الشاشة')
+    const saved = await this.em.transaction(async em => {
+      const locked = await em.getRepository(HolidayWorkOrder).findOne({ where: { id }, lock: { mode: 'pessimistic_write' } })
+      // CR30-B01: الأمر نفسه من جديد تحت قفل صفه — فرعه ممكن يكون اتغيّر (تعديل من حساب الشركة) بعد الفحص اللي فوق
+      if (!locked || !this.visible(locked, this.scope(user))) throw new NotFoundException('الأمر مش موجود')
+      this.assertWrite(user, locked)
+      if (locked.status !== 'ACTIVE') return locked
+      await em.getRepository(HolidayWorkOrder).update({ id }, { status: 'CANCELLED', cancelledByUserId: user.sub, cancelledAt: new Date(), cancelReason: text })
       await cancelHolidayWorkObligations(em, id)
+      return em.getRepository(HolidayWorkOrder).findOneByOrFail({ id })
     })
-    return this.detail(user, id)
+    return this.detailAfterWrite(user, saved)
+  }
+
+  // رد التعديل أو الإلغاء بعد ما اتحفظ تحت القفل: لو حساب الشركة نقل الأمر لفرع تاني بعد الحفظ على طول، العرض بقى برّه النطاق —
+  // الرد بيقول اللي اتحفظ (الأمر وحالته) بدل «مش موجود» عن عملية نجحت. saved لازم يكون الصف من جوه معاملة الكتابة نفسها (CR31-B01)
+  private async detailAfterWrite(user: JwtPayload, saved: HolidayWorkOrder) {
+    try {
+      return await this.detail(user, saved.id)
+    } catch (error) {
+      if (!(error instanceof NotFoundException)) throw error
+      return { today: holidayWorkToday(), canSeeAmounts: false, order: { id: saved.id, kind: saved.kind, name: saved.name, status: saved.status, movedOutOfScope: true } }
+    }
   }
 
   // اليوم المغطى بأمر ما بيطلعش إضافي مكتشف: أي إضافي مكتشف لسه ما اتعتمدش في أيام الأمر اللي فاتت
