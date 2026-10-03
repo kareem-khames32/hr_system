@@ -17,6 +17,12 @@ export interface SettlementFinancialSnapshot {
   overtimeLineId: number | null
   installmentLineId: number | null
   generatedAt: string
+  // B1.8b: قيود الدفتر المعلّقة اللي التصفية لمّتها — موجودة بس لما الإعداد مفتوح، واللقطة القديمة من غيرها = مفيش قيود
+  obligations?: { id: number; type: 'DEBIT' | 'CREDIT'; amount: number }[]
+  obligationDebitAmount?: number
+  obligationCreditAmount?: number
+  obligationDebitLineId?: number | null
+  obligationCreditLineId?: number | null
 }
 
 // قفل تطبيقي داخل المعاملة فقط؛ لا يقفل صف الموظف الذي تقرؤه خدمة الحضور باتصال آخر.

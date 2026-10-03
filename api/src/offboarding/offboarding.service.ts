@@ -33,6 +33,8 @@ import { payrollLineNotReversedSql } from '../payroll/payroll-reversal-sql'
 import { legacyInstallmentNumber, readLoanInstallmentPositions } from '../payroll/payroll-installment-balances'
 import { assertNoHeldLoanInstallments, isPayrollInstallmentPlan } from '../payroll/payroll-installment-ledger'
 import { recordSettlementLoanRecovery } from '../loans/loan-recovery'
+import { applySettlementObligations, readSettlementPendingObligations, settlementObligationTotals,
+  SETTLEMENT_COLLECT_OBLIGATIONS_KEY, SETTLEMENT_OBLIGATION_CREDIT_PREFIX, SETTLEMENT_OBLIGATION_DEBIT_PREFIX } from './settlement-obligations'
 import { PayrollDecimal } from '../payroll/payroll-decimal'
 import { assertUniqueOvertimeDays, legacyExemptOvertimeSource, overtimeFinancialValue, projectOvertimeFinancialValue, type LegacyExplicitOvertimeRequest, type OvertimeFinancialValue } from '../payroll/overtime-financial'
 import { loadAttendanceExemptions, exemptionPolicyOnDate } from '../attendance/attendance-exemption-resolver'
@@ -880,6 +882,20 @@ export class OffboardingService implements OnApplicationBootstrap {
       })
     }
 
+    // (±) B1.8b: قيود الدفتر المعلّقة اللي المسير مش هياخدها — ورا إعداد مقفول (مقفول = التصفية زي ما كانت واللقطة من غير المفاتيح دي)
+    if (await this.cfg(SETTLEMENT_COLLECT_OBLIGATIONS_KEY, 'false') === 'true') {
+      const obligations = await readSettlementPendingObligations(this.lines.manager, emp.id, kase.lastWorkingDay, runSalary)
+      const totals = settlementObligationTotals(obligations)
+      Object.assign(snapshot, { obligations, obligationDebitAmount: totals.debit, obligationCreditAmount: totals.credit,
+        obligationDebitLineId: null, obligationCreditLineId: null })
+      if (totals.debit > 0) {
+        rows.push({ caseId: kase.id, label: `${SETTLEMENT_OBLIGATION_DEBIT_PREFIX} (${totals.debitCount})`, type: 'DEBIT', amount: totals.debit, isAuto: true })
+      }
+      if (totals.credit > 0) {
+        rows.push({ caseId: kase.id, label: `${SETTLEMENT_OBLIGATION_CREDIT_PREFIX} (${totals.creditCount})`, type: 'CREDIT', amount: totals.credit, isAuto: true })
+      }
+    }
+
     // (−) قيمة العهدة المفقودة/التالفة عبر مسار write-off المباشر (بلا قيد
     // مديونية). العهدة المبلَّغ عنها بطلب فقد (custody_finance) لها قيد DEBIT في
     // دفتر المديونيات يستهلكه المسير الشهري وقت الإشعار — نتخطّاها هنا لمنع
@@ -944,6 +960,10 @@ export class OffboardingService implements OnApplicationBootstrap {
   private attachFinancialLines(snapshot: SettlementFinancialSnapshot, rows: SettlementLine[]) {
     snapshot.overtimeLineId = rows.find(row => row.isAuto && row.label.startsWith('أوفرتايم معتمد غير مصروف ('))?.id ?? null
     snapshot.installmentLineId = rows.find(row => row.isAuto && row.label === 'رصيد سلف متبقٍ')?.id ?? null
+    if (snapshot.obligations) {
+      snapshot.obligationDebitLineId = rows.find(row => row.isAuto && row.type === 'DEBIT' && row.label.startsWith(SETTLEMENT_OBLIGATION_DEBIT_PREFIX))?.id ?? null
+      snapshot.obligationCreditLineId = rows.find(row => row.isAuto && row.type === 'CREDIT' && row.label.startsWith(SETTLEMENT_OBLIGATION_CREDIT_PREFIX))?.id ?? null
+    }
   }
 
   // ===== تحرير بنود التصفية (قبل الاعتماد فقط) =====
@@ -1044,20 +1064,23 @@ export class OffboardingService implements OnApplicationBootstrap {
         // تسمية البند القديم قابلة للتعديل. خلو fresh قد يكون بسبب مطالبة المسير،
         // فلا يثبت أن البند الآلي القديم لم يحتسب المصدر المالي نفسه بالفعل.
         const ambiguousAuto = lines.some(line => line.isAuto) && await tx.hasPendingFinancialSources(current.employeeId)
-        if (fresh.overtime.length || fresh.installments.length || ambiguousAuto) {
+        if (fresh.overtime.length || fresh.installments.length || fresh.obligations?.length || ambiguousAuto) {
           throw new ConflictException('بنود التصفية القديمة بلا مراجع مالية محفوظة؛ أعد توليد البنود وراجعها قبل الاعتماد')
         }
         current.settlementFinancialSnapshot = fresh
       } else {
+        // B1.8b: قيود الدفتر جوه التوقيع (اللقطة القديمة أو الإعداد المقفول = مفيش قيود)، فتغييرها أو تفعيل الإعداد بعد التوليد = إعادة توليد
         const signature = (snapshot: SettlementFinancialSnapshot) => JSON.stringify({
           version: snapshot.version, overtime: snapshot.overtime, installments: snapshot.installments,
           overtimeAmount: snapshot.overtimeAmount, installmentAmount: snapshot.installmentAmount,
+          obligations: snapshot.obligations ?? [], obligationDebitAmount: snapshot.obligationDebitAmount ?? 0, obligationCreditAmount: snapshot.obligationCreditAmount ?? 0,
         })
         if (signature(stored) !== signature(fresh)) {
           throw new ConflictException('تغيرت مطالبة المسير أو مصادر الأوفرتايم والسلف بعد توليد التصفية؛ أعد توليد البنود وراجعها قبل الاعتماد')
         }
         for (const [id, amount, type] of [
           [stored.overtimeLineId, stored.overtimeAmount, 'CREDIT'], [stored.installmentLineId, stored.installmentAmount, 'DEBIT'],
+          [stored.obligationDebitLineId ?? null, stored.obligationDebitAmount ?? 0, 'DEBIT'], [stored.obligationCreditLineId ?? null, stored.obligationCreditAmount ?? 0, 'CREDIT'],
         ] as const) {
           if (amount === 0 && id === null) continue
           const line = lines.find(row => row.id === id)
@@ -1067,6 +1090,8 @@ export class OffboardingService implements OnApplicationBootstrap {
         }
       }
       current.settlementNet = netOf(lines)
+      // B1.8b: القيود اللي التصفية لمّتها بتتعلّم مستهلكة جوه نفس المعاملة — المسير مابياخدهاش تاني أبدًا
+      await applySettlementObligations(tx.lines.manager, current.employeeId, current.settlementFinancialSnapshot?.obligations ?? [])
       // AD-13 (C6): رصيد السلف غير المغطى بالمستحقات يُسجل مدينًا PENDING_RECOVERY ولا يُشطب تلقائيًا.
       const recoverySnapshot = current.settlementFinancialSnapshot
       if (recoverySnapshot && recoverySnapshot.installmentAmount > 0) {
@@ -1159,6 +1184,10 @@ export class OffboardingService implements OnApplicationBootstrap {
         .length > 0 && await this.hasPendingFinancialSources(kase.employeeId)
       if (legacyFinancialLines || snapshot?.overtime.length || snapshot?.installments.length) {
         throw new ConflictException('التصفية المعتمدة تحجز أوفرتايم أو أقساط سلف؛ راجع تسويتها المالية قبل إلغاء الملف حتى لا تُحسب مرة ثانية')
+      }
+      // B1.8b: القيود اللي اتسوّت في التصفية اتعلّمت مستهلكة؛ إلغاء الملف كان هيسيبها مستهلكة من غير تصفية
+      if (snapshot?.obligations?.length) {
+        throw new ConflictException('التصفية المعتمدة سوّت قيود دفتر؛ راجع تسويتها المالية قبل إلغاء الملف')
       }
     }
 

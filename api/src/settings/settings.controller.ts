@@ -664,6 +664,8 @@ export class SettingsController {
     // B1.8 السلف
     'loan.first_installment_after_approval_period': ['true', 'false'],
     'loans.require_disbursement_before_deduction': ['true', 'false'],
+    // B1.8b التصفية والقيود المعلقة
+    'settlement.collect_pending_obligations': ['true', 'false'],
     'attendance.flex.count_early_work_toward_required': ['true', 'false'],
     'attendance.flex.prorate_window_on_partial_leave': ['true', 'false'],
     'attendance.flex.window_supersedes_grace': ['true', 'false'],
