@@ -59,7 +59,9 @@ test('static guard rejects destructive statements, including split dynamic SQL, 
     'DROP TABLE #tmp, dbo.employees;', 'DROP TABLE IF EXISTS #t, dbo.users;', 'DROP TABLE #a,\n  [dbo].[employees]', 'ALTER TABLE dbo.employees ALTER COLUMN nameAr nvarchar(5) NULL;',
     "EXEC(N'DEL' + N'ETE FROM dbo.employees')", "DECLARE @s nvarchar(max) = N'TRUNC' + 'ATE TABLE dbo.t'", 'SET XACT_ABORT OFF;', 'SET ANSI_WARNINGS OFF',
     'DISABLE TRIGGER ALL ON dbo.employees;', 'ALTER TABLE dbo.employees NOCHECK CONSTRAINT ALL', 'ALTER INDEX ALL ON dbo.employees DISABLE',
-    "EXEC sp_rename N'dbo.employees', N'employees_old'", 'ALTER TABLE dbo.a SWITCH TO dbo.b', 'ALTER SCHEMA archive TRANSFER dbo.employees', 'DBCC SHRINKDATABASE(0)']) {
+    "EXEC sp_rename N'dbo.employees', N'employees_old'", 'ALTER TABLE dbo.a SWITCH TO dbo.b', 'ALTER SCHEMA archive TRANSFER dbo.employees', 'DBCC SHRINKDATABASE(0)',
+    // B2.1: الاستثناء لقايمة أحداث المشغّل بس — جملة المسح نفسها جوه المشغّل أو بعده لسه ممنوعة
+    'CREATE OR ALTER TRIGGER dbo.t ON dbo.x INSTEAD OF UPDATE AS DELETE FROM dbo.x', 'INSTEAD OF UPDATE, DELETE AS BEGIN DELETE dbo.x END']) {
     assert.equal(flagged(sql), true, sql)
   }
   for (const sql of ['DROP TABLE #tmp', 'DROP TABLE IF EXISTS #tmp', 'DELETE FROM #tmp', 'DELETE @rows WHERE id=1',
@@ -67,7 +69,10 @@ test('static guard rejects destructive statements, including split dynamic SQL, 
     '/* TRUNCATE TABLE dbo.x */ SELECT 1', 'ALTER TABLE dbo.public_holidays DROP CONSTRAINT DF_x', "EXEC sys.sp_rename N'dbo.a.b', N'c', N'COLUMN'",
     "UPDATE dbo.employees SET workType=N'full_time' WHERE workType=N'fulltime'", 'DROP TABLE #a, #b', 'DROP TABLE IF EXISTS #step9_overtime;',
     '-- hr-migrate: allow-alter-column\nALTER TABLE dbo.a ALTER COLUMN note nvarchar(400) NULL', "UPDATE dbo.t SET note = N'switch to POLICY' WHERE id = 1",
-    "EXEC sys.sp_rename @qualified,@new,N'COLUMN';"]) {
+    "EXEC sys.sp_rename @qualified,@new,N'COLUMN';",
+    // B2.1: مشغّل بيمنع التعديل والمسح (قايمة أحداثه فيها DELETE) مسموح
+    "CREATE OR ALTER TRIGGER dbo.[TR_audit_log_append_only] ON dbo.[audit_log] INSTEAD OF UPDATE, DELETE AS BEGIN THROW 84010, N'x', 1; END",
+    'CREATE TRIGGER dbo.t ON dbo.x INSTEAD OF DELETE AS SELECT 1']) {
     assert.equal(flagged(sql), false, sql)
   }
 })

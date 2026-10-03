@@ -115,8 +115,9 @@ test('RG-03: قايمة الاستثناءات من غير بنود قديمة،
     else assert.ok(guarded(handler, JwtAuthGuard), `${id}: مش عام ومن غير حارس دخول`)
   }
   // أي زيادة في الاستثناءات قرار ظاهر في المراجعة: الأعداد مثبّتة
-  assert.deepEqual(counts, { PUBLIC_OK: 9, SELF: 22, AUTH_ANY_OK: 11, SERVICE_CHECK: 75 })
-  assert.equal(handlers.filter(handler => handler.perms.length === 0).length, 117)
+  // B2.1: +1 SELF (تسجيل التصدير من الشاشات في سجل التدقيق)
+  assert.deepEqual(counts, { PUBLIC_OK: 9, SELF: 23, AUTH_ANY_OK: 11, SERVICE_CHECK: 75 })
+  assert.equal(handlers.filter(handler => handler.perms.length === 0).length, 118)
   // من غير حارس دخول = العام بس
   const open = handlers.filter(handler => !guarded(handler, JwtAuthGuard)).map(handler => handler.id).sort()
   assert.deepEqual(open, Object.keys(EXCEPTIONS).filter(id => EXCEPTIONS[id] === 'PUBLIC_OK').sort())

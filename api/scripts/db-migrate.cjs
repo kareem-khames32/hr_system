@@ -122,7 +122,8 @@ function executionUnits(file) {
 const FORBIDDEN = [
   [/\bDROP\s+COLUMN\b/i, 'DROP COLUMN ممنوع'],
   [/\bTRUNCATE\s+TABLE\b/i, 'TRUNCATE TABLE ممنوع'],
-  [/(?<!\bON\s{1,20})\bDELETE\b(?!\s+(?:FROM\s+)?[#@])/i, 'DELETE ممنوع (لا حذف لصفوف الشركة؛ عطّل الصف أو غيّر حالته)'],
+  // B2.1: DELETE في قايمة أحداث مشغّل (INSTEAD OF UPDATE, DELETE) بيمنع المسح مش بيعمله — مسموح؛ أي DELETE تاني ممنوع
+  [/(?<!\bON\s{1,20})(?<!\bINSTEAD\s+OF(?:\s*(?:INSERT|UPDATE)\s*,)*\s*)\bDELETE\b(?!\s+(?:FROM\s+)?[#@])/i, 'DELETE ممنوع (لا حذف لصفوف الشركة؛ عطّل الصف أو غيّر حالته)'],
   [/\bDROP\s+(?:DATABASE|SCHEMA|VIEW|PROC|PROCEDURE|FUNCTION|TRIGGER|USER|LOGIN|SEQUENCE|TYPE|SYNONYM|ROLE|ASSEMBLY|PARTITION)\b/i, 'DROP لكائن قاعدة ممنوع'],
   [/\bALTER\s+DATABASE\b/i, 'ALTER DATABASE ممنوع'],
   [/^\s*USE\s+[[\w]/im, 'USE ممنوع (الترحيل يعمل على القاعدة المختارة فقط)'],

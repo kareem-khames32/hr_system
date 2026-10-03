@@ -589,6 +589,8 @@ export class SettingsController {
   // مفاتيح رقمية حرجة للمحرك — قيمة فارغة/غير رقمية/أقل من الحد الأدنى تُفسد
   // المسير (قسمة على صفر) أو الحساب. نرفضها هنا كشبكة أمان لأي مصدر.
   private static readonly NUMERIC_MIN: Record<string, number> = {
+    // B2.1: مدة الاحتفاظ بسجل التدقيق (الحد الأعلى والعدد الصحيح في upsertConfig)
+    'audit.retention_months': 12,
     'leave.annual_entitled': 0,
     'leave.sick_entitled': 0,
     'leave.max_backdate_days': 0,
@@ -759,6 +761,11 @@ export class SettingsController {
       if (!Number.isInteger(n) || n > (dto.key === 'loan.exceptional_reason_min_length' ? 500 : 120)) {
         throw new BadRequestException('إعدادات السلف أعداد صحيحة: طول السبب حتى 500 حرف، وأشهر أول قسط حتى 120')
       }
+    }
+    // B2.1: مدة الاحتفاظ بسجل التدقيق — شهور صحيحة من 12
+    if (dto.key === 'audit.retention_months') {
+      const n = Number(dto.value)
+      if (!Number.isInteger(n) || n < 12 || n > 1200) throw new BadRequestException('مدة الاحتفاظ بسجل التدقيق عدد شهور صحيح من 12 إلى 1200')
     }
     if (['loan.request_from_day', 'loan.request_to_day'].includes(dto.key)) {
       const n = Number(dto.value)

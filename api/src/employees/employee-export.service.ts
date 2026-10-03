@@ -7,6 +7,7 @@ import { localDateOf } from '../attendance/attendance.service'
 import { readBranchCurrencies, readSystemCurrency } from '../org/branch-currency-db'
 import { BULK_CONTENT_TYPES } from './employee-bulk-update.sheet'
 import { canSeeEmployeesFinance } from './employee-projection'
+import { recordAudit } from '../audit/audit'
 import {
   employeeExportCells, employeeExportColumns, writeEmployeesWorkbook,
   type EmployeeExportLookups, type EmployeeExportRow,
@@ -46,7 +47,11 @@ export class EmployeeExportService {
     const columns = employeeExportColumns(canSeeEmployeesFinance(user))
     const lookups = await this.lookups(ordered)
     const buffer = await writeEmployeesWorkbook(columns, ordered.map(row => employeeExportCells(row, lookups, columns)))
-    return { buffer, count: ordered.length, fileName: `الموظفين-${localDateOf(new Date())}.xlsx`, contentType: BULK_CONTENT_TYPES.xlsx }
+    const fileName = `الموظفين-${localDateOf(new Date())}.xlsx`
+    // B2.1: التصدير في سجل التدقيق (عدد الموظفين واسم الملف، باسم الحساب وفرعه)
+    await recordAudit(this.ds.manager, { category: 'EXPORT', action: 'EMPLOYEES_EXPORT', entityType: 'screen', entityId: '/employees', actorUserId: user.sub,
+      branchId: user.branchId ?? null, summary: `تصدير ${fileName} (${ordered.length} موظف)`, after: { screen: '/employees', filename: fileName, rows: ordered.length } })
+    return { buffer, count: ordered.length, fileName, contentType: BULK_CONTENT_TYPES.xlsx }
   }
 
   private async chunked<T>(values: number[], query: (placeholders: string, params: number[]) => Promise<T[]>) {

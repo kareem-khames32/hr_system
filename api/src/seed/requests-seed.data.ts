@@ -391,6 +391,8 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'loans.require_disbursement_before_deduction', value: 'false' },
   // B1.8b: التصفية تلم قيود الدفتر المعلّقة اللي المسير مش هياخدها — مقفول = التصفية زي النهارده
   { key: 'settlement.collect_pending_obligations', value: 'false' },
+  // B2.1: سجل التدقيق — مدة الاحتفاظ بالشهور (أقل قيمة 12). بعدها السجل بيظهر في «منتهي الاحتفاظ» بس، ومفيش مسح
+  { key: 'audit.retention_months', value: '24' },
   { key: 'payroll.exemption_reason_min_length', value: '20' },
   // C2 / الخطوة 25 (DD-03/05): الخصومات المصنفة — أقل طول للسبب، نافذة كشف التكرار بالساعات،
   // إنشاء المدير الهيكلي (مباشر/فريق/قسم/فرع) بحسب نطاق النوع، وحد الإنشاء الجماعي في الدفعة.

@@ -69,7 +69,7 @@ export const MODULES = {
   platform: moduleDef({
     nameAr: 'المنصة والإعدادات', group: 'core', core: true,
     description: 'الدخول والحسابات والأدوار والإعدادات العامة ولوحة التحكم، وتقويم الشركة (أيام العمل والعطلات الرسمية)',
-    permissions: ['users.manage', 'roles.manage', 'settings.manage', 'settings.modules', 'dashboard.view_all'],
+    permissions: ['users.manage', 'roles.manage', 'settings.manage', 'settings.modules', 'dashboard.view_all', 'audit.view'],
     // أيام العمل والعطلات الرسمية أساسي: الحضور والإجازات والرواتب كلهم بيحسبوا منهم، فمايتقفلوش مع موديول واحد
     routes: ['/', '/settings', '/login', '/leaves/holidays'],
     features: {

@@ -21,9 +21,11 @@ const EXCEPTIONS = {
   'BrandingController.branding': 'PUBLIC_OK', // GET /branding
   'BrandingController.logo': 'PUBLIC_OK', // GET /branding/logo
   'HealthController.check': 'PUBLIC_OK', // GET /health
-  // ===== SELF (22) — خدمة ذاتية: بيشتغل على بيانات صاحب الحساب بس (user.sub / user.employeeId) — دور «موظف» صلاحياته فاضية فمفيش مفتاح ينفع =====
+  // ===== SELF (23) — خدمة ذاتية: بيشتغل على بيانات صاحب الحساب بس (user.sub / user.employeeId) — دور «موظف» صلاحياته فاضية فمفيش مفتاح ينفع =====
   'AssetsController.myCustody': 'SELF', // GET /custody/mine
   'AttendanceController.myToday': 'SELF', // GET /attendance/my-today
+  // B2.1: تصدير صاحب الحساب نفسه من شاشة في سجل التدقيق (مابيقراش أي بيانات)
+  'AuditController.recordExport': 'SELF', // POST /audit/exports
   'AttendanceExemptionsController.mine': 'SELF', // GET /attendance-exemptions/mine
   'AuthController.changePassword': 'SELF', // POST /auth/change-password
   'AuthController.me': 'SELF', // GET /auth/me

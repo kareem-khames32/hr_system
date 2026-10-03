@@ -22,6 +22,9 @@ export function downloadCsv(filename: string, header: string[], rows: unknown[][
   a.remove()
   // الإلغاء بعد بدء التنزيل — الإلغاء الفوري قد يقطعه في بعض المتصفحات
   setTimeout(() => URL.revokeObjectURL(url), 1000)
+  // B2.1: التصدير في سجل التدقيق (الشاشة واسم الملف وعدد الصفوف). تحميل متأخر: الملف ده من غير استيراد في أوله
+  // (بيتشغّل لوحده في اختبارات التصدير)، وفشل التسجيل مابيوقفش التنزيل
+  void import('./audit-api').then((audit) => audit.recordScreenExport(filename, rows.length)).catch(() => undefined)
 }
 
 // تاريخ اليوم المحلي YYYY-MM-DD لاسم الملف

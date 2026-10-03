@@ -42,6 +42,7 @@ import { User } from './user.entity'
 import { RequireModule } from '../modules-registry/module.guard'
 import { ModulesService } from '../modules-registry/modules.service'
 import { permissionShown } from '../modules-registry/registry'
+import { recordAudit } from '../audit/audit'
 
 class CreateRoleDto {
   // حد 30 = طول عمود users.role — الكود الأطول لا يمكن إسناده لمستخدم
@@ -348,6 +349,8 @@ export class RolesController {
       )
       if (violation) throw new ForbiddenException(violation)
     }
+    // B2.1: المنح والسحب قبل وبعد في سجل التدقيق (الحذف والإضافة مابيوصلوش للمستمع)
+    const previous = await this.overrides.find({ where: { userId: id } })
     await this.overrides.delete({ userId: id })
     const rows = [
       ...grants.map((p) => ({ userId: id, permission: p, effect: 'GRANT' as const })),
@@ -357,6 +360,10 @@ export class RolesController {
     // تغيّرت الصلاحيات الفعلية → أبطِل التوكنات القائمة فوراً
     user.tokenVersion = (user.tokenVersion ?? 0) + 1
     await this.users.save(user)
+    const list = (effect: string, from: Array<{ permission: string; effect: string }>) => from.filter(row => row.effect === effect).map(row => row.permission).sort()
+    await recordAudit(this.overrides.manager, { category: 'PERMISSIONS', action: 'USER_PERMISSIONS_SET', entityType: 'user', entityId: id, actorUserId: actor.sub,
+      branchId: user.branchId ?? null, summary: `تعديل صلاحيات الحساب ${user.email}`,
+      before: { grants: list('GRANT', previous), revokes: list('REVOKE', previous) }, after: { grants: [...grants].sort(), revokes: [...revokes].sort() } })
     return this.userPermissions(actor, id)
   }
 }

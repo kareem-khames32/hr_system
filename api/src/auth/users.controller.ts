@@ -65,6 +65,7 @@ import { DomainSyncService } from './domain-sync.service'
 import { legacyUnusablePasswordUserIds, needsPasswordFromLegacy } from './legacy-password-marker'
 import { LoginSecurityService } from './login-security.service'
 import { RequireModule } from '../modules-registry/module.guard'
+import { recordAudit } from '../audit/audit'
 
 // الصلاحيات الإضافية القابلة للمنح = سجل الصلاحيات المركزي كاملاً
 // + أسماء قديمة للتوافق (كانت hardcoded قبل السجل)
@@ -490,6 +491,9 @@ export class UsersController {
           })
           .where('id = :id', { id: target.id })
           .execute()
+        // B2.1: الكلمة المؤقتة في سجل التدقيق (إنها اتحطت بس — من غير أي قيمة)
+        await recordAudit(em, { category: 'PERMISSIONS', action: 'TEMP_PASSWORD_SET', entityType: 'user', entityId: target.id, actorUserId: actor.sub,
+          branchId: target.branchId ?? null, summary: `كلمة سر مؤقتة للحساب ${target.email}`, after: { mustChangePassword } })
       }
     })
     return { updated: visible.length, userIds: visible.map((u) => u.id), mustChangePassword }

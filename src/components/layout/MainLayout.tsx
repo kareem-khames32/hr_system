@@ -36,6 +36,8 @@ const PATH_PERMS: Array<[prefix: string | RegExp, perm: string | string[] | null
   ['/settings/users', 'users.manage'],
   // B1.3: سجل الدخول بنفس صلاحية المستخدمين
   ['/settings/login-log', 'users.manage'],
+  // B2.1: سجل التدقيق
+  ['/settings/audit', 'audit.view'],
   // B1.4: المهام المجدولة (الخادم بيشترط كمان حساب على كل الفروع)
   ['/settings/scheduled-jobs', 'settings.manage'],
   ['/settings/modules', 'settings.modules'],

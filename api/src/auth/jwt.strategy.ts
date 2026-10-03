@@ -7,6 +7,7 @@ import { Repository } from 'typeorm'
 import type { JwtPayload } from './auth.service'
 import { branchScopeCovers, branchScopeOf, effectiveBranchScope } from './guards'
 import { User } from './user.entity'
+import { auditRequestContext } from '../audit/audit'
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -52,6 +53,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         throw new UnauthorizedException('انتهت صلاحية الجلسة — سجّل الدخول من جديد')
       }
     }
+    // B2.1: صاحب الطلب لسجل التدقيق (التغييرات اللي مالهاش عمود «مين» بتاخده من هنا)
+    const audit = auditRequestContext.getStore()
+    if (audit) audit.userId = payload.sub
     return payload
   }
 }
