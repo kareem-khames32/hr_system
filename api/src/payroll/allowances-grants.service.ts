@@ -279,6 +279,24 @@ export class PayrollAllowancesService {
     return `${branch} — ${ids.length} موظف مختار`
   }
 
+  // CR29-B01 (مراجعة Codex الجولة 29): نقل الموظف بياخد قفله المالي لآخر معاملته. بدل الفرع (أو قسم أو فريق أو موظفين بالاسم فيه)
+  // بيقفل موظفيه ويقرا ملفاتهم تاني تحت القفل: اللي اتنقل لفرع تاني أو ساب الشغل قبل القفل بيطلع، والمختار بالاسم = الصرف كله
+  // بيترفض — فمفيش قيد بيتكتب بصلاحية فرع قديم. بدل الشركة كلها لحساب على كل الفروع، فالنقل مابيغيّرش صلاحيته
+  private async lockedBranchTargets(em: EntityManager, target: AllowanceTarget, employeeIds: number[]) {
+    await lockPayrollEmployees(em, employeeIds)
+    const rows: Array<{ id: number; branchId: number | null; departmentId: number | null; teamId: number | null; status: string | null; isActive: boolean | null }> = []
+    for (const chunk of chunks(employeeIds, 1000)) {
+      for (const row of await em.query(`SELECT [id], [branchId], [departmentId], [teamId], [status], [isActive] FROM [employees] WHERE [id] IN (${idList(chunk)})`, chunk)) {
+        rows.push({ id: Number(row.id), branchId: row.branchId == null ? null : Number(row.branchId), departmentId: row.departmentId == null ? null : Number(row.departmentId),
+          teamId: row.teamId == null ? null : Number(row.teamId), status: row.status ?? null, isActive: row.isActive == null ? null : row.isActive === true || row.isActive === 1 })
+      }
+    }
+    const still = resolveAllowanceTargetEmployees(target, rows.filter(row => row.branchId === target.branchId))
+    if (target.level === 'employees' && still.length !== employeeIds.length) throw new BadRequestException('في موظف مختار مش تبع الفرع ده أو ساب الشغل')
+    if (!still.length) throw new BadRequestException('مفيش موظفين شغالين في الاختيار ده')
+    return still
+  }
+
   // ===== صرف بدل =====
   async createGrant(user: JwtPayload, input: AllowanceGrantInput) {
     const period = this.period(input.period), scope = this.scope(user)
@@ -334,20 +352,22 @@ export class PayrollAllowancesService {
     const branchOf = new Map(employees.map(employee => [employee.id, employee.branchId]))
 
     const result = await this.em.transaction(async em => {
+      const targets = target.level === 'company' ? employeeIds : await this.lockedBranchTargets(em, target, employeeIds)
       // نفس البدل لنفس الموظف في نفس الشهر ما يتصرفش مرتين
       const duplicates = new Set<number>()
-      for (const chunk of chunks(employeeIds)) {
+      for (const chunk of chunks(targets)) {
         const rows: Array<{ employeeId: number }> = await em.query(`SELECT DISTINCT [employeeId] FROM [payroll_allowance_grant_lines] WITH (UPDLOCK, HOLDLOCK)
           WHERE [period] = @0 AND [allowanceTypeId] = @1 AND [status] = 'ACTIVE' AND [employeeId] IN (${idList(chunk, 2)})`, [period, type.id, ...chunk])
         for (const row of rows) duplicates.add(Number(row.employeeId))
       }
-      const fresh = employeeIds.filter(id => !duplicates.has(id))
+      const fresh = targets.filter(id => !duplicates.has(id))
       if (!fresh.length) throw new BadRequestException(`كل الموظفين المختارين واخدين «${type.name}» في ${period} خلاص`)
       const grant = await em.getRepository(PayrollAllowanceGrant).save(em.getRepository(PayrollAllowanceGrant).create({ period, allowanceTypeId: type.id, typeName: type.name,
         amount, targetLevel: target.level, branchId: target.branchId, targetIds: targetIds.length ? JSON.stringify(targetIds) : null, reason,
         employeeCount: fresh.length, createdByUserId: user.sub }))
       for (const chunk of chunks(fresh, 150)) {
-        await em.getRepository(PayrollAllowanceGrantLine).insert(chunk.map(employeeId => ({ grantId: grant.id, period, employeeId, branchId: branchOf.get(employeeId) ?? null,
+        await em.getRepository(PayrollAllowanceGrantLine).insert(chunk.map(employeeId => ({ grantId: grant.id, period, employeeId,
+          branchId: target.level === 'company' ? branchOf.get(employeeId) ?? null : target.branchId,
           allowanceTypeId: type.id, amount, obligationId: null, status: 'ACTIVE', cancelledByUserId: null, cancelledAt: null })))
       }
       const lines: Array<{ id: number; employeeId: number }> = await em.query('SELECT [id], [employeeId] FROM [payroll_allowance_grant_lines] WHERE [grantId] = @0', [grant.id])

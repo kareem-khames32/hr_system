@@ -16,6 +16,7 @@ import {
 } from './payroll-overview-filters'
 import { PayrollRun } from './payroll.entities'
 import { PayrollService } from './payroll.service'
+import { lockPayrollEmployees } from './payroll-settlement-boundary'
 
 // تبويبات شاشة المسير: المدرجين بالمسير، موظفين ليس لديهم مسير، التضارب، الاستقطاعات و«شيل خصم». قراءة بنطاق الفرع.
 
@@ -524,8 +525,16 @@ export class PayrollOverviewService {
         if (rows.length !== ids.length) throw new BadRequestException('في موظف مختار مش تبع الفرع ده')
       }
     }
-    const saved = await this.waivers.save(this.waivers.create({ period, kind: input.kind, targetLevel: level, branchId,
-      targetIds: ids.length ? JSON.stringify(ids) : null, reason, status: 'ACTIVE', createdByUserId: user.sub }))
+    const save = (em: EntityManager) => em.getRepository(PayrollDeductionWaiver).save(em.getRepository(PayrollDeductionWaiver).create({ period, kind: input.kind,
+      targetLevel: level, branchId, targetIds: ids.length ? JSON.stringify(ids) : null, reason, status: 'ACTIVE', createdByUserId: user.sub }))
+    // CR29-B01 (مراجعة Codex الجولة 29): قاعدة «موظفين بالاسم» بتتطبق على الموظف أيًا كان فرعه وقت الحساب، فبتتحفظ تحت قفل الموظفين
+    // المالي (النقل بياخده) وبعد ما فرعهم يتقرا تاني تحته — اللي اتنقل لفرع تاني قبل القفل بيرفض القاعدة كلها من غير ما تتحفظ
+    const saved = level !== 'employees' ? await save(this.em) : await this.em.transaction(async em => {
+      await lockPayrollEmployees(em, ids)
+      const rows = await em.query(`SELECT [id] FROM [employees] WHERE [branchId] = @0 AND [id] IN (${idList(ids, 1)})`, [branchId, ...ids])
+      if (rows.length !== ids.length) throw new BadRequestException('في موظف مختار مش تبع الفرع ده')
+      return save(em)
+    })
     // المسيرات اللي هيأثر فيها بعد إعادة الحساب (المعتمد والمصروف ما بيتغيرش) — لحساب الفروع: اللي فيها موظف من نطاقه بس
     const runs = await this.runsInScope(scope, await this.monthRuns(period))
     return { id: saved.id, recalculateRuns: runs.filter(run => OPEN_STATUSES.includes(run.status)).map(run => ({ id: run.id, name: run.name, status: run.status })),

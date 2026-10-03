@@ -8,6 +8,7 @@ import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { AttendanceService } from './attendance.service'
 // تراكم المسير يومًا بيوم: أمر دوام العطلة بيغيّر أيام الموظفين المشمولين
 import { markPayrollDaysDirty } from '../payroll/payroll-daily-accrual'
+import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
 import { HolidayWorkOrder } from './holiday-work.entities'
 import { departmentPathOf, holidayAudienceMatches } from './holiday-audience'
 import { branchLocalParentOfRows } from '../org/department-tree'
@@ -389,9 +390,25 @@ export class HolidayWorkService {
     return false
   }
 
+  // CR29-B01 (مراجعة Codex الجولة 29): أمر «موظفين بالاسم» بيتطبق على الموظف أيًا كان فرعه وقت الحساب (زي «شيل خصم»)، فبيتحفظ تحت
+  // قفل الموظفين المالي (النقل بياخده) وبعد ما فرعهم يتقرا تاني تحته — اللي اتنقل لفرع تاني قبل القفل بيرفض الأمر كله من غير ما يتحفظ
+  private async lockNamedTargets(em: EntityManager, values: { targetLevel: string; branchId: number | null; targetIds: string | null }) {
+    if (values.targetLevel !== 'employees') return
+    const ids = uniqueIds(JSON.parse(values.targetIds ?? '[]'))
+    await lockPayrollEmployees(em, ids)
+    for (const chunk of chunks(ids)) {
+      const rows = await em.query(`SELECT [id] FROM [employees] WHERE [branchId] = @0 AND [id] IN (${inList(chunk, 1)})`, [values.branchId, ...chunk])
+      if (rows.length !== chunk.length) throw new BadRequestException('في موظف مختار مش تبع الفرع ده')
+    }
+  }
+
   async create(user: JwtPayload, input: HolidayWorkOrderInput) {
     const values = await this.normalize(user, input)
-    const saved = await this.orders.save(this.orders.create({ ...values, kind: 'ORDER', status: 'ACTIVE', sourceRequestId: null, createdByUserId: user.sub }))
+    const saved = await this.em.transaction(async em => {
+      await this.lockNamedTargets(em, values)
+      const orders = em.getRepository(HolidayWorkOrder)
+      return orders.save(orders.create({ ...values, kind: 'ORDER', status: 'ACTIVE', sourceRequestId: null, createdByUserId: user.sub }))
+    })
     const overtime = await this.clearCoveredOvertime(saved)
     return { ...(await this.detail(user, saved.id)), overtime }
   }
@@ -403,6 +420,7 @@ export class HolidayWorkService {
     this.assertWrite(user, current)
     const values = await this.normalize(user, input)
     await this.em.transaction(async em => {
+      await this.lockNamedTargets(em, values)
       const locked = await em.getRepository(HolidayWorkOrder).findOne({ where: { id }, lock: { mode: 'pessimistic_write' } })
       if (!locked || locked.status !== 'ACTIVE') throw new ConflictException('الأمر اتغير أو اتلغى — حدّث الشاشة')
       await em.getRepository(HolidayWorkOrder).update({ id }, { ...values, updatedByUserId: user.sub, updatedAt: new Date() })

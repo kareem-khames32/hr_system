@@ -637,3 +637,36 @@ test('CR28-B01: الرفض والرد على الاعتراض والإنشاء �
   assert.deepEqual((await ledgerOf('bonus', paidBonus.id)).map(item => item.status), ['APPLIED'], 'مافيش قيد استرداد')
   assert.equal((await repo('BonusRequest').findOneByOrFail({ id: paidBonus.id })).revision, paidRow.revision)
 })
+
+test('CR29-B01: قيد الدفتر المباشر وصرف البدل وقاعدة شيل الخصم بالاسم بتقرا فرع الموظف بعد قفله المالي — نقل اتحفظ قبلها بيرفضها من غير أي كتابة', { timeout: 300000 }, async () => {
+  // حساب نطاقه الفرع الأول بصلاحية حساب الرواتب بس (نفس حساب مراجعة Codex)
+  const desk = await repo('User').save({ email: 'r29-desk@payroll-bonuses.invalid', displayName: 'r29-desk', passwordHash: 'test-only', role: 'employee',
+    branchId: org.branchA.id, permissions: JSON.stringify(['payroll.view', 'payroll.calculate']) })
+  // قيد مباشر (إضافة يدوية)، وإلغاء قيد قائم
+  const manual = await employee('BN_R29_MAN', { departmentId: null })
+  const credit = { employeeId: manual.id, type: 'CREDIT', category: 'manual', amount: 321.09, label: 'إضافة يدوية وقت النقل' }
+  expectStatus(await whileTransferHoldsFinance(manual, () => request(desk, 'POST', '/obligations', credit)), 403)
+  assert.equal(await repo('EmployeeObligation').countBy({ employeeId: manual.id }), 0)
+  const cancelled = await employee('BN_R29_CAN', { departmentId: null })
+  const pending = expectStatus(await request(desk, 'POST', '/obligations', { ...credit, employeeId: cancelled.id }), 201)
+  expectStatus(await whileTransferHoldsFinance(cancelled, () => request(desk, 'POST', `/obligations/${pending.id}/cancel`, {})), 403)
+  assert.equal((await repo('EmployeeObligation').findOneByOrFail({ id: pending.id })).status, 'PENDING')
+  // البدل: بالاسم بيترفض كله، وعلى فريق اللي اتنقل بيطلع منه
+  const allowanceType = expectStatus(await request(users.admin, 'POST', '/payroll/allowances/types', { name: 'بدل اختبار تزامن النقل' }), 201)
+  const named = await employee('BN_R29_ALW', { departmentId: null })
+  const grant = { period: '2027-03', allowanceTypeId: allowanceType.id, amount: '150.00', reason: 'بدل وقت النقل', branchId: org.branchA.id }
+  expectStatus(await whileTransferHoldsFinance(named, () => request(desk, 'POST', '/payroll/allowances/grants', { ...grant, targetLevel: 'employees', employeeIds: [named.id] })), 400)
+  assert.equal(await repo('EmployeeObligation').countBy({ employeeId: named.id }), 0)
+  const teamMember = await employee('BN_R29_TEAM', { teamId: org.teamA.id })
+  const teamGrant = expectStatus(await whileTransferHoldsFinance(teamMember, () => request(desk, 'POST', '/payroll/allowances/grants',
+    { ...grant, targetLevel: 'teams', teamIds: [org.teamA.id] })), 201)
+  const lines = await repo('PayrollAllowanceGrantLine').findBy({ grantId: teamGrant.id })
+  assert.deepEqual(lines.map(line => line.employeeId).sort((a, b) => a - b), [people.a1.id, people.a2.id, people.a3.id].sort((a, b) => a - b), 'اللي اتنقل طلع من البدل')
+  assert.ok(lines.every(line => line.branchId === org.branchA.id))
+  assert.equal(await repo('EmployeeObligation').countBy({ employeeId: teamMember.id }), 0)
+  // قاعدة شيل خصم لموظفين بالاسم
+  const waived = await employee('BN_R29_WVR', { departmentId: null })
+  expectStatus(await whileTransferHoldsFinance(waived, () => request(desk, 'POST', '/payroll/overview/waivers',
+    { period: '2027-03', kind: 'LATENESS', targetLevel: 'employees', branchId: org.branchA.id, employeeIds: [waived.id], reason: 'شيل خصم وقت النقل' })), 400)
+  assert.equal(await repo('PayrollDeductionWaiver').countBy({ reason: 'شيل خصم وقت النقل' }), 0)
+})
