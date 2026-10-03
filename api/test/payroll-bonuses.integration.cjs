@@ -477,3 +477,338 @@ test('Scope, settings and closed legacy routes: previews never reveal staff outs
   assert.deepEqual([legacy.employeeId, legacy.type, legacy.category, /^\d{4}-\d{2}$/.test(legacy.targetPeriod), !!legacy.effectiveDate], [people.solo.id, 'CREDIT', 'bonus', true, true])
   await repo('EmployeeObligation').update(legacy.id, { status: 'CANCELLED' })
 })
+
+// ===== CR28-B01 (مراجعة Codex الجولة 28): فرع الموظف بيتقرا بعد قفله المالي =====
+// نقل الموظف لفرع تاني بياخد قفله المالي لآخر معاملته، فإجراءات المكافآت والخصومات اللي صلاحيتها بفرع الموظف بتقراه بعد القفل ده.
+// قبل الإصلاح: الإلغاء كان بيفحص الفرع قبل القفل، ونقل بيتحفظ في النص → القيد المالي بيتلغي والرد «غير موجود».
+const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
+async function within(promise, ms) {
+  let timer
+  try {
+    return await Promise.race([promise.then(value => ({ done: true, value })), new Promise(done => { timer = setTimeout(() => done({ done: false }), ms) })])
+  } finally { clearTimeout(timer) }
+}
+const RACE_REASON = 'نقل الموظف لفرع تاني وقت إجراء مالي على طلبه'
+// النقل الحقيقي (PATCH /employees/:id) بأمر التقويم المؤرخ النهارده
+async function transferTo(emp, branch) {
+  const context = expectStatus(await request(users.admin, 'GET', `/attendance/calendar-context?scope=EMPLOYEE&sourceId=${emp.id}`), 200)
+  return request(users.admin, 'PATCH', `/employees/${emp.id}`, { branchId: branch.id, calendarChange: { effectiveFrom: new Date().toLocaleDateString('en-CA'),
+    reason: RACE_REASON, expectedRevision: context.revision, expectedCurrentSourceHash: context.currentSourceHash } })
+}
+// حاجز: اتصال تاني ماسك القفل المالي للموظف زي النقل بالظبط؛ الإجراء لازم يكون واقف عليه، وبعدين النقل بيتحفظ جوه نفس المعاملة
+async function whileTransferHoldsFinance(emp, action) {
+  const barrier = ds.createQueryRunner()
+  let pending, committed = false
+  try {
+    await barrier.connect(); await barrier.startTransaction()
+    const spid = (await barrier.query('SELECT @@SPID AS spid'))[0].spid
+    const locked = await barrier.query("DECLARE @result int; EXEC @result=sys.sp_getapplock @Resource=@0,@LockMode='Exclusive',@LockOwner='Transaction',@LockTimeout=5000; SELECT @result AS result",
+      [`hr:employee-finance:${emp.id}`])
+    assert.ok(locked[0].result >= 0)
+    pending = action()
+    const deadline = Date.now() + 8000
+    let waiting = false
+    while (!waiting && Date.now() < deadline) {
+      waiting = (await master.request().input('spid', sql.Int, spid).input('database', sql.NVarChar, database)
+        .query("SELECT session_id FROM sys.dm_exec_requests WHERE database_id=DB_ID(@database) AND blocking_session_id=@spid AND wait_type LIKE 'LCK%'")).recordset.length > 0
+      if (!waiting) await new Promise(done => setTimeout(done, 25))
+    }
+    assert.equal(waiting, true, 'الإجراء لازم يستنى القفل المالي للموظف قبل ما يقرا فرعه')
+    await barrier.query('UPDATE employees SET branchId=@0 WHERE id=@1', [org.branchB.id, emp.id])
+    await barrier.commitTransaction(); committed = true
+    return await pending
+  } finally {
+    if (!committed && barrier.isTransactionActive) await barrier.rollbackTransaction()
+    if (pending) await Promise.allSettled([pending])
+    await barrier.release()
+  }
+}
+const raceBonus = (emp, overrides = {}) => ({ ...bonus({ reason: `${REASON} — تزامن النقل` }), employeeId: emp.id, targetPeriod: '2027-03', confirmNotDuplicate: true, ...overrides })
+const raceDeduction = (emp, overrides = {}) => ({ deductionTypeId: types.commitment.id, inputValue: '0.5', incidentDate, reason: `${DREASON} — تزامن النقل`,
+  targetPeriod: '2027-03', employeeId: emp.id, confirmNotDuplicate: true, ...overrides })
+const ledgerOf = (kind, id) => repo('EmployeeObligation').find({ where: { [kind === 'bonus' ? 'bonusRequestId' : 'deductionRequestId']: id }, order: { id: 'ASC' } })
+
+test('CR28-B01: إلغاء المكافأة والخصم وقت نقل حقيقي للموظف — النقل اتحفظ قبل قفل الإلغاء = «غير موجود» والطلب والقيد زي ما هم، والرد من معاملة الإلغاء نفسها', { timeout: 240000 }, async () => {
+  const boundary = require('../src/payroll/payroll-settlement-boundary')
+  for (const kind of ['bonus', 'deduction']) {
+    const prefix = kind === 'bonus' ? 'bonuses' : 'deductions', entity = kind === 'bonus' ? 'BonusRequest' : 'DeductionRequest'
+    const emp = await employee(`BN_R28_${kind.toUpperCase()}`, { departmentId: null })
+    const row = expectStatus(await request(users.admin, 'POST', `/${prefix}`, kind === 'bonus' ? raceBonus(emp) : raceDeduction(emp)), 201)
+    assert.equal(row.status, 'APPROVED')
+    const ledgerBefore = (await ledgerOf(kind, row.id)).map(item => [item.id, item.status])
+    assert.ok(ledgerBefore.length > 0 && ledgerBefore.every(([, status]) => status === 'PENDING'))
+    // الإلغاء بيقف عند قفل الموظف المالي (قبل ما ياخده)، والنقل الحقيقي بيخلص 200 في الوقت ده
+    const original = boundary.lockPayrollEmployees, entered = deferred(), gate = deferred()
+    let armed = true, cancelling
+    boundary.lockPayrollEmployees = async function (em, ids) {
+      if (armed && ids.includes(emp.id)) { armed = false; entered.resolve(); await gate.promise }
+      return original(em, ids)
+    }
+    try {
+      cancelling = request(users.hr, 'POST', `/${prefix}/${row.id}/cancel`, { expectedRevision: row.revision, reason: `${RACE_REASON} — إلغاء` })
+      assert.equal((await within(entered.promise, 10000)).done, true, 'الإلغاء وصل لقفل الموظف المالي')
+      expectStatus(await transferTo(emp, org.branchB), 200)
+    } finally {
+      gate.resolve(); boundary.lockPayrollEmployees = original
+    }
+    expectStatus(await cancelling, 404, kind === 'bonus' ? 'BONUS_NOT_FOUND' : 'DEDUCTION_NOT_FOUND')
+    const stored = await repo(entity).findOneByOrFail({ id: row.id })
+    assert.deepEqual([stored.status, stored.revision], ['APPROVED', row.revision], 'الطلب ماتلغاش')
+    assert.deepEqual((await ledgerOf(kind, row.id)).map(item => [item.id, item.status]), ledgerBefore, 'القيد المالي ماتلغاش')
+    assert.equal(await repo(kind === 'bonus' ? 'BonusRequestEvent' : 'DeductionRequestEvent').countBy({ requestId: row.id, eventType: 'CANCELLED' }), 0)
+    // موارد الفرع الجديد تلغيه عادي
+    const cancelled = expectStatus(await request(users.hrB, 'POST', `/${prefix}/${row.id}/cancel`, { expectedRevision: row.revision, reason: `${RACE_REASON} — الفرع الجديد` }), 201)
+    assert.equal(cancelled.status, 'CANCELLED')
+  }
+  // الترتيب العكسي: الإلغاء خلص الأول والنقل بعده على طول — الرد هو اللي اتحفظ (من جوه المعاملة)، مش قراءة بعدها بنطاق اتغيّر
+  const service = app.get(require('../src/payroll/bonuses.service').BonusesService)
+  const emp = await employee('BN_R28_VIEW', { departmentId: null })
+  const row = expectStatus(await request(users.admin, 'POST', '/bonuses', raceBonus(emp)), 201)
+  const detail = service.detail, readAfterCommit = deferred(), moved = deferred()
+  service.detail = async function (...args) { readAfterCommit.resolve(); await moved.promise; return detail.apply(this, args) }
+  let cancelling
+  try {
+    cancelling = request(users.hr, 'POST', `/bonuses/${row.id}/cancel`, { expectedRevision: row.revision, reason: `${RACE_REASON} — الرد` })
+    const first = await Promise.race([cancelling.then(() => 'response'), readAfterCommit.promise.then(() => 'read-after-commit')])
+    expectStatus(await transferTo(emp, org.branchB), 200)
+    moved.resolve()
+    const body = expectStatus(await cancelling, 201)
+    assert.equal(first, 'response', 'رد الإلغاء اتبنى جوه معاملته')
+    assert.deepEqual([body.id, body.status, body.employee.branchId], [row.id, 'CANCELLED', org.branchA.id])
+  } finally {
+    moved.resolve(); service.detail = detail
+    if (cancelling) await Promise.allSettled([cancelling])
+  }
+  expectStatus(await request(users.hr, 'GET', `/bonuses/${row.id}`), 404, 'BONUS_NOT_FOUND')
+})
+
+test('CR28-B01: الرفض والرد على الاعتراض والإنشاء والدفعة والعكس وقرار القسط المعلق بيقروا فرع الموظف بعد قفله المالي — نقل اتحفظ قبله بيرفضهم من غير أي كتابة', { timeout: 300000 }, async () => {
+  // الرفض: خطوة الموارد البشرية صلاحيتها بفرع الموظف
+  for (const kind of ['bonus', 'deduction']) {
+    const prefix = kind === 'bonus' ? 'bonuses' : 'deductions', entity = kind === 'bonus' ? 'BonusRequest' : 'DeductionRequest'
+    const emp = await employee(`BN_R28_RJ_${kind.toUpperCase()}`, { departmentId: null, managerEmployeeId: people.manager.id })
+    const row = expectStatus(await request(users.manager, 'POST', `/${prefix}`, kind === 'bonus' ? raceBonus(emp) : raceDeduction(emp)), 201)
+    assert.deepEqual([row.status, row.steps.map(step => [step.role, step.status])], ['IN_APPROVAL', [['HR', 'PENDING']]])
+    const rejected = await whileTransferHoldsFinance(emp, () => request(users.hr, 'POST', `/${prefix}/${row.id}/reject`, { expectedRevision: row.revision, reason: 'رفض وقت النقل' }))
+    expectStatus(rejected, 404, kind === 'bonus' ? 'BONUS_NOT_FOUND' : 'DEDUCTION_NOT_FOUND')
+    const stored = await repo(entity).findOneByOrFail({ id: row.id })
+    assert.deepEqual([stored.status, stored.revision], ['IN_APPROVAL', row.revision])
+  }
+  // الإنشاء الفردي من الموارد البشرية (اعتماد فوري = قيد مالي)
+  const single = await employee('BN_R28_NEW', { departmentId: null })
+  expectStatus(await whileTransferHoldsFinance(single, () => request(users.hr, 'POST', '/bonuses', raceBonus(single))), 403, 'BONUS_OUT_OF_SCOPE')
+  assert.equal(await repo('BonusRequest').countBy({ employeeId: single.id }), 0)
+  // الدفعة: الموظف اللي اتنقل بيطلع منها، فالبصمة بتختلف والإرسال بيترفض كمعاينة قديمة
+  const bulkEmp = await employee('BN_R28_BULK', { departmentId: null })
+  const bulkBody = { deductionTypeId: types.commitment.id, inputValue: '0.5', incidentDate, reason: `${DREASON} — دفعة وقت النقل`, targetPeriod: '2027-03',
+    selection: { mode: 'EMPLOYEES', ids: [bulkEmp.id], excludeEmployeeIds: [] } }
+  const preview = expectStatus(await request(users.hr, 'POST', '/deductions/preview', bulkBody), 201)
+  assert.deepEqual(preview.rows.map(row => [row.employeeId, row.status]), [[bulkEmp.id, 'READY']])
+  const stale = expectStatus(await whileTransferHoldsFinance(bulkEmp, () => request(users.hr, 'POST', '/deductions/bulk', { ...bulkBody, previewHash: preview.previewHash })), 409, 'DEDUCTION_PREVIEW_STALE')
+  assert.deepEqual(stale.preview.rows.map(row => [row.employeeId, row.status]), [[bulkEmp.id, 'DEDUCTION_OUT_OF_SCOPE']])
+  assert.equal(await repo('DeductionRequest').countBy({ employeeId: bulkEmp.id }), 0)
+  // رد الموارد البشرية على اعتراض الموظف
+  const objecting = await employee('BN_R28_OBJ', { departmentId: null })
+  const objector = await repo('User').save({ email: 'r28-objector@payroll-bonuses.invalid', displayName: 'r28-objector', passwordHash: 'test-only', role: 'employee',
+    branchId: org.branchA.id, employeeId: objecting.id, permissions: '[]' })
+  const objected = expectStatus(await request(users.admin, 'POST', '/deductions', raceDeduction(objecting)), 201)
+  expectStatus(await request(objector, 'POST', `/deductions/${objected.id}/objection`, { text: 'كنت في مهمة رسمية في اليوم ده' }), 201)
+  expectStatus(await whileTransferHoldsFinance(objecting, () => request(users.hr, 'POST', `/deductions/${objected.id}/objection-response`, { text: 'رد وقت النقل' })), 404, 'DEDUCTION_NOT_FOUND')
+  assert.equal(await repo('DeductionRequestEvent').countBy({ requestId: objected.id, eventType: 'OBJECTION_RESPONDED' }), 0)
+  // قرار القسط المعلق
+  const suspended = await employee('BN_R28_SUSP', { departmentId: null })
+  const withInstallment = expectStatus(await request(users.admin, 'POST', '/deductions', raceDeduction(suspended)), 201)
+  const [installment] = await ledgerOf('deduction', withInstallment.id)
+  await repo('EmployeeObligation').update(installment.id, { status: 'SUSPENDED' })
+  expectStatus(await whileTransferHoldsFinance(suspended, () => request(users.hr, 'POST', `/deductions/obligations/${installment.id}/decision`,
+    { action: 'DROP', reason: `${RACE_REASON} — إسقاط قسط` })), 404, 'DEDUCTION_OBLIGATION_NOT_FOUND')
+  assert.equal((await repo('EmployeeObligation').findOneByOrFail({ id: installment.id })).status, 'SUSPENDED')
+  // عكس مكافأة مصروفة
+  const paid = await employee('BN_R28_PAID', { departmentId: null })
+  await exempt(paid)
+  const paidBonus = expectStatus(await request(users.admin, 'POST', '/bonuses', raceBonus(paid, { targetPeriod: '2026-10' })), 201)
+  const run = await calc('2026-10', [paid])
+  await approveRun(run)
+  expectStatus(await transition(run, 'pay'), 201)
+  const paidRow = await repo('BonusRequest').findOneByOrFail({ id: paidBonus.id })
+  assert.deepEqual((await ledgerOf('bonus', paidBonus.id)).map(item => item.status), ['APPLIED'])
+  expectStatus(await whileTransferHoldsFinance(paid, () => request(users.hr, 'POST', `/bonuses/${paidBonus.id}/reverse`,
+    { expectedRevision: paidRow.revision, reason: `${RACE_REASON} — عكس` })), 404, 'BONUS_NOT_FOUND')
+  assert.deepEqual((await ledgerOf('bonus', paidBonus.id)).map(item => item.status), ['APPLIED'], 'مافيش قيد استرداد')
+  assert.equal((await repo('BonusRequest').findOneByOrFail({ id: paidBonus.id })).revision, paidRow.revision)
+})
+
+test('CR29-B01: قيد الدفتر المباشر وصرف البدل وقاعدة شيل الخصم بالاسم بتقرا فرع الموظف بعد قفله المالي — نقل اتحفظ قبلها بيرفضها من غير أي كتابة', { timeout: 300000 }, async () => {
+  // حساب نطاقه الفرع الأول بصلاحية حساب الرواتب بس (نفس حساب مراجعة Codex)
+  const desk = await repo('User').save({ email: 'r29-desk@payroll-bonuses.invalid', displayName: 'r29-desk', passwordHash: 'test-only', role: 'employee',
+    branchId: org.branchA.id, permissions: JSON.stringify(['payroll.view', 'payroll.calculate']) })
+  // قيد مباشر (إضافة يدوية)، وإلغاء قيد قائم
+  const manual = await employee('BN_R29_MAN', { departmentId: null })
+  const credit = { employeeId: manual.id, type: 'CREDIT', category: 'manual', amount: 321.09, label: 'إضافة يدوية وقت النقل' }
+  expectStatus(await whileTransferHoldsFinance(manual, () => request(desk, 'POST', '/obligations', credit)), 403)
+  assert.equal(await repo('EmployeeObligation').countBy({ employeeId: manual.id }), 0)
+  const cancelled = await employee('BN_R29_CAN', { departmentId: null })
+  const pending = expectStatus(await request(desk, 'POST', '/obligations', { ...credit, employeeId: cancelled.id }), 201)
+  expectStatus(await whileTransferHoldsFinance(cancelled, () => request(desk, 'POST', `/obligations/${pending.id}/cancel`, {})), 403)
+  assert.equal((await repo('EmployeeObligation').findOneByOrFail({ id: pending.id })).status, 'PENDING')
+  // البدل: بالاسم بيترفض كله، وعلى فريق اللي اتنقل بيطلع منه
+  const allowanceType = expectStatus(await request(users.admin, 'POST', '/payroll/allowances/types', { name: 'بدل اختبار تزامن النقل' }), 201)
+  const named = await employee('BN_R29_ALW', { departmentId: null })
+  const grant = { period: '2027-03', allowanceTypeId: allowanceType.id, amount: '150.00', reason: 'بدل وقت النقل', branchId: org.branchA.id }
+  expectStatus(await whileTransferHoldsFinance(named, () => request(desk, 'POST', '/payroll/allowances/grants', { ...grant, targetLevel: 'employees', employeeIds: [named.id] })), 400)
+  assert.equal(await repo('EmployeeObligation').countBy({ employeeId: named.id }), 0)
+  const teamMember = await employee('BN_R29_TEAM', { teamId: org.teamA.id })
+  const teamGrant = expectStatus(await whileTransferHoldsFinance(teamMember, () => request(desk, 'POST', '/payroll/allowances/grants',
+    { ...grant, targetLevel: 'teams', teamIds: [org.teamA.id] })), 201)
+  const lines = await repo('PayrollAllowanceGrantLine').findBy({ grantId: teamGrant.id })
+  assert.deepEqual(lines.map(line => line.employeeId).sort((a, b) => a - b), [people.a1.id, people.a2.id, people.a3.id].sort((a, b) => a - b), 'اللي اتنقل طلع من البدل')
+  assert.ok(lines.every(line => line.branchId === org.branchA.id))
+  assert.equal(await repo('EmployeeObligation').countBy({ employeeId: teamMember.id }), 0)
+  // قاعدة شيل خصم لموظفين بالاسم
+  const waived = await employee('BN_R29_WVR', { departmentId: null })
+  expectStatus(await whileTransferHoldsFinance(waived, () => request(desk, 'POST', '/payroll/overview/waivers',
+    { period: '2027-03', kind: 'LATENESS', targetLevel: 'employees', branchId: org.branchA.id, employeeIds: [waived.id], reason: 'شيل خصم وقت النقل' })), 400)
+  assert.equal(await repo('PayrollDeductionWaiver').countBy({ reason: 'شيل خصم وقت النقل' }), 0)
+})
+
+// CR33-B01 (مراجعة Codex الجولة 33) والصنف كله: موظف كان في فرع ب ومكافأته وخصمه اتحجزوا في مسير ب معتمد، وبعدين اتنقل لفرع أ.
+// رقم مسير ب مايظهرش لموارد فرع أ: لا في عرض الطلب (سطور القيود وحالة الصرف)، ولا في رسالة رفض الإلغاء، ولا في رسالة «الشهر مقفول»
+// لما يقترح للموظف نفسه على نفس الشهر. حساب الشركة بيشوف الرقم، ومسير فرع أ بيفضل رقمه ظاهر لموارد أ
+test('CR33-B01: رقم مسير فرع تاني مايظهرش لموارد الفرع في عرض المكافأة والخصم ولا في رسايل رفض الإلغاء و«الشهر مقفول»، ومسير الفرع نفسه بيظهر', { timeout: 240000 }, async () => {
+  // شهر فات: النقل النهارده مابيتداخلش مع مسيره المعتمد
+  const period = '2026-07'
+  const emp = await employee('BN_R33_MOVED', { branchId: org.branchB.id, departmentId: null })
+  await exempt(emp)
+  const bonusRow = expectStatus(await request(users.admin, 'POST', '/bonuses', { ...bonus({ reason: `${REASON} — قبل النقل` }), employeeId: emp.id, targetPeriod: period, confirmNotDuplicate: true }), 201)
+  const deductionRow = expectStatus(await request(users.admin, 'POST', '/deductions', { deductionTypeId: types.commitment.id, inputValue: '0.5', incidentDate,
+    reason: `${DREASON} — قبل النقل`, targetPeriod: period, employeeId: emp.id, confirmNotDuplicate: true }), 201)
+  assert.deepEqual([bonusRow.status, deductionRow.status], ['APPROVED', 'APPROVED'])
+  const privateRun = await calc(period, [emp])
+  assert.equal((await repo('PayrollRunMember').findOneByOrFail({ runId: privateRun.id, employeeId: emp.id })).snapshot.branchId, org.branchB.id)
+  await approveRun(privateRun)
+  assert.ok((await ledgerOf('bonus', bonusRow.id)).some(item => item.reservedPayrollRunId === privateRun.id), 'المكافأة محجوزة في مسير ب')
+  expectStatus(await transferTo(emp, org.branchA), 200)
+  assert.equal((await request(users.hr, 'GET', `/payroll/runs/${privateRun.id}`)).status, 403)
+  const leaks = body => JSON.stringify(body).includes(`#${privateRun.id}`) || JSON.stringify(body).includes(`"reservedPayrollRunId":${privateRun.id}`) ||
+    JSON.stringify(body).includes(`"runId":${privateRun.id}`) || JSON.stringify(body).includes(`"appliedPayrollRunId":${privateRun.id}`)
+
+  for (const kind of ['bonus', 'deduction']) {
+    const prefix = kind === 'bonus' ? 'bonuses' : 'deductions', row = kind === 'bonus' ? bonusRow : deductionRow
+    // العرض: موارد أ تشوف الطلب (الموظف بقى عندها) من غير رقم مسير ب، والشركة بتشوفه
+    const shown = expectStatus(await request(users.hr, 'GET', `/${prefix}/${row.id}`), 200)
+    assert.ok(shown.obligations.length > 0)
+    assert.ok(!leaks(shown), `عرض ${kind} كشف مسير ب: ${JSON.stringify(shown.obligations)}`)
+    assert.ok(expectStatus(await request(users.admin, 'GET', `/${prefix}/${row.id}`), 200).obligations.some(item => item.reservedPayrollRunId === privateRun.id))
+    // رفض الإلغاء: نفس الرفض والقيد زي ما هو، من غير الرقم لموارد أ، وبالرقم للشركة
+    const refused = await request(users.hr, 'POST', `/${prefix}/${row.id}/cancel`, { expectedRevision: shown.revision, reason: `${RACE_REASON} — بعد الحجز` })
+    assert.equal(refused.status, 409, JSON.stringify(refused.body)); assert.equal(refused.body.code, kind === 'bonus' ? 'BONUS_RESERVED' : 'DEDUCTION_RESERVED')
+    assert.ok(!leaks(refused.body), `رسالة رفض ${kind} كشفت مسير ب: ${refused.body.message}`)
+    const companyRefused = await request(users.admin, 'POST', `/${prefix}/${row.id}/cancel`, { expectedRevision: shown.revision, reason: `${RACE_REASON} — الشركة` })
+    assert.equal(companyRefused.status, 409); assert.ok(companyRefused.body.message.includes(`(#${privateRun.id})`), companyRefused.body.message)
+    // «الشهر مقفول» لاقتراح جديد للموظف على نفس الشهر
+    const closed = await request(users.hr, 'POST', `/${prefix}`, kind === 'bonus'
+      ? { ...bonus({ reason: `${REASON} — بعد النقل` }), employeeId: emp.id, targetPeriod: period, confirmNotDuplicate: true }
+      : { deductionTypeId: types.commitment.id, inputValue: '0.5', incidentDate, reason: `${DREASON} — بعد النقل`, targetPeriod: period, employeeId: emp.id, confirmNotDuplicate: true })
+    assert.equal(closed.status, 400, JSON.stringify(closed.body)); assert.equal(closed.body.code, kind === 'bonus' ? 'BONUS_PERIOD_CLOSED' : 'DEDUCTION_PERIOD_CLOSED')
+    assert.ok(!leaks(closed.body), `رسالة «الشهر مقفول» كشفت مسير ب: ${JSON.stringify(closed.body)}`)
+  }
+  assert.ok((await ledgerOf('bonus', bonusRow.id)).every(item => item.status === 'PENDING'), 'الرفض ماغيّرش القيد')
+  // تقرير مطابقة الخصومات: البند بلقطة عضويته في المسير (ب)، مش فرع الموظف النهارده (أ)
+  const reportsA = await repo('User').save({ email: 'hr-a-reports@payroll-bonuses.invalid', displayName: 'تقارير فرع أ', passwordHash: 'test-only', role: 'hr_manager',
+    branchId: org.branchA.id, employeeId: null, permissions: JSON.stringify(['deductions.view', 'deductions.manage', 'payroll.view', 'reports.view']) })
+  const reconciliation = expectStatus(await request(reportsA, 'GET', `/deductions/reports?fromPeriod=${period}&toPeriod=${period}`), 200).reconciliation
+  assert.ok(!reconciliation.some(row => row.runId === privateRun.id), `المطابقة كشفت مسير ب: ${JSON.stringify(reconciliation)}`)
+  assert.ok(expectStatus(await request(users.admin, 'GET', `/deductions/reports?fromPeriod=${period}&toPeriod=${period}`), 200).reconciliation.some(row => row.runId === privateRun.id))
+
+  // الضابط: موظف في أ ومسير أ معتمد لنفس الشهر = الرقم ظاهر لموارد أ
+  const stays = await employee('BN_R33_STAYS', { departmentId: null })
+  await exempt(stays)
+  const ownRun = await calc(period, [stays])
+  await approveRun(ownRun)
+  const own = await request(users.hr, 'POST', '/bonuses', { ...bonus({ reason: `${REASON} — مسير الفرع` }), employeeId: stays.id, targetPeriod: period, confirmNotDuplicate: true })
+  assert.equal(own.status, 400, JSON.stringify(own.body)); assert.equal(own.body.code, 'BONUS_PERIOD_CLOSED')
+  assert.ok(own.body.message.includes(`(#${ownRun.id})`), own.body.message); assert.equal(own.body.runId, ownRun.id)
+})
+
+// CR34-B01 (مراجعة Codex الجولة 34): خصم أكبر من الراتب لموظف في ب اترحّل باقيه وقت صرف مسير ب (حدث «ترحيل» فيه رقم المسير)،
+// وبعدين الموظف اتنقل لأ. موارد أ بتشوف الطلب (الموظف بقى عندها) من غير رقم مسير ب في أي حدث، والشركة بتشوفه، والسجل المخزن زي ما هو
+test('CR34-B01: أحداث الخصم (الترحيل) مابتكشفش رقم مسير فرع تاني لموارد الفرع بعد نقل الموظف، والشركة بتشوفه', { timeout: 240000 }, async () => {
+  const period = '2026-06'
+  const emp = await employee('BN_R34_CARRY', { branchId: org.branchB.id, departmentId: null })
+  await exempt(emp)
+  // 28 يوم بدون راتب (8,400) فالباقي 600، وخصم 7.5 يوم (2,250 = حد 25%): 600 تتحصّل والباقي يترحّل للشهر الجاي وقت الصرف
+  await repo('Leave').save({ employeeId: emp.id, leaveTypeCode: 'UNPAID', fromDate: '2026-06-01', toDate: '2026-06-28', days: 28, period: 'FULL', isUnpaid: true, status: 'APPROVED' })
+  const row = expectStatus(await request(users.admin, 'POST', '/deductions', { deductionTypeId: types.commitment.id, inputValue: '7.5', incidentDate,
+    reason: `${DREASON} — أكبر من الراتب`, targetPeriod: period, employeeId: emp.id, confirmNotDuplicate: true }), 201)
+  assert.equal(row.status, 'APPROVED')
+  const privateRun = await calc(period, [emp])
+  await approveRun(privateRun)
+  expectStatus(await transition(privateRun, 'pay'), 201)
+  const stored = await repo('DeductionRequestEvent').find({ where: { requestId: row.id }, order: { id: 'ASC' } })
+  const carry = stored.find(event => ['CARRY_FORWARD', 'CARRY_SUSPENDED'].includes(event.eventType))
+  assert.ok(carry, `فيه حدث ترحيل: ${stored.map(event => event.eventType).join(',')}`)
+  assert.equal(JSON.parse(carry.payload).runId, privateRun.id)
+  expectStatus(await transferTo(emp, org.branchA), 200)
+  assert.equal((await request(users.hr, 'GET', `/payroll/runs/${privateRun.id}`)).status, 403)
+
+  const shown = expectStatus(await request(users.hr, 'GET', `/deductions/${row.id}`), 200)
+  assert.ok(!JSON.stringify(shown.events).includes(`"runId":${privateRun.id}`), `أحداث الخصم كشفت مسير ب: ${JSON.stringify(shown.events.map(event => event.payload))}`)
+  assert.equal(shown.events.find(event => event.id === carry.id).payload.runId, null)
+  assert.ok(!JSON.stringify(shown.events).includes(`#${privateRun.id}`))
+  // الشركة بتشوف الرقم، والسجل المخزن زي ما هو
+  assert.equal(expectStatus(await request(users.admin, 'GET', `/deductions/${row.id}`), 200).events.find(event => event.id === carry.id).payload.runId, privateRun.id)
+  assert.equal(JSON.parse((await repo('DeductionRequestEvent').findOneByOrFail({ id: carry.id })).payload).runId, privateRun.id)
+})
+
+test('CR36-B01: «دفتر المستحقات» ورد إلغاء القيد وسجل الإضافي مابيكشفوش رقم مسير فرع تاني بعد نقل الموظف (محجوز ومصروف)، والشركة بتشوفه', { timeout: 300000 }, async () => {
+  const period = '2026-05'
+  const credit = (emp, label) => repo('EmployeeObligation').save({ employeeId: emp.id, type: 'CREDIT', category: 'manual', amount: 123.45, label,
+    status: 'PENDING', effectiveDate: '2026-05-01', sourceRef: `cr36:${emp.id}:${label}` })
+  // موظف مسيره في ب اتصرف (القيد مستهلك)، وموظف مسيره في ب معتمد بس (القيدين محجوزين)
+  const paid = await employee('BN_R36_PAID', { branchId: org.branchB.id, departmentId: null })
+  const held = await employee('BN_R36_HELD', { branchId: org.branchB.id, departmentId: null })
+  for (const emp of [paid, held]) await exempt(emp)
+  const paidCredit = await credit(paid, 'بدل مصروف')
+  const heldCredits = [await credit(held, 'بدل محجوز 1'), await credit(held, 'بدل محجوز 2')]
+  const paidRun = await calc(period, [paid]); await approveRun(paidRun); expectStatus(await transition(paidRun, 'pay'), 201)
+  const heldRun = await calc(period, [held]); await approveRun(heldRun)
+  const stored = await repo('EmployeeObligation').findOneByOrFail({ id: paidCredit.id })
+  assert.deepEqual([stored.status, stored.appliedPayrollRunId, stored.reservedPayrollRunId], ['APPLIED', paidRun.id, paidRun.id])
+  assert.equal((await repo('EmployeeObligation').findOneByOrFail({ id: heldCredits[0].id })).reservedPayrollRunId, heldRun.id)
+  // إضافي اتصرف في مسير ب
+  const overtime = await repo('OvertimeEntry').save({ employeeId: paid.id, date: '2026-05-12', source: 'PRE_REQUESTED', status: 'PAID', payrollRunId: paidRun.id,
+    deferredFromRunId: heldRun.id, hoursActual: 2, payableHours: 2, approvedMinutes: 120 })
+  for (const emp of [paid, held]) expectStatus(await transferTo(emp, org.branchA), 200)
+  for (const run of [paidRun, heldRun]) assert.equal((await request(users.hr, 'GET', `/payroll/runs/${run.id}`)).status, 403)
+  const leaks = (body, ids) => ids.filter(id => [`RunId":${id},`, `RunId":${id}}`].some(text => JSON.stringify(body).includes(text)))
+
+  // دفتر المستحقات لموارد أ: من غير مراجع مسيرات ب، والمبالغ والحالات زي ما هي
+  const paidLedger = expectStatus(await request(users.hr, 'GET', `/obligations/employee/${paid.id}`), 200)
+  assert.deepEqual(leaks(paidLedger, [paidRun.id, heldRun.id]), [])
+  const paidRow = paidLedger.find(row => row.id === paidCredit.id)
+  assert.deepEqual([paidRow.status, Number(paidRow.amount), paidRow.appliedPayrollRunId, paidRow.reservedPayrollRunId], ['APPLIED', 123.45, null, null])
+  const heldLedger = expectStatus(await request(users.hr, 'GET', `/obligations/employee/${held.id}`), 200)
+  assert.deepEqual(leaks(heldLedger, [heldRun.id]), [])
+  assert.deepEqual(heldLedger.map(row => row.reservedPayrollRunId), [null, null])
+  // الشركة بتشوف المراجع
+  const companyLedger = expectStatus(await request(users.admin, 'GET', `/obligations/employee/${paid.id}`), 200)
+  assert.deepEqual([companyLedger.find(row => row.id === paidCredit.id).appliedPayrollRunId], [paidRun.id])
+  // رد الإلغاء: نفس الحكم، والإلغاء نفسه زي ما هو
+  const cancelled = expectStatus(await request(users.hr, 'POST', `/obligations/${heldCredits[0].id}/cancel`, {}), 201)
+  assert.deepEqual([cancelled.status, cancelled.reservedPayrollRunId], ['CANCELLED', null])
+  const companyCancel = expectStatus(await request(users.admin, 'POST', `/obligations/${heldCredits[1].id}/cancel`, {}), 201)
+  assert.equal(companyCancel.reservedPayrollRunId, heldRun.id)
+  // سجل الإضافي لقارئ حضور ورواتب فرع أ: من غير مسير الصرف ولا المسير اللي اتأجل منه
+  const attendanceA = await repo('User').save({ email: 'attendance-a-cr36@payroll-bonuses.invalid', displayName: 'attendance-a-cr36', passwordHash: 'test-only',
+    role: 'employee', branchId: org.branchA.id, employeeId: null, permissions: JSON.stringify(['attendance.view_all', 'payroll.view']) })
+  const log = expectStatus(await request(attendanceA, 'GET', '/attendance/overtime?from=2026-05-01&to=2026-05-31'), 200)
+  const entry = log.entries.find(row => row.id === overtime.id)
+  assert.ok(entry, 'السجل ظاهر لقارئ الفرع')
+  assert.deepEqual([entry.payrollRunId, entry.deferredFromRunId], [null, null])
+  assert.deepEqual(leaks(log, [paidRun.id, heldRun.id]), [])
+  const companyLog = expectStatus(await request(users.admin, 'GET', '/attendance/overtime?from=2026-05-01&to=2026-05-31'), 200)
+  const companyEntry = companyLog.entries.find(row => row.id === overtime.id)
+  assert.deepEqual([companyEntry.payrollRunId, companyEntry.deferredFromRunId], [paidRun.id, heldRun.id])
+  // المخزن زي ما هو
+  assert.equal((await repo('OvertimeEntry').findOneByOrFail({ id: overtime.id })).payrollRunId, paidRun.id)
+})

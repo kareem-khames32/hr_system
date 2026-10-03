@@ -97,6 +97,8 @@ import { moduleOfRequestType } from '../modules-registry/registry'
 import { onePersonControlEnabled } from '../payroll/one-person-controls'
 import { assertPersonalDataKeys, PERSONAL_DATA_HANDLER, validatePersonalDataRequest } from './personal-data-requests'
 import { recordOutboxEvent } from '../queue/outbox'
+// CR36-B01 وCR37-B01: مرجع المسير في إضافي تفاصيل الطلب ونص أحداثه بقاعدة رؤية المسير
+import { payloadRunIds, payrollRunPeriods, payrollRunRefVisibility, scopeRunRefRows, scrubEventReferences } from '../payroll/payroll-run-visibility'
 
 export interface ActDto {
   action: 'APPROVE' | 'REJECT' | 'RETURN'
@@ -2124,12 +2126,22 @@ export class RequestsService {
       : [])
     const saved = entry.calculationSnapshot
     const approved = saved?.approval
+    // CR37-B01: حدث فيه مرجع مسير (عكس الصرف: originalRunId وreversalRunId) مخفي للحساب لموظف السجل — نصه من غير «#رقم» (الحمولة مابترجعش أصلًا)
+    const eventRefs = events.map(event => payloadRunIds(event.payload ?? null))
+    const eventShown = eventRefs.some(ids => ids.length) ? await payrollRunRefVisibility(this.ds.manager, branchScopeOf(user), eventRefs.flat(), [entry.employeeId], user.employeeId ?? null) : null
+    // CR38-B02: وفترة المسير المخفي كمان («عكس صرف مسير 2026-08» ← «عكس صرف مسير خارج نطاق صلاحيتك»)، وتاريخ العمل زي ما هو
+    const eventHidden = (index: number) => eventShown ? eventRefs[index].filter(runId => !eventShown(runId, entry.employeeId)) : []
+    const eventPeriods = eventShown ? await payrollRunPeriods(this.ds.manager, events.flatMap((_, index) => eventHidden(index))) : new Map<number, string>()
+    const eventReason = (index: number) => eventHidden(index).length
+      ? scrubEventReferences(events[index].reason, eventHidden(index).map(runId => eventPeriods.get(runId))) : events[index].reason
     // نوافذ الإضافي في الدليل على قد نطاق القارئ: فترة فرع تاني مايظهرش اسمها (مراجعة Codex الجولة 17، CR17-B02)
     const windowView = await overtimeWindowRedactor(this.ds.manager, branchScopeOf(user), [saved?.submission, saved?.review])
     // الخطوة 13: جاهزية راتب شهر يوم العمل قبل الاعتماد النهائي، حتى لا يُفاجأ المعتمد الأخير بـOT_SALARY_MONTH_EVIDENCE_REQUIRED.
     const wageEvidence = !approved && ['DETECTED', 'SUBMITTED'].includes(entry.status)
       ? await this.ds.transaction(em => overtimeWageEvidence(em, entry.employeeId, entry.date)).catch(() => null) : null
-    return { ...full, overtime: {
+    // CR36-B01: مرجع المسير اللي اتأجل منه الإضافي (deferredFromRunId) بقاعدة رؤية المسير لموظف السجل
+    const [overtime] = await scopeRunRefRows(this.ds.manager, user, [{
+      employeeId: entry.employeeId,
       wageEvidence,
       id: entry.id, requestId: entry.requestId, date: entry.date, status: entry.status, source: entry.source,
       hoursRequested: entry.hoursRequested, hoursActual: entry.hoursActual, approvedMinutes: entry.approvedMinutes,
@@ -2146,11 +2158,13 @@ export class RequestsService {
           amount: approved.amount, dayKind: approved.dayKind, approvedAt: approved.approvedAt, approverId: approved.approverId,
           // اعتماد تلقائي بفترة «اعتماد تلقائي» (قرار النظام) — علامة بس من غير معرّفات الفترات
           autoApproved: approved.autoApproval != null } : null } : null,
-      events: events.map(event => ({ id: event.id, eventType: event.eventType, actorUserId: event.actorUserId,
+      events: events.map((event, index) => ({ id: event.id, eventType: event.eventType, actorUserId: event.actorUserId,
         actorName: event.actorUserId ? actorNames.get(event.actorUserId) || null : null,
-        stepOrder: event.stepOrder, reason: event.reason, createdAt: event.createdAt,
+        stepOrder: event.stepOrder, reason: eventReason(index), createdAt: event.createdAt,
         beforeMinutes: event.payload?.beforeMinutes ?? null, approvedMinutes: event.payload?.approvedMinutes ?? null })),
-    } }
+    }], row => row.employeeId)
+    const { employeeId: _employee, ...view } = overtime
+    return { ...full, overtime: view }
   }
 
   // بطاقة صاحب الطلب: هويته وتنظيمه الحالي ومديره المباشر (نفس حل خطوة «المدير المباشر» في السلسلة)، ومين قدّمه

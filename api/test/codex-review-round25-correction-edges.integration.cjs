@@ -1,0 +1,75 @@
+'use strict'
+const {test,before,after}=require('node:test'),assert=require('node:assert/strict'),setup=require('./codex-review-round25-support.cjs')
+let f,reader,calc
+before(async()=>{f=await setup('r25_correction_edges');reader=await f.actor('reader',['payroll.view']);calc=await f.actor('calculator',['payroll.calculate','payroll.view'])},{timeout:180000})
+after(async()=>{if(f)await f.close()})
+
+test('CR25 shared-root reconciliation retains only reader items and identical company totals',{timeout:90000},async t=>{
+ const near=await f.employee(6321.19),far=await f.employee(18379.61,f.B)
+ const root=await f.calculate(await f.draft('أصل تصحيح مشترك',[near.id,far.id]));await f.pay(root)
+ const rev=await f.reverse(root,[near.id])
+ const supp=await f.ok('POST',`/payroll/runs/${root.id}/supplementary`,{employeeIds:[near.id],name:'تكميلي ألف وحده',reason:'تصحيح موظف الفرع فقط'})
+ await f.calculate(supp)
+ const view=await f.ok('GET',`/payroll/runs/${supp.id}/corrections`,null,reader)
+ const full=await f.ok('GET',`/payroll/runs/${supp.id}/corrections`)
+ assert.deepEqual(view.reconciliation.employees.map(e=>e.employeeId),[near.id]);assert.equal(view.reconciliation.totals.originalNet,'6321.19')
+ assert.equal(view.reconciliation.runs.find(r=>r.id===root.id).totalNet,null)
+ assert.equal(full.reconciliation.totals.originalNet,'24700.80')
+ assert.ok(!JSON.stringify(view).includes('18379.61'));assert.ok(!JSON.stringify(view).includes(far.fullName))
+ assert.equal(view.correction.parentRun.id,root.id);assert.ok(!('totalNet' in view.correction.parentRun))
+ t.diagnostic(JSON.stringify({case:'correction-shared-root',branchOriginal:'6321.19',companyOriginal:'24700.80',hiddenTotal:null,knownParentHeader:true,reversalId:rev.id}))
+})
+
+test('CR25 correction children must not expose a later payroll recorded wholly in another branch',{timeout:90000},async t=>{
+ const e=await f.employee(6143.27)
+ const root=await f.calculate(await f.draft('أصل فرع ألف قبل النقل',[e.id]));await f.pay(root)
+ await f.reverse(root,[e.id])
+ // Fixture represents a transferred profile and new wage; original paid membership stays immutable in A.
+ await f.repo('Employee').update(e.id,{branchId:f.B.id,basicSalary:9876.54})
+ const supp=await f.ok('POST',`/payroll/runs/${root.id}/supplementary`,{employeeIds:[e.id],name:'تكميلي باء السري بعد النقل',reason:'تصحيح راتب بعد تغيير الفرع'})
+ const calculated=await f.calculate(supp)
+ assert.equal(calculated.members.find(m=>m.employeeId===e.id).snapshot.branchId,f.B.id)
+ assert.equal(Number(calculated.items[0].netPay),9876.54)
+ assert.equal((await f.request('GET',`/payroll/runs/${supp.id}`,null,reader)).status,403)
+ const detail=await f.ok('GET',`/payroll/runs/${root.id}`,null,reader)
+ const corrections=await f.ok('GET',`/payroll/runs/${root.id}/corrections`,null,reader)
+ assert.ok(!corrections.reconciliation.runs.some(r=>r.id===supp.id),'The new reconciliation filter actually hides the foreign child')
+ const bodies=[detail,corrections]
+ const children=bodies.map(body=>body.correction.children.find(child=>child.id===supp.id)??null)
+ t.diagnostic(JSON.stringify({case:'correction-child-after-transfer',parentSnapshotBranch:f.A.id,childSnapshotBranch:f.B.id,childDirectGet:403,childNet:9876.54,reconciliationHidesChild:true,returnedChildren:children}))
+ for(const body of bodies){assert.ok(!JSON.stringify(body).includes('9876.54'),'Foreign child net must not leak through correction.children');assert.ok(!JSON.stringify(body).includes(supp.name))}
+})
+
+test('CR25 forward update must not modify a calculated foreign snapshot after a profile moves into scope',{timeout:90000},async t=>{
+ const anchorEmployee=await f.employee(6111.19),foreign=await f.employee(8333.37,f.B),addition=await f.employee(5222.29)
+ const name='سلسلة اختبار اللقطة المحجوبة'
+ const anchor=await f.calculate(await f.draft(name,[anchorEmployee.id]))
+ await f.attendance(foreign,'2026-08')
+ const future=await f.calculate(await f.draft(name,[foreign.id],'2026-08'))
+ assert.equal(future.members[0].snapshot.branchId,f.B.id)
+ await f.repo('Employee').update(foreign.id,{branchId:f.A.id})
+ const denied=await f.request('GET',`/payroll/runs/${future.id}`,null,calc);assert.equal(denied.status,403)
+ const before=await f.repo('PayrollRun').findOneByOrFail({id:future.id})
+ const eventsBefore=await f.repo('PayrollRunEvent').countBy({runId:future.id,eventType:'MEMBERSHIP_CHANGED'})
+ const result=await f.ok('POST',`/payroll/runs/${anchor.id}/members`,{employeeIds:[addition.id],reason:'إضافة على شهر الفرع المسموح'},calc)
+ const after=await f.repo('PayrollRun').findOneByOrFail({id:future.id})
+ const eventsAfter=await f.repo('PayrollRunEvent').countBy({runId:future.id,eventType:'MEMBERSHIP_CHANGED'})
+ t.diagnostic(JSON.stringify({case:'forward-calculated-foreign',beforeStatus:before.status,readStatus:denied.status,forwardSnapshotBranch:f.B.id,profileNowBranch:f.A.id,beforeDefinition:before.definition,afterDefinition:after.definition,eventsAdded:eventsAfter-eventsBefore,returnedRecalculateRuns:result.recalculateRuns}))
+ assert.equal(after.definition,before.definition,'An unreadable calculated payroll must not have its membership definition rewritten');assert.equal(eventsAfter,eventsBefore)
+})
+
+test('CR25 an old payslip must not reveal a paid supplementary item recorded in another branch',{timeout:90000},async t=>{
+ const e=await f.employee(6174.29)
+ const root=await f.calculate(await f.draft('قسيمة ألف قبل النقل',[e.id]));await f.pay(root);await f.reverse(root,[e.id])
+ await f.repo('Employee').update(e.id,{branchId:f.B.id,basicSalary:9764.83})
+ const supp=await f.ok('POST',`/payroll/runs/${root.id}/supplementary`,{employeeIds:[e.id],name:'تكميلي باء المصروف المخفي',reason:'تصحيح ملف الموظف بعد النقل'})
+ const child=await f.calculate(supp);await f.pay(child)
+ assert.equal(child.members[0].snapshot.branchId,f.B.id);assert.equal(Number(child.items[0].netPay),9764.83)
+ const direct=await f.request('GET',`/payroll/items/${child.items[0].id}`,null,reader);assert.equal(direct.status,404)
+ const old=await f.ok('GET',`/payroll/items/${root.items[0].id}`,null,reader)
+ const self=await f.actor('self-payslip',[],f.B,{employeeId:e.id})
+ const own=await f.ok('GET',`/payroll/items/${root.items[0].id}`,null,self)
+ assert.ok(own.reversal.supplementary.some(row=>row.itemId===child.items[0].id),'The employee is intentionally allowed his own supplementary payslip')
+ t.diagnostic(JSON.stringify({case:'old-payslip-foreign-supplementary',oldItem:root.items[0].id,newItem:child.items[0].id,directNewItemStatus:direct.status,branchReaderSupplementary:old.reversal.supplementary,employeeOwnSupplementaryVisible:true}))
+ assert.ok(!old.reversal.supplementary.some(row=>row.itemId===child.items[0].id),'A branch reader must not receive the foreign supplementary item through the old payslip')
+})

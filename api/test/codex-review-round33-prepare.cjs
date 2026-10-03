@@ -1,0 +1,15 @@
+'use strict'
+const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto'),assert=require('node:assert/strict'),{execFileSync}=require('node:child_process')
+const root=path.resolve(__dirname,'../..'),target='2ba6575a9c06081b46e8d3b3d17645c4c7ce09cd'
+const git=args=>execFileSync('git',args,{cwd:root,encoding:'utf8'}).trim()
+assert.equal(git(['rev-parse','HEAD']),target)
+assert.equal(git(['diff','--name-only',target,'--','api/src','src','docs','api/test']),'')
+const files=git(['ls-files','api/src','src','docs','api/test']).split(/\r?\n/).filter(Boolean)
+const evidence=path.join(__dirname,'codex-review-round33-scope-evidence.cjs')
+if(!fs.existsSync(evidence))fs.writeFileSync(evidence,'module.exports = '+JSON.stringify({target,base:'7e08fb1',root,files:files.map(file=>({file,sha256:crypto.createHash('sha256').update(fs.readFileSync(path.join(root,file))).digest('hex')})),environmentCopied:false},null,2)+'\n')
+for(const name of ['suite','preload','fixture','support','static','final-audit']){
+ const destination=path.join(__dirname,`codex-review-round33-${name}.cjs`)
+ if(fs.existsSync(destination))continue
+ fs.writeFileSync(destination,fs.readFileSync(path.join(__dirname,`codex-review-round32-${name}.cjs`),'utf8').replaceAll('round32','round33').replaceAll('CR32','CR33').replaceAll('REPORT_32','REPORT_33').replace('|31|32)','|31|32|33)'))
+}
+console.log(JSON.stringify({target,hashedFiles:files.length,productClean:true}))

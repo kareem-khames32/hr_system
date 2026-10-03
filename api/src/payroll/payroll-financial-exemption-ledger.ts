@@ -136,7 +136,7 @@ export async function reserveExemptedObligations(em: EntityManager, employeeId: 
   for (const row of rows) {
     const line = saved!.exemptedObligations.find(entry => entry.obligationId === row.id)!
     if (row.status !== 'PENDING') throw conflict('PAYRUN-OBLIGATION-CHANGED', `القيد المُعفى #${row.id} استُهلك أو أُلغي بعد الحساب؛ أعد حساب المسير`)
-    if (row.reservedPayrollRunId != null && row.reservedPayrollRunId !== runId) throw conflict('PAYRUN-OBLIGATION-RESERVED', `القيد المُعفى #${row.id} محجوز لمسير آخر معتمد (#${row.reservedPayrollRunId})`)
+    if (row.reservedPayrollRunId != null && row.reservedPayrollRunId !== runId) throw conflict('PAYRUN-OBLIGATION-RESERVED', `القيد المُعفى #${row.id} محجوز لمسير آخر معتمد`) // CR33-B01: من غير رقم المسير التاني
     if (cents(row.amount) !== cents(line.amount)) throw conflict('PAYRUN-OBLIGATION-CHANGED', `مبلغ القيد المُعفى #${row.id} تغيّر بعد الحساب؛ أعد حساب المسير`)
   }
   const updated = await em.query(`UPDATE [employee_obligations] SET [reservedPayrollRunId]=@0,[reservedAt]=SYSUTCDATETIME() OUTPUT INSERTED.[id]

@@ -63,7 +63,8 @@ function exemptionsEm({ members = [], items = [], employees = [], grantedBy = []
     [PayrollRunMember, { find: async ({ where }) => members.filter(row => row.runId === where.runId) }],
     [PayrollItem, { find: async ({ where }) => items.filter(row => row.runId === where.runId) }],
     [Employee, { find: async ({ where }) => employees.filter(row => idsOf(where).includes(row.id)) }],
-    [PayrollFinancialExemption, { count: async ({ where }) => grantedBy.filter(row => row.runId === where.runId && row.grantedByUserId === where.grantedByUserId).length }],
+    [PayrollFinancialExemption, { find: async ({ where }) => grantedBy.filter(row => row.runId === where.runId && row.grantedByUserId === where.grantedByUserId)
+      .map(row => ({ evaluation: null, ...row })) }],
   ])
   return { getRepository: entity => { const repo = repos.get(entity); if (!repo) throw new Error(`unexpected repo ${entity?.name}`); return repo } }
 }
@@ -74,34 +75,41 @@ test('financial exemptions run screen: a run with no member in the user branch i
   const otherBranchRun = exemptionsEm({ members: [{ runId: 10, employeeId: 166, snapshot: { branchId: 4, departmentId: null } }], items: [{ runId: 10, employeeId: 166 }] })
   const orgs = await service.runOrgs(otherBranchRun, 10)
   assert.deepEqual([...orgs.entries()], [[166, { branchId: 4, departmentId: null }]])
-  await assert.rejects(service.assertRunInScope(otherBranchRun, hrBranch1, noDepartments, 10, orgs), error => error instanceof ForbiddenException && error.getResponse().code === 'EXEMPTION_RUN_OUT_OF_SCOPE')
-  await service.assertRunInScope(otherBranchRun, admin, noDepartments, 10, orgs)
+  await assert.rejects(service.assertRunInScope(otherBranchRun, hrBranch1, 10, orgs), error => error instanceof ForbiddenException && error.getResponse().code === 'EXEMPTION_RUN_OUT_OF_SCOPE')
+  await service.assertRunInScope(otherBranchRun, admin, 10, orgs)
 
   // عضو قديم بلا لقطة: الفرع من ملفه الحالي
   const legacy = exemptionsEm({ items: [{ runId: 11, employeeId: 5 }, { runId: 11, employeeId: 167 }], employees: [{ id: 5, branchId: 1, departmentId: 2 }, { id: 167, branchId: 5, departmentId: null }] })
   const legacyOrgs = await service.runOrgs(legacy, 11)
   assert.equal(legacyOrgs.get(5).branchId, 1)
-  await service.assertRunInScope(legacy, hrBranch1, noDepartments, 11, legacyOrgs)
+  await service.assertRunInScope(legacy, hrBranch1, 11, legacyOrgs)
 
-  // قسم يديره المستخدم، أو إعفاء منحه بنفسه، يبقي المسير مرئيًا له
+  // (Codex CR24-B01) قسم يديره المستخدم في فرع تاني مابيفتحش المسير — الصفة الهيكلية ماتعدّيش فصل الفروع
   const managed = exemptionsEm({ members: [{ runId: 12, employeeId: 168, snapshot: { branchId: 6, departmentId: 9 } }] })
-  await service.assertRunInScope(managed, hrBranch1, { departments: new Set([9]) }, 12, await service.runOrgs(managed, 12))
+  await assert.rejects(service.assertRunInScope(managed, hrBranch1, 12, await service.runOrgs(managed, 12)), error => error instanceof ForbiddenException && error.getResponse().code === 'EXEMPTION_RUN_OUT_OF_SCOPE')
+  // وإعفاء منحه المستخدم بنفسه بيبقي المسير مرئيًا له
   const granted = exemptionsEm({ members: [{ runId: 13, employeeId: 169, snapshot: { branchId: 7, departmentId: null } }], grantedBy: [{ runId: 13, grantedByUserId: 12 }] })
-  await service.assertRunInScope(granted, hrBranch1, noDepartments, 13, await service.runOrgs(granted, 13))
+  await service.assertRunInScope(granted, hrBranch1, 13, await service.runOrgs(granted, 13))
+  // (Codex CR25) نسخة إعفاءه المنقولة لتكميلي في فرع تاني مش منح جديد منه — مابتفتحش له التكميلي
+  const carried = exemptionsEm({ members: [{ runId: 14, employeeId: 170, snapshot: { branchId: 7, departmentId: null } }],
+    grantedBy: [{ runId: 14, grantedByUserId: 12, evaluation: JSON.stringify({ carriedFrom: { exemptionId: 3, runId: 13 } }) }] })
+  await assert.rejects(service.assertRunInScope(carried, hrBranch1, 14, await service.runOrgs(carried, 14)), error => error instanceof ForbiddenException && error.getResponse().code === 'EXEMPTION_RUN_OUT_OF_SCOPE')
 
   // الحساب غير المسند لفرع (نطاق فارغ) لا يرى مسيرًا
   const unassigned = { ...hrBranch1, branchId: null }
-  await assert.rejects(service.assertRunInScope(legacy, unassigned, noDepartments, 11, legacyOrgs), ForbiddenException)
+  await assert.rejects(service.assertRunInScope(legacy, unassigned, 11, legacyOrgs), ForbiddenException)
 })
 
 test('financial exemptions service wires the run scope gate into runView and candidates, and filters recalc ids by branch', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/payroll/financial-exemptions.service.ts'), 'utf8')
   const body = name => source.slice(source.indexOf(`  async ${name}(`), source.indexOf('\n  }\n', source.indexOf(`  async ${name}(`)))
   const runView = body('runView'), candidates = body('candidates')
-  assert.match(runView, /assertRunInScope\(em, user, facts, runId, orgs\)/)
+  assert.match(runView, /assertRunInScope\(em, user, runId, orgs\)/)
   assert.ok(runView.indexOf('assertRunInScope') < runView.indexOf('return {'), 'gate before any run data is returned')
   assert.match(runView, /this\.privileged\(user\) && this\.inBranch\(user, orgs\.get\(id\)\?\.branchId\)/)
-  assert.match(candidates, /assertRunInScope\(em, user, facts, runId, await this\.runOrgs\(em, runId\)\)/)
+  assert.match(candidates, /assertRunInScope\(em, user, runId, await this\.runOrgs\(em, runId\)\)/)
+  // الصفة قبل قراءة المسير: حساب بلا صفة مايعرفش من الرد إن رقم المسير موجود
+  for (const body of [runView, candidates]) assert.ok(body.indexOf('forbidden(\'EXEMPTION_FORBIDDEN\'') < body.indexOf('this.loadRun(em, runId)'), 'role gate before loadRun')
   assert.ok(candidates.indexOf('assertRunInScope') < candidates.indexOf('return { run:'), 'gate before the candidate list')
 })
 

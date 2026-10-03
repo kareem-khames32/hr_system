@@ -3,16 +3,17 @@ import { randomBytes } from 'node:crypto'
 import { DataSource, EntityManager } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, branchScopeSql, inBranchScope, userHasPerm } from '../auth/guards'
+import { payloadRunIds, payrollRunPeriods, payrollRunRefVisibility, scrubEventReferences } from '../payroll/payroll-run-visibility'
 import { PayrollDecimal } from '../payroll/payroll-decimal'
 import { readLoanInstallmentPositions } from '../payroll/payroll-installment-balances'
 import { repayLoanEarly } from '../payroll/payroll-installment-ledger'
 import { loanScheduleAmounts } from '../requests/loan-installment-requests'
+import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
 import { addDays, LoanCapPolicyValues, loanMoney, normalizeLoanCapPolicyInput } from './loan-caps'
 import { evaluateEmployeeLoanCap, isLoanCapRequestType, LOAN_CAP_POLICY_COLUMNS, loanRequestDayWindow, localDate, parseLoanCapPolicyRow, REGULAR_LOAN_SINGLE_DEDUCTION } from './loan-request-caps'
 import { collectLoanRecovery, LOAN_RECOVERY_COLUMNS, openRecoveryAmount, writeOffLoanRecovery } from './loan-recovery'
 // B1.8 / R09: تسجيل صرف السلفة
 import { loanDisbursementDetails, readLoanDisbursementInput, recordLoanDisbursement } from './loan-disbursement'
-import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
 import type { LoanCapPolicyDto, LoanRepaymentDto } from './loans.dto'
 
 const blank = (value: unknown) => value === undefined || value === null || (typeof value === 'string' && value.trim() === '')
@@ -30,6 +31,15 @@ export class LoansService {
     // صف SQL خام: الفرع رقم أو null — والمقارنة بفروع النطاق (فرع أو أكتر)
     if (!employee || !inBranchScope(branchScopeOf(user), employee.branchId == null ? null : Number(employee.branchId))) throw new NotFoundException(notFound)
     return employee
+  }
+
+  // CR28-B01 (مراجعة Codex الجولة 28): نقل الموظف لفرع تاني بياخد قفله المالي لآخر معاملته، ففرعه بيتقرا تاني بعد القفل ده
+  // قبل أي حركة مالية (سداد مبكر، تحصيل أو إعدام رصيد متبقي) — قبله ممكن يكون نقل اتحفظ والحركة تتسجل بصلاحية الفرع القديم.
+  // الفحص الأول قبل القفل عشان اللي مالوش نطاق ياخد «غير موجود» من غير ما يستنى قفل حد
+  private async employeeInScopeLocked(em: EntityManager, user: JwtPayload, employeeId: number, notFound: string) {
+    await this.employeeInScope(em, user, employeeId, notFound)
+    await lockPayrollEmployees(em, [employeeId])
+    return this.employeeInScope(em, user, employeeId, notFound)
   }
 
   // ===== AD-01: سياسات السقوف المؤرخة =====
@@ -173,12 +183,12 @@ export class LoansService {
         if (!userHasPerm(user, 'payroll.view')) throw new NotFoundException('السلفة غير موجودة')
         await this.employeeInScope(em, user, loan.employeeId, 'السلفة غير موجودة')
       }
-      const [row] = await this.ledgerFor(em, loan.employeeId, loanId, !own)
+      const [row] = await this.ledgerFor(em, loan.employeeId, loanId, !own, own ? null : user)
       return row
     })
   }
 
-  private async ledgerFor(em: EntityManager, employeeId: number, loanId: number | undefined, full: boolean) {
+  private async ledgerFor(em: EntityManager, employeeId: number, loanId: number | undefined, full: boolean, viewer: JwtPayload | null = null) {
     const loans = await em.query(`SELECT [id],[requestId],[employeeId],CONVERT(varchar(40),[amount]) AS [amount],CONVERT(varchar(40),[requestedAmount]) AS [requestedAmount],
       [status],[disbursedAt],[isExceptional],[exceptionalCategory],[exceptionalReason],[firstInstallmentPeriod],[installmentMonths]${full ? ',[capSnapshot],[createdByUserId]' : ''}
       FROM [loans] WHERE [employeeId]=@0 ${loanId === undefined ? '' : 'AND [id]=@1'} ORDER BY [id] DESC`, loanId === undefined ? [employeeId] : [employeeId, loanId])
@@ -191,6 +201,28 @@ export class LoansService {
       FROM [loan_installment_events] WHERE [employeeId]=@0 ${full ? '' : `AND [action] IN (${EMPLOYEE_EVENT_ACTIONS.map(a => `'${a}'`).join(',')})`} ORDER BY [id]`, [employeeId])
     // B1.8: بيانات تسجيل الصرف (ترحيل 082) — قبله فاضية
     const disbursement = await loanDisbursementDetails(em, loans.map((loan: any) => Number(loan.id)))
+    // CR34-B01: قارئ الرواتب (مش الموظف نفسه) بياخد رقم المسير بس لو المسير مرئي له بلقطة عضوية الموظف، والحدث اللي مسيره مخفي
+    // من غير «#رقم» في نصه. السجل المخزن زي ما هو
+    if (viewer) {
+      const shown = await payrollRunRefVisibility(em, branchScopeOf(viewer), events.map((event: any) => event.payrollRunId), [employeeId], viewer.employeeId ?? null)
+      const hiddenEvents = events.filter((event: any) => event.payrollRunId != null && !shown(event.payrollRunId, employeeId))
+      // CR38-B02: وفترة المسير المخفي كمان — مسير الحدث ومسيرات حمولته (عكس الصرف: الأصل اللي فترته في النص)
+      const payloads = new Map<number, unknown>()
+      if (hiddenEvents.length) {
+        for (const row of await em.query(`SELECT [id],[payload] FROM [loan_installment_events] WHERE [id] IN (SELECT CAST([value] AS int) FROM OPENJSON(@0))`,
+          [JSON.stringify(hiddenEvents.map((event: any) => Number(event.id)))])) {
+          try { payloads.set(Number(row.id), row.payload ? JSON.parse(row.payload) : null) } catch { payloads.set(Number(row.id), null) }
+        }
+      }
+      const refsOf = (event: any): number[] => [Number(event.payrollRunId), ...payloadRunIds(payloads.get(Number(event.id)) ?? null)]
+      const payloadShown = hiddenEvents.length ? await payrollRunRefVisibility(em, branchScopeOf(viewer), hiddenEvents.flatMap(refsOf), [employeeId], viewer.employeeId ?? null) : null
+      const periods = hiddenEvents.length ? await payrollRunPeriods(em, hiddenEvents.flatMap(refsOf)) : new Map<number, string>()
+      for (const event of hiddenEvents) {
+        const hiddenPeriods = refsOf(event).filter(runId => !payloadShown || !payloadShown(runId, employeeId)).map(runId => periods.get(runId))
+        event.payrollRunId = null
+        event.reason = scrubEventReferences(event.reason, hiddenPeriods)
+      }
+    }
     return loans.map((loan: any) => {
       const installments = positions.filter(row => row.loanId === loan.id).sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.id - b.id)
         .map(({ employeeId: _employee, ...row }) => row)
@@ -218,7 +250,8 @@ export class LoansService {
       await lockPayrollEmployees(em, [Number(loan.employeeId)])
       await this.employeeInScope(em, user, loan.employeeId, 'السلفة غير موجودة')
       await recordLoanDisbursement(em, { loanId, ...input, actorId: user.sub })
-      const [row] = await this.ledgerFor(em, Number(loan.employeeId), loanId, true)
+      // بعد دمج خط التسريبات: الرد بقاعدة رؤية المسير للي صرف (CR34)
+      const [row] = await this.ledgerFor(em, Number(loan.employeeId), loanId, true, user)
       return row
     })
   }
@@ -228,7 +261,7 @@ export class LoansService {
     return this.ds.transaction(async em => {
       const [loan] = await em.query('SELECT [id],[employeeId] FROM [loans] WHERE [id]=@0', [loanId])
       if (!loan) throw new NotFoundException('السلفة غير موجودة')
-      await this.employeeInScope(em, user, loan.employeeId, 'السلفة غير موجودة')
+      await this.employeeInScopeLocked(em, user, loan.employeeId, 'السلفة غير موجودة')
       const amount = blank(dto.amount) ? null : loanMoney(dto.amount, 'مبلغ السداد')
       return repayLoanEarly(em, { employeeId: loan.employeeId, loanId, amount, reference: dto.reference, method: dto.method, mode: dto.mode,
         reason: dto.reason ?? null, requestId: null, actorId: user.sub })
@@ -260,7 +293,7 @@ export class LoansService {
   private async recoveryInScope(em: EntityManager, user: JwtPayload, id: number) {
     const [row] = await em.query('SELECT [employeeId] FROM [loan_recovery_balances] WHERE [id]=@0', [id])
     if (!row) throw new NotFoundException('رصيد السلفة المتبقي غير موجود')
-    await this.employeeInScope(em, user, row.employeeId, 'رصيد السلفة المتبقي غير موجود')
+    await this.employeeInScopeLocked(em, user, row.employeeId, 'رصيد السلفة المتبقي غير موجود')
   }
 
   async collectRecovery(user: JwtPayload, id: number, dto: { amount: unknown; reference: string; reason?: string }) {

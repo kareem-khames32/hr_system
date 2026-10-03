@@ -1,0 +1,33 @@
+'use strict'
+const {test,before,after}=require('node:test'),assert=require('node:assert/strict'),setup=require('./codex-review-round32-support.cjs')
+let f,desk
+before(async()=>{f=await setup('r32_holiday_effects');desk=await f.actor('r32-holiday-effects',['attendance.manage','payroll.view']);await f.setting('attendance.weekend_days','FRI,SAT');await f.repo('Branch').update([f.A.id,f.B.id],{weekendDays:'FRI,SAT'})},{timeout:180000})
+after(async()=>{if(f)await f.close()})
+test('CR32 update returns ordinary detail, recomputes covered overtime and rebuilds only the unreserved holiday credit',{timeout:120000},async t=>{
+ const day='2026-07-17',emp=await f.employee(9000)
+ await f.repo('Employee').update(emp.id,{fingerprintCode:emp.employeeCode})
+ await f.ok('POST','/attendance/punches/manual',{punches:['08:00','12:00'].map(clock=>({employeeCode:emp.employeeCode,timestamp:new Date(`${day}T${clock}:00`).toISOString()})),reason:'CR32 real four hours on Friday'})
+ const active=()=>f.repo('OvertimeEntry').findBy({employeeId:emp.id,date:day})
+ assert.ok((await active()).some(row=>['DETECTED','SUBMITTED'].includes(row.status)),'Actual punches discover overtime before the order covers the day')
+ const body={name:'CR32 changing coverage',targetLevel:'branch',branchId:f.A.id,dates:['2030-07-05'],multiplier:2}
+ const order=(await f.ok('POST','/attendance/holiday-work',body,desk)).order
+ const updated=await f.ok('PATCH',`/attendance/holiday-work/${order.id}`,{...body,dates:[day]},desk)
+ assert.equal(updated.overtime.failed,0);assert.ok(updated.overtime.recomputed>=1)
+ const {overtime,...view}=updated;assert.deepEqual(view,await f.ok('GET',`/attendance/holiday-work/${order.id}`,null,desk))
+ assert.ok(!(await active()).some(row=>['DETECTED','SUBMITTED','APPROVED'].includes(row.status)))
+ const run=await f.draft('CR32 holiday effects',[emp.id]);await f.calculate(run)
+ const sourceRef=`holiday_work:${order.id}:${day}`,first=await f.repo('EmployeeObligation').findOneByOrFail({employeeId:emp.id,sourceRef,status:'PENDING'})
+ assert.equal(Number(first.amount),300)
+ await f.ok('PATCH',`/attendance/holiday-work/${order.id}`,{...body,dates:[day],multiplier:1.5},desk)
+ assert.equal((await f.repo('EmployeeObligation').findOneByOrFail({id:first.id})).status,'CANCELLED')
+ await f.ok('POST',`/payroll/runs/${run.id}/recalculate`,{reason:'CR32 changed holiday multiplier'})
+ const current=(await f.repo('EmployeeObligation').findBy({employeeId:emp.id,sourceRef})).filter(row=>row.status==='PENDING')
+ assert.equal(current.length,1);assert.equal(Number(current[0].amount),225)
+ const item=await f.repo('PayrollItem').findOneByOrFail({runId:run.id,employeeId:emp.id})
+ assert.equal(Number(item.otherAdditions),225);assert.equal(Number(item.overtimeAmount),0)
+ await f.ok('POST',`/attendance/holiday-work/${order.id}/cancel`,{reason:'CR32 cancel unreserved amount'},desk)
+ assert.equal((await f.repo('EmployeeObligation').findOneByOrFail({id:current[0].id})).status,'CANCELLED')
+ await f.ok('POST',`/payroll/runs/${run.id}/recalculate`,{reason:'CR32 cancelled holiday order'})
+ assert.equal(Number((await f.repo('PayrollItem').findOneByOrFail({runId:run.id,employeeId:emp.id})).otherAdditions),0)
+ t.diagnostic(JSON.stringify({case:'holiday-update-financial-effects',initialCredit:300,newCredit:225,afterCancel:0,coveredOvertimeRecomputed:overtime.recomputed,replyEqualsGet:true,noDuplicateCredit:true}))
+})
