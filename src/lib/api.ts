@@ -697,6 +697,8 @@ export interface ApiUser {
   // الشاشة بتعلّمه عشان تفرّقه عن حساب البريد+كلمة المرور وإنت بتسند الأدوار.
   isDomainAccount?: boolean
   domainObjectGuid?: string | null
+  // B1.3: الحساب مقفول (بعد محاولات دخول غلط) لحد الوقت ده — بيرجع للحساب المقفول بس
+  lockedUntil?: string
 }
 
 // ===== مزامنة حسابات الدومين (POST /users/domain-sync) =====
@@ -1183,6 +1185,17 @@ export const fetchBankSheet = (runId: number) => get<ApiBankSheet>(`/payroll/run
 
 // ===== المستخدمون والإعدادات =====
 export const fetchUsers = () => get<ApiUser[]>('/users')
+// B1.3: فك قفل حساب اتقفل بعد محاولات دخول غلط
+export const unlockUser = (id: number) => post<{ id: number; unlocked: boolean }>(`/users/${id}/unlock`, {})
+// B1.3: سجل الدخول (الأحدث الأول، 500 بحد أقصى) — available = false قبل ترحيل 078
+export interface ApiLoginEvent {
+  id: number; at: string; userId: number | null; displayName: string | null; identifier: string
+  method: 'PASSWORD' | 'DOMAIN' | 'CODE' | 'ADMIN'; outcome: string; ip: string | null; userAgent: string | null; actorUserId: number | null; actorName: string | null
+}
+export const fetchLoginEvents = (filters: { from?: string; to?: string; outcome?: string; search?: string; userId?: number }) => {
+  const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => value !== undefined && value !== '').map(([key, value]) => [key, String(value)])).toString()
+  return get<{ available: boolean; rows: ApiLoginEvent[] }>(`/users/login-events${query ? `?${query}` : ''}`)
+}
 export const createUser = (u: { email: string; password: string; displayName: string; role: string; branchId?: number; employeeId?: number; permissions?: string[]; scopeAllBranches?: boolean; scopeBranchIds?: number[] }) =>
   post<ApiUser>('/users', u)
 // scopeBranchIds: فروع النطاق بعلامات صح؛ null أو [] = يرجع لفرعه الأصلي بس

@@ -1,0 +1,76 @@
+// B1.3 — أمان الدخول: القواعد الصافية (التأخير والقفل وسياسة كلمة السر وحراسة الإعدادات وحماية فرض التحقق على الأدوار)، وربط الشاشات.
+// لا SQL ولا خدمة (التشغيل الحقيقي في login-security.integration.cjs وترحيله في login-security-migration.integration.cjs).
+const { test } = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
+require('../node_modules/ts-node').register({ project: path.join(__dirname, '..', 'tsconfig.json'), transpileOnly: true })
+const security = require('../src/auth/login-security')
+const { twoFactorEnableBlock } = require('../src/auth/two-factor-gate')
+const root = path.resolve(__dirname, '..', '..')
+const read = file => fs.readFileSync(path.join(root, file), 'utf8').replace(/\r\n/g, '\n')
+
+test('القفل والتأخير: أول محاولتين من غير تأخير، وبعدين ثانية ثم 2 ثم 4 كحد أقصى، والقفل عند الحد بالمدة', () => {
+  assert.deepEqual([1, 2, 3, 4, 5, 6, 10].map(count => security.failureDelayMs(count)), [0, 0, 1000, 2000, 4000, 4000, 4000])
+  assert.deepEqual([3, 4].map(count => security.failureDelayMs(count, 50)), [50, 100])
+  const now = new Date('2026-10-03T10:00:00Z')
+  assert.equal(security.lockAfterFailure(9, { maxAttempts: 10, minutes: 15 }, now), null)
+  assert.equal(security.lockAfterFailure(10, { maxAttempts: 10, minutes: 15 }, now).toISOString(), '2026-10-03T10:15:00.000Z')
+  assert.deepEqual([security.lockedNow('2026-10-03T10:00:01Z', now), security.lockedNow('2026-10-03T09:59:59Z', now), security.lockedNow(null, now)], [true, false, false])
+  assert.match(security.lockedMessage('2026-10-03T10:14:30Z', now), /بعد 15 دقيقة/)
+  // الإعدادات: القيمة الغلط = الافتراضي
+  assert.deepEqual(security.lockoutSettingsOf({}), { maxAttempts: 10, minutes: 15 })
+  assert.deepEqual(security.lockoutSettingsOf({ 'auth.lockout.max_attempts': '5', 'auth.lockout.minutes': '30' }), { maxAttempts: 5, minutes: 30 })
+  assert.deepEqual(security.lockoutSettingsOf({ 'auth.lockout.max_attempts': '1', 'auth.lockout.minutes': 'x' }), { maxAttempts: 10, minutes: 15 })
+})
+
+test('سياسة كلمة السر (NIST): الطول، والشائعة، والحرف المتكرر، وجزء البريد واسم صاحب الحساب واسم النظام — من غير شرط رموز', () => {
+  const ok = 'horse battery staple 7'
+  assert.equal(security.passwordPolicyIssue(ok, 8), null)
+  assert.equal(security.passwordPolicyIssue('correcthorsebatterystaple', 8), null, 'حروف صغيرة بس مقبولة')
+  assert.match(security.passwordPolicyIssue('short1', 8), /8 حروف على الأقل/)
+  assert.match(security.passwordPolicyIssue('x'.repeat(129), 8), /128/)
+  for (const common of ['password123', 'Password@123', 'QWERTY123', ' 12345678 ']) assert.match(security.passwordPolicyIssue(common, 8), /الشائعة/, common)
+  assert.match(security.passwordPolicyIssue('zzzzzzzzzz', 8), /حرف واحد متكرر/)
+  assert.match(security.passwordPolicyIssue('i-am-mona.ali-2026', 8, { email: 'mona.ali@company.com' }), /اسم الحساب/)
+  assert.match(security.passwordPolicyIssue('Mona Ali 2026!', 8, { displayName: 'mona ali' }), /اسم صاحب الحساب/)
+  assert.match(security.passwordPolicyIssue('logic-leap-2026', 8), /اسم النظام/)
+  assert.equal(security.passwordPolicyIssue('abc!defg', 8, { email: 'abc@x.com' }), null, 'جزء بريد أقل من 4 حروف مايتحسبش')
+  assert.equal(security.passwordMinLengthOf('7'), 8); assert.equal(security.passwordMinLengthOf('12'), 12)
+})
+
+test('حراسة إعدادات أمان الدخول، وفرض التحقق على أدوار محتاج البريد مضبوط زي التحقق العام', () => {
+  const error = security.loginSecurityConfigError
+  assert.equal(error('auth.lockout.max_attempts', '10'), null)
+  assert.match(error('auth.lockout.max_attempts', '2'), /من 3 لـ100/)
+  assert.match(error('auth.lockout.minutes', '1.5'), /رقم صحيح/)
+  assert.match(error('auth.password.min_length', '7'), /من 8 لـ64/)
+  assert.equal(error('auth.two_factor.roles', ''), null)
+  assert.equal(error('auth.two_factor.roles', 'super_admin, hr_manager'), null)
+  assert.match(error('auth.two_factor.roles', 'HR Manager'), /حروف إنجليزية صغيرة/)
+  assert.match(error('auth.two_factor.roles', 'hr_manager,hr_manager'), /من غير تكرار/)
+  assert.equal(error('payroll.cycle_start_day', 'x'), null, 'مفاتيح تانية مش شغله')
+  assert.deepEqual(security.twoFactorRolesOf(' super_admin ,, hr_manager,Bad Role'), ['super_admin', 'hr_manager'])
+  const noMail = { SMTP_HOST: '' }
+  assert.match(twoFactorEnableBlock('auth.two_factor.roles', 'hr_manager', noMail), /أصحاب الأدوار دي هيتقفلوا/)
+  assert.equal(twoFactorEnableBlock('auth.two_factor.roles', '', noMail), null, 'تفضية القايمة مسموحة دايمًا')
+  assert.match(twoFactorEnableBlock('auth.two_factor_enabled', 'true', noMail), /كل الحسابات هتتقفل/)
+})
+
+test('الشاشات: «فك القفل» في المستخدمين، و«سجل الدخول» بصلاحيته، وإعدادات الأمان، ورؤوس الحماية في الواجهة', () => {
+  const users = read('src/app/settings/users/page.tsx')
+  for (const text of ['await unlockUser(user.id)', 'user.lockedUntil && (', 'href="/settings/login-log"']) assert.ok(users.includes(text), text)
+  const log = read('src/app/settings/login-log/page.tsx')
+  for (const text of ['fetchLoginEvents(filters)', 'data-login-log-unavailable', "'الوقت', 'الحساب', 'الطريقة', 'النتيجة', 'الـIP', 'الجهاز'"]) assert.ok(log.includes(text), text)
+  assert.doesNotMatch(log, /^export (const|function) (?!default)/m, 'صفحة Next من غير exports تانية')
+  assert.ok(read('src/components/layout/MainLayout.tsx').includes("['/settings/login-log', 'users.manage']"))
+  assert.ok(read('src/components/layout/Sidebar.tsx').includes("{ label: 'سجل الدخول', href: '/settings/login-log', perm: 'users.manage' }"))
+  const policies = read('src/app/settings/policies/page.tsx')
+  for (const key of ['auth.two_factor.roles', 'auth.lockout.max_attempts', 'auth.lockout.minutes', 'auth.password.min_length']) assert.ok(policies.includes(`key: '${key}'`), key)
+  const seed = read('api/src/seed/requests-seed.data.ts')
+  for (const key of ['auth.lockout.max_attempts', 'auth.lockout.minutes', 'auth.password.min_length', 'auth.two_factor.roles']) assert.ok(seed.includes(`key: '${key}'`), key)
+  const next = read('next.config.js')
+  for (const text of ["{ key: 'X-Frame-Options', value: 'DENY' }", "{ key: 'X-Content-Type-Options', value: 'nosniff' }", 'poweredByHeader: false', "source: '/:path*'"]) assert.ok(next.includes(text), text)
+  assert.ok(read('api/src/main.ts').includes('applySecurityHeaders(app)'))
+  assert.ok(read('docs/DEPLOY_SERVER.md').includes('TRUST_PROXY=1'))
+})

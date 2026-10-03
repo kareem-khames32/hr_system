@@ -80,4 +80,12 @@ export class User {
   // type صريح: النوع `string | null` بيوصل للـreflection كـObject فـTypeORM بيرفض الإقلاع بدونه
   @Column({ type: 'nvarchar', length: 64, nullable: true })
   domainObjectGuid: string | null
+
+  // أمان الدخول (B1.3 — ترحيل 078): محاولات كلمة السر الغلط ورا بعض، والحساب مقفول لحد إمتى (null = مش مقفول).
+  // select: false — بتتقري وتتكتب صراحةً بس (LoginSecurityService)، فباقي النظام والكود قبل الترحيل مايتأثروش بيهم
+  @Column({ type: 'int', default: 0, select: false })
+  failedLoginCount: number
+
+  @Column({ type: 'datetime2', nullable: true, select: false })
+  lockedUntil: Date | null
 }

@@ -14,6 +14,7 @@ import { User } from './user.entity'
 // بـ node api/scripts/two-factor-off.cjs من غير ما التطبيق يشتغل (مفتاح الطوارئ).
 export { TWO_FACTOR_CONFIG_KEY } from './two-factor-gate'
 import { TWO_FACTOR_CONFIG_KEY } from './two-factor-gate'
+import { TWO_FACTOR_ROLES_KEY, twoFactorRolesOf } from './login-security'
 import { PRODUCT_NAME } from '../settings/product-name'
 
 /** ثوابت الرمز في مكان واحد — مش مفاتيح إعدادات (المالك رفض تضخيم لوحة الإعدادات). */
@@ -111,10 +112,14 @@ export class TwoFactorService {
    *   مطلوب، والمتصل لازم **يرفض الدخول** (فشل مقفول). قبل كده كانت بترجّع false هنا، فخلل قراءة
    *   واحد كان بيفتح جلسة بلا رمز ولا حالة معلَّقة.
    */
-  async gate(): Promise<TwoFactorGate> {
+  async gate(user?: Pick<User, 'role'>): Promise<TwoFactorGate> {
     try {
       const row = await this.config.findOne({ where: { key: TWO_FACTOR_CONFIG_KEY } })
-      return (row?.value ?? '').trim().toLowerCase() === 'true' ? 'ENABLED' : 'DISABLED'
+      if ((row?.value ?? '').trim().toLowerCase() === 'true') return 'ENABLED'
+      if (!user) return 'DISABLED'
+      // B1.3: التحقق العام مقفول — دور الحساب في «التحقق بخطوتين إلزامي لأدوار…» = الرمز مطلوب له هو
+      const roles = await this.config.findOne({ where: { key: TWO_FACTOR_ROLES_KEY } })
+      return twoFactorRolesOf(roles?.value ?? '').includes(user.role) ? 'ENABLED' : 'DISABLED'
     } catch (error) {
       this.logger.error(
         `تعذّر قراءة ${TWO_FACTOR_CONFIG_KEY} — حالة التحقق بخطوتين مش معروفة والدخول بيُرفض: ${(error as Error).message}`

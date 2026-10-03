@@ -233,6 +233,8 @@ test('الإصلاح 3: معامل عقوبة الغياب وباقي المفا
     require('../src/payroll/financial-exemptions').exemptionSettingError,
     require('../src/payroll/payroll-policy-settings').validatePayrollPolicyDefaultConfig,
     require('../src/offboarding/eos').eosConfigError,
+    // B1.3: أمان الدخول (القفل وطول كلمة السر)
+    require('../src/auth/login-security').loginSecurityConfigError,
   ]
   const rejectsNegative = key => {
     for (const validate of validators) {

@@ -396,6 +396,12 @@ export const configSeed: Array<{ key: string; value: string }> = [
   // (POST /auth/mail-test أو node api/scripts/mail-selftest.cjs) — وإلا الشركة كلها تتقفل برّه النظام.
   // مفتاح الطوارئ من الترمينال بلا تطبيق: node api/scripts/two-factor-off.cjs
   { key: 'auth.two_factor_enabled', value: 'false' },
+  // أمان الدخول (B1.3): قفل الحساب بعد محاولات كلمة سر غلط ورا بعض (العدد، والمدة بالدقايق)، وأقل طول لكلمة السر الجديدة،
+  // وأكواد الأدوار اللي التحقق بخطوتين إلزامي ليها لما التحقق العام مقفول (فاضي = ولا دور). الحدود في api/src/auth/login-security.ts.
+  { key: 'auth.lockout.max_attempts', value: '10' },
+  { key: 'auth.lockout.minutes', value: '15' },
+  { key: 'auth.password.min_length', value: '8' },
+  { key: 'auth.two_factor.roles', value: '' },
   // حساب دخول للموظف الجديد من الدومين في لحظته (قرار المالك 22 سبتمبر بالليل) — **بيتسلّم مفتوح**،
   // لأن الدخول بالدومين شغّال حيًّا خلاص. 'false' بتقفل التلقائي **بس**؛ زرّ «مزامنة من AD» في ملف
   // الموظف ضغطة بإيد المالك وبيفضل شغّال. القفل مايوقّفش إضافة موظف ولا يفشّلها أصلًا:

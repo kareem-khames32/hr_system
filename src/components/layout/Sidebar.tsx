@@ -227,6 +227,7 @@ const adminMenuDefs: MenuItem[] = [
       { label: 'قوالب المستندات', href: '/settings/document-templates', perm: 'settings.manage' },
       { label: 'قوالب الخطابات', href: '/settings/letter-templates', perm: 'settings.manage' },
       { label: 'المستخدمين', href: '/settings/users', perm: 'users.manage' },
+      { label: 'سجل الدخول', href: '/settings/login-log', perm: 'users.manage' },
       { label: 'الأدوار والصلاحيات', href: '/settings/roles', perm: 'roles.manage' },
     ],
   },

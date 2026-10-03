@@ -5,12 +5,15 @@ import {
   Controller,
   ForbiddenException,
   Get,
+  Headers,
   HttpCode,
+  Ip,
   NotFoundException,
   Param,
   ParseIntPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
@@ -60,6 +63,7 @@ import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { DomainSyncService } from './domain-sync.service'
 import { legacyUnusablePasswordUserIds, needsPasswordFromLegacy } from './legacy-password-marker'
+import { LoginSecurityService } from './login-security.service'
 import { RequireModule } from '../modules-registry/module.guard'
 
 // الصلاحيات الإضافية القابلة للمنح = سجل الصلاحيات المركزي كاملاً
@@ -222,6 +226,24 @@ class DomainSyncDto {
 export const DOMAIN_SYNC_COMPANY_WIDE_ONLY =
   'مزامنة حسابات الدومين بتعمل حسابات في كل الفروع — متاحة للحساب اللي نطاقه «كل الفروع» بس'
 
+// B1.3: فلاتر سجل الدخول
+class LoginEventsQueryDto {
+  @IsOptional() @Matches(/^d{4}-d{2}-d{2}$/, { message: 'التاريخ بصيغة YYYY-MM-DD' })
+  from?: string
+
+  @IsOptional() @Matches(/^d{4}-d{2}-d{2}$/, { message: 'التاريخ بصيغة YYYY-MM-DD' })
+  to?: string
+
+  @IsOptional() @Type(() => Number) @IsInt()
+  userId?: number
+
+  @IsOptional() @Matches(/^[A-Z_]{2,30}$/, { message: 'النتيجة غير معروفة' })
+  outcome?: string
+
+  @IsOptional() @IsString() @MaxLength(100)
+  search?: string
+}
+
 // كلمة مرور مؤقتة واحدة لكذا حساب مرة واحدة (الحسابات المنقولة من القديم جات من غير كلمة)
 class TemporaryPasswordDto {
   @IsArray({ message: 'اختار المستخدمين' })
@@ -255,7 +277,8 @@ export class UsersController {
     @InjectRepository(Role) private readonly roles: Repository<Role>,
     @InjectRepository(Branch) private readonly branches: Repository<Branch>,
     private readonly auth: AuthService,
-    private readonly domainSync: DomainSyncService
+    private readonly domainSync: DomainSyncService,
+    private readonly security: LoginSecurityService
   ) {}
 
   // الدور القابل للإسناد = موجود في جدول roles ومفعّل (المخصصة مسموحة)
@@ -358,6 +381,8 @@ export class UsersController {
     if (scope !== null) query.where(...branchScopeQb('u.branchId', scope))
     const rows = await query.getMany()
     const legacyIds = legacyUnusablePasswordUserIds()
+    // B1.3: الحسابات المقفولة دلوقتي (بعد محاولات غلط) — الشاشة بتعرض «مقفول لحد…» وزرار «فك القفل»
+    const locked = await this.security.lockedAccounts()
     // لا نُخرج الـ hash أبداً — بس علامة «مستخدم منقول — محتاج باسورد»
     return rows.map(({ passwordHash: _ph, ...rest }) => ({
       ...rest,
@@ -369,6 +394,7 @@ export class UsersController {
       // «حساب دومين»: مربوط بحساب Active Directory (بيدخل بكلمة المجال، ومفيش كلمة عندنا).
       // الشاشة بتعلّمه عشان المالك يفرّق وهو بيسند الأدوار بين حساب المجال وحساب البريد+الكلمة.
       isDomainAccount: !!rest.domainObjectGuid,
+      ...(locked.has(rest.id) ? { lockedUntil: locked.get(rest.id)!.toISOString() } : {}),
     }))
   }
 
@@ -445,6 +471,8 @@ export class UsersController {
         )
       }
     }
+    // B1.3: سياسة كلمة السر (NIST) — الطول والشائعة وبريد الحساب واسمه
+    for (const target of visible) await this.security.assertPassword(dto.password, { email: target.email, displayName: target.displayName })
     const mustChangePassword = dto.mustChangePassword ?? true
     const passwordChangedAt = new Date()
     const hashes = new Map<number, string>()
@@ -513,6 +541,8 @@ export class UsersController {
       if (violation) throw new ForbiddenException(violation)
     }
 
+    // B1.3: سياسة كلمة السر (NIST)
+    await this.security.assertPassword(dto.password, { email, displayName: dto.displayName })
     const saved = await this.users.save(
       this.users.create({
         email,
@@ -530,6 +560,48 @@ export class UsersController {
     )
     const { passwordHash: _ph, ...rest } = saved
     return { ...rest, ...scopeView(saved) }
+  }
+
+  /** B1.3: فك قفل حساب اتقفل بعد محاولات دخول غلط (العداد صفر). الحساب برّه نطاق فروع المنفّذ = مش موجود. */
+  @Post(':id/unlock')
+  @HttpCode(200)
+  async unlock(@CurrentUser() actor: JwtPayload, @Param('id', ParseIntPipe) id: number, @Ip() ip: string, @Headers('user-agent') userAgent?: string) {
+    const target = await this.users.findOne({ where: { id } })
+    if (!target || !inBranchScope(branchScopeOf(actor), target.branchId)) throw new NotFoundException('المستخدم غير موجود')
+    const unlocked = await this.security.reset(target.id)
+    await this.security.record({ userId: target.id, identifier: target.email, method: 'ADMIN', outcome: unlocked ? 'UNLOCKED' : 'UNLOCK_NOOP',
+      context: { ip, userAgent }, actorUserId: actor.sub })
+    return { id: target.id, unlocked }
+  }
+
+  /**
+   * B1.3: سجل الدخول — كل محاولة بوقتها ونتيجتها والـIP والجهاز، الأحدث الأول (500 بحد أقصى).
+   * حساب الفروع بيشوف محاولات حسابات فروعه بس (المحاولات على بريد مش موجود لحساب الشركة بس).
+   */
+  @Get('login-events')
+  async loginEvents(@CurrentUser() actor: JwtPayload, @Query() query: LoginEventsQueryDto) {
+    const scope = branchScopeOf(actor)
+    const params: unknown[] = []
+    const where: string[] = []
+    const param = (value: unknown) => { params.push(value); return `@${params.length - 1}` }
+    if (query.from) where.push(`e.[at] >= ${param(new Date(`${query.from}T00:00:00`))}`)
+    if (query.to) where.push(`e.[at] < DATEADD(day, 1, ${param(new Date(`${query.to}T00:00:00`))})`)
+    if (query.userId) where.push(`e.[userId] = ${param(query.userId)}`)
+    if (query.outcome) where.push(`e.[outcome] = ${param(query.outcome)}`)
+    if (query.search?.trim()) where.push(`(e.[identifier] LIKE ${param(`%${query.search.trim().replace(/[%_[]/g, ch => `[${ch}]`)}%`)} OR u.[displayName] LIKE ${param(`%${query.search.trim().replace(/[%_[]/g, ch => `[${ch}]`)}%`)})`)
+    if (scope !== null) where.push(scope.length ? `u.[branchId] IN (${scope.map(id => param(id)).join(', ')})` : '1 = 0')
+    try {
+      const rows: Array<Record<string, unknown>> = await this.users.manager.query(
+        `SELECT TOP (500) e.[id], e.[at], e.[userId], u.[displayName], e.[identifier], e.[method], e.[outcome], e.[ip], e.[userAgent], e.[actorUserId], a.[displayName] AS [actorName]
+         FROM dbo.login_events e LEFT JOIN dbo.users u ON u.[id] = e.[userId] LEFT JOIN dbo.users a ON a.[id] = e.[actorUserId]
+         ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY e.[id] DESC`, params)
+      return { available: true, rows }
+    } catch (error) {
+      // قبل ترحيل 078: الجدول مش موجود — الشاشة بتقول إن السجل لسه ماتفعّلش
+      const numbers = [(error as any)?.number, (error as any)?.driverError?.number, (error as any)?.originalError?.info?.number]
+      if (numbers.includes(208)) return { available: false, rows: [] }
+      throw error
+    }
   }
 
   @Patch(':id')
@@ -636,6 +708,8 @@ export class UsersController {
       await this.assertLinkableEmployee(actor, dto.employeeId, id)
     }
     if (dto.password) {
+      // B1.3: سياسة كلمة السر (NIST)
+      await this.security.assertPassword(dto.password, { email: user.email, displayName: user.displayName })
       user.passwordHash = await bcrypt.hash(dto.password, 10)
       // إعادة التعيين من المدير = كلمة مؤقتة افتراضيًا (إلا حسابك إنت)
       user.mustChangePassword = dto.mustChangePassword ?? actor.sub !== id

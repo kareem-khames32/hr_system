@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import { MainLayout } from '@/components/layout'
 import {
   Search,
@@ -40,6 +41,7 @@ import {
   getCurrentUser,
   isCompanyWideUser,
   setTemporaryPassword,
+  unlockUser,
   setUserPermissions,
   syncDomainUsers,
   updateUser,
@@ -550,6 +552,18 @@ export default function UsersPage() {
     }
   }
 
+  // B1.3: فك قفل حساب اتقفل بعد محاولات دخول غلط
+  const unlock = async (user: ApiUser) => {
+    if (!confirm(`فك قفل حساب ${user.displayName}؟ عداد المحاولات الغلط هيرجع صفر.`)) return
+    try {
+      await unlockUser(user.id)
+      setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, lockedUntil: undefined } : u)))
+      setError(null)
+    } catch (err: any) {
+      setError(err.message)
+    }
+  }
+
   const toggleActive = async (user: ApiUser) => {
     const question = user.isActive
       ? `هل تريد تعطيل حساب ${user.displayName}؟`
@@ -571,7 +585,7 @@ export default function UsersPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-800">المستخدمين</h1>
-            <p className="text-gray-500 mt-1">إدارة مستخدمي النظام وصلاحياتهم</p>
+            <p className="text-gray-500 mt-1">إدارة مستخدمي النظام وصلاحياتهم — <Link href="/settings/login-log" className="text-primary-600 underline">سجل الدخول</Link></p>
           </div>
           <div className="flex items-center gap-3">
             {/* حسابات الدومين جاهزة قبل أي دخول — الزر بيعرض المعاينة الأول ومفيش كتابة قبل التأكيد */}
@@ -871,6 +885,12 @@ export default function UsersPage() {
                       >
                         {statusLabels[statusOf(user)]}
                       </span>
+                      {user.lockedUntil && (
+                        <span className="mt-1 flex items-center gap-1 text-xs text-red-700" data-user-locked>
+                          مقفول لحد {user.lockedUntil.slice(11, 16)}
+                          <button type="button" onClick={() => unlock(user)} className="underline text-primary-700">فك القفل</button>
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-4 text-sm text-gray-500" dir="ltr">
                       {formatLastLogin(user.lastLoginAt)}

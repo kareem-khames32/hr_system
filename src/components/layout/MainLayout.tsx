@@ -34,6 +34,8 @@ const PATH_PERMS: Array<[prefix: string | RegExp, perm: string | string[] | null
   ['/employees/hiring-documents', 'documents.manage'],
   ['/employees/transfers', 'transfers.view'],
   ['/settings/users', 'users.manage'],
+  // B1.3: سجل الدخول بنفس صلاحية المستخدمين
+  ['/settings/login-log', 'users.manage'],
   ['/settings/modules', 'settings.modules'],
   ['/settings/roles', 'roles.manage'],
   ['/settings/request-types', 'request_types.manage'],

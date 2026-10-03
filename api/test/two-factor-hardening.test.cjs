@@ -65,6 +65,11 @@ function challengeRepository() {
 const identity = { id: 7, email: 'gate@example.invalid', displayName: 'حساب اختبار', role: 'employee',
   branchId: 1, employeeId: 1, isActive: true, permissions: '[]', tokenVersion: 0 }
 
+// B1.3: أمان الدخول (القفل وسجل الدخول) زي قبل ترحيل 078 — مختبر لوحده في login-security.integration.cjs
+const loginSecurityBeforeMigration = { async record() {}, async lockState() { return { failedLoginCount: 0, lockedUntil: null } },
+  async lockoutSettings() { return { maxAttempts: 10, minutes: 15 } }, async registerFailure() { return null }, async reset() { return false },
+  async assertPassword() {} }
+
 /** مزوّدون وهميون على الحدود الخارجية بس: الدليل والبريد وموقّع الجلسة. الخدمتان حقيقيتان. */
 function harness({ configValue = 'true', configThrows = false } = {}) {
   const stats = { sessions: 0, mails: 0, loginWrites: 0 }
@@ -88,7 +93,7 @@ function harness({ configValue = 'true', configThrows = false } = {}) {
     { async signAsync() { stats.sessions++; return 'fake-session' } }, twoFactor,
     { async authenticate() { return { mail: identity.email } }, isConfigured: () => true,
       status: () => ({ enabled: false, configured: false, missing: [] }) },
-    { async resolveUser() { return { ...identity } } }, mail)
+    { async resolveUser() { return { ...identity } } }, mail, loginSecurityBeforeMigration)
   return { auth, twoFactor, challenges, stats, sent, get code() { return sent[sent.length - 1] } }
 }
 

@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   HttpException,
+  HttpStatus,
   Injectable,
   Logger,
   ServiceUnavailableException,
@@ -20,6 +21,8 @@ import { Role, UserPermissionOverride } from './role.entity'
 import { OTP, TWO_FACTOR_CONFIG_KEY, TwoFactorChallengeView, TwoFactorError, TwoFactorService } from './two-factor.service'
 import { User } from './user.entity'
 import { PRODUCT_NAME } from '../settings/product-name'
+import { failureDelayMs, lockedMessage, lockedNow } from './login-security'
+import { LoginSecurityService, type LoginContext } from './login-security.service'
 
 // حمولة التوكن — الدور والفرع هما أساس عزل البيانات
 export interface JwtPayload {
@@ -79,8 +82,21 @@ export class AuthService {
     private readonly twoFactor: TwoFactorService,
     private readonly directory: DirectoryService,
     private readonly domain: DomainLoginService,
-    private readonly mail: MailService
+    private readonly mail: MailService,
+    private readonly security: LoginSecurityService
   ) {}
+
+  // B1.3: تأخير رد المحاولة الغلط (ثانية ثم 2 ثم 4) — AUTH_FAILURE_DELAY_MS بيصغّره في الاختبارات
+  private async failureDelay(failedCount: number) {
+    const base = Number(process.env.AUTH_FAILURE_DELAY_MS ?? 1000)
+    const ms = failureDelayMs(failedCount, Number.isFinite(base) && base >= 0 ? base : 1000)
+    if (ms > 0) await new Promise(resolve => setTimeout(resolve, ms))
+  }
+
+  // الحساب مقفول: 423 بكود ثابت ولحد إمتى
+  private lockedError(lockedUntil: Date) {
+    return new HttpException({ code: 'AUTH_ACCOUNT_LOCKED', message: lockedMessage(lockedUntil), lockedUntil: lockedUntil.toISOString() }, HttpStatus.LOCKED)
+  }
 
   // الصلاحيات النهائية = حزمة الدور + GRANTs − REVOKEs
   // proposed: تجاوزات مقترحة بدل المحفوظة — لحساب أثر التعديل قبل حفظه (منع التصعيد)
@@ -172,32 +188,51 @@ export class AuthService {
    * التحقق بخطوتين مقفول (الافتراضي) → الرد جلسة كاملة زي ما هو بالحرف.
    * مفتوح → الرد حالة معلَّقة بس (مفيش accessToken)، والجلسة بتتفتح بعد verifyTwoFactor.
    */
-  async login(email: string, password: string): Promise<LoginResult> {
+  async login(email: string, password: string, context: LoginContext = {}): Promise<LoginResult> {
+    const identifier = String(email ?? '').toLowerCase().trim()
     const user = await this.withPasswordState()
-      .where('u.email = :email', { email: email.toLowerCase().trim() })
+      .where('u.email = :email', { email: identifier })
       .getOne()
+    // B1.3: كل محاولة في سجل الدخول. الحساب المش موجود والمعطّل نفس الرد بالحرف (مفيش كشف وجود)
     if (!user || !user.isActive) {
+      await this.security.record({ userId: user?.id ?? null, identifier, method: 'PASSWORD', outcome: user ? 'INACTIVE' : 'UNKNOWN_ACCOUNT', context })
       throw new UnauthorizedException('بيانات الدخول غير صحيحة')
+    }
+    // B1.3: الحساب المقفول مابيتجربش عليه كلمة سر خالص — حتى الصح بيرجع «مقفول» لحد ما المدة تخلص أو المدير يفكه
+    const lock = await this.security.lockState(user.id)
+    if (lockedNow(lock.lockedUntil)) {
+      await this.security.record({ userId: user.id, identifier, method: 'PASSWORD', outcome: 'LOCKED', context })
+      throw this.lockedError(lock.lockedUntil!)
     }
     // الحسابات المنقولة من القديم: hash لسر عشوائي محدش يعرفه → المقارنة بتفشل دايمًا لحد ما المدير يعيّن كلمة
     // وحسابات المجال بس (بلا كلمة مرور عندنا) نفس الحكاية: المسار ده بيفشل عليها دايمًا
     const ok = await bcrypt.compare(password, user.passwordHash)
     if (!ok) {
+      // العداد بيزيد، ولو وصل الحد الحساب بيتقفل (والمحاولة دي نفسها بترجع «اتقفل»)، والرد بيتأخر من المحاولة التالتة
+      const after = await this.security.registerFailure(user.id, await this.security.lockoutSettings())
+      const lockedNowAfter = !!after && lockedNow(after.lockedUntil)
+      await this.security.record({ userId: user.id, identifier, method: 'PASSWORD', outcome: lockedNowAfter ? 'LOCKED_OUT' : 'BAD_PASSWORD', context })
+      await this.failureDelay(after?.failedLoginCount ?? 0)
+      if (lockedNowAfter) throw this.lockedError(after!.lockedUntil!)
       throw new UnauthorizedException('بيانات الدخول غير صحيحة')
     }
-    return this.finishLogin(user, 'PASSWORD', user.email)
+    await this.security.reset(user.id)
+    return this.finishLogin(user, 'PASSWORD', user.email, context, identifier)
   }
 
   /**
    * الدخول بحساب الشركة: المجال بيثبت الهوية، وبعدها نطابق الموظف ونعمل/نربط الحساب في لحظته.
    * الصلاحيات والأدوار ونطاق الفروع من جداولنا — مفيش مجموعة AD بتتقري ولا بتمنح حاجة.
    */
-  async domainLogin(username: string, password: string): Promise<LoginResult> {
+  async domainLogin(username: string, password: string, context: LoginContext = {}): Promise<LoginResult> {
     let directoryUser
+    const identifier = String(username ?? '').trim()
     try {
       directoryUser = await this.directory.authenticate(username, password)
     } catch (error) {
       if (error instanceof DirectoryAuthError) {
+        // B1.3: القفل بتاع حساب الشركة في الويندوز نفسه (سياسة المجال) — هنا التسجيل بس
+        await this.security.record({ identifier, method: 'DOMAIN', outcome: `DOMAIN_${error.code}`.slice(0, 30), context })
         // السبب التقني في سجل الخادم بس — المستخدم بياخد الرسالة العربية المناسبة للسبب
         this.logger.warn(`رفض دخول بحساب الشركة [${error.code}]: ${error.detail ?? 'بلا تفاصيل'}`)
         if (error.code === 'DIRECTORY_UNAVAILABLE' || error.code === 'NOT_CONFIGURED') {
@@ -209,7 +244,7 @@ export class AuthService {
     }
     const user = await this.domain.resolveUser(directoryUser)
     // صندوق البريد من AD الأول (322 موظف بريدهم عندنا @maharah.local) وإلا بريد الحساب
-    return this.finishLogin(user, 'DOMAIN', directoryUser.mail ?? user.email)
+    return this.finishLogin(user, 'DOMAIN', directoryUser.mail ?? user.email, context, identifier)
   }
 
   /**
@@ -220,9 +255,12 @@ export class AuthService {
   private async finishLogin(
     user: User,
     method: 'PASSWORD' | 'DOMAIN',
-    address: string
+    address: string,
+    context: LoginContext = {},
+    identifier: string = user.email
   ): Promise<LoginResult> {
-    const gate = await this.twoFactor.gate()
+    // B1.3: التحقق العام مقفول بس دور الحساب في «التحقق بخطوتين إلزامي لأدوار…» = الرمز مطلوب
+    const gate = await this.twoFactor.gate(user)
     if (gate === 'UNKNOWN') {
       this.logger.error(
         `رفض دخول ${method} للحساب ${user.id}: تعذّر قراءة مفتاح ${TWO_FACTOR_CONFIG_KEY} من قاعدة البيانات`
@@ -234,10 +272,13 @@ export class AuthService {
     }
     if (gate === 'DISABLED') {
       await this.users.update({ id: user.id }, { lastLoginAt: new Date() })
+      await this.security.record({ userId: user.id, identifier, method, outcome: 'SUCCESS', context })
       return this.issueSession(user)
     }
     try {
-      return await this.twoFactor.open(user, method, address)
+      const challenge = await this.twoFactor.open(user, method, address)
+      await this.security.record({ userId: user.id, identifier, method, outcome: 'CODE_SENT', context })
+      return challenge
     } catch (error) {
       // فشل البريد ممنوع يدخّل حد: رفض صريح بالسبب الحقيقي، ومفيش جلسة ولا حالة معلَّقة
       if (error instanceof MailSendError) throw new ServiceUnavailableException(error.message)
@@ -262,14 +303,18 @@ export class AuthService {
   }
 
   /** التحقق من رمز البريد → الجلسة. كل قواعد الحساب بتتقري من القاعدة من جديد هنا. */
-  async verifyTwoFactor(challengeToken: string, code: string): Promise<SessionResponse> {
-    const challenge = await this.twoFactor.verify(challengeToken, code).catch((error) => {
+  async verifyTwoFactor(challengeToken: string, code: string, context: LoginContext = {}): Promise<SessionResponse> {
+    const challenge = await this.twoFactor.verify(challengeToken, code).catch(async (error) => {
+      // B1.3: الرمز الغلط أو المنتهي في السجل (الحساب بيتعرف من الرمز لو صالح)
+      await this.security.record({ identifier: '—', method: 'CODE',
+        outcome: `CODE_${error?.code ?? 'REJECTED'}`.slice(0, 30), context })
       throw this.httpFor(error)
     })
     const user = await this.withPasswordState().where('u.id = :id', { id: challenge.userId }).getOne()
     // الحساب اتعطّل بين إرسال الرمز والتحقق منه؟ مفيش جلسة (نفس قاعدة الدخول)
     if (!user || !user.isActive) throw new UnauthorizedException('بيانات الدخول غير صحيحة')
     await this.users.update({ id: user.id }, { lastLoginAt: new Date() })
+    await this.security.record({ userId: user.id, identifier: user.email, method: 'CODE', outcome: 'SUCCESS', context })
     return this.issueSession(user)
   }
 
@@ -298,6 +343,8 @@ export class AuthService {
     if (!(await bcrypt.compare(currentPassword, user.passwordHash))) {
       throw new BadRequestException('كلمة المرور الحالية مش صح')
     }
+    // B1.3: سياسة كلمة السر الجديدة (NIST): الطول، والشائعة، وبريد الحساب واسمه
+    await this.security.assertPassword(newPassword, { email: user.email, displayName: user.displayName })
     if (await bcrypt.compare(newPassword, user.passwordHash)) {
       throw new BadRequestException(
         user.mustChangePassword

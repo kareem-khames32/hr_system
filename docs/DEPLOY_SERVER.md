@@ -101,6 +101,9 @@ PUPPETEER_EXECUTABLE_PATH=<مسار chrome على السيرفر>
 
 > لو هتدخلوا بدومين أو اسم بدل الـIP، غيّر `FRONTEND_URL` و`NEXT_PUBLIC_API_URL` تحت لنفس العنوان.
 
+> **لو حطيتوا proxy قدام النظام** (IIS أو nginx أو غيره): ضيف `TRUST_PROXY=1` (عدد الـproxies) في `api/.env`، عشان سجل الدخول
+> (الإعدادات ← سجل الدخول) يسجّل IP الجهاز الحقيقي بدل عنوان الـproxy. من غير proxy (الوضع الحالي) ماتحطهوش.
+
 ```bash
 cd api
 npm ci

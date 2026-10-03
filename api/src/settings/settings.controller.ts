@@ -47,6 +47,7 @@ import { isCustomTerminationReasonsKey } from '../offboarding/termination-reason
 import { Employee } from '../employees/employee.entity'
 import type { JwtPayload } from '../auth/auth.service'
 import { twoFactorEnableBlock } from '../auth/two-factor-gate'
+import { loginSecurityConfigError } from '../auth/login-security'
 import { applyGeneralGraceToAttendanceRules, attendanceRuleToday, captureLegacyAttendanceRuleBaselines, lockAttendanceRuleMutation } from '../attendance/attendance-rule-history'
 import { assertCalendarScope, beginCalendarChange, CalendarChangeDto, finishCalendarChange } from '../attendance/attendance-calendar-history'
 import { overtimeWageComponents } from '../payroll/overtime-financial'
@@ -695,6 +696,9 @@ export class SettingsController {
     // قرار المالك 22 سبتمبر: التحقق بخطوتين مايتفتحش وخادم البريد مش مضبوط — وإلا الشركة كلها تتقفل برّه النظام
     const twoFactorBlock = twoFactorEnableBlock(dto.key, dto.value)
     if (twoFactorBlock) throw new BadRequestException(twoFactorBlock)
+    // B1.3: حدود إعدادات أمان الدخول (القفل وطول كلمة السر وأكواد أدوار التحقق بخطوتين)
+    const loginSecurityError = loginSecurityConfigError(dto.key, dto.value)
+    if (loginSecurityError) throw new BadRequestException(loginSecurityError)
     // الخطوة 9 (مسار R2): القيمة المؤقتة لا تُحفظ كاسم شركة مؤكد
     if (dto.key.startsWith('company.') && isDataPlaceholder(dto.value)) throw new BadRequestException(DATA_PLACEHOLDER_REJECTED)
     // ملف الشركة: صيغ خفيفة (آيبان SA/EG، بريد، رقم موحد، تاريخ انتهاء السجل...)

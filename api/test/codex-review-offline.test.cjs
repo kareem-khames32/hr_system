@@ -67,7 +67,10 @@ function authHarness({ configFailure = false, mailFailure = false } = {}) {
   const twoFactor = new TwoFactorService(challenges, config, mail)
   const auth = new AuthService(users, { async findOne() { return null } }, { async find() { return [] } },
     { async signAsync() { stats.sessions++; return 'synthetic-session-value' } }, twoFactor,
-    { async authenticate() { return { mail: fakeUser.email } } }, { async resolveUser() { return { ...fakeUser } } }, mail)
+    { async authenticate() { return { mail: fakeUser.email } } }, { async resolveUser() { return { ...fakeUser } } }, mail,
+    // B1.3: أمان الدخول زي قبل ترحيل 078 (لا قفل ولا سجل) — مختبر لوحده في login-security.integration.cjs
+    { async record() {}, async lockState() { return { failedLoginCount: 0, lockedUntil: null } }, async lockoutSettings() { return { maxAttempts: 10, minutes: 15 } },
+      async registerFailure() { return null }, async reset() { return false }, async assertPassword() {} })
   return { auth, twoFactor, stats, challenges, get row() { return row }, get code() { return deliveredCode } }
 }
 

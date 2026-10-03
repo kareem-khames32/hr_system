@@ -2,7 +2,9 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
+  Ip,
   Post,
   UseGuards,
 } from '@nestjs/common'
@@ -74,9 +76,10 @@ class ChangePasswordDto {
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
+  // B1.3: الـIP والجهاز لسجل الدخول
   @Post('login')
-  login(@Body() dto: LoginDto) {
-    return this.auth.login(dto.email, dto.password)
+  login(@Body() dto: LoginDto, @Ip() ip: string, @Headers('user-agent') userAgent?: string) {
+    return this.auth.login(dto.email, dto.password, { ip, userAgent })
   }
 
   // ما تعرضه شاشة الدخول قبل أي مصادقة — هل زر «الدخول بحساب الشركة» يظهر. بلا أي تفصيل عن الخادم
@@ -87,15 +90,15 @@ export class AuthController {
 
   // «الدخول بحساب الشركة»: bind على Active Directory، وربط الموظف في لحظته (بلا إنشاء مسبق)
   @Post('login/domain')
-  domainLogin(@Body() dto: DomainLoginDto) {
-    return this.auth.domainLogin(dto.username, dto.password)
+  domainLogin(@Body() dto: DomainLoginDto, @Ip() ip: string, @Headers('user-agent') userAgent?: string) {
+    return this.auth.domainLogin(dto.username, dto.password, { ip, userAgent })
   }
 
   // الخطوة الثانية للمسارين: الرمز اللي وصل على البريد → الجلسة
   @Post('login/verify')
   @HttpCode(200)
-  verify(@Body() dto: VerifyCodeDto) {
-    return this.auth.verifyTwoFactor(dto.challengeToken, dto.code)
+  verify(@Body() dto: VerifyCodeDto, @Ip() ip: string, @Headers('user-agent') userAgent?: string) {
+    return this.auth.verifyTwoFactor(dto.challengeToken, dto.code, { ip, userAgent })
   }
 
   // رمز جديد لنفس محاولة الدخول — بمهلة وبحد أعلى
