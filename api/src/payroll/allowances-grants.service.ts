@@ -13,6 +13,7 @@ import {
 import { PayrollAllowanceGrant, PayrollAllowanceGrantLine, PayrollAllowanceType } from './allowances-grants.entities'
 import { salaryPayrollPeriodBounds } from './payroll-period-salary'
 import { lockPayrollEmployees } from './payroll-settlement-boundary'
+import { PayrollRunMember } from './payroll.entities'
 
 // «تابة البدلات» في شاشة المسير: أنواع البدلات، وصرف بدل لشهر على استهداف (سطر لكل موظف + إضافة في دفتر المديونيات)،
 // والقائمة بالحالة والمسير والإجماليات، والإلغاء قبل اعتماد المسير. عزل الفروع: حساب الفرع يشوف ويعدّل فرعه بس،
@@ -168,6 +169,34 @@ export class PayrollAllowancesService {
     return result.sort((a, b) => a.period.localeCompare(b.period) || a.id - b.id)
   }
 
+  // CR32-B01 (مراجعة Codex الجولة 32): مرجع المسير (رقمه واسمه وحالته) في ردود البدل وقايمته بيظهر لحساب الفرع بس لو الموظف المعني عضو فيه
+  // بلقطة فرع من نطاقه — أو مسير قديم من غير أعضاء على فرع من نطاقه. فالمسير اللي اتعمل في فرع تاني بعد نقل الموظف (حتى لو شايل قيد بدل
+  // مختوم بفرع الحساب) مابيظهرش، زي قايمة المسيرات وقراءته. حساب الشركة بيشوف الكل
+  private async runRefVisibility(scope: BranchScope, runIds: number[], employeeIds: number[], em: EntityManager = this.em): Promise<(runId: number, employeeId: number) => boolean> {
+    if (scope === null) return () => true
+    const visible = new Set<string>(), withMembers = new Set<number>(), runBranch = new Map<number, number | null>()
+    const people = uniqueIds(employeeIds)
+    for (const chunk of chunks(uniqueIds(runIds))) {
+      const runs: Array<{ id: number; branchId: number | null; hasMembers: number }> = await em.query(`SELECT r.[id], r.[branchId],
+          CASE WHEN EXISTS (SELECT 1 FROM [payroll_run_members] m WHERE m.[runId] = r.[id]) THEN 1 ELSE 0 END AS [hasMembers]
+        FROM [payroll_runs] r WHERE r.[id] IN (${idList(chunk)})`, chunk)
+      for (const run of runs) {
+        if (Number(run.hasMembers)) withMembers.add(Number(run.id))
+        runBranch.set(Number(run.id), run.branchId == null ? null : Number(run.branchId))
+      }
+      for (const peopleChunk of chunks(people)) {
+        const members = await em.getRepository(PayrollRunMember).find({ where: { runId: In(chunk), employeeId: In(peopleChunk) },
+          select: { id: true, runId: true, employeeId: true, snapshot: true } })
+        for (const member of members) {
+          const branchId = member.snapshot?.branchId
+          if (branchId != null && inBranchScope(scope, Number(branchId))) visible.add(`${member.runId}:${member.employeeId}`)
+        }
+      }
+    }
+    return (runId, employeeId) => visible.has(`${runId}:${employeeId}`) ||
+      (!withMembers.has(runId) && runBranch.get(runId) != null && inBranchScope(scope, runBranch.get(runId)!))
+  }
+
   // المسيرات غير الملغاة لشهر فيها واحد على الأقل من الموظفين (عضو أو بند): المفتوح يتعاد حسابه، والمعتمد/المصروف ما بيتغيرش
   private async monthRunsFor(period: string, employeeIds: number[]) {
     const wanted = new Set(employeeIds)
@@ -218,6 +247,7 @@ export class PayrollAllowancesService {
     }
     const names = await this.orgNames()
     const users = await this.userNames([...grants.values()].map(grant => grant.createdByUserId))
+    const runShown = await this.runRefVisibility(scope, runIds, lines.map(line => line.employeeId))
     const canWrite = (grant: PayrollAllowanceGrant | undefined, branchId: number | null) =>
       scope === null || (!!grant && grant.targetLevel !== 'company' && inBranchScope(scope, branchId))
 
@@ -231,7 +261,9 @@ export class PayrollAllowancesService {
         obligation: obligation ? { status: obligation.status, reservedPayrollRunId: obligation.reservedPayrollRunId ?? null,
           appliedPayrollRunId: obligation.appliedPayrollRunId ?? null, payrollReversalRunId: obligation.payrollReversalRunId ?? null } : null,
         openRun: openRun ? { id: openRun.id, includesObligation: !!including } : null })
-      const run = runId ? runs.get(runId) ?? null : null
+      // CR32-B01: مسير برّه نطاق الحساب لموظف السطر ده = من غير رقم ولا اسم (الحالة بتاعة السطر نفسه بتفضل)
+      const shownRunId = runId && runShown(runId, line.employeeId) ? runId : null
+      const run = shownRunId ? runs.get(shownRunId) ?? null : null
       const employee = employees.get(line.employeeId)
       const branchId = line.branchId ?? employee?.branchId ?? null
       return {
@@ -239,7 +271,7 @@ export class PayrollAllowancesService {
         branchName: branchId ? names.branches.get(branchId) ?? null : null,
         departmentName: employee?.departmentId ? names.departments.get(employee.departmentId) ?? null : null,
         allowanceTypeId: line.allowanceTypeId, typeName: grant?.typeName ?? `بدل #${line.allowanceTypeId}`, amount: money(cents(line.amount)),
-        status: line.status, state, stateLabel: ALLOWANCE_LINE_STATE_LABELS[state], runId: run?.id ?? runId, runName: run?.name ?? null, runStatus: run?.status ?? null,
+        status: line.status, state, stateLabel: ALLOWANCE_LINE_STATE_LABELS[state], runId: run?.id ?? shownRunId, runName: run?.name ?? null, runStatus: run?.status ?? null,
         reason: grant?.reason ?? '', createdAt: line.createdAt,
         canCancel: allowanceLineCancellable(state) && canWrite(grant, line.branchId),
       }
@@ -388,8 +420,11 @@ export class PayrollAllowancesService {
       return { grant, created: fresh.length, skipped: duplicates.size, employeeIds: fresh }
     })
     const runs = await this.monthRunsFor(period, result.employeeIds)
+    // CR32-B01: القراية دي بعد الـcommit — مسير اتعمل في فرع تاني للموظف بعد نقله مايظهرش في رد الحساب
+    const runShown = await this.runRefVisibility(scope, [...runs.recalculateRuns, ...runs.lockedRuns].map(run => run.id), result.employeeIds)
+    const shownRun = (run: { id: number }) => result.employeeIds.some(employeeId => runShown(run.id, employeeId))
     return { id: result.grant.id, created: result.created, skippedDuplicates: result.skipped, amount: money(cents(amount)),
-      total: money(cents(amount) * result.created), ...runs }
+      total: money(cents(amount) * result.created), recalculateRuns: runs.recalculateRuns.filter(shownRun), lockedRuns: runs.lockedRuns.filter(shownRun) }
   }
 
   // ===== الإلغاء قبل اعتماد المسير =====
@@ -432,8 +467,10 @@ export class PayrollAllowancesService {
       }
       await em.query(`UPDATE [payroll_allowance_grant_lines] SET [status] = 'CANCELLED', [cancelledByUserId] = @1, [cancelledAt] = SYSUTCDATETIME()
         WHERE [id] = @0 AND [status] = 'ACTIVE'`, [current.id, user.sub])
-      const recalculateRuns = obligation ? await this.runsHolding(em, [current], [obligation.id]) : []
-      return { id: current.id, status: 'CANCELLED', recalculateRuns }
+      const holding = obligation ? await this.runsHolding(em, [current], [obligation.id]) : []
+      // CR32-B01: المسير الشايل القيد ممكن يكون مسير فرع تاني للموظف بعد نقله
+      const runShown = await this.runRefVisibility(scope, holding.map(run => run.id), [current.employeeId], em)
+      return { id: current.id, status: 'CANCELLED', recalculateRuns: holding.filter(run => runShown(run.id, current.employeeId)) }
     })
   }
 
@@ -472,7 +509,9 @@ export class PayrollAllowancesService {
         await em.query(`UPDATE [payroll_allowance_grant_lines] SET [status] = 'CANCELLED', [cancelledByUserId] = @0, [cancelledAt] = SYSUTCDATETIME()
           WHERE [status] = 'ACTIVE' AND [id] IN (${idList(chunk, 1)})`, [user.sub, ...chunk])
       }
-      const recalculateRuns = await this.runsHolding(em, done, [...cancelledObligations])
+      const holding = await this.runsHolding(em, done, [...cancelledObligations])
+      const runShown = await this.runRefVisibility(scope, holding.map(run => run.id), done.map(line => line.employeeId), em)
+      const recalculateRuns = holding.filter(run => done.some(line => runShown(run.id, line.employeeId)))
       return { id: grant.id, cancelled: done.length, locked: locked.length, recalculateRuns }
     })
   }
