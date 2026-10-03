@@ -1,11 +1,11 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { DataSource, EntityManager } from 'typeorm'
-import { mkdir, writeFile, unlink, access } from 'fs/promises'
+import { access } from 'fs/promises'
 import { randomUUID } from 'crypto'
-import { dirname } from 'path'
 import { Employee } from '../employees/employee.entity'
 import { StoredFile } from '../files/stored-file.entity'
-import { storedPath } from '../files/storage'
+import { fileStorage, storedPath } from '../files/storage'
+import { recordStoredFileHash, sha256Hex } from '../files/stored-file-hash'
 import { LetterRequest } from '../requests/entities/letter.entities'
 import { Request } from '../requests/entities/request.entity'
 import { RequestType } from '../requests/entities/request-type.entity'
@@ -63,17 +63,17 @@ export class LettersService {
       templateRevisionId = revision.id
     }
     const bytes = await this.renderer.pdf(snapshot)
+    // B2.2: عن طريق واجهة التخزين، والصف ببصمة المحتوى
     const storedName = `letters/${randomUUID()}.pdf`
-    const target = storedPath(storedName)
-    await mkdir(dirname(target), { recursive: true })
-    await writeFile(target, bytes, { flag: 'wx' })
+    await fileStorage().write(storedName, bytes)
     try {
       const file = await em.getRepository(StoredFile).save({ originalName: `${snapshot.content.title}-${employee.employeeCode}.pdf`, storedName,
         mime: 'application/pdf', size: bytes.length, entityType: 'letter', entityId: req.id, employeeId: employee.id })
+      await recordStoredFileHash(em, file.id, sha256Hex(bytes))
       const letter = await repo.save({ ...existing, requestId: req.id, employeeId: employee.id, letterType: type.code.replace(/^LETTER_/, ''), purpose,
         status: 'GENERATED', generatedPdfRef: `file:${file.id}`, templateId, templateRevisionId, contentSnapshot: snapshot })
       return { ref: `LTR-${letter.id}`, completed: true }
-    } catch (err) { await unlink(target).catch(() => undefined); throw err }
+    } catch (err) { await fileStorage().remove(storedName).catch(() => undefined); throw err }
   }
 
   async fileFor(user: JwtPayload, id: number) {

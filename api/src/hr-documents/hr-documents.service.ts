@@ -1,8 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { DataSource, EntityManager, In, IsNull, Not } from 'typeorm'
 import { createHash, randomUUID } from 'crypto'
-import { access, mkdir, unlink, writeFile } from 'fs/promises'
-import { dirname } from 'path'
+import { access } from 'fs/promises'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchIdIn, branchScopeOf, branchScopeQb, inBranchScope, isEmptyBranchScope, scopeWord, userHasPerm } from '../auth/guards'
 import type { BranchScope } from '../auth/guards'
@@ -12,7 +11,8 @@ import { canReadEmployeeFinance } from '../employees/employee-projection'
 import { paidMonthlySalary } from '../employees/compensation'
 import { EmployeeDocument } from '../assets/assets.entities'
 import { StoredFile } from '../files/stored-file.entity'
-import { storedPath } from '../files/storage'
+import { fileStorage, storedPath } from '../files/storage'
+import { recordStoredFileHash, sha256Hex } from '../files/stored-file-hash'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { LetterRenderer } from '../letters/letter-renderer.service'
 import { localDateOf } from '../attendance/attendance.service'
@@ -203,7 +203,7 @@ export class HrDocumentsService {
     if (typeof body.idempotencyKey !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.idempotencyKey)) throw new BadRequestException('مفتاح إصدار المستند يجب أن يكون UUID صالحاً')
     const input = this.input(body), idempotencyKey = body.idempotencyKey.toLowerCase()
     const inputHash = createHash('sha256').update(JSON.stringify(input)).digest('hex')
-    let createdPath: string | undefined
+    let createdName: string | undefined
     try {
       return await this.ds.transaction(async em => {
         // Serialize this actor's issue attempts before checking the unique UUID.
@@ -220,12 +220,13 @@ export class HrDocumentsService {
         const prepared = await this.prepare(em, user, input, reference, true)
         const bytes = await this.renderer.pdf(prepared.snapshot)
         if (bytes.length < 5 || Buffer.from(bytes.subarray(0, 5)).toString() !== '%PDF-') throw new BadRequestException('تعذّر توليد ملف PDF صالح')
-        const storedName = `hr-documents/${randomUUID()}.pdf`, target = storedPath(storedName)
-        await mkdir(dirname(target), { recursive: true })
-        createdPath = target
-        await writeFile(target, bytes, { flag: 'wx' })
+        // B2.2: عن طريق واجهة التخزين، والصف ببصمة المحتوى
+        const storedName = `hr-documents/${randomUUID()}.pdf`
+        createdName = storedName
+        await fileStorage().write(storedName, bytes)
         const file = await em.save(StoredFile, em.create(StoredFile, { originalName: `${prepared.revision.name}-${reference}.pdf`, storedName,
           mime: 'application/pdf', size: bytes.length, entityType: 'hr_document', employeeId: prepared.employee?.id ?? null as any, uploadedBy: user.sub }))
+        await recordStoredFileHash(em, file.id, sha256Hex(bytes))
         let employeeDocumentId: number | null = null
         if (prepared.employee) {
           const document = await em.save(EmployeeDocument, em.create(EmployeeDocument, { employeeId: prepared.employee.id, docType: prepared.revision.name.slice(0, 100),
@@ -240,7 +241,7 @@ export class HrDocumentsService {
         return this.issuedView(issued)
       })
     } catch (error) {
-      if (createdPath) await unlink(createdPath).catch(() => undefined)
+      if (createdName) await fileStorage().remove(createdName).catch(() => undefined)
       throw error
     }
   }

@@ -68,6 +68,7 @@ import { CATEGORY_CHAIN_KEY_PREFIX, REQUEST_CATEGORY_LABELS, categoryChainMap, i
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
 import { RequireModule } from '../modules-registry/module.guard'
+import { allowedFileTypesError, FILES_ALLOWED_TYPES_KEY, FILES_MAX_SIZE_KEY, FILES_MAX_SIZE_LIMIT_MB, parseAllowedFileTypes } from '../files/file-type'
 
 class UpsertConfigDto {
   @IsOptional()
@@ -591,6 +592,8 @@ export class SettingsController {
   private static readonly NUMERIC_MIN: Record<string, number> = {
     // B2.1: مدة الاحتفاظ بسجل التدقيق (الحد الأعلى والعدد الصحيح في upsertConfig)
     'audit.retention_months': 12,
+    // B2.2: أقصى حجم للملف المرفوع بالميجا (الحد الأعلى 50 والعدد الصحيح في upsertConfig)
+    'files.max_size_mb': 1,
     'leave.annual_entitled': 0,
     'leave.sick_entitled': 0,
     'leave.max_backdate_days': 0,
@@ -770,6 +773,18 @@ export class SettingsController {
     if (['loan.request_from_day', 'loan.request_to_day'].includes(dto.key)) {
       const n = Number(dto.value)
       if (!Number.isInteger(n) || n > 31) throw new BadRequestException('أيام طلب السلفة أعداد صحيحة من 1 إلى 31')
+    }
+    // B2.2: أقصى حجم للملف المرفوع (ميجا صحيح من 1 لـ50)، والأنواع المسموحة من القايمة المعروفة بس (بتتحفظ بحروف صغيرة من غير تكرار)
+    if (dto.key === FILES_MAX_SIZE_KEY) {
+      const n = Number(dto.value)
+      if (dto.value.trim() === '' || !Number.isInteger(n) || n < 1 || n > FILES_MAX_SIZE_LIMIT_MB) {
+        throw new BadRequestException(`أقصى حجم للملف عدد ميجا صحيح من 1 إلى ${FILES_MAX_SIZE_LIMIT_MB}`)
+      }
+    }
+    if (dto.key === FILES_ALLOWED_TYPES_KEY) {
+      const fileTypesError = allowedFileTypesError(dto.value)
+      if (fileTypesError) throw new BadRequestException(fileTypesError)
+      dto.value = parseAllowedFileTypes(dto.value).join(',')
     }
     // معامل عقوبة الغياب: نفس حدّ تجاوز المعادلة (payroll-policy.dto.ts) — 0 إلى 9999 بمنزلتين
     if (dto.key === 'attendance.absence_penalty_days') {

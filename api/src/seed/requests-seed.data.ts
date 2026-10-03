@@ -393,6 +393,9 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'settlement.collect_pending_obligations', value: 'false' },
   // B2.1: سجل التدقيق — مدة الاحتفاظ بالشهور (أقل قيمة 12). بعدها السجل بيظهر في «منتهي الاحتفاظ» بس، ومفيش مسح
   { key: 'audit.retention_months', value: '24' },
+  // B2.2: الملفات المرفوعة — أقصى حجم بالميجا (1 لـ50) والأنواع المسموحة (النوع بيتحسب من المحتوى نفسه، والامتداد لازم يطابقه)
+  { key: 'files.max_size_mb', value: '10' },
+  { key: 'files.allowed_types', value: 'jpeg,png,webp,pdf,doc,docx,xls,xlsx' },
   { key: 'payroll.exemption_reason_min_length', value: '20' },
   // C2 / الخطوة 25 (DD-03/05): الخصومات المصنفة — أقل طول للسبب، نافذة كشف التكرار بالساعات،
   // إنشاء المدير الهيكلي (مباشر/فريق/قسم/فرع) بحسب نطاق النوع، وحد الإنشاء الجماعي في الدفعة.

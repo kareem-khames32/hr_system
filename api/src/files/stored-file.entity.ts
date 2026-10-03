@@ -43,4 +43,9 @@ export class StoredFile {
 
   @CreateDateColumn()
   uploadedAt: Date
+
+  // B2.2 (ترحيل 085): بصمة SHA-256 للمحتوى — برّه الكيان للقراءة والكتابة (الكود قبل الترحيل)، بتتكتب بـSQL صريح بعد التأكد
+  // من وجود العمود (stored-file-hash.ts). القديم من غير بصمة.
+  @Column({ type: 'nvarchar', length: 64, nullable: true, select: false, insert: false, update: false })
+  sha256?: string | null
 }

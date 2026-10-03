@@ -15,45 +15,31 @@ import {
 } from '@nestjs/common'
 import { FileInterceptor } from '@nestjs/platform-express'
 import { InjectRepository } from '@nestjs/typeorm'
-import { DataSource, Repository } from 'typeorm'
+import { DataSource, In, Repository } from 'typeorm'
 import type { Response } from 'express'
-import { diskStorage } from 'multer'
-import { existsSync, mkdirSync, unlinkSync } from 'fs'
-import { extname, join, relative } from 'path'
+import { memoryStorage } from 'multer'
 import { randomUUID } from 'crypto'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, RolesGuard, userHasPerm } from '../auth/guards'
 import { StoredFile } from './stored-file.entity'
 import { Employee } from '../employees/employee.entity'
 import { Request } from '../requests/entities/request.entity'
+import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { RequestsService } from '../requests/requests.service'
-import { storedPath, uploadsRoot } from './storage'
+import { fileStorage } from './storage'
 import { assertHrDocumentFileAccess } from '../hr-documents/hr-document-access'
 import { assertLetterFileAccess } from '../letters/letter-access'
 import { RequireModule } from '../modules-registry/module.guard'
+import {
+  classifyUpload, FILE_TYPE_EXTENSIONS, FILE_TYPE_MIME, FILES_ALLOWED_TYPES_KEY, FILES_MAX_SIZE_KEY, FILES_MAX_SIZE_LIMIT_MB,
+  IMAGE_FILE_TYPES, maxFileSizeMb, parseAllowedFileTypes,
+} from './file-type'
+import { recordStoredFileHash, sha256Hex } from './stored-file-hash'
 
-// التخزين المحلي المنظم: uploads/YYYY-MM/
-
-const ALLOWED_MIME = [
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-  'application/pdf',
-  'application/msword',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.ms-excel',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-]
-const MAX_SIZE = 10 * 1024 * 1024 // 10MB
-
-const monthDir = () => {
+// التخزين المنظم: YYYY-MM/uuid.ext عن طريق واجهة التخزين (fileStorage — القرص دلوقتي)
+const monthFolder = () => {
   const d = new Date()
-  const dir = join(
-    uploadsRoot(),
-    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-  )
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  return dir
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
 // رفع وتحميل الملفات الفعلية — سكانات ومستندات وتقارير طبية
@@ -68,28 +54,17 @@ export class FilesController {
     private readonly requests: RequestsService
   ) {}
 
+  // B2.2: الحد والأنواع من الإعدادات وقت الرفع (files.max_size_mb وfiles.allowed_types)
+  private async uploadSettings() {
+    const rows = await this.ds.getRepository(RequestsConfig).find({ where: { key: In([FILES_MAX_SIZE_KEY, FILES_ALLOWED_TYPES_KEY]) } })
+    const value = (key: string) => rows.find(row => row.key === key)?.value
+    return { maxMb: maxFileSizeMb(value(FILES_MAX_SIZE_KEY)), allowed: parseAllowedFileTypes(value(FILES_ALLOWED_TYPES_KEY)) }
+  }
+
+  // B2.2: الملف بيتقرا في الذاكرة (بسقف 50 ميجا ثابت)، والحكم عليه قبل أي كتابة: الحد من الإعداد، والنوع الحقيقي من المحتوى
+  // ومطابق للامتداد، وبعدين بس بيتكتب على التخزين ويتسجل ببصمته. المرفوض مابيكتبش حاجة على القرص ولا في القاعدة.
   @Post('upload')
-  @UseInterceptors(
-    FileInterceptor('file', {
-      storage: diskStorage({
-        destination: (_req, _file, cb) => cb(null, monthDir()),
-        filename: (_req, file, cb) =>
-          cb(null, `${randomUUID()}${extname(file.originalname)}`),
-      }),
-      limits: { fileSize: MAX_SIZE },
-      fileFilter: (_req, file, cb) => {
-        if (!ALLOWED_MIME.includes(file.mimetype)) {
-          return cb(
-            new BadRequestException(
-              'نوع الملف غير مسموح — المسموح: صور JPG/PNG وPDF وWord وExcel'
-            ) as any,
-            false
-          )
-        }
-        cb(null, true)
-      },
-    })
-  )
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: FILES_MAX_SIZE_LIMIT_MB * 1024 * 1024 } }))
   async upload(
     @CurrentUser() user: JwtPayload,
     @UploadedFile() file: Express.Multer.File,
@@ -98,7 +73,6 @@ export class FilesController {
     @Query('employeeId') employeeId?: string
   ) {
     if (!file) throw new BadRequestException('لم يصل ملف — أرسل الحقل file')
-    try {
     if (entityType && !['request', 'employee_photo', 'company_logo', 'document', 'contract', 'leave_attachment'].includes(entityType)) {
       throw new BadRequestException('تصنيف الملف غير صالح')
     }
@@ -107,9 +81,8 @@ export class FilesController {
         throw new BadRequestException('معرّف الملف أو الموظف غير صالح')
       }
     }
-    if (entityType === 'company_logo' && (!userHasPerm(user, 'settings.manage') || !file.mimetype.startsWith('image/'))) {
-      throw new ForbiddenException('رفع شعار الشركة يتطلب صلاحية الإعدادات وملف صورة')
-    }
+    const LOGO_RULE = 'رفع شعار الشركة يتطلب صلاحية الإعدادات وملف صورة'
+    if (entityType === 'company_logo' && !userHasPerm(user, 'settings.manage')) throw new ForbiddenException(LOGO_RULE)
     const ownerId = employeeId ? Number(employeeId) : user.employeeId
     if (ownerId && ownerId !== user.employeeId) {
       const emp = await this.ds.getRepository(Employee).findOneBy({ id: ownerId })
@@ -118,33 +91,46 @@ export class FilesController {
         throw new ForbiddenException('لا تملك صلاحية رفع ملفات لهذا الموظف')
       }
     }
-    if (entityType === 'employee_photo' && !file.mimetype.startsWith('image/')) throw new BadRequestException('صورة الموظف يجب أن تكون صورة')
-    const rel = relative(uploadsRoot(), file.path)
-    const saved = await this.files.save(
-      this.files.create({
-        originalName: file.originalname,
-        storedName: rel,
-        mime: file.mimetype,
-        size: file.size,
-        entityType: entityType || undefined,
-        entityId: entityId ? Number(entityId) : undefined,
-        // الافتراضي: الملف تبع موظف رافعه — إلا لو الإدارة حددت غيره
-        employeeId: employeeId
-          ? Number(employeeId)
-          : (user.employeeId ?? undefined),
-        uploadedBy: user.sub,
+    // الصلاحيات الأول (نفس ترتيب الرفض القديم)، وبعدها المحتوى نفسه
+    const settings = await this.uploadSettings()
+    if (file.size > settings.maxMb * 1024 * 1024) throw new BadRequestException(`حجم الملف أكبر من الحد (${settings.maxMb} ميجا)`)
+    const verdict = classifyUpload(file.buffer, file.originalname, settings.allowed)
+    if ('error' in verdict) throw new BadRequestException(verdict.error)
+    const image = IMAGE_FILE_TYPES.includes(verdict.type)
+    if (entityType === 'company_logo' && !image) throw new ForbiddenException(LOGO_RULE)
+    if (entityType === 'employee_photo' && !image) throw new BadRequestException('صورة الموظف لازم تكون صورة (JPG أو PNG أو WEBP)')
+    // الاسم على التخزين بامتداد النوع الحقيقي (مش امتداد المستخدم)، والنوع المسجل هو الحقيقي
+    const storedName = `${monthFolder()}/${randomUUID()}${FILE_TYPE_EXTENSIONS[verdict.type][0]}`
+    const sha256 = sha256Hex(file.buffer)
+    const storage = fileStorage()
+    await storage.write(storedName, file.buffer)
+    try {
+      const { saved, hashed } = await this.ds.transaction(async em => {
+        const row = await em.save(StoredFile, em.create(StoredFile, {
+          originalName: file.originalname,
+          storedName,
+          mime: FILE_TYPE_MIME[verdict.type],
+          size: file.size,
+          entityType: entityType || undefined,
+          entityId: entityId ? Number(entityId) : undefined,
+          // الافتراضي: الملف تبع موظف رافعه — إلا لو الإدارة حددت غيره
+          employeeId: employeeId ? Number(employeeId) : (user.employeeId ?? undefined),
+          uploadedBy: user.sub,
+        }))
+        return { saved: row, hashed: await recordStoredFileHash(em, row.id, sha256) }
       })
-    )
-    return {
-      id: saved.id,
-      originalName: saved.originalName,
-      size: saved.size,
-      mime: saved.mime,
-      // المرجع الذي يوضع في fileRef بالسجلات
-      ref: `file:${saved.id}`,
-    }
+      return {
+        id: saved.id,
+        originalName: saved.originalName,
+        size: saved.size,
+        mime: saved.mime,
+        // بصمة المحتوى (من غير ترحيل 085: null)
+        sha256: hashed ? sha256 : null,
+        // المرجع الذي يوضع في fileRef بالسجلات
+        ref: `file:${saved.id}`,
+      }
     } catch (err) {
-      if (existsSync(file.path)) unlinkSync(file.path)
+      await storage.remove(storedName).catch(() => undefined)
       throw err
     }
   }
@@ -197,8 +183,8 @@ export class FilesController {
       throw new ForbiddenException('لا تملك صلاحية الاطلاع على هذا الملف')
     }
     }
-    const abs = storedPath(f.storedName)
-    if (!existsSync(abs)) throw new NotFoundException('ملف التخزين مفقود')
+    const storage = fileStorage()
+    if (!(await storage.exists(f.storedName))) throw new NotFoundException('ملف التخزين مفقود')
     res.setHeader('Content-Type', f.mime)
     res.setHeader('X-Content-Type-Options', 'nosniff')
     res.setHeader('Cache-Control', 'private, no-store')
@@ -206,6 +192,8 @@ export class FilesController {
       'Content-Disposition',
       `inline; filename*=UTF-8''${encodeURIComponent(f.originalName)}`
     )
-    res.sendFile(abs)
+    const local = storage.localPath(f.storedName)
+    if (local) res.sendFile(local)
+    else storage.read(f.storedName).pipe(res)
   }
 }

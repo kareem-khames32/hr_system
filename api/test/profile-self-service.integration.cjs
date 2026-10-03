@@ -42,7 +42,9 @@ async function request(user, method, route, body) {
 }
 async function upload(user, { type = 'image/png', name = 'me.png', entityType = 'employee_photo', employeeId } = {}) {
   const form = new FormData()
-  form.append('file', new Blob([Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex')], { type }), name)
+  // B2.2: النوع بيتحسب من المحتوى والامتداد لازم يطابقه — ملف .pdf محتواه PDF، والباقي صورة PNG
+  const content = name.toLowerCase().endsWith('.pdf') ? Buffer.from('%PDF-1.4\n% profile fixture\n') : Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex')
+  form.append('file', new Blob([content], { type }), name)
   const query = new URLSearchParams({ entityType, ...(employeeId ? { employeeId: String(employeeId) } : {}) })
   const response = await fetch(`${base}/files/upload?${query}`, { method: 'POST', headers: { Authorization: `Bearer ${token(user)}` }, body: form })
   const text = await response.text()
