@@ -422,14 +422,18 @@ export class HolidayWorkService {
     await this.em.transaction(async em => {
       await this.lockNamedTargets(em, values)
       const locked = await em.getRepository(HolidayWorkOrder).findOne({ where: { id }, lock: { mode: 'pessimistic_write' } })
-      if (!locked || locked.status !== 'ACTIVE') throw new ConflictException('الأمر اتغير أو اتلغى — حدّث الشاشة')
+      // CR30-B01 (مراجعة Codex الجولة 30): الأمر نفسه ممكن يكون اتنقل لفرع تاني (تعديل من حساب الشركة) بعد الفحص اللي فوق —
+      // الرؤية وصلاحية الكتابة من جديد على الصف المقفول، فالتعديل بصلاحية فرع قديم مابيتحفظش
+      if (!locked || !this.visible(locked, this.scope(user))) throw new NotFoundException('الأمر مش موجود')
+      this.assertWrite(user, locked)
+      if (locked.status !== 'ACTIVE') throw new ConflictException('الأمر اتغير أو اتلغى — حدّث الشاشة')
       await em.getRepository(HolidayWorkOrder).update({ id }, { ...values, updatedByUserId: user.sub, updatedAt: new Date() })
       // القيود المستحقة في المسودات تتلغي وإعادة حساب المسير بتبنيها بالأمر الجديد؛ المحجوز/المصروف ما يتلمسش
       await cancelHolidayWorkObligations(em, id)
     })
     const saved = await this.orders.findOneByOrFail({ id })
     const overtime = await this.clearCoveredOvertime(saved)
-    return { ...(await this.detail(user, id)), overtime }
+    return { ...(await this.detailAfterWrite(user, saved)), overtime }
   }
 
   async cancel(user: JwtPayload, id: number, reason?: unknown) {
@@ -437,13 +441,28 @@ export class HolidayWorkService {
     this.assertWrite(user, current)
     if (current.status !== 'ACTIVE') return this.detail(user, id)
     const text = String(reason ?? '').trim().slice(0, 300) || null
-    await this.em.transaction(async em => {
-      const done = await em.getRepository(HolidayWorkOrder).update({ id, status: 'ACTIVE' },
-        { status: 'CANCELLED', cancelledByUserId: user.sub, cancelledAt: new Date(), cancelReason: text })
-      if (!done.affected) throw new ConflictException('الأمر اتغير — حدّث الشاشة')
+    const saved = await this.em.transaction(async em => {
+      const locked = await em.getRepository(HolidayWorkOrder).findOne({ where: { id }, lock: { mode: 'pessimistic_write' } })
+      // CR30-B01: الأمر نفسه من جديد تحت قفل صفه — فرعه ممكن يكون اتغيّر (تعديل من حساب الشركة) بعد الفحص اللي فوق
+      if (!locked || !this.visible(locked, this.scope(user))) throw new NotFoundException('الأمر مش موجود')
+      this.assertWrite(user, locked)
+      if (locked.status !== 'ACTIVE') return locked
+      await em.getRepository(HolidayWorkOrder).update({ id }, { status: 'CANCELLED', cancelledByUserId: user.sub, cancelledAt: new Date(), cancelReason: text })
       await cancelHolidayWorkObligations(em, id)
+      return em.getRepository(HolidayWorkOrder).findOneByOrFail({ id })
     })
-    return this.detail(user, id)
+    return this.detailAfterWrite(user, saved)
+  }
+
+  // رد التعديل أو الإلغاء بعد ما اتحفظ تحت القفل: لو حساب الشركة نقل الأمر لفرع تاني بعد الحفظ على طول، العرض بقى برّه النطاق —
+  // الرد بيقول اللي اتحفظ (الأمر وحالته) بدل «مش موجود» عن عملية نجحت
+  private async detailAfterWrite(user: JwtPayload, saved: HolidayWorkOrder) {
+    try {
+      return await this.detail(user, saved.id)
+    } catch (error) {
+      if (!(error instanceof NotFoundException)) throw error
+      return { today: holidayWorkToday(), canSeeAmounts: false, order: { id: saved.id, kind: saved.kind, name: saved.name, status: saved.status, movedOutOfScope: true } }
+    }
   }
 
   // اليوم المغطى بأمر ما بيطلعش إضافي مكتشف: أي إضافي مكتشف لسه ما اتعتمدش في أيام الأمر اللي فاتت

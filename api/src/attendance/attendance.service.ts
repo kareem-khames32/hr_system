@@ -682,32 +682,39 @@ export class AttendanceService {
     }>,
     user?: JwtPayload
   ) {
-    const p = await this.overtimePeriods.findOne({ where: { id } })
-    if (!p) throw new NotFoundException('الفترة غير موجودة')
-    this.assertOvertimePeriodScope(user, p.branchId)
+    const current = await this.overtimePeriods.findOne({ where: { id } })
+    if (!current) throw new NotFoundException('الفترة غير موجودة')
+    this.assertOvertimePeriodScope(user, current.branchId)
     if (dto.effect !== undefined && !['OPEN', 'CLOSED'].includes(dto.effect)) {
       throw new BadRequestException('الأثر: OPEN أو CLOSED')
     }
-    // الحالة النهائية بعد التعديل: «اعتماد تلقائي» على فترة مقفولة مرفوض — حتى لو القفل جه من غير ما يتبعت الحقل
-    this.assertOvertimePeriodAutoApprove(dto.autoApprove ?? p.autoApprove, dto.effect ?? p.effect)
-    const before = { fromDate: p.fromDate, toDate: p.toDate, branchId: p.branchId ?? null, effect: p.effect, isActive: p.isActive }
-    // حقول قابلة للتعديل فقط — ممنوع الجسم يكتب على id
-    if (dto.name !== undefined) {
-      if (!String(dto.name).trim()) throw new BadRequestException('اسم الفترة مطلوب')
-      p.name = String(dto.name).trim()
-    }
-    if (dto.fromDate !== undefined) p.fromDate = dto.fromDate
-    if (dto.toDate !== undefined) p.toDate = dto.toDate
-    this.validOvertimePeriodDates(p.fromDate, p.toDate)
-    if (dto.effect !== undefined) p.effect = dto.effect as any
-    if (dto.branchId !== undefined) {
-      // null لازم يتكتب null صريح — undefined كان بيسيب الفرع القديم في القاعدة
-      p.branchId = (await this.overtimePeriodBranch(dto.branchId)) as any
+    // CR30-B01 (مراجعة Codex الجولة 30): الفترة نفسها ممكن تكون اتنقلت لفرع تاني (تعديل من حساب الشركة) بعد الفحص اللي فوق —
+    // التعديل بيقفل صفها ويقرا نطاقها تاني تحت القفل جوه نفس المعاملة، وإعادة حساب الأيام بعد ما يتحفظ
+    const { saved, before } = await this.overtimePeriods.manager.transaction(async em => {
+      const p = await em.getRepository(OvertimePeriod).findOne({ where: { id }, lock: { mode: 'pessimistic_write' } })
+      if (!p) throw new NotFoundException('الفترة غير موجودة')
       this.assertOvertimePeriodScope(user, p.branchId)
-    }
-    if (dto.isActive !== undefined) p.isActive = !!dto.isActive
-    if (dto.autoApprove != null) p.autoApprove = dto.autoApprove
-    const saved = await this.overtimePeriods.save(p)
+      // الحالة النهائية بعد التعديل: «اعتماد تلقائي» على فترة مقفولة مرفوض — حتى لو القفل جه من غير ما يتبعت الحقل
+      this.assertOvertimePeriodAutoApprove(dto.autoApprove ?? p.autoApprove, dto.effect ?? p.effect)
+      const before = { fromDate: p.fromDate, toDate: p.toDate, branchId: p.branchId ?? null, effect: p.effect, isActive: p.isActive }
+      // حقول قابلة للتعديل فقط — ممنوع الجسم يكتب على id
+      if (dto.name !== undefined) {
+        if (!String(dto.name).trim()) throw new BadRequestException('اسم الفترة مطلوب')
+        p.name = String(dto.name).trim()
+      }
+      if (dto.fromDate !== undefined) p.fromDate = dto.fromDate
+      if (dto.toDate !== undefined) p.toDate = dto.toDate
+      this.validOvertimePeriodDates(p.fromDate, p.toDate)
+      if (dto.effect !== undefined) p.effect = dto.effect as any
+      if (dto.branchId !== undefined) {
+        // null لازم يتكتب null صريح — undefined كان بيسيب الفرع القديم في القاعدة
+        p.branchId = (await this.overtimePeriodBranch(dto.branchId)) as any
+        this.assertOvertimePeriodScope(user, p.branchId)
+      }
+      if (dto.isActive !== undefined) p.isActive = !!dto.isActive
+      if (dto.autoApprove != null) p.autoApprove = dto.autoApprove
+      return { saved: await em.getRepository(OvertimePeriod).save(p), before }
+    })
     // «اعتماد تلقائي» لوحده مابيغيرش نافذة اليوم ولا أدلته فمفيش إعادة حساب: المكتشف اللي لسه ما اتوجهش بيتحسم في دورة
     // التوجيه الجاية (بيتعتمد لو يومه خلص، أو بيروح لسلسلته لو العلامة اتشالت)، واللي في سلسلة اعتماد بيفضل قرار معتمده
     const changed = before.fromDate !== saved.fromDate || before.toDate !== saved.toDate ||
@@ -719,10 +726,17 @@ export class AttendanceService {
   }
 
   async deleteOvertimePeriod(id: number, user?: JwtPayload) {
-    const p = await this.overtimePeriods.findOne({ where: { id } })
-    if (!p) throw new NotFoundException('الفترة غير موجودة')
-    this.assertOvertimePeriodScope(user, p.branchId)
-    await this.overtimePeriods.delete({ id })
+    const current = await this.overtimePeriods.findOne({ where: { id } })
+    if (!current) throw new NotFoundException('الفترة غير موجودة')
+    this.assertOvertimePeriodScope(user, current.branchId)
+    // CR30-B01: الحذف تحت قفل صف الفترة بعد ما نطاقها يتقرا تاني (ممكن تكون اتنقلت لفرع تاني بعد الفحص اللي فوق)
+    const p = await this.overtimePeriods.manager.transaction(async em => {
+      const locked = await em.getRepository(OvertimePeriod).findOne({ where: { id }, lock: { mode: 'pessimistic_write' } })
+      if (!locked) throw new NotFoundException('الفترة غير موجودة')
+      this.assertOvertimePeriodScope(user, locked.branchId)
+      await em.getRepository(OvertimePeriod).delete({ id })
+      return locked
+    })
     const recompute = p.isActive ? await this.recomputeOvertimeWindowDays([p]) : { recomputed: 0, failed: 0 }
     return { deleted: true, recompute }
   }
