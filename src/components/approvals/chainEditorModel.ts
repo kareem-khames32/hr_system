@@ -34,7 +34,28 @@ export interface ApiChain {
   // تنفيذ فوري بلا اعتمادات — يسري فقط حين تكون السلسلة بلا خطوات
   autoApprove: boolean
   steps: ApiChainStep[]
+  // B1.11: خطوات وظيفية مالهاش حساب نشط بيحملها في فرع من فروع السلسلة (بنطاق القارئ) — تحذير بس
+  holderGaps?: ApiChainHolderGap[]
 }
+
+export interface ApiChainHolderGap {
+  stepId: number
+  stepOrder: number
+  // APPROVER = دور الخطوة، ESCALATION = جهة تصعيدها
+  kind: 'APPROVER' | 'ESCALATION'
+  role: string
+  branches: Array<{ id: number; name: string }>
+}
+
+// سطر لكل ثغرة: الخطوة ودورها والفروع اللي مفيهاش حد معاه الصلاحية
+export const holderGapLines = (chain: Pick<ApiChain, 'holderGaps'>): string[] =>
+  (chain.holderGaps ?? []).map((gap) => {
+    const role = roleLabels[gap.role] ?? gap.role
+    const where = gap.branches.map((branch) => branch.name).join('، ')
+    return gap.kind === 'ESCALATION'
+      ? `تصعيد الخطوة ${gap.stepOrder} لـ«${role}»: مفيش حساب نشط معاه الصلاحية دي في ${where} — الطلب المتصعّد هيقف`
+      : `الخطوة ${gap.stepOrder} «${role}»: مفيش حساب نشط معاه الصلاحية دي في ${where} — طلبات الفرع هتقف عندها`
+  })
 
 // أدوار المعتمدين الحقيقية في المحرك
 export const roleLabels: Record<string, string> = {

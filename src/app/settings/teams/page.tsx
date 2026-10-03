@@ -28,6 +28,11 @@ import {
   fetchTeams,
   updateTeam,
 } from '@/lib/api'
+import {
+  fetchManagerLeaderMismatches,
+  mismatchPersonLabel,
+  type ApiManagerLeaderMismatch,
+} from '@/lib/team-manager-mismatches'
 
 const emptyForm = {
   name: '',
@@ -50,6 +55,9 @@ export default function TeamsPage() {
   const [saving, setSaving] = useState(false)
   const [editingTeam, setEditingTeam] = useState<ApiTeam | null>(null)
   const [activeMenu, setActiveMenu] = useState<number | null>(null)
+  // كشف «المدير المسجل غير قائد الفريق» (B1.11) — null = مش متاح للحساب أو فشل، فالكارت مابيظهرش
+  const [mismatches, setMismatches] = useState<ApiManagerLeaderMismatch[] | null>(null)
+  const [showMismatches, setShowMismatches] = useState(false)
 
   const [formData, setFormData] = useState({ ...emptyForm })
 
@@ -69,6 +77,9 @@ export default function TeamsPage() {
     } finally {
       setLoading(false)
     }
+    fetchManagerLeaderMismatches()
+      .then((result) => setMismatches(result.rows))
+      .catch(() => setMismatches(null))
   }
 
   useEffect(() => {
@@ -87,14 +98,18 @@ export default function TeamsPage() {
     employees.filter((e) => e.teamId === teamId).length
 
   // أعضاء لهم مدير مباشر مسجّل غير القائد — المحلِّل يقدّمه على قائد الفريق
-  // (المسجّل ← قائد الفريق ← مدير القسم ← مدير الفرع)، فاعتماداتهم لا تذهب للقائد
+  // (المسجّل ← قائد الفريق ← مدير القسم ← مدير الفرع)، فاعتماداتهم لا تذهب للقائد.
+  // القائد نفسه مش بيتعد (مديره طبيعي غيره)، والفريق من غير قائد مفيهوش تعارض (نفس كشف الخادم — B1.11)
   const membersWithOwnManager = (team: ApiTeam) =>
-    employees.filter(
-      (e) =>
-        e.teamId === team.id &&
-        !!e.managerEmployeeId &&
-        e.managerEmployeeId !== team.leaderEmployeeId
-    ).length
+    team.leaderEmployeeId
+      ? employees.filter(
+          (e) =>
+            e.teamId === team.id &&
+            e.id !== team.leaderEmployeeId &&
+            !!e.managerEmployeeId &&
+            e.managerEmployeeId !== team.leaderEmployeeId
+        ).length
+      : 0
 
   const filteredTeams = teams.filter((team) => {
     const matchesSearch =
@@ -260,6 +275,63 @@ export default function TeamsPage() {
             </div>
           </div>
         </div>
+
+        {/* كشف «المدير المسجل غير قائد الفريق» (B1.11) — عرض بس، والتصحيح من ملف الموظف أو من القائد */}
+        {mismatches && mismatches.length > 0 && (
+          <div className="card p-4">
+            <button
+              type="button"
+              onClick={() => setShowMismatches(!showMismatches)}
+              className="w-full flex items-start justify-between gap-3 text-right"
+            >
+              <span className="flex items-start gap-2">
+                <Info size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                <span>
+                  <span className="block font-medium text-gray-800">
+                    {mismatches.length} موظف مديرهم المسجّل غير قائد فريقهم
+                  </span>
+                  <span className="block text-xs text-gray-500 mt-0.5">
+                    المدير المسجّل في الملف بيتقدّم على قائد الفريق، فاعتماداتهم بتروح له. راجع كل اسم: لو القائد هو الصح، صحّح المدير في ملف الموظف.
+                  </span>
+                </span>
+              </span>
+              <span className="text-sm text-primary-600 shrink-0">
+                {showMismatches ? 'إخفاء' : 'عرض الأسماء'}
+              </span>
+            </button>
+            {showMismatches && (
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-right text-gray-500 border-b border-gray-100">
+                      <th className="py-2 px-2 font-medium">الموظف</th>
+                      <th className="py-2 px-2 font-medium">الفريق</th>
+                      <th className="py-2 px-2 font-medium">المدير المسجّل</th>
+                      <th className="py-2 px-2 font-medium">قائد الفريق</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {mismatches.map((row) => (
+                      <tr key={row.employeeId} className="border-b border-gray-50">
+                        <td className="py-2 px-2">
+                          <Link
+                            href={`/employees/${row.employeeId}`}
+                            className="text-primary-600 hover:text-primary-700"
+                          >
+                            {row.employeeCode} — {row.fullName}
+                          </Link>
+                        </td>
+                        <td className="py-2 px-2 text-gray-700">{row.team.name}</td>
+                        <td className="py-2 px-2 text-gray-700">{mismatchPersonLabel(row.recordedManager)}</td>
+                        <td className="py-2 px-2 text-gray-700">{mismatchPersonLabel(row.teamLeader)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Filters */}
         <div className="card p-4">

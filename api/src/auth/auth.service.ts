@@ -9,7 +9,7 @@ import {
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { JwtService } from '@nestjs/jwt'
-import { Repository } from 'typeorm'
+import { In, Repository } from 'typeorm'
 import * as bcrypt from 'bcryptjs'
 import { DirectoryAuthError } from './directory.types'
 import { DirectoryService } from './directory.service'
@@ -120,12 +120,47 @@ export class AuthService {
     legacyGrants: string[]
     effective: string[]
   }> {
-    let rolePerms: string[] = []
-    let roleActive = true
     // مطابقة حرفية: الـcollation لا يفرّق حالة الأحرف ولا المسافات الأخيرة →
     // دور مخزَّن كـ "SUPER_ADMIN" لا يرث حزمة super_admin (الحراس تقارن حرفياً)
     const found = await this.roles.findOne({ where: { code: user.role } })
     const roleRow = found && found.code === user.role ? found : null
+    const ovr: Array<{ permission: string; effect: string }> = proposed
+      ? [
+          ...proposed.grants.map((permission) => ({ permission, effect: 'GRANT' })),
+          ...proposed.revokes.map((permission) => ({ permission, effect: 'REVOKE' })),
+        ]
+      : await this.overrides.find({ where: { userId: user.id } })
+    return this.composeBreakdown(user, roleRow, ovr)
+  }
+
+  // نفس الصلاحيات النهائية لمجموعة حسابات باستعلامين بدل اتنين لكل حساب — تحذير محرر السلاسل (B1.11) بيعدّ
+  // مين بيحمل كل خطوة وظيفية في كل فرع. نفس composeBreakdown بالحرف (مطابقة الدور الحرفية والعمود القديم والسحب)
+  async resolvePermissionsMany(users: User[]): Promise<Map<number, string[]>> {
+    const result = new Map<number, string[]>()
+    if (users.length === 0) return result
+    const codes = [...new Set(users.map((user) => user.role).filter(Boolean))]
+    const roleRows = codes.length ? await this.roles.find({ where: { code: In(codes) } }) : []
+    const ids = users.map((user) => user.id)
+    const overrides: UserPermissionOverride[] = []
+    // حد معاملات SQL Server (2100) — دفعات
+    for (let offset = 0; offset < ids.length; offset += 1000) {
+      overrides.push(...(await this.overrides.find({ where: { userId: In(ids.slice(offset, offset + 1000)) } })))
+    }
+    for (const user of users) {
+      const roleRow = roleRows.find((row) => row.code === user.role) ?? null
+      result.set(user.id, this.composeBreakdown(user, roleRow, overrides.filter((row) => row.userId === user.id)).effective)
+    }
+    return result
+  }
+
+  // حزمة الدور (صفه الحرفي أو الـpreset) + المنح + العمود القديم − السحب
+  private composeBreakdown(
+    user: User,
+    roleRow: Role | null,
+    ovr: Array<{ permission: string; effect: string }>
+  ) {
+    let rolePerms: string[] = []
+    let roleActive = true
     if (roleRow) {
       // الدور المعطَّل لا يمنح شيئاً — تبقى تجاوزات المستخدم فقط
       roleActive = !!roleRow.isActive
@@ -141,12 +176,6 @@ export class AuthService {
       rolePerms =
         ROLE_PRESETS.find((r) => r.code === user.role)?.permissions ?? []
     }
-    const ovr: Array<{ permission: string; effect: string }> = proposed
-      ? [
-          ...proposed.grants.map((permission) => ({ permission, effect: 'GRANT' })),
-          ...proposed.revokes.map((permission) => ({ permission, effect: 'REVOKE' })),
-        ]
-      : await this.overrides.find({ where: { userId: user.id } })
     const grants = ovr.filter((o) => o.effect === 'GRANT').map((o) => o.permission)
     const revokes = ovr.filter((o) => o.effect === 'REVOKE').map((o) => o.permission)
 

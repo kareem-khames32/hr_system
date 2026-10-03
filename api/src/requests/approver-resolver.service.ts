@@ -26,6 +26,37 @@ export function hasHrOverride(user: Pick<JwtPayload, 'role' | 'permissions'>): b
   )
 }
 
+// الأدوار الوظيفية: بتتحل وقت الفعل بصلاحية الحساب ونطاق فروعه، مش بموظف محدد وقت التقديم
+export const FUNCTIONAL_APPROVER_ROLES = ['hr', 'finance', 'it', 'custody_officer', 'payroll_officer', 'executive'] as const
+
+// الحساب ده بيحمل الخطوة الوظيفية دي بصلاحياته؟ (من غير مخرج مدير النظام ولا مخرج الموارد البشرية للشغل الواقف) —
+// نفس حكم satisfies بالحرف، ومحرر السلاسل بيستخدمه عشان ينبّه لخطوة مالهاش حامل في فرع (B1.11 / D05)
+export function holdsFunctionalStep(user: Pick<JwtPayload, 'role' | 'permissions'>, role: string): boolean {
+  const granted = user.permissions ?? []
+  switch (role) {
+    case 'hr':
+      return (
+        user.role === 'hr_manager' ||
+        granted.includes('approve.hr') ||
+        granted.includes('hr') // توافق قديم
+      )
+    case 'executive':
+      return granted.includes('approve.executive') || granted.includes('executive')
+    // بالصلاحية فقط — كود الدور مش تفويض: أي دور مخصص ممكن ياخد كود زي
+    // 'finance' من شاشة الأدوار (SET-8)
+    case 'finance':
+      return granted.includes('approve.finance') || granted.includes('finance')
+    case 'it':
+      return granted.includes('approve.it') || granted.includes('it')
+    case 'custody_officer':
+      return granted.includes('approve.custody') || granted.includes('custody_officer')
+    case 'payroll_officer':
+      return granted.includes('approve.payroll')
+    default:
+      return false
+  }
+}
+
 // خطوة النظام: الإضافي المكتشف اللي اتعتمد تلقائي بفترة «اعتماد تلقائي» (قرار المالك 28 سبتمبر) — خطوة واحدة بتتسجل
 // معتمدة بقرار النظام (approverId = 0) في نفس معاملة إنشاء الطلب. مش دور يتضبط في سلاسل الاعتماد (APPROVER_ROLES
 // في الإعدادات مابتقبلوش)، ومحدش بيطابقه في satisfies (إلا مدير النظام، والخطوة أصلًا متصرَّف فيها والطلب مكتمل)
@@ -238,7 +269,6 @@ export class ApproverResolver {
     // super_admin يتصرف في أي خطوة — يفكّ أي انسداد
     if (user.role === 'super_admin') return true
     if (options.hrUnblock === true && this.hasHrOverride(user)) return true
-    const granted = user.permissions ?? []
 
     switch (step.role) {
       case 'direct_manager_of_requester':
@@ -252,29 +282,14 @@ export class ApproverResolver {
           step.approverEmployeeId !== null &&
           user.employeeId === step.approverEmployeeId
         )
+      // الأدوار الوظيفية بالصلاحية (holdsFunctionalStep — نفس الحكم اللي محرر السلاسل بينبّه بيه)
       case 'hr':
-        return (
-          user.role === 'hr_manager' ||
-          granted.includes('approve.hr') ||
-          granted.includes('hr') // توافق قديم
-        )
       case 'executive':
-        return (
-          granted.includes('approve.executive') || granted.includes('executive')
-        )
-      // بالصلاحية فقط — كود الدور مش تفويض: أي دور مخصص ممكن ياخد كود زي
-      // 'finance' من شاشة الأدوار (SET-8)
       case 'finance':
-        return granted.includes('approve.finance') || granted.includes('finance')
       case 'it':
-        return granted.includes('approve.it') || granted.includes('it')
       case 'custody_officer':
-        return (
-          granted.includes('approve.custody') ||
-          granted.includes('custody_officer')
-        )
       case 'payroll_officer':
-        return granted.includes('approve.payroll')
+        return holdsFunctionalStep(user, step.role)
       default:
         return false
     }

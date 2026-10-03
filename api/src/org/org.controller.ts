@@ -102,6 +102,13 @@ export class OrgController {
     return this.org.findTeams(branchScopeOf(user))
   }
 
+  // B1.11 / D12: الموظفين اللي مديرهم المسجل غير قائد فريقهم (عرض بس، بنطاق الحساب)
+  @Get('teams/manager-mismatches')
+  @Perm('org.manage', 'employees.view')
+  managerLeaderMismatches(@CurrentUser() user: JwtPayload) {
+    return this.org.managerLeaderMismatches(branchScopeOf(user))
+  }
+
   @Post('teams')
   @Perm('org.manage')
   createTeam(@CurrentUser() user: JwtPayload, @Body() dto: CreateTeamDto) {

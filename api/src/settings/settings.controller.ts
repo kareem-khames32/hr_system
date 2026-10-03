@@ -29,7 +29,10 @@ import {
   ValidateNested,
 } from 'class-validator'
 import { Type } from 'class-transformer'
-import { assertCompanyWideWrite, branchIdIn, branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
+import { assertCompanyWideWrite, branchIdIn, branchScopeOf, CurrentUser, effectiveBranchScope, inBranchScope, JwtAuthGuard, Perm, RolesGuard, userHasPerm, type BranchScope } from '../auth/guards'
+import { AuthService } from '../auth/auth.service'
+import { User } from '../auth/user.entity'
+import { chainHolderGaps } from './approval-chain-holders'
 import { ApprovalChain } from '../requests/entities/approval-chain.entity'
 import { ApprovalStep } from '../requests/entities/approval-step.entity'
 import { Branch } from '../org/entities/branch.entity'
@@ -541,7 +544,9 @@ export class SettingsController {
     private readonly steps: Repository<ApprovalStep>,
     @InjectRepository(RequestType)
     private readonly requestTypes: Repository<RequestType>,
-    private readonly destinations: DestinationsService
+    private readonly destinations: DestinationsService,
+    // صلاحيات الحسابات النهائية لتحذير محرر السلاسل (B1.11)
+    private readonly auth: AuthService
   ) {}
 
   // ===== إعدادات المحرك (مفاتيح/قيم) =====
@@ -1000,10 +1005,13 @@ export class SettingsController {
       const type = typeCode ? typeByCode.get(typeCode) : undefined
       return scope !== null && !!type && type.branchId != null && !inBranchScope(scope, type.branchId)
     }
+    // B1.11 / D05: خطوة وظيفية مالهاش حامل نشط في فرع من فروع السلسلة (بنطاق القارئ) — تحذير بس، مش منع
+    const holderGaps = await this.chainHolderGaps(allSteps, scope)
     return chains.filter((c) => !typeHidden(c.requestTypeCode)).map((c) => ({
       ...c,
       isPrimary: primaryIds.has(c.id),
       steps: allSteps.filter((s) => s.chainId === c.id),
+      holderGaps: holderGaps.get(c.id) ?? [],
       requestTypeName: c.requestTypeCode
         ? typeByCode.get(c.requestTypeCode)?.nameAr ?? null
         : null,
@@ -1141,6 +1149,24 @@ export class SettingsController {
       await repo.delete({ chainId: id })
       const steps = await this.persistChainSteps(repo, id, dto.steps)
       return { ...chain, steps }
+    })
+  }
+
+  // حاملو الخطوات الوظيفية: كل حساب نشط غير مدير النظام بصلاحياته النهائية (نفس حساب التوكن) ونطاقه الفعّال.
+  // كل السلاسل بتدخل (النسخة الفرعية المفعّلة بتشيل فرعها من العامة)، والرد بيطلع للسلاسل المعروضة بس
+  private async chainHolderGaps(steps: ApprovalStep[], viewer: BranchScope) {
+    const em = this.chains.manager
+    const [allChains, branches, accounts] = await Promise.all([
+      this.chains.find({ select: { id: true, code: true, branchId: true, isActive: true } }),
+      em.find(Branch, { select: { id: true, name: true, isActive: true }, order: { id: 'ASC' } }),
+      em.find(User, { where: { isActive: true },
+        select: { id: true, role: true, branchId: true, scopeAllBranches: true, scopeBranchIds: true, permissions: true } }),
+    ])
+    const counted = accounts.filter((account) => account.role !== 'super_admin')
+    const permissions = await this.auth.resolvePermissionsMany(counted)
+    return chainHolderGaps({
+      chains: allChains, steps, branches, viewer,
+      holders: counted.map((account) => ({ role: account.role, permissions: permissions.get(account.id) ?? [], scope: effectiveBranchScope(account) })),
     })
   }
 

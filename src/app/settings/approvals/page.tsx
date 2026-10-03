@@ -40,6 +40,7 @@ import {
   branchesWithoutVersionOf,
   branchVersionsOfChain,
   generalChainOf,
+  holderGapLines,
   roleDescriptions,
   roleLabels,
   thresholdFieldLabels,
@@ -638,6 +639,20 @@ export default function ApprovalsPage() {
                           ))}
                         </div>
                       </div>
+                      )}
+                      {/* B1.11: خطوة وظيفية مالهاش حد معاه صلاحيتها في فرع — تحذير بس، الحفظ مش ممنوع */}
+                      {holderGapLines(chain).length > 0 && (
+                        <div className="mt-3 flex items-start gap-2 p-3 bg-warning-50 rounded-xl">
+                          <AlertCircle size={16} className="text-warning-600 shrink-0 mt-0.5" />
+                          <div className="text-sm text-warning-700 space-y-1">
+                            {holderGapLines(chain).map((line) => (
+                              <p key={line}>{line}</p>
+                            ))}
+                            <p className="text-xs">
+                              محدش هيشوف الطلبات دي غير مدير النظام. ادّي الصلاحية لحساب في الفرع من شاشة المستخدمين، أو غيّر الخطوة.
+                            </p>
+                          </div>
+                        </div>
                       )}
                     </div>
 

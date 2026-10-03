@@ -575,6 +575,50 @@ export class OrgService {
   }
 
   // ===== الفرق =====
+  // B1.11 / D12: كشف لمرة واحدة — موظف نشط في فريق ليه قائد، ومديره المسجل في الملف موجود وغير القائد. المدير المسجل
+  // بيتقدم على قائد الفريق في «المدير المباشر» (directManagerOf — الترتيب زي ما هو بقرار المالك)، فطلباته بتروح للمسجل
+  // مش للقائد. عرض بس: مفيش تعديل. بنطاق الحساب: الموظف من فروعه، واسم الفريق أو المدير أو القائد من فرع تاني مايتقالش.
+  async managerLeaderMismatches(scope: BranchScope) {
+    if (isEmptyBranchScope(scope)) return { rows: [], total: 0 }
+    const teams = await this.teams.find({ relations: { department: true } })
+    const led = teams.filter((team) => team.leaderEmployeeId)
+    if (led.length === 0) return { rows: [], total: 0 }
+    const teamById = new Map(led.map((team) => [team.id, team]))
+    const members = await this.employees.find({
+      where: { isActive: true, teamId: In(led.map((team) => team.id)), ...(scope === null ? {} : { branchId: branchIdIn(scope) }) },
+      select: { id: true, employeeCode: true, fullName: true, branchId: true, teamId: true, managerEmployeeId: true },
+      order: { employeeCode: 'ASC' },
+    })
+    const mismatched = members.filter((emp) => {
+      const leaderId = teamById.get(Number(emp.teamId))?.leaderEmployeeId
+      return !!leaderId && leaderId !== emp.id && !!emp.managerEmployeeId && emp.managerEmployeeId !== leaderId
+    })
+    const peopleIds = [...new Set(mismatched.flatMap((emp) => [emp.managerEmployeeId, teamById.get(Number(emp.teamId))!.leaderEmployeeId]))]
+    const people = new Map<number, Employee>()
+    for (let offset = 0; offset < peopleIds.length; offset += 1000) {
+      for (const person of await this.employees.find({ where: { id: In(peopleIds.slice(offset, offset + 1000)) },
+        select: { id: true, employeeCode: true, fullName: true, branchId: true, isActive: true } })) people.set(person.id, person)
+    }
+    const hiddenPerson = { id: null, employeeCode: null, fullName: 'موظف خارج نطاق صلاحيتك', isActive: null }
+    const personRef = (id: number) => {
+      const person = people.get(id)
+      if (!person) return { id, employeeCode: null, fullName: null, isActive: false }
+      return inBranchScope(scope, person.branchId)
+        ? { id: person.id, employeeCode: person.employeeCode, fullName: person.fullName, isActive: !!person.isActive }
+        : hiddenPerson
+    }
+    const rows = mismatched.map((emp) => {
+      const team = teamById.get(Number(emp.teamId))!
+      return {
+        employeeId: emp.id, employeeCode: emp.employeeCode, fullName: emp.fullName,
+        team: inBranchScope(scope, team.department?.branchId) ? { id: team.id, name: team.name } : { id: null, name: 'فريق خارج نطاق صلاحيتك' },
+        recordedManager: personRef(emp.managerEmployeeId),
+        teamLeader: personRef(team.leaderEmployeeId),
+      }
+    })
+    return { rows, total: rows.length }
+  }
+
   findTeams(branchScope: BranchScope) {
     if (branchScope == null)
       return this.teams.find({ relations: { department: true } })

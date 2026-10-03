@@ -6,6 +6,7 @@ import { LeaveType } from '../requests/entities/leave.entities'
 import { RequestType } from '../requests/entities/request-type.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { RequestsModule } from '../requests/requests.module'
+import { AuthModule } from '../auth/auth.module'
 import { ConfigDefaultsService } from './config-defaults.service'
 import { RequestCategoryChainsController } from './request-category-chains.controller'
 import { RequestCategoryChainsService } from './request-category-chains.service'
@@ -15,6 +16,8 @@ import { SettingsController } from './settings.controller'
   imports: [
     // DestinationsService: قائمة الوجهات المنفّذة لبانِي الطلبات
     RequestsModule,
+    // AuthService: صلاحيات الحسابات النهائية لتحذير محرر السلاسل (B1.11) — AuthModule مابيستوردش SettingsModule فمفيش حلقة
+    AuthModule,
     TypeOrmModule.forFeature([
       RequestsConfig,
       LeaveType,

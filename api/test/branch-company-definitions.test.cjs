@@ -154,6 +154,8 @@ test('chain list: another branch never sees a chain made for a branch-only type 
       : chains },
     steps: { find: async () => [] },
     requestTypes: { find: async () => types },
+    // B1.11: تحذير الحاملين (مالوش دعوة بالقايمة نفسها — اختباره في approval-chain-holders)
+    chainHolderGaps: async () => new Map(),
   }
   const list = (user) => SettingsController.prototype.listChains.call(fake, user)
   const other = await list(otherBranchHr)
