@@ -14,6 +14,8 @@ import { findPayrollConflicts } from './payroll-membership-guard'
 import { lockPayrollEmployees } from './payroll-settlement-boundary'
 import { payrollRunStateIssue } from './payroll-run-approval'
 import { PayrollService } from './payroll.service'
+// CR35-B01: مرجع مسير في موانع العكس بقاعدة رؤية المسير للحساب
+import { scopePayrollRunRefBlockers } from './payroll-run-visibility'
 
 // C8 / الخطوة 31: مسار تصحيح المسير المصروف — معاينة عكس الصرف وإنشاء مسير العكس، والمسير التكميلي المربوط، وتقرير التسويات.
 // اعتماد مسير العكس وتنفيذه وإلغاؤه يمرون من نقاط المسير نفسها (approve/pay/cancel/reopen) بفصل المهام وقيد الصرف (payroll.service.ts).
@@ -229,7 +231,9 @@ export class PayrollCorrectionsService {
     this.assertCorrectable(run, 'عكس صرف المسير')
     const items = await this.selectedItems(em, run, dto.employeeIds)
     const { plans: _plans, ...preview } = await this.planAll(em, run, items)
-    return { runId: run.id, period: run.period, employees: items.length, blocked: preview.blockers.length > 0, ...preview }
+    // CR35-B01: مرجع مسير في الموانع (المسير اللاحق اللي حجز قسط الترحيل) بقاعدة رؤية المسير للحساب لموظف المانع — البصمة زي ما هي
+    const lines = await Promise.all(preview.lines.map(async line => ({ ...line, blockers: await scopePayrollRunRefBlockers(em, user, line.blockers) })))
+    return { runId: run.id, period: run.period, employees: items.length, blocked: preview.blockers.length > 0, ...preview, lines, blockers: lines.flatMap(line => line.blockers) }
   }
 
   /** إنشاء مسير العكس (CALCULATED) بسطر معلق لكل بند؛ لا أثر مالي قبل اعتماده من مستخدم آخر وتنفيذه بقيد صرف. */
@@ -243,7 +247,11 @@ export class PayrollCorrectionsService {
       const items = await this.selectedItems(em, run, dto.employeeIds)
       await lockPayrollEmployees(em, items.map(item => item.employeeId))
       const { plans, lines, blockers, totalNet, previewHash } = await this.planAll(em, run, items)
-      if (blockers.length) throw conflict('PAYRUN-REVERSAL-BLOCKED', `تعذر عكس الصرف: ${blockers[0].message}${blockers.length > 1 ? ` (و${blockers.length - 1} مانعًا آخر)` : ''}`, { blockers })
+      if (blockers.length) {
+        // CR35-B01: نفس حجب المعاينة في الرفض
+        const shown = await scopePayrollRunRefBlockers(em, user, blockers)
+        throw conflict('PAYRUN-REVERSAL-BLOCKED', `تعذر عكس الصرف: ${shown[0].message}${shown.length > 1 ? ` (و${shown.length - 1} مانعًا آخر)` : ''}`, { blockers: shown })
+      }
       if (!dto.previewHash || dto.previewHash !== previewHash) throw conflict('PAYRUN-REVERSAL-PREVIEW-STALE', 'اعرض معاينة العكس الحالية ثم أكد الإنشاء؛ تغيّرت بنود العكس أو آثاره منذ المعاينة')
       const base = `عكس صرف ${run.name ?? `المسير #${run.id}`}`.slice(0, 170)
       let name = base

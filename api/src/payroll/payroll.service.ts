@@ -112,6 +112,8 @@ import { cancelPayrollReversalLines, carryReversedRunExemptions, describePayroll
 import { assertPayrollRunHasNoChain, voidPayrollRunApprovals } from './payroll-approval-chain'
 import { assertPayrollRunNotDisbursed, closePayrollRunDisbursement } from './payroll-disbursement'
 import { PayrollItemDisbursement } from './payroll-disbursement.entities'
+// CR35-B01: مرجع مسير في موانع عكس الصرف بقاعدة رؤية المسير للحساب
+import { scopePayrollRunRefBlockers } from './payroll-run-visibility'
 
 // الخطوة 16: مدخلات تعريف المسير من الشاشة (تُتحقق هنا ضد القاعدة؛ الـDTO يتحقق من الشكل فقط).
 export interface PayrollRunDefinitionInput {
@@ -1425,7 +1427,7 @@ export class PayrollService {
       if (selfApproval) throw new ForbiddenException(selfApproval)
       // C8 / الخطوة 31: مسير العكس — فصل المهام أعلاه (من أنشأ العكس لا يعتمده)، ثم إعادة التحقق من كل سطر؛ لا حجز ولا دفاتر قبل التنفيذ
       if (payrollRunTypeOf(run) === 'REVERSAL') {
-        const ready = await this.reversalLinesReady(em, run)
+        const ready = await this.reversalLinesReady(em, run, user)
         run.status = 'APPROVED'
         run.approvedBy = user.sub
         run.approvedAt = new Date()
@@ -1540,7 +1542,7 @@ export class PayrollService {
       // قيد الصرف هنا قيد الاسترداد (القناة والمرجع). صفوف المسير الأصلي لا تُعدَّل.
       if (payrollRunTypeOf(run) === 'REVERSAL') {
         if (run.parentRunId) await lockPayrollRunForCorrection(em, run.parentRunId)
-        const ready = await this.reversalLinesReady(em, run)
+        const ready = await this.reversalLinesReady(em, run, user)
         const effects = []
         for (const pair of ready.pairs) effects.push(await postPayrollReversalLine(em, { reversalRun: run, parentRun: ready.parent, line: pair.line, item: pair.item, actorUserId: user.sub }))
         run.status = 'PAID'
@@ -1729,7 +1731,7 @@ export class PayrollService {
   }
 
   // C8 / الخطوة 31: سطور مسير العكس المعلقة جاهزة للاعتماد أو التنفيذ — المسير الأصلي ما زال مصروفًا، والبند بلقطته، ولا مانع لاحق (الموظفون مقفولون)
-  private async reversalLinesReady(em: EntityManager, run: PayrollRun) {
+  private async reversalLinesReady(em: EntityManager, run: PayrollRun, viewer: JwtPayload | null = null) {
     const parent = run.parentRunId ? await em.getRepository(PayrollRun).findOneBy({ id: run.parentRunId }) : null
     if (!parent || parent.status !== 'PAID' || payrollRunTypeOf(parent) === 'REVERSAL') {
       throw new ConflictException({ code: 'PAYRUN-REVERSAL-PARENT', message: 'المسير الأصلي لمسير العكس غير موجود أو لم يعد مصروفًا' })
@@ -1749,7 +1751,11 @@ export class PayrollService {
       blockers.push(...plan.blockers)
       pairs.push({ line, item })
     }
-    if (blockers.length) throw new ConflictException({ code: 'PAYRUN-REVERSAL-BLOCKED', message: `تعذر المتابعة في مسير العكس: ${blockers[0].message}`, blockers })
+    if (blockers.length) {
+      // CR35-B01: مرجع المسير اللاحق في الموانع بقاعدة رؤية المسير للحساب اللي بيعتمد أو بيصرف
+      const shown = await scopePayrollRunRefBlockers(em, viewer, blockers)
+      throw new ConflictException({ code: 'PAYRUN-REVERSAL-BLOCKED', message: `تعذر المتابعة في مسير العكس: ${shown[0].message}`, blockers: shown })
+    }
     return { parent, pairs, employeeIds }
   }
 

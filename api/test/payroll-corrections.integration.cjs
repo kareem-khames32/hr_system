@@ -819,3 +819,77 @@ test('CR25-B01 / CR26: إعفاء منقول لتكميلي فيه موظف ات
   assert.deepEqual([(await repo('PayrollFinancialExemption').findOneByOrFail({ id: copies[stay.id].id })).attachmentRef, await events()], ['محضر-قبل-النقل', before])
   expectStatus(await request(otherHr, 'GET', `/payroll/exemptions/${copies[stay.id].id}`), 200)
 })
+
+test('CR35-B01 / CR35-N01: موانع عكس الصرف بقاعدة رؤية المسير — قسط ترحيل حجزه مسير فرع تاني بعد نقل الموظف بيتقال من غير رقمه ولا حالته لقارئ الفرع في المعاينة والإنشاء واعتماد مسير العكس، والشركة بتشوفه؛ ومسير العكس بيتبع مسيره الأصلي', { timeout: 900000 }, async () => {
+  const admin2 = await repo('User').save({ email: 'admin2-cr35@payroll-corrections-test.invalid', displayName: 'admin2-cr35', passwordHash: 'test-only', role: 'super_admin',
+    branchId: null, permissions: '[]' })
+  const createdPolicy = expectStatus(await request(users.admin, 'POST', '/payroll/policies', { name: 'مجموعة الشركة لموانع العكس', effectiveFrom: policyStart, settings: { ...cycle23 } }), 201)
+  const published = expectStatus(await request(users.admin, 'POST', `/payroll/policies/${createdPolicy.policy.id}/versions/${createdPolicy.versions[0].id}/publish`,
+    { expectedRevision: createdPolicy.versions[0].revision, reason: 'نشر مجموعة الشركة لاختبار موانع عكس الصرف' }), 200)
+  const versionId = published.version.id
+  // موظف فرع القارئ براتب 1,000 وسلفة 1,500 بقسط واحد: مسير أغسطس بيخصم 1,000 ويرحّل 500
+  const emp = await employee(1000)
+  const loan = await repo('Loan').save({ employeeId: emp.id, amount: 1500, status: 'DISBURSED', disbursedAt: new Date('2026-07-01T08:00:00Z') })
+  const installment = await repo('LoanInstallment').save({ loanId: loan.id, dueDate: '2026-08-10', amount: 1500, paid: false })
+  let august = expectStatus(await request(users.admin, 'POST', '/payroll/runs', { name: 'مسير أغسطس لموانع العكس', policyVersionId: versionId, period,
+    filters: { employeeIds: [emp.id] } }), 201)
+  august = await calculate(august, users.admin)
+  assert.deepEqual([Number(itemOf(august, emp).loanInstallments), Number(itemOf(august, emp).netPay)], [1000, 0])
+  await acknowledge(august, admin2)
+  expectStatus(await request(admin2, 'POST', `/payroll/runs/${august.id}/approve`), 201)
+  expectStatus(await request(admin2, 'POST', `/payroll/runs/${august.id}/pay`, { channel: 'BANK_TRANSFER', reference: 'TRX-CR35-AUG' }), 201)
+  const continuation = await repo('LoanInstallment').findOneByOrFail({ parentInstallmentId: installment.id })
+  assert.equal(Number(continuation.amount), 500)
+  // قارئ الفرع بيعاين وبينشئ العكس قبل الحجز (مسير عكس من غير أعضاء، أصله أغسطس)
+  const clean = expectStatus(await request(users.desk, 'POST', `/payroll/runs/${august.id}/reversal-preview`, { employeeIds: [emp.id] }), 201)
+  assert.equal(clean.blocked, false)
+  const reversal = expectStatus(await request(users.desk, 'POST', `/payroll/runs/${august.id}/reversals`, { employeeIds: [emp.id], reason: REASON, previewHash: clean.previewHash }), 201)
+
+  // الموظف اتنقل لفرع تاني، ومسير سبتمبر هناك (معتمد) حجز قسط الترحيل
+  await repo('Employee').update(emp.id, { branchId: org.other.id })
+  const days = []
+  for (let time = Date.parse('2026-08-23T12:00:00Z'); time <= Date.parse('2026-09-22T12:00:00Z'); time += 86400000) {
+    days.push({ employeeId: emp.id, branchId: org.other.id, date: new Date(time).toISOString().slice(0, 10), status: 'present', checkIn: '08:00', checkOut: '16:00',
+      shiftName: 'وردية اختبار التصحيح', shiftStart: '08:00', shiftEnd: '16:00', scheduleSource: 'override', workMinutes: 480, lateMinutes: 0, deductibleMinutes: 0, earlyLeaveMinutes: 0 })
+  }
+  await repo('AttendanceDay').save(days, { chunk: 100 })
+  let september = expectStatus(await request(users.admin, 'POST', '/payroll/runs', { name: 'مسير سبتمبر السري لموانع العكس', policyVersionId: versionId, period: '2026-09',
+    filters: { employeeIds: [emp.id] } }), 201)
+  september = await calculate(september, users.admin)
+  assert.equal(Number(itemOf(september, emp).loanInstallments), 500)
+  await acknowledge(september, admin2)
+  expectStatus(await request(admin2, 'POST', `/payroll/runs/${september.id}/approve`), 201)
+  expectStatus(await request(users.desk, 'GET', `/payroll/runs/${september.id}`), 403)
+  expectStatus(await request(users.desk, 'GET', `/payroll/runs/${august.id}`), 200)
+  const leaks = body => [`"runId":${september.id},`, `"runId":${september.id}}`, `المسير #${september.id} `, 'مسير سبتمبر السري', '(معتمد)', 'redactedMessage']
+    .filter(text => JSON.stringify(body).includes(text))
+  const DOWNSTREAM = `قسط الترحيل #${continuation.id} دخل مسير لاحق برّه نطاق صلاحيتك؛ لازم يتعكس أو يتفتح من الحساب اللي يشوفه قبل عكس المسير ده`
+
+  // المعاينة لقارئ الفرع: الموانع من غير مسير سبتمبر، ومسير العكس (أصله أغسطس) ظاهر برقمه — CR35-N01
+  const preview = expectStatus(await request(users.desk, 'POST', `/payroll/runs/${august.id}/reversal-preview`, { employeeIds: [emp.id] }), 201)
+  assert.equal(preview.blocked, true)
+  assert.deepEqual(leaks(preview), [])
+  const downstream = preview.blockers.find(row => row.code === 'PAYRUN-REVERSAL-DOWNSTREAM')
+  assert.deepEqual([downstream.message, downstream.details], [DOWNSTREAM, { installmentId: continuation.id, runId: null }])
+  const exists = preview.blockers.find(row => row.code === 'PAYRUN-REVERSAL-EXISTS')
+  assert.equal(exists.details.reversalRunId, reversal.id); assert.match(exists.message, new RegExp(`بمسير العكس #${reversal.id} `))
+  assert.deepEqual(preview.lines[0].blockers, preview.blockers)
+  // حساب الشركة: المرجع كامل
+  const company = expectStatus(await request(users.admin, 'POST', `/payroll/runs/${august.id}/reversal-preview`, { employeeIds: [emp.id] }), 201)
+  const companyDownstream = company.blockers.find(row => row.code === 'PAYRUN-REVERSAL-DOWNSTREAM')
+  assert.equal(companyDownstream.details.runId, september.id); assert.ok(companyDownstream.message.includes(`المسير #${september.id} (معتمد)`), companyDownstream.message)
+  assert.equal(company.previewHash, preview.previewHash, 'البصمة واحدة للحسابين')
+  assert.ok(!JSON.stringify(company).includes('redactedMessage'))
+
+  // الإنشاء واعتماد مسير العكس: نفس المنع (409) من غير المرجع، ومن غير أي تغيير
+  const state = await financialState([emp.id])
+  const created = expectStatus(await request(users.desk, 'POST', `/payroll/runs/${august.id}/reversals`, { employeeIds: [emp.id], reason: REASON,
+    previewHash: preview.previewHash }), 409, 'PAYRUN-REVERSAL-BLOCKED')
+  assert.deepEqual(leaks(created), [])
+  const approve = expectStatus(await request(users.approver, 'POST', `/payroll/runs/${reversal.id}/approve`), 409, 'PAYRUN-REVERSAL-BLOCKED')
+  assert.deepEqual(leaks(approve), []); assert.ok(approve.message.includes(DOWNSTREAM), approve.message)
+  const companyApprove = expectStatus(await request(admin2, 'POST', `/payroll/runs/${reversal.id}/approve`), 409, 'PAYRUN-REVERSAL-BLOCKED')
+  assert.ok(companyApprove.message.includes(`المسير #${september.id} (معتمد)`), companyApprove.message)
+  assert.deepEqual(await financialState([emp.id]), state)
+  assert.equal((await repo('PayrollRun').findOneByOrFail({ id: reversal.id })).status, 'CALCULATED')
+})

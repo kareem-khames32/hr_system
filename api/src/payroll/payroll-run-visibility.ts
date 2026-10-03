@@ -1,5 +1,6 @@
 import { In, type EntityManager } from 'typeorm'
-import { inBranchScope, type BranchScope } from '../auth/guards'
+import { branchScopeOf, inBranchScope, type BranchScope } from '../auth/guards'
+import type { JwtPayload } from '../auth/auth.service'
 import { PayrollRunMember } from './payroll.entities'
 
 // CR34-B01: مراجع المسير في حمولة حدث (أي مفتاح runId أو ينتهي بـRunId وقيمته رقم، في أي عمق)
@@ -42,15 +43,17 @@ export async function payrollRunRefVisibility(em: EntityManager, scope: BranchSc
   if (scope === null) return runId => runId != null
   const ids = [...new Set(runIds.filter((id): id is number => Number.isSafeInteger(id) && Number(id) > 0))]
   const people = [...new Set(employeeIds.filter((id): id is number => Number.isSafeInteger(id) && Number(id) > 0))]
-  const visible = new Set<string>(), withMembers = new Set<number>(), runBranch = new Map<number, number | null>()
+  const visible = new Set<string>(), withMembers = new Set<number>(), runBranch = new Map<number, number | null>(), parentOf = new Map<number, number>()
   for (let offset = 0; offset < ids.length; offset += 500) {
     const chunk = ids.slice(offset, offset + 500)
-    const runs: Array<{ id: number; branchId: number | null; hasMembers: number }> = await em.query(`SELECT r.[id], r.[branchId],
-        CASE WHEN EXISTS (SELECT 1 FROM [payroll_run_members] m WHERE m.[runId] = r.[id]) THEN 1 ELSE 0 END AS [hasMembers]
+    const runs: Array<{ id: number; branchId: number | null; hasMembers: number; runType: string | null; parentRunId: number | null }> = await em.query(`SELECT r.[id], r.[branchId],
+        CASE WHEN EXISTS (SELECT 1 FROM [payroll_run_members] m WHERE m.[runId] = r.[id]) THEN 1 ELSE 0 END AS [hasMembers], r.[runType], r.[parentRunId]
       FROM [payroll_runs] r WHERE r.[id] IN (SELECT CAST([value] AS int) FROM OPENJSON(@0))`, [JSON.stringify(chunk)])
     for (const run of runs) {
       if (Number(run.hasMembers)) withMembers.add(Number(run.id))
       runBranch.set(Number(run.id), run.branchId == null ? null : Number(run.branchId))
+      // CR35-N01: مسير العكس من غير أعضاء بيتحكم بمسيره الأصلي (نفس assertRunAccess)
+      if (run.runType === 'REVERSAL' && run.parentRunId != null && !Number(run.hasMembers) && Number(run.parentRunId) !== Number(run.id)) parentOf.set(Number(run.id), Number(run.parentRunId))
     }
     for (let start = 0; start < people.length; start += 500) {
       const members = await em.getRepository(PayrollRunMember).find({ where: { runId: In(chunk), employeeId: In(people.slice(start, start + 500)) },
@@ -61,7 +64,31 @@ export async function payrollRunRefVisibility(em: EntityManager, scope: BranchSc
       }
     }
   }
+  const own = (runId: number, employeeId: number) => visible.has(`${runId}:${employeeId}`) ||
+    (!withMembers.has(runId) && runBranch.get(runId) != null && inBranchScope(scope, runBranch.get(runId)!))
+  // أصول مسيرات العكس: بنفس القاعدة (العكس مابيتعكسش، فمستوى واحد)
+  const parents = [...new Set(parentOf.values())]
+  const parentShown = parents.length ? await payrollRunRefVisibility(em, scope, parents, people, selfEmployeeId) : null
   return (runId, employeeId) => runId != null && (
-    (selfEmployeeId != null && employeeId === selfEmployeeId) || visible.has(`${runId}:${employeeId}`) ||
-    (!withMembers.has(runId) && runBranch.get(runId) != null && inBranchScope(scope, runBranch.get(runId)!)))
+    (selfEmployeeId != null && employeeId === selfEmployeeId) ||
+    (parentOf.has(runId) ? !!parentShown && parentShown(parentOf.get(runId)!, employeeId) : own(runId, employeeId)))
+}
+
+/** مانع فيه مرجع مسير في تفاصيله (runId أو *RunId) ونص بديل من غير المرجع (redactedMessage) */
+export interface PayrollRunRefBlocker { employeeId: number; message: string; details?: Record<string, unknown>; redactedMessage?: string }
+
+/**
+ * CR35-B01: موانع (عكس الصرف) للحساب ده — مرجع المسير اللي مش مرئي له لموظف المانع بيبقى null، والنص بيتبدل بالنص البديل اللي من غير
+ * رقم المسير وحالته. المرئي زي ما هو. النص البديل نفسه مابيطلعش في الرد. viewer = null (داخلي) = من غير حجب
+ */
+export async function scopePayrollRunRefBlockers<T extends PayrollRunRefBlocker>(em: EntityManager, viewer: JwtPayload | null, blockers: readonly T[]): Promise<Array<Omit<T, 'redactedMessage'>>> {
+  const strip = (blocker: T): Omit<T, 'redactedMessage'> => { const { redactedMessage: _redacted, ...rest } = blocker; return rest }
+  const refs = blockers.map(blocker => payloadRunIds(blocker.details ?? null))
+  if (!viewer || !refs.some(ids => ids.length)) return blockers.map(strip)
+  const shown = await payrollRunRefVisibility(em, branchScopeOf(viewer), refs.flat(), blockers.map(blocker => blocker.employeeId), viewer.employeeId ?? null)
+  return blockers.map(blocker => {
+    const { payload: details, hidden } = maskPayloadRunRefs(blocker.details ?? null, runId => shown(runId, blocker.employeeId))
+    if (!hidden) return strip(blocker)
+    return { ...strip(blocker), message: blocker.redactedMessage ?? scrubEventReferences(blocker.message) ?? '', details: details ?? {} }
+  })
 }
