@@ -38,6 +38,8 @@ export const SCHEDULED_JOBS = {
     label: 'تنفيذ النقل المجدول', schedule: 'كل يوم 00:15' },
   'requests.escalations': { cron: '0 * * * *', module: 'requests.escalations', lock: 'requests.escalations',
     label: 'تصعيد الطلبات المتأخرة', schedule: 'كل ساعة' },
+  'documents.expiry-events': { cron: '50 0 * * *', module: 'documents.expiry-events', lock: 'documents.expiry-events',
+    label: 'أحداث المستندات اللي هتنتهي (للطابور)', schedule: 'كل يوم 00:50' },
   'scheduler.prune-runs': { cron: '40 3 * * *', module: null, lock: 'scheduler.prune-runs',
     label: 'مسح سجل المهام الأقدم من 30 يوم', schedule: 'كل يوم 03:40' },
 } as const satisfies Record<string, ScheduledJobDef>

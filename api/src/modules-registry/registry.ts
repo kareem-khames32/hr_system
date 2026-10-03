@@ -119,6 +119,8 @@ export const MODULES = {
     permissions: ['documents.manage'],
     routes: ['/employees/documents', '/employees/hiring-documents', '/my/documents', '/settings/documents', '/settings/document-templates', '/settings/letter-templates'],
     requestHandlers: ['letter_pdf_generator'],
+    // B2.3: حدث «مستند هينتهي» للطابور
+    jobs: ['documents.expiry-events'],
   }),
   reports: moduleDef({
     nameAr: 'التقارير', group: 'core', core: true,

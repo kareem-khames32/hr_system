@@ -84,6 +84,7 @@ const localToday = () => {
 
 // D4 / CQ-04 (الخطوة 22): تقريب التصفية هو تقريب المسير ونهاية الخدمة نفسه (roundPayrollMoney).
 import { roundPayrollMoney as round2 } from '../payroll/payroll-money'
+import { recordOutboxEvent } from '../queue/outbox'
 
 // صلاحية كل جهة في الـ checklist
 const PARTY_PERMS: Record<ClearanceParty, string[]> = {
@@ -1158,6 +1159,9 @@ export class OffboardingService implements OnApplicationBootstrap {
       }
       await em.getRepository(User).update({ employeeId: emp.id }, { isActive: false })
       await em.getRepository(OffboardingCase).update(current.id, { status: 'CLOSED' })
+      // B2.3: «الموظف انتهت خدمته» في نفس معاملة الإغلاق (مرة واحدة لكل ملف)
+      await recordOutboxEvent(em, { type: 'EMPLOYEE_TERMINATED', entityType: 'employee', entityId: emp.id, key: `employee-terminated:${current.id}`,
+        payload: { employeeId: emp.id, caseId: current.id, lastWorkingDay: current.lastWorkingDay, branchId: emp.branchId ?? null } })
       return true
     })
   }

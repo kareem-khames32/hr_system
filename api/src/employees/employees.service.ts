@@ -62,6 +62,7 @@ import { CustodyAssignment } from '../requests/entities/custody.entities'
 import { openCustodyStatuses } from '../requests/employment-destinations'
 import { readEmployeeSuspensions, readOpenSuspensions, suspensionTableReady, suspensionView } from './employee-suspensions'
 import type { CreateEmployeeSuspensionDto, EndEmployeeSuspensionDto } from './employees.dto'
+import { recordOutboxEvent } from '../queue/outbox'
 
 // حقول إجبارية عند الإضافة (قرار المالك 16 سبتمبر): في التعديل الغائب بلا تغيير، والمرسل فاضي = مسح مرفوض.
 // رقم الهوية / الجواز مش هنا: مسح واحد منهم مسموح لو التاني فاضل (employeeIdentityIssues في update)
@@ -496,6 +497,9 @@ export class EmployeesService {
       // (NO_SALARY_DEFINED) حتى توثيق منفصل. فشل التوثيق (عملة غير مدعومة، شهر خارج المدى) يرجّع الإنشاء كله.
       await documentInitialEmployeeSalary(em, { employeeId: result.id, actorUserId: actorId, hireDate: result.actualStartDate || result.joinDate || null,
         effectivePayrollPeriod: salaryEffectivePayrollPeriod, evidenceReference: salaryEvidenceReference?.trim() || (dto.contractNumber?.trim() ? `عقد ${dto.contractNumber.trim()}` : undefined) })
+      // B2.3: «تم التعيين» في نفس معاملة الإنشاء (الشاشة والتعيين من المرشح بيعدّوا من هنا)
+      await recordOutboxEvent(em, { type: 'EMPLOYEE_HIRED', entityType: 'employee', entityId: result.id,
+        payload: { employeeId: result.id, branchId: result.branchId ?? null, joinDate: result.joinDate ?? null } })
       return result
     })
     // رصيد السنة الحالية تلقائياً — الاستحقاق من الإعدادات

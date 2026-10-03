@@ -96,6 +96,7 @@ import { ModulesService } from '../modules-registry/modules.service'
 import { moduleOfRequestType } from '../modules-registry/registry'
 import { onePersonControlEnabled } from '../payroll/one-person-controls'
 import { assertPersonalDataKeys, PERSONAL_DATA_HANDLER, validatePersonalDataRequest } from './personal-data-requests'
+import { recordOutboxEvent } from '../queue/outbox'
 
 export interface ActDto {
   action: 'APPROVE' | 'REJECT' | 'RETURN'
@@ -1010,6 +1011,7 @@ export class RequestsService {
         requestId: req.id, step: 0, approverId: user.sub, action: 'APPROVED', comment: 'تنفيذ تلقائي وفق سلسلة الاعتماد المضبوطة',
       })
       await em.getRepository(Request).save(req)
+      await this.recordDecisionEvent(em, req, 'APPROVED')
       return this.executeDestinationLocked(em, req)
     }
 
@@ -1392,7 +1394,9 @@ export class RequestsService {
         req.status = 'REJECTED'
         req.resolvedSteps = JSON.stringify(resolved)
         req.completedAt = new Date()
-        return em.getRepository(Request).save(req)
+        const rejected = await em.getRepository(Request).save(req)
+        await this.recordDecisionEvent(em, rejected, 'REJECTED')
+        return rejected
       }
 
       if (dto.action === 'RETURN') {
@@ -1429,6 +1433,7 @@ export class RequestsService {
       try {
         if (this.isOvertimeRequest(req, em)) await this.finalizeOvertimeApproval(em, req, user.sub)
         await em.getRepository(Request).save(req)
+        await this.recordDecisionEvent(em, req, 'APPROVED')
         return await this.executeDestinationLocked(em, req)
       } catch (e) {
         if (e instanceof BadRequestException) {
@@ -1484,6 +1489,12 @@ export class RequestsService {
       req.status = 'IN_EXECUTION'
     }
     return em.getRepository(Request).save(req)
+  }
+
+  // B2.3: حدث «تم اعتماد/رفض الطلب» في نفس معاملة القرار — مراجع بس (رقم الطلب ونوعه وصاحبه وفرعه)، من غير محتواه
+  private async recordDecisionEvent(em: EntityManager, req: Request, decision: 'APPROVED' | 'REJECTED') {
+    await recordOutboxEvent(em, { type: decision === 'APPROVED' ? 'REQUEST_APPROVED' : 'REQUEST_REJECTED', entityType: 'request', entityId: req.id,
+      payload: { requestId: req.id, typeCode: definitionCodeOf(req), requesterId: req.requesterId ?? null, branchId: req.branchId ?? null } })
   }
 
   private async afterSubmission(saved: Request) {
@@ -1633,7 +1644,9 @@ export class RequestsService {
       req.status = 'REJECTED'
       req.completedAt = new Date()
       await this.releaseRequestOvertime(em, req, 'REJECTED', user.sub, reason)
-      return em.getRepository(Request).save(req)
+      const rejected = await em.getRepository(Request).save(req)
+      await this.recordDecisionEvent(em, rejected, 'REJECTED')
+      return rejected
     })
   }
 
@@ -2344,6 +2357,7 @@ export class RequestsService {
     req.resolvedSteps = JSON.stringify(steps)
     await this.finalizeOvertimeApproval(em, req, SYSTEM_APPROVER_ID, { periodIds })
     await em.getRepository(Request).save(req)
+    await this.recordDecisionEvent(em, req, 'APPROVED')
     const executed = await this.executeDestinationLocked(em, req)
     if (executed.status !== 'COMPLETED') throw new ConflictException('وجهة الإضافي المعتمد تلقائيًا ماكملتش؛ الإضافي بيمشي في سلسلة الاعتماد')
   }
@@ -2904,6 +2918,7 @@ export class RequestsService {
     if (this.isOvertimeDefinition(type)) await this.approveOvertimeInstantly(em, req, resolved, user, comment)
     if (isSalaryChangeType(type)) (em.queryRunner!.data.salaryRequestAutoActors ??= new Map<number, number>()).set(req.id, user.sub)
     await em.getRepository(Request).save(req)
+    await this.recordDecisionEvent(em, req, 'APPROVED')
     return this.executeDestinationLocked(em, req)
   }
 

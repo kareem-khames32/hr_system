@@ -1,0 +1,57 @@
+import { Logger } from '@nestjs/common'
+import type { EntityManager } from 'typeorm'
+
+// B2.3: الـoutbox — الحدث بيتكتب في نفس معاملة العملية (em بتاعها). لو العملية رجعت، الحدث مش موجود أصلًا.
+// قبل ترحيل 086: مفيش كتابة، وتحذير واحد في سجل الخادم.
+
+export const DOMAIN_EVENTS = {
+  EMPLOYEE_HIRED: 'تم التعيين',
+  REQUEST_APPROVED: 'تم اعتماد الطلب',
+  REQUEST_REJECTED: 'تم رفض الطلب',
+  PAYROLL_RUN_APPROVED: 'المسير اتعتمد',
+  DOCUMENT_EXPIRING: 'مستند هينتهي',
+  EMPLOYEE_TERMINATED: 'الموظف انتهت خدمته',
+} as const
+export type DomainEventType = keyof typeof DOMAIN_EVENTS
+export const QUEUE_MIGRATION_MISSING = 'الطابور والـoutbox محتاجين ترحيل 20261003_086 على قاعدة البيانات'
+
+export interface OutboxEventInput {
+  type: DomainEventType
+  entityType?: string | null
+  entityId?: string | number | null
+  /** أرقام ومراجع بس — من غير أسماء ولا مبالغ ولا بيانات شخصية (المستهلك بيقرا اللي محتاجه بصلاحياته) */
+  payload?: Record<string, unknown> | null
+  /** مفتاح منع تكرار الحدث نفسه (اختياري) */
+  key?: string | null
+}
+
+const logger = new Logger('Outbox')
+let ready: boolean | null = null, checkedAt = 0, warned = false
+
+/** الجداول موجودة (ترحيل 086)؟ الموجود بيتحفظ، والناقص بيتفحص تاني كل دقيقة */
+export async function queueTablesReady(em: EntityManager): Promise<boolean> {
+  if (ready === true || (ready === false && Date.now() - checkedAt < 60_000)) return ready
+  const [row] = await em.query(`SELECT CASE WHEN OBJECT_ID(N'dbo.outbox_events', N'U') IS NOT NULL AND OBJECT_ID(N'dbo.jobs_queue', N'U') IS NOT NULL THEN 1 ELSE 0 END AS [ready]`)
+  ready = Number(row?.ready) === 1
+  checkedAt = Date.now()
+  if (!ready && !warned) { warned = true; logger.warn(QUEUE_MIGRATION_MISSING + ' — الأحداث مش بتتسجل لحد ما يتطبق') }
+  return ready
+}
+
+/**
+ * تسجيل حدث في نفس معاملة em. مفتاح منع التكرار لو اتكرر = الحدث موجود قبل كده، فمفيش صف جديد ولا خطأ (بيرجّع false).
+ * قبل الترحيل: مفيش تسجيل (false).
+ */
+export async function recordOutboxEvent(em: EntityManager, input: OutboxEventInput): Promise<boolean> {
+  if (!(await queueTablesReady(em))) return false
+  const key = input.key ? String(input.key).slice(0, 160) : null
+  const rows: Array<{ id: string }> = await em.query(`INSERT INTO [outbox_events] ([eventType], [entityType], [entityId], [payload], [eventKey], [createdAt])
+    OUTPUT INSERTED.[id]
+    SELECT @0, @1, @2, @3, @4, SYSUTCDATETIME() WHERE @4 IS NULL OR NOT EXISTS (SELECT 1 FROM [outbox_events] WITH (UPDLOCK, HOLDLOCK) WHERE [eventKey] = @4)`,
+    [input.type, input.entityType ? String(input.entityType).slice(0, 40) : null, input.entityId == null ? null : String(input.entityId).slice(0, 60),
+      input.payload == null ? null : JSON.stringify(input.payload), key])
+  return rows.length === 1
+}
+
+/** للاختبارات: نسيان حالة الجداول */
+export function resetQueueTablesCache() { ready = null; checkedAt = 0; warned = false }

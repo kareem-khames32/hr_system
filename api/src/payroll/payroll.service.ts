@@ -120,6 +120,7 @@ import { claimPayrollApproval } from './payroll-approval-lock'
 import { collectPayrollRunMemberChanges, payrollItemMonthlyGross, payrollRunChangeItems, payrollRunLeavers } from './payroll-run-changes'
 import { onePersonControlEnabled } from './one-person-controls'
 import { PayrollRunApproval } from './payroll-approval-chain.entities'
+import { recordOutboxEvent } from '../queue/outbox'
 
 // B1.5: مكان «بدل السكن» في مكونات الراتب الشهرية (أساس التأمينات السعودي «الأساسي + السكن» لما الإعداد مفتوح)
 const HOUSING_COMPONENT = MONTHLY_SALARY_COMPONENTS.findIndex(component => component.code === 'HOUSING')
@@ -1543,6 +1544,9 @@ export class PayrollService {
         approvalChain: chain,
         // B1.7: المعتمد غيّر بيانات موظفين في المسير — مين، ومعتمد تاني في السلسلة ولا تعدّي مدير النظام بسببه (الضابط مقفول أو مفيش = من غير المفتاح)
         ...(onePerson ? { onePersonControl: onePerson } : {}) })
+      // B2.3: «المسير اتعتمد» في نفس معاملة الاعتماد — مراجع بس (المسير وفترته ونوعه ونطاقه)
+      await recordOutboxEvent(em, { type: 'PAYROLL_RUN_APPROVED', entityType: 'payroll_run', entityId: run.id,
+        payload: { runId: run.id, period: run.period, runType: run.runType ?? null, scopeType: run.scopeType ?? null, branchId: run.branchId ?? null } })
       return run
     }
   }

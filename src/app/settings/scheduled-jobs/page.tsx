@@ -5,6 +5,7 @@ import { Clock, RefreshCw } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import { fetchScheduledJobs, type ApiScheduledJob, type ApiScheduledJobRun } from '@/lib/api'
 import { formatDateTime } from '@/lib/dates'
+import QueuePanel from '@/components/QueuePanel'
 
 // المهام المجدولة (خطة التنفيذ B1.4): كل مهمة بموعدها والجاية إمتى، وآخر تشغيل وآخر فشل، وعدد آخر 24 ساعة، وآخر 20 تشغيل.
 // قراءة بس، لصاحب «إدارة الإعدادات» على كل الفروع. التشغيل نفسه مرة واحدة حتى لو فيه أكتر من نسخة من الـAPI.
@@ -130,6 +131,9 @@ export default function ScheduledJobsPage() {
             </table>
           )}
         </div>
+
+        {/* B2.3: الطابور والـoutbox */}
+        <QueuePanel />
       </div>
     </MainLayout>
   )

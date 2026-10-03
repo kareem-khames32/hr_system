@@ -286,6 +286,9 @@ test('ME-05: المهام المجدولة — مهمة الموديول الم�
       spy: () => spy(get('../src/requests/requests.service', 'RequestsService'), 'runEscalations', { escalated: 0 }) },
     { module: null, run: () => get('../src/requests/requests-scheduler.service', 'RequestsScheduler').transfers(),
       spy: () => spy(get('../src/requests/requests.service', 'RequestsService'), 'runScheduledTransfers', { executed: 0, employmentExecuted: 0, cancelled: 0 }) },
+    // B2.3: أحداث المستندات اللي هتنتهي (موديول المستندات أساسي)
+    { module: null, run: () => get('../src/queue/queue.service', 'QueueService').recordDocumentExpiryEvents('2026-10-03'),
+      spy: () => spy(get('../src/queue/queue.service', 'QueueService').ds, 'transaction', 0) },
   ]
   const calls = async job => { const watch = job.spy(); try { await job.run(); return watch.calls.length } finally { watch.restore() } }
   // كل الموديولات مفعّلة: كل مهمة بتوصل لشغلها

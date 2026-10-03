@@ -28,6 +28,7 @@ import { ModulesRegistryModule } from './modules-registry/modules-registry.modul
 import { ScheduledJobsModule } from './scheduler/scheduled-jobs.module'
 // B2.1: سجل التدقيق المركزي
 import { AuditModule } from './audit/audit.module'
+import { QueueModule } from './queue/queue.module'
 import { StatutoryModule } from './statutory/statutory.module'
 import { validateEnv } from './auth/jwt-secret'
 import { dbPacketSize } from './common/sql-packet-size'
@@ -80,6 +81,8 @@ import { dbPacketSize } from './common/sql-packet-size'
     // B1.4: كل مواعيد المهام المجدولة، وتشغيلها مرة واحدة بقفل وسجل، وشاشتها
     ScheduledJobsModule,
     AuditModule,
+    // B2.3: الطابور والـoutbox (Global — أي موديول بيسجّل مستهلكه)
+    QueueModule,
 
     // B1.5: القيم القانونية المؤرخة (مسار GOSI الجديد وحدود الأجر المصري) بشكل «حزمة الدولة»
     StatutoryModule,

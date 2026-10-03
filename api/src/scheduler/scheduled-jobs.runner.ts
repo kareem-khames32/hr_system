@@ -8,6 +8,7 @@ import { TypedDeductionsScheduler } from '../payroll/typed-deductions-scheduler.
 import { LeaveAttachmentDeadlineJob } from '../requests/leave-attachment-deadline.job'
 import { RequestsScheduler } from '../requests/requests-scheduler.service'
 import { RequestsService } from '../requests/requests.service'
+import { QueueService } from '../queue/queue.service'
 import { Scheduled } from './scheduled-jobs'
 import { ScheduledJobsService } from './scheduled-jobs.service'
 
@@ -70,6 +71,11 @@ export class ScheduledJobsRunner {
   @Scheduled('requests.scheduled-transfers')
   scheduledTransfers() {
     return this.jobs.tick('requests.scheduled-transfers', () => this.use(RequestsScheduler).transfers())
+  }
+
+  @Scheduled('documents.expiry-events')
+  documentExpiryEvents() {
+    return this.jobs.tick('documents.expiry-events', () => this.use(QueueService).recordDocumentExpiryEvents())
   }
 
   @Scheduled('requests.escalations')
