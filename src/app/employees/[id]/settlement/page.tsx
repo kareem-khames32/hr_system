@@ -41,6 +41,9 @@ import {
 } from '@/lib/api'
 import { useCurrency } from '@/lib/currency'
 import { SETTLEMENT_LABEL_MAX, settlementLabelIssue } from '@/lib/input-limits'
+// B1.8c: تسجيل صرف التصفية المعتمدة
+import { SettlementPaymentPanel } from '@/components/offboarding/SettlementPaymentPanel'
+import type { ApiSettlementPayment } from '@/lib/settlement-payment-api'
 
 // حالات ملف إنهاء الخدمة — تسميات عربية فقط
 const statusLabels: Record<string, string> = {
@@ -488,6 +491,17 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
                 )}
               </div>
             </div>
+          )}
+
+          {/* B1.8c: صرف التصفية — بعد الاعتماد ولأصحاب التصفية بس */}
+          {det.settlementDocRef && seesMoney && (
+            <SettlementPaymentPanel
+              caseId={det.id}
+              payment={(det as { settlementPayment?: ApiSettlementPayment | null }).settlementPayment}
+              ready={(det as { settlementPaymentReady?: boolean }).settlementPaymentReady}
+              canRecord={can('settlement.approve')}
+              onRecorded={load}
+            />
           )}
 
           <div className="grid grid-cols-12 gap-6">

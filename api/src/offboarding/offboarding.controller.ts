@@ -29,6 +29,8 @@ import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { OffboardingService } from './offboarding.service'
 // بنود التصفية اليدوية — رسائل تحقق عربية بدل رسائل class-validator الإنجليزية الخام
 import { AddLineDto, UpdateLineDto } from './settlement-line.dto'
+// B1.8c: تسجيل صرف التصفية
+import { SettlementPaymentDto } from './settlement-line.dto'
 import { CUSTOM_TERMINATION_REASONS_MAX, TERMINATION_REASON_CODE } from './termination-reasons'
 import { RequireModule } from '../modules-registry/module.guard'
 
@@ -277,5 +279,16 @@ export class OffboardingController {
     @Param('id', ParseIntPipe) id: number
   ) {
     return this.service.approveSettlement(user, id)
+  }
+
+  // B1.8c: تسجيل صرف التصفية المعتمدة (التاريخ والطريقة والمرجع) — مرة واحدة
+  @Perm('settlement.approve')
+  @Post(':id/settlement-payment')
+  recordSettlementPayment(
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: SettlementPaymentDto
+  ) {
+    return this.service.recordSettlementPayment(user, id, dto)
   }
 }

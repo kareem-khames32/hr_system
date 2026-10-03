@@ -98,6 +98,20 @@ export class OffboardingCase {
   @Column({ length: 100, nullable: true })
   clearanceCertRef: string
 
+  // B1.8c (ترحيل 083): تسجيل صرف التصفية — برّه الكيان للقراءة والكتابة (الكود قبل الترحيل)،
+  // بتتقرا وتتكتب بـSQL صريح في settlement-payment.ts بعد التأكد من وجودها
+  @Column({ type: 'date', nullable: true, select: false, insert: false, update: false })
+  settlementPaidAt: string | null
+
+  @Column({ type: 'int', nullable: true, select: false, insert: false, update: false })
+  settlementPaidByUserId: number | null
+
+  @Column({ type: 'nvarchar', length: 20, nullable: true, select: false, insert: false, update: false })
+  settlementPaymentMethod: string | null
+
+  @Column({ type: 'nvarchar', length: 100, nullable: true, select: false, insert: false, update: false })
+  settlementPaymentReference: string | null
+
   @CreateDateColumn()
   createdAt: Date
 }

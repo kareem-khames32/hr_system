@@ -27,3 +27,17 @@ export class UpdateLineDto {
   @IsNumber({}, { message: 'المبلغ رقم' })
   amount?: number
 }
+
+// B1.8c: تسجيل صرف التصفية — التحقق الكامل (التاريخ والطريقة والمرجع) في readSettlementPaymentInput
+export class SettlementPaymentDto {
+  @IsString({ message: 'تاريخ الصرف بصيغة YYYY-MM-DD' })
+  date: string
+
+  @IsIn(['CASH', 'BANK_TRANSFER', 'CHEQUE'], { message: 'طريقة الصرف: نقدي أو تحويل بنكي أو شيك' })
+  method: 'CASH' | 'BANK_TRANSFER' | 'CHEQUE'
+
+  @IsOptional()
+  @IsString({ message: 'مرجع الصرف نص' })
+  @MaxLength(100, { message: 'مرجع الصرف لحد 100 حرف' })
+  reference?: string
+}

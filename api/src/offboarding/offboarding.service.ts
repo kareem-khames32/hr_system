@@ -33,6 +33,7 @@ import { payrollLineNotReversedSql } from '../payroll/payroll-reversal-sql'
 import { legacyInstallmentNumber, readLoanInstallmentPositions } from '../payroll/payroll-installment-balances'
 import { assertNoHeldLoanInstallments, isPayrollInstallmentPlan } from '../payroll/payroll-installment-ledger'
 import { recordSettlementLoanRecovery } from '../loans/loan-recovery'
+import { readSettlementPayment, readSettlementPaymentInput, recordSettlementPayment as saveSettlementPayment, settlementPaymentReady } from './settlement-payment'
 import { applySettlementObligations, readSettlementPendingObligations, settlementObligationTotals,
   SETTLEMENT_COLLECT_OBLIGATIONS_KEY, SETTLEMENT_OBLIGATION_CREDIT_PREFIX, SETTLEMENT_OBLIGATION_DEBIT_PREFIX } from './settlement-obligations'
 import { PayrollDecimal } from '../payroll/payroll-decimal'
@@ -586,7 +587,27 @@ export class OffboardingService implements OnApplicationBootstrap {
       where: { caseId: id },
       order: { id: 'ASC' },
     })
-    return { ...base, settlementNet, lines, net: netOf(lines) }
+    // B1.8c: صرف التصفية المتسجل (null = لسه أو الترحيل 083 مش متطبق)
+    const settlementPayment = await readSettlementPayment(this.cases.manager, id)
+    return { ...base, settlementNet, lines, net: netOf(lines), settlementPayment, settlementPaymentReady: await settlementPaymentReady(this.cases.manager) }
+  }
+
+  // ===== B1.8c: تسجيل صرف التصفية المعتمدة (مرة واحدة) — تسجيل بس، مفيش مبلغ ولا حالة بتتغير =====
+  async recordSettlementPayment(user: JwtPayload, caseId: number, dto: { date?: unknown; method?: unknown; reference?: unknown }) {
+    await this.withFinancialCase(caseId, async tx => {
+      const kase = await tx.cases.findOne({ where: { id: caseId } })
+      const emp = kase ? await tx.employees.findOne({ where: { id: kase.employeeId } }) : null
+      // أصحاب التصفية في فرع الموظف بس — برّه الفرع 404 زي التفاصيل
+      if (!kase || !inBranchScope(user, emp?.branchId)) throw new NotFoundException('الحالة غير موجودة')
+      if (!['SETTLED', 'CLOSED'].includes(kase.status) || !kase.settlementApprovedAt) {
+        throw new BadRequestException('صرف التصفية بيتسجل بعد اعتمادها')
+      }
+      const approved = new Date(kase.settlementApprovedAt)
+      const approvedOn = [approved.getFullYear(), String(approved.getMonth() + 1).padStart(2, '0'), String(approved.getDate()).padStart(2, '0')].join('-')
+      const input = readSettlementPaymentInput(dto, localToday(), approvedOn)
+      await saveSettlementPayment(tx.cases.manager, { caseId, date: input.date, method: input.method, reference: input.reference, actorId: user.sub })
+    })
+    return this.detail(caseId, user)
   }
 
   // من يصل للملف وبأي صفة — مصدر واحد للتفاصيل و«بنود إخلاء عليّ»
