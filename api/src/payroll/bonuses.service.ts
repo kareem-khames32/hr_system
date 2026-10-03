@@ -25,7 +25,7 @@ import { payrollPeriodOfDate } from './payroll-period'
 import { salaryPayrollPeriodBounds } from './payroll-period-salary'
 import { PAYROLL_SALARY_EVIDENCE_MODE_KEY, parsePayrollSalaryEvidenceMode, type PayrollSalaryEvidenceMode, selectPayrollRunSalary } from './payroll-run-salary'
 import { lockPayrollEmployees } from './payroll-settlement-boundary'
-import { payrollRunRefVisibility } from './payroll-run-visibility'
+import { maskPayloadRunRefs, payloadRunIds, payrollRunRefVisibility, scrubEventReferences } from './payroll-run-visibility'
 import { PayrollRun } from './payroll.entities'
 import {
   addPayrollMonths,
@@ -715,14 +715,14 @@ export class BonusesService {
     const [view] = await this.views(em, user, [row], 'all')
     if (!view) return null
     const events = await em.getRepository(BonusRequestEvent).find({ where: { requestId: id }, order: { id: 'ASC' } })
-    // CR33-B01: رقم المسير المقفول في حدث الاعتماد (deferredPastClosedRunId) بيظهر بس لو المسير مرئي للحساب
+    // CR33-B01 وCR34-B01: كل مرجع مسير في حمولة الأحداث (runId في الترحيل والإعفاء، وdeferredPastClosedRunId، …) بيظهر بس لو المسير
+    // مرئي للحساب لموظف الطلب؛ والحدث اللي مسيره مخفي بتتشال منه مراجع الإعفاء و«#رقم» من نصه. السجل المخزن زي ما هو
     const payloads = events.map(event => json<Record<string, unknown> | null>(event.payload, null))
-    const deferred = payloads.map(payload => payload?.deferredPastClosedRunId).filter((value): value is number => typeof value === 'number')
-    const shown = deferred.length ? await this.runShown(em, user, deferred, [row.employeeId]) : () => true
+    const runIds = payloads.flatMap(payload => payloadRunIds(payload))
+    const shown = runIds.length ? await this.runShown(em, user, runIds, [row.employeeId]) : () => true
     return { ...view, events: events.map((event, index) => {
-      const payload = payloads[index]
-      if (payload && typeof payload.deferredPastClosedRunId === 'number' && !shown(payload.deferredPastClosedRunId, row.employeeId)) payload.deferredPastClosedRunId = null
-      return { ...event, payload }
+      const { payload, hidden } = maskPayloadRunRefs(payloads[index], runId => shown(runId, row.employeeId))
+      return { ...event, payload, reason: hidden ? scrubEventReferences(event.reason) : event.reason }
     }) }
   }
 

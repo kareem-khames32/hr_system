@@ -2,6 +2,37 @@ import { In, type EntityManager } from 'typeorm'
 import { inBranchScope, type BranchScope } from '../auth/guards'
 import { PayrollRunMember } from './payroll.entities'
 
+// CR34-B01: مراجع المسير في حمولة حدث (أي مفتاح runId أو ينتهي بـRunId وقيمته رقم، في أي عمق)
+const RUN_REF_KEY = /^runId$|RunId$/
+export function payloadRunIds(payload: unknown, out: number[] = []): number[] {
+  if (Array.isArray(payload)) for (const value of payload) payloadRunIds(value, out)
+  else if (payload && typeof payload === 'object') {
+    for (const [key, value] of Object.entries(payload)) RUN_REF_KEY.test(key) && typeof value === 'number' ? out.push(value) : payloadRunIds(value, out)
+  }
+  return out
+}
+
+/** نسخة من الحمولة: مرجع المسير المخفي = null، ولو فيه مرجع اتخفى مراجع الإعفاء (exemptionId) كمان. hidden = اتخفى حاجة */
+export function maskPayloadRunRefs<T>(payload: T, visible: (runId: number) => boolean): { payload: T; hidden: boolean } {
+  let hidden = false
+  const walk = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(walk)
+    if (!value || typeof value !== 'object') return value
+    const copy: Record<string, unknown> = {}
+    for (const [key, item] of Object.entries(value)) {
+      if (RUN_REF_KEY.test(key) && typeof item === 'number' && !visible(item)) { copy[key] = null; hidden = true } else copy[key] = walk(item)
+    }
+    return copy
+  }
+  const masked = walk(payload) as T
+  if (hidden && masked && typeof masked === 'object' && !Array.isArray(masked) && 'exemptionId' in (masked as Record<string, unknown>)) (masked as Record<string, unknown>).exemptionId = null
+  return { payload: masked, hidden }
+}
+
+/** نص الحدث اللي مسيره مخفي: من غير «#رقم» (رقم إعفاء أو قيد أو مسير من الفرع التاني) ولا القوسين اللي فضيوا بعده */
+export const scrubEventReferences = (text: string | null | undefined): string | null =>
+  text == null ? null : text.replace(/\s*#\d+/g, '').replace(/\(\s*\)/g, '').replace(/\s{2,}/g, ' ').trim()
+
 // CR32-B01 وCR33-B01 (مراجعة Codex الجولتين 32 و33): مرجع مسير (رقمه أو اسمه أو حالته) في رد أو رسالة رفض أو عرض لحساب فرع بيظهر بس لو
 // الموظف المعني عضو في المسير بلقطة فرع من نطاق الحساب — أو مسير قديم من غير أعضاء خالص على فرع من نطاقه. فالمسير اللي اتعمل في فرع
 // تاني بعد نقل الموظف (حتى لو شايل قيد مختوم بفرع الحساب) مابيظهرش، زي قايمة المسيرات وقراءته. الموظف نفسه بيشوف مسيراته (قسيمته)،

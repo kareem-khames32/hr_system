@@ -404,3 +404,43 @@ test('CR28-B01: السداد المبكر وتحصيل وإعدام الرصيد
   const after = await requestRow(own.id)
   assert.deepEqual([after.status, after.currentStep], [waiting.status, waiting.currentStep])
 })
+
+test('CR34-B01: دفتر السلفة لقارئ رواتب الفرع — رقم مسير اتعمل للموظف في فرع تاني (قبل نقله) مابيظهرش ولا «#رقمه» في نص الحدث؛ مسير فرعه وحساب الشركة والموظف نفسه بيشوفوه', async () => {
+  const otherBranch = await repo('Branch').save({ code: 'C6B34', name: 'فرع السلف ٣٤' })
+  const borrower = await repo('Employee').save({ employeeCode: 'C6R34', fullName: 'موظف C6R34', branchId: f.branch.id, departmentId: null, joinDate: '2020-01-01',
+    basicSalary: 8000, housingAllowance: 2000, transportAllowance: 0, phoneAllowance: 0, workNatureAllowance: 0, otherAllowance: 0, status: 'active', isActive: true,
+    payMethod: 'cash', annualLeaveEntitled: false })
+  const borrowerUser = await repo('User').save({ employeeId: borrower.id, branchId: f.branch.id, email: 'c6-r34-self@test.invalid', displayName: 'r34-self', role: 'employee',
+    passwordHash: 'isolated-token-only', permissions: '[]' })
+  const loanId = await insertLoan(borrower.id, '900.00', 3, '2026-05')
+  const [first, second] = await installmentsOf(loanId)
+  // مسير بلقطة عضوية الموظف في فرع معيّن (اسمه ورقمه من الفرع ده بس)
+  const run = async (branchId, period, status, label = '') => {
+    const saved = await repo('PayrollRun').save({ name: `مسير C6 ${period}${label}`, scopeType: 'BRANCH', branchId, period, startDate: `${period}-01`, endDate: `${period}-28`, status })
+    await repo('PayrollRunMember').save({ runId: saved.id, employeeId: borrower.id, snapshot: { branchId } })
+    return saved.id
+  }
+  const seen = await run(f.branch.id, '2026-05', 'PAID'), hidden = await run(otherBranch.id, '2026-06', 'PAID'), reversal = await run(otherBranch.id, '2026-06', 'PAID', ' (عكس)')
+  const event = (installmentId, runId, action, reason) => raw(`INSERT loan_installment_events(employeeId,loanId,installmentId,payrollRunId,action,actionKey,reason,payload)
+    VALUES(@0,@1,@2,@3,@4,@5,@6,N'{}')`, [borrower.id, loanId, installmentId, runId, action, `cr34:${action}:${runId}`, reason])
+  await event(first.id, seen, 'PAYROLL_POSTED', `خصم قسط بمسير #${seen}`)
+  await event(second.id, hidden, 'PAYROLL_POSTED', `خصم قسط بمسير #${hidden}`)
+  await event(second.id, reversal, 'REVERSAL', `عكس صرف مسير 2026-06 (#${hidden}) بمسير العكس #${reversal}`)
+  const shape = ledger => ledger.events.map(item => [item.action, item.payrollRunId, item.reason])
+  // قارئ رواتب فرع الموظف الحالي: مسير فرعه بس
+  const branchView = expect(await http(f.hr, 'GET', `/loans/${loanId}/ledger`), 200)
+  assert.deepEqual(shape(branchView), [['PAYROLL_POSTED', seen, `خصم قسط بمسير #${seen}`], ['PAYROLL_POSTED', null, 'خصم قسط بمسير'],
+    ['REVERSAL', null, 'عكس صرف مسير 2026-06 بمسير العكس']])
+  const branchJson = JSON.stringify(branchView)
+  for (const id of [hidden, reversal]) for (const end of [',', '}', ' ', ')', '"']) {
+    assert.ok(!branchJson.includes(`#${id}${end}`) && !branchJson.includes(`"payrollRunId":${id}${end}`), `run ${id} leaked`)
+  }
+  // حساب الشركة: كل المسيرات بنصها
+  assert.deepEqual(shape(expect(await http(f.admin, 'GET', `/loans/${loanId}/ledger`), 200)), [['PAYROLL_POSTED', seen, `خصم قسط بمسير #${seen}`],
+    ['PAYROLL_POSTED', hidden, `خصم قسط بمسير #${hidden}`], ['REVERSAL', reversal, `عكس صرف مسير 2026-06 (#${hidden}) بمسير العكس #${reversal}`]])
+  // الموظف نفسه: مسيراته (قسيمته) في الفرعين
+  assert.deepEqual(shape(expect(await http(borrowerUser, 'GET', `/loans/${loanId}/ledger`), 200)).map(([action, runId]) => [action, runId]),
+    [['PAYROLL_POSTED', seen], ['PAYROLL_POSTED', hidden], ['REVERSAL', reversal]])
+  // السجل المخزن زي ما هو
+  assert.deepEqual((await raw('SELECT payrollRunId FROM loan_installment_events WHERE loanId=@0 ORDER BY id', [loanId])).map(row => row.payrollRunId), [seen, hidden, reversal])
+})

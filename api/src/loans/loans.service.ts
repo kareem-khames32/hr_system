@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { DataSource, EntityManager } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, branchScopeSql, inBranchScope, userHasPerm } from '../auth/guards'
+import { payrollRunRefVisibility, scrubEventReferences } from '../payroll/payroll-run-visibility'
 import { PayrollDecimal } from '../payroll/payroll-decimal'
 import { readLoanInstallmentPositions } from '../payroll/payroll-installment-balances'
 import { repayLoanEarly } from '../payroll/payroll-installment-ledger'
@@ -180,12 +181,12 @@ export class LoansService {
         if (!userHasPerm(user, 'payroll.view')) throw new NotFoundException('السلفة غير موجودة')
         await this.employeeInScope(em, user, loan.employeeId, 'السلفة غير موجودة')
       }
-      const [row] = await this.ledgerFor(em, loan.employeeId, loanId, !own)
+      const [row] = await this.ledgerFor(em, loan.employeeId, loanId, !own, own ? null : user)
       return row
     })
   }
 
-  private async ledgerFor(em: EntityManager, employeeId: number, loanId: number | undefined, full: boolean) {
+  private async ledgerFor(em: EntityManager, employeeId: number, loanId: number | undefined, full: boolean, viewer: JwtPayload | null = null) {
     const loans = await em.query(`SELECT [id],[requestId],[employeeId],CONVERT(varchar(40),[amount]) AS [amount],CONVERT(varchar(40),[requestedAmount]) AS [requestedAmount],
       [status],[disbursedAt],[isExceptional],[exceptionalCategory],[exceptionalReason],[firstInstallmentPeriod],[installmentMonths]${full ? ',[capSnapshot],[createdByUserId]' : ''}
       FROM [loans] WHERE [employeeId]=@0 ${loanId === undefined ? '' : 'AND [id]=@1'} ORDER BY [id] DESC`, loanId === undefined ? [employeeId] : [employeeId, loanId])
@@ -196,6 +197,15 @@ export class LoansService {
       FROM [loan_repayments] WHERE [employeeId]=@0 ORDER BY [id]`, [employeeId])
     const events = await em.query(`SELECT [id],[loanId],[installmentId],[action],[reason],[requestId],[payrollRunId],[createdAt]${full ? ',[actorId]' : ''}
       FROM [loan_installment_events] WHERE [employeeId]=@0 ${full ? '' : `AND [action] IN (${EMPLOYEE_EVENT_ACTIONS.map(a => `'${a}'`).join(',')})`} ORDER BY [id]`, [employeeId])
+    // CR34-B01: قارئ الرواتب (مش الموظف نفسه) بياخد رقم المسير بس لو المسير مرئي له بلقطة عضوية الموظف، والحدث اللي مسيره مخفي
+    // من غير «#رقم» في نصه. السجل المخزن زي ما هو
+    if (viewer) {
+      const shown = await payrollRunRefVisibility(em, branchScopeOf(viewer), events.map((event: any) => event.payrollRunId), [employeeId], viewer.employeeId ?? null)
+      for (const event of events) if (event.payrollRunId != null && !shown(event.payrollRunId, employeeId)) {
+        event.payrollRunId = null
+        event.reason = scrubEventReferences(event.reason)
+      }
+    }
     return loans.map((loan: any) => {
       const installments = positions.filter(row => row.loanId === loan.id).sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.id - b.id)
         .map(({ employeeId: _employee, ...row }) => row)

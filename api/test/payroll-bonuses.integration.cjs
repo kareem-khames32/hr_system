@@ -729,3 +729,33 @@ test('CR33-B01: رقم مسير فرع تاني مايظهرش لموارد ال
   assert.equal(own.status, 400, JSON.stringify(own.body)); assert.equal(own.body.code, 'BONUS_PERIOD_CLOSED')
   assert.ok(own.body.message.includes(`(#${ownRun.id})`), own.body.message); assert.equal(own.body.runId, ownRun.id)
 })
+
+// CR34-B01 (مراجعة Codex الجولة 34): خصم أكبر من الراتب لموظف في ب اترحّل باقيه وقت صرف مسير ب (حدث «ترحيل» فيه رقم المسير)،
+// وبعدين الموظف اتنقل لأ. موارد أ بتشوف الطلب (الموظف بقى عندها) من غير رقم مسير ب في أي حدث، والشركة بتشوفه، والسجل المخزن زي ما هو
+test('CR34-B01: أحداث الخصم (الترحيل) مابتكشفش رقم مسير فرع تاني لموارد الفرع بعد نقل الموظف، والشركة بتشوفه', { timeout: 240000 }, async () => {
+  const period = '2026-06'
+  const emp = await employee('BN_R34_CARRY', { branchId: org.branchB.id, departmentId: null })
+  await exempt(emp)
+  // 28 يوم بدون راتب (8,400) فالباقي 600، وخصم 7.5 يوم (2,250 = حد 25%): 600 تتحصّل والباقي يترحّل للشهر الجاي وقت الصرف
+  await repo('Leave').save({ employeeId: emp.id, leaveTypeCode: 'UNPAID', fromDate: '2026-06-01', toDate: '2026-06-28', days: 28, period: 'FULL', isUnpaid: true, status: 'APPROVED' })
+  const row = expectStatus(await request(users.admin, 'POST', '/deductions', { deductionTypeId: types.commitment.id, inputValue: '7.5', incidentDate,
+    reason: `${DREASON} — أكبر من الراتب`, targetPeriod: period, employeeId: emp.id, confirmNotDuplicate: true }), 201)
+  assert.equal(row.status, 'APPROVED')
+  const privateRun = await calc(period, [emp])
+  await approveRun(privateRun)
+  expectStatus(await transition(privateRun, 'pay'), 201)
+  const stored = await repo('DeductionRequestEvent').find({ where: { requestId: row.id }, order: { id: 'ASC' } })
+  const carry = stored.find(event => ['CARRY_FORWARD', 'CARRY_SUSPENDED'].includes(event.eventType))
+  assert.ok(carry, `فيه حدث ترحيل: ${stored.map(event => event.eventType).join(',')}`)
+  assert.equal(JSON.parse(carry.payload).runId, privateRun.id)
+  expectStatus(await transferTo(emp, org.branchA), 200)
+  assert.equal((await request(users.hr, 'GET', `/payroll/runs/${privateRun.id}`)).status, 403)
+
+  const shown = expectStatus(await request(users.hr, 'GET', `/deductions/${row.id}`), 200)
+  assert.ok(!JSON.stringify(shown.events).includes(`"runId":${privateRun.id}`), `أحداث الخصم كشفت مسير ب: ${JSON.stringify(shown.events.map(event => event.payload))}`)
+  assert.equal(shown.events.find(event => event.id === carry.id).payload.runId, null)
+  assert.ok(!JSON.stringify(shown.events).includes(`#${privateRun.id}`))
+  // الشركة بتشوف الرقم، والسجل المخزن زي ما هو
+  assert.equal(expectStatus(await request(users.admin, 'GET', `/deductions/${row.id}`), 200).events.find(event => event.id === carry.id).payload.runId, privateRun.id)
+  assert.equal(JSON.parse((await repo('DeductionRequestEvent').findOneByOrFail({ id: carry.id })).payload).runId, privateRun.id)
+})
