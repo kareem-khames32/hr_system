@@ -109,12 +109,20 @@ export const UNASSIGNED_REASON_LABELS = {
 export type UnassignedReasonCode = keyof typeof UNASSIGNED_REASON_LABELS
 export const UNASSIGNED_REASON_CODES = Object.keys(UNASSIGNED_REASON_LABELS) as UnassignedReasonCode[]
 
-interface OrgNames { branches: Map<number, string>; departments: Map<number, string>; teams: Map<number, string>; costCenters: Map<number, string> }
+interface OrgNames {
+  branches: Map<number, string>; departments: Map<number, string>; teams: Map<number, string>; costCenters: Map<number, string>
+  // CR39-B02: فرع القسم والفريق — اسم الوحدة بيظهر لقارئ فرع بس لو فرعها في نطاقه
+  departmentBranch: Map<number, number | null>; teamBranch: Map<number, number | null>
+}
 
 async function loadOrgNames(em: EntityManager): Promise<OrgNames> {
   const read = async (table: string) => new Map<number, string>(
     (await em.query(`SELECT [id], [name] FROM [${table}]`)).map((row: any) => [Number(row.id), String(row.name)]))
-  return { branches: await read('branches'), departments: await read('departments'), teams: await read('teams'), costCenters: await read('cost_centers') }
+  const branchOf = async (sqlText: string) => new Map<number, number | null>(
+    (await em.query(sqlText)).map((row: any) => [Number(row.id), row.branchId == null ? null : Number(row.branchId)]))
+  return { branches: await read('branches'), departments: await read('departments'), teams: await read('teams'), costCenters: await read('cost_centers'),
+    departmentBranch: await branchOf('SELECT [id], [branchId] FROM [departments]'),
+    teamBranch: await branchOf('SELECT t.[id], d.[branchId] FROM [teams] t LEFT JOIN [departments] d ON d.[id] = t.[departmentId]') }
 }
 
 interface RunRow {
@@ -149,17 +157,25 @@ export interface PayrollRunsReportOptions extends PayrollReportDraftOption {
   org?: OrgFilter | null
 }
 
-export function payrollRunScopeLabel(run: Pick<RunRow, 'scopeType' | 'scopeIds' | 'employeeIds' | 'branchId'>, names: OrgNames) {
+/**
+ * تسمية نطاق المسير. CR39-B02: لقارئ فرع (scope مش null) أسماء الفروع والأقسام والفرق اللي في نطاقه بس، والباقي «وغيرها خارج نطاق صلاحيتك»
+ * (رأس المسير المختلط بيظهر من غير أسماء تنظيم فرع تاني)، والقايمة المخصّصة من غير عدد موظفيها كلهم. مراكز التكلفة على مستوى الشركة.
+ */
+export function payrollRunScopeLabel(run: Pick<RunRow, 'scopeType' | 'scopeIds' | 'employeeIds' | 'branchId'>, names: OrgNames, scope: PayrollReportScope = null) {
   const ids = run.scopeIds ? parseIds(run.scopeIds) : run.branchId ? [run.branchId] : []
-  const named = (map: Map<number, string>, prefix: string) =>
-    `${prefix}: ${ids.length ? ids.map(id => map.get(id) ?? `#${id}`).join('، ') : 'غير محدد'}`
+  const named = (map: Map<number, string>, prefix: string, branchOf: (id: number) => number | null | 'company') => {
+    if (!ids.length) return `${prefix}: غير محدد`
+    const shown = ids.filter(id => { const branch = branchOf(id); return scope === null || branch === 'company' || inReportScope(scope, branch) })
+    const others = shown.length < ids.length
+    return `${prefix}: ${shown.length ? shown.map(id => map.get(id) ?? `#${id}`).join('، ') + (others ? '، وغيرها خارج نطاق صلاحيتك' : '') : 'خارج نطاق صلاحيتك'}`
+  }
   switch (run.scopeType) {
     case 'COMPANY': return PAYROLL_SCOPE_LABELS.COMPANY
-    case 'BRANCH': return named(names.branches, 'فرع')
-    case 'DEPARTMENT': return named(names.departments, 'قسم')
-    case 'TEAM': return named(names.teams, 'فريق')
-    case 'COST_CENTER': return named(names.costCenters, 'مركز تكلفة')
-    case 'CUSTOM': return `قائمة مخصّصة (${parseIds(run.employeeIds).length} موظف)`
+    case 'BRANCH': return named(names.branches, 'فرع', id => id)
+    case 'DEPARTMENT': return named(names.departments, 'قسم', id => names.departmentBranch.get(id) ?? null)
+    case 'TEAM': return named(names.teams, 'فريق', id => names.teamBranch.get(id) ?? null)
+    case 'COST_CENTER': return named(names.costCenters, 'مركز تكلفة', () => 'company')
+    case 'CUSTOM': return scope === null ? `قائمة مخصّصة (${parseIds(run.employeeIds).length} موظف)` : 'قائمة مخصّصة'
     default: return run.scopeType
   }
 }
@@ -252,9 +268,10 @@ export async function payrollRunsReport(em: EntityManager, scope: PayrollReportS
     const runType = runTypeOf(run)
     const base = {
       id: Number(run.id), name: run.name, period: run.period, status: run.status, scopeType: run.scopeType,
-      scopeLabel: payrollRunScopeLabel(run, names), runType, parentRunId: run.parentRunId === null ? null : Number(run.parentRunId),
-      branchId: run.branchId === null ? null : Number(run.branchId),
-      branchName: run.branchId === null ? null : names.branches.get(Number(run.branchId)) ?? null,
+      scopeLabel: payrollRunScopeLabel(run, names, scope), runType, parentRunId: run.parentRunId === null ? null : Number(run.parentRunId),
+      // CR39-B02 (مسح الصنف): فرع المسير القديم (رقمه واسمه) بيظهر بس لو في نطاق القارئ
+      branchId: run.branchId === null || !inReportScope(scope, Number(run.branchId)) ? null : Number(run.branchId),
+      branchName: run.branchId === null || !inReportScope(scope, Number(run.branchId)) ? null : names.branches.get(Number(run.branchId)) ?? null,
       startDate: run.startDate, endDate: run.endDate,
       storedTotalNet: !narrowed ? reportMoney(reportCents(run.totalNet)) : null,
     }
@@ -558,7 +575,7 @@ export async function payrollUnassignedReport(em: EntityManager, scope: PayrollR
     })
   }
   const runSummaries = runs.filter(run => scope === null || visibleRunIds.has(Number(run.id))).map(run => ({
-    ...runRef(run, scope), scopeLabel: payrollRunScopeLabel(run, names),
+    ...runRef(run, scope), scopeLabel: payrollRunScopeLabel(run, names, scope),
     members: members.filter(member => Number(member.runId) === Number(run.id) && member.membershipStatus !== 'EXCLUDED').length,
     excluded: members.filter(member => Number(member.runId) === Number(run.id) && member.membershipStatus === 'EXCLUDED').length,
   }))

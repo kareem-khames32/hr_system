@@ -37,3 +37,38 @@ test('CR38-B02: النسخة العميقة بتنضّف حقول النص بس 
   assert.equal(scrubRunPeriodsDeep(value, new Set()), value, 'من غير فترات = نفس القيمة')
   assert.equal(scrubRunPeriodsDeep(value, undefined), value)
 })
+
+test('CR39-B01: مفتاح السطر المحجوب ببصمة من الأصل — مفتاحين مختلفين مايبقوش واحد، ونفس المفتاح نفس النتيجة في الصف والعمود، والاسم من غير الفترة', () => {
+  const { scrubRunLineKey } = require('../src/payroll/payroll-run-visibility')
+  const july = 'ALLOWANCE:إعادة قيد #1 بعد عكس صرف مسير 2026-07: بدل', august = 'ALLOWANCE:إعادة قيد #1 بعد عكس صرف مسير 2026-08: بدل'
+  const hidden = new Set(['2026-07', '2026-08'])
+  assert.notEqual(scrubRunLineKey(july, hidden), scrubRunLineKey(august, hidden))
+  assert.equal(scrubRunLineKey(july, hidden), scrubRunLineKey(july, hidden))
+  assert.match(scrubRunLineKey(july, hidden), /^ALLOWANCE:إعادة قيد #1 بعد عكس صرف مسير خارج نطاق صلاحيتك: بدل~[a-f0-9]{8}$/)
+  assert.equal(scrubRunLineKey('BASIC', hidden), 'BASIC')
+  const response = { runId: 9, columns: { earnings: [{ key: july, name: july.slice(10) }] }, rows: [{ employeeId: 1, earnings: [{ key: july, name: july.slice(10), amount: 67.89 }] }] }
+  const out = scrubRunPeriodsDeep(response, hidden)
+  assert.equal(out.columns.earnings[0].key, out.rows[0].earnings[0].key, 'الصف والعمود بنفس المفتاح')
+  assert.equal(out.rows[0].earnings[0].name, 'إعادة قيد #1 بعد عكس صرف مسير خارج نطاق صلاحيتك: بدل')
+  assert.deepEqual([out.runId, out.rows[0].employeeId, out.rows[0].earnings[0].amount], [9, 1, 67.89])
+  assert.equal(JSON.stringify(out).includes('2026-07'), false)
+})
+
+test('CR39-B02: تسمية نطاق المسير لقارئ فرع — وحدات نطاقه بس، والباقي «وغيرها خارج نطاق صلاحيتك»، والشركة كاملة، والقايمة المخصّصة من غير عدد', () => {
+  const { payrollRunScopeLabel } = require('../src/payroll/payroll-reports')
+  const names = { branches: new Map([[1, 'فرع ألف'], [2, 'فرع باء']]), departments: new Map([[10, 'قسم ألف'], [20, 'قسم باء']]),
+    teams: new Map([[100, 'فريق ألف'], [200, 'فريق باء']]), costCenters: new Map([[7, 'مركز مشروعات']]),
+    departmentBranch: new Map([[10, 1], [20, 2]]), teamBranch: new Map([[100, 1], [200, 2]]) }
+  const run = (scopeType, scopeIds, employeeIds = null) => ({ scopeType, scopeIds: JSON.stringify(scopeIds), employeeIds, branchId: null })
+  assert.equal(payrollRunScopeLabel(run('BRANCH', [1, 2]), names), 'فرع: فرع ألف، فرع باء')
+  assert.equal(payrollRunScopeLabel(run('BRANCH', [1, 2]), names, [1]), 'فرع: فرع ألف، وغيرها خارج نطاق صلاحيتك')
+  assert.equal(payrollRunScopeLabel(run('BRANCH', [2]), names, [1]), 'فرع: خارج نطاق صلاحيتك')
+  assert.equal(payrollRunScopeLabel(run('DEPARTMENT', [10, 20]), names, 1), 'قسم: قسم ألف، وغيرها خارج نطاق صلاحيتك')
+  assert.equal(payrollRunScopeLabel(run('TEAM', [100, 200]), names, [1]), 'فريق: فريق ألف، وغيرها خارج نطاق صلاحيتك')
+  assert.equal(payrollRunScopeLabel(run('COST_CENTER', [7]), names, [1]), 'مركز تكلفة: مركز مشروعات')
+  assert.equal(payrollRunScopeLabel(run('CUSTOM', [], JSON.stringify([1, 2, 3])), names), 'قائمة مخصّصة (3 موظف)')
+  assert.equal(payrollRunScopeLabel(run('CUSTOM', [], JSON.stringify([1, 2, 3])), names, [1]), 'قائمة مخصّصة')
+  for (const label of [payrollRunScopeLabel(run('BRANCH', [1, 2]), names, [1]), payrollRunScopeLabel(run('DEPARTMENT', [10, 20]), names, [1])]) {
+    assert.equal(label.includes('باء'), false)
+  }
+})

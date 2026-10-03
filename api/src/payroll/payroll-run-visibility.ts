@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { In, type EntityManager } from 'typeorm'
 import { branchScopeOf, inBranchScope, type BranchScope } from '../auth/guards'
 import type { JwtPayload } from '../auth/auth.service'
@@ -152,17 +153,29 @@ export async function scopeRunRefRows<T extends object>(em: EntityManager, viewe
   })
 }
 
-/** CR38-B02: حقول النص اللي ممكن تحمل «مسير YYYY-MM» (اسم القيد، السبب، الملاحظة) في صفوف الدفتر والقسيمة وسجلات الإضافي */
-const RUN_PERIOD_TEXT_KEYS = new Set(['label', 'reason', 'note', 'notes', 'description'])
+/** CR38-B02 وCR39-B01: حقول النص اللي ممكن تحمل «مسير YYYY-MM» (اسم القيد، السبب، الملاحظة، واسم سطر القسيمة) في صفوف الدفتر والقسيمة وسجلات الإضافي */
+const RUN_PERIOD_TEXT_KEYS = new Set(['label', 'reason', 'note', 'notes', 'description', 'name'])
 
-/** CR38-B02: نسخة من القيمة (أي عمق) حقول نصها من غير فترة أي مسير مخفي — التواريخ والمبالغ والأرقام زي ما هي */
+/**
+ * CR39-B01: مفتاح سطر القسيمة أو عمود جدول المسير («ALLOWANCE:إعادة قيد #1 بعد عكس صرف مسير 2026-07: …»): نفس الحجب + بصمة قصيرة من المفتاح الأصلي،
+ * عشان مفتاحين مختلفين مايبقوش واحد بعد الحجب، ونفس المفتاح يفضل مطابق بين الصف والعمود. المفتاح من غير فترة مخفية زي ما هو.
+ */
+export function scrubRunLineKey(key: string, hiddenPeriods: Iterable<string | null | undefined>): string {
+  const scrubbed = scrubRunPeriods(key, hiddenPeriods) as string
+  return scrubbed === key ? key : `${scrubbed}~${createHash('sha1').update(key).digest('hex').slice(0, 8)}`
+}
+
+/** CR38-B02: نسخة من القيمة (أي عمق) حقول نصها (ومفاتيح السطور) من غير فترة أي مسير مخفي — التواريخ والمبالغ والأرقام زي ما هي */
 export function scrubRunPeriodsDeep<T>(value: T, hiddenPeriods: ReadonlySet<string> | undefined): T {
   if (!hiddenPeriods?.size) return value
   const walk = (item: unknown): unknown => {
     if (Array.isArray(item)) return item.map(walk)
     if (!item || typeof item !== 'object' || item instanceof Date) return item
     const copy: Record<string, unknown> = {}
-    for (const [key, field] of Object.entries(item)) copy[key] = RUN_PERIOD_TEXT_KEYS.has(key) && typeof field === 'string' ? scrubRunPeriods(field, hiddenPeriods) : walk(field)
+    for (const [key, field] of Object.entries(item)) {
+      copy[key] = typeof field === 'string' && RUN_PERIOD_TEXT_KEYS.has(key) ? scrubRunPeriods(field, hiddenPeriods)
+        : typeof field === 'string' && key === 'key' ? scrubRunLineKey(field, hiddenPeriods) : walk(field)
+    }
     return copy
   }
   return walk(value) as T

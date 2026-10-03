@@ -1960,7 +1960,12 @@ export class PayrollService {
       const items = await em.getRepository(PayrollItem).find({ where: { runId }, order: { employeeId: 'ASC' } })
       const lines = await describePayrollItemsLines(em, items)
       const rows = items.map((item, index) => ({ itemId: item.id, employeeId: item.employeeId, ...lines[index] }))
-      return { runId, columns: payrollLineColumns(rows), rows }
+      // CR39-B01: أسماء السطور ومفاتيحها (في الصفوف والأعمدة) من غير فترة أي مسير مخفي للحساب لموظفي المسير — نفس الحجب في الاتنين
+      // فالمفتاح يفضل مطابق بين الصف والعمود. الشركة زي ما هي
+      const scope = branchScopeOf(user)
+      const hidden = scope === null ? new Map<number, Set<string>>() : await hiddenRunPeriodsByEmployee(em, scope, items.map(item => item.employeeId), user.employeeId ?? null)
+      const union = new Set([...hidden.values()].flatMap(periods => [...periods]))
+      return scrubRunPeriodsDeep({ runId, columns: payrollLineColumns(rows), rows }, union)
     })
   }
 
