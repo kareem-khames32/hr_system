@@ -967,3 +967,112 @@ test('CR38-B01/B02: موظف اتنقل — قايمة مسيرات «بلا م�
   assert.equal(companyLedger.label, `مرحّل من قيد #1 (مسير ${period}): غرامة اختبار CR38`)
   assert.equal((await repo('EmployeeObligation').findOneByOrFail({ id: carried.id })).label, companyLedger.label, 'المخزن زي ما هو')
 })
+
+test('CR40-B01/B02: موظف اتعكس صرفه واتنقل — بنود مسيره الجديد في كل شاشة (القسيمة، جدول المسير، سطور الشهر، مراجعة الاعتماد، شاشة المسير، السجل المالي) من غير فترة مسيره القديم لقارئ الفرع الجديد، وبصمة المفتاح مابتتفكّش، والشركة وصاحب القسيمة بيشوفوا النص كامل', { timeout: 900000 }, async () => {
+  const admin4 = await repo('User').save({ email: 'admin4@payroll-corrections-test.invalid', displayName: 'admin4', passwordHash: 'test-only', role: 'super_admin',
+    branchId: null, permissions: '[]' })
+  const approveAndPay = async (run, reference) => {
+    expectStatus(await request(admin4, 'POST', `/payroll/runs/${run.id}/approve`), 201)
+    expectStatus(await request(admin4, 'POST', `/payroll/runs/${run.id}/pay`, { channel: 'BANK_TRANSFER', reference }), 201)
+  }
+  const createdPolicy = expectStatus(await request(users.admin, 'POST', '/payroll/policies', { name: 'مجموعة الشركة — بنود CR40', effectiveFrom: policyStart, settings: { ...cycle23 } }), 201)
+  const published = expectStatus(await request(users.admin, 'POST', `/payroll/policies/${createdPolicy.policy.id}/versions/${createdPolicy.versions[0].id}/publish`,
+    { expectedRevision: createdPolicy.versions[0].revision, reason: 'نشر مجموعة الشركة لاختبار بنود الجولة 40' }), 200)
+  const versionId = published.version.id
+  const emp = await employee(9000)
+  // بدل في الدفتر بيتصرف في أغسطس، ويتعكس فيرجع قيد إعادة اسمه فيه «مسير 2026-08»
+  const credit = expectStatus(await request(users.admin, 'POST', '/obligations', { employeeId: emp.id, type: 'CREDIT', amount: 67.89, label: 'بدل اختبار CR40',
+    category: 'allowance', effectiveDate: '2026-08-01' }), 201)
+  let august = expectStatus(await request(users.admin, 'POST', '/payroll/runs', { name: 'مسير أغسطس لبنود CR40', policyVersionId: versionId, period,
+    filters: { employeeIds: [emp.id] } }), 201)
+  august = await calculate(august, users.admin)
+  await acknowledge(august, admin4)
+  await approveAndPay(august, 'TRX-CR40-AUG')
+  const preview = expectStatus(await request(users.admin, 'POST', `/payroll/runs/${august.id}/reversal-preview`, { employeeIds: [emp.id] }), 201)
+  const reversal = expectStatus(await request(users.admin, 'POST', `/payroll/runs/${august.id}/reversals`, { employeeIds: [emp.id], reason: REASON, previewHash: preview.previewHash }), 201)
+  await approveAndPay(reversal, 'REFUND-CR40-AUG')
+  const restored = await repo('EmployeeObligation').findOneByOrFail({ payrollReversalOfObligationId: credit.id })
+  assert.deepEqual([restored.status, restored.label.includes(`مسير ${period}`)], ['PENDING', true])
+  // قيد خصم بنفس شكل اسم الترحيل (بيشاور على فترة مسير أغسطس)
+  await repo('EmployeeObligation').save({ employeeId: emp.id, type: 'DEBIT', category: 'manual', amount: 10, status: 'PENDING', effectiveDate: '2026-08-23', targetPeriod: '2026-09',
+    label: `مرحّل من قيد #1 (مسير ${period}): غرامة اختبار CR40` })
+  // الموظف اتنقل للفرع التاني، وحضوره في دورة سبتمبر هناك
+  await repo('Employee').update(emp.id, { branchId: org.other.id })
+  const days = []
+  for (let time = Date.parse('2026-08-23T12:00:00Z'); time <= Date.parse('2026-09-22T12:00:00Z'); time += 86400000) {
+    days.push({ employeeId: emp.id, branchId: org.other.id, date: new Date(time).toISOString().slice(0, 10), status: 'present', checkIn: '08:00', checkOut: '16:00',
+      shiftName: 'وردية اختبار التصحيح', shiftStart: '08:00', shiftEnd: '16:00', scheduleSource: 'override', workMinutes: 480, lateMinutes: 0, deductibleMinutes: 0, earlyLeaveMinutes: 0 })
+  }
+  await repo('AttendanceDay').save(days, { chunk: 100 })
+  let september = expectStatus(await request(users.otherBranch, 'POST', '/payroll/runs', { name: 'مسير سبتمبر لبنود CR40', policyVersionId: versionId, period: '2026-09',
+    filters: { employeeIds: [emp.id] } }), 201)
+  september = await calculate(september, users.otherBranch)
+  const item = itemOf(september, emp)
+  assert.equal(money(item.netPay), money(9000 + 67.89 - 10))
+  // البند المحفوظ: تفصيله فيه اسم القيد بالفترة القديمة (زي سطور الإعفاء المالي) — يثبت إن شاشة المسير والقسيمة بيحجبوا نص التفصيل كمان
+  const savedBreakdown = (await repo('PayrollItem').findOneByOrFail({ id: item.id })).breakdown
+  await repo('PayrollItem').update({ id: item.id }, { breakdown: JSON.stringify({ ...JSON.parse(savedBreakdown), auditNote: `${restored.label} — قيد #${restored.id}` }) })
+
+  const reader = await repo('User').save({ email: 'lines-other-cr40@payroll-corrections-test.invalid', displayName: 'lines-other-cr40', passwordHash: 'test-only', role: 'hr_manager',
+    branchId: org.other.id, permissions: JSON.stringify(['payroll.view', 'reports.view']) })
+  for (const run of [august, reversal]) expectStatus(await request(reader, 'GET', `/payroll/runs/${run.id}`), 403)
+  const forbidden = `مسير ${period}`
+  const leaks = (value, at = '$', out = []) => {
+    if (typeof value === 'string') { if (value.includes(forbidden)) out.push(at) }
+    else if (Array.isArray(value)) value.forEach((entry, index) => leaks(entry, `${at}[${index}]`, out))
+    else if (value && typeof value === 'object') for (const [key, entry] of Object.entries(value)) { if (key.includes(forbidden)) out.push(`${at}{${key}}`); leaks(entry, `${at}.${key}`, out) }
+    return out
+  }
+  const before = { state: await financialState([emp.id]), item: (await query('SELECT * FROM [payroll_items] WHERE [id]=@0', [item.id]))[0].breakdown }
+  const routes = {
+    payslip: `/payroll/items/${item.id}`,
+    runLines: `/payroll/runs/${september.id}/lines`,
+    runDetail: `/payroll/runs/${september.id}`,
+    overviewLines: '/payroll/overview/lines?period=2026-09',
+    approvalReview: `/payroll/approval-chain/runs/${september.id}/review`,
+    ledger: `/obligations/employee/${emp.id}`,
+    register: '/reports/financial/payroll-register?period=2026-09&includeDraft=true',
+  }
+  const branch = {}
+  for (const [name, route] of Object.entries(routes)) {
+    branch[name] = expectStatus(await request(reader, 'GET', route), 200)
+    assert.deepEqual(leaks(branch[name]), [], `${name}: ${route}`)
+  }
+  // الصفوف والأعمدة بنفس المفتاح، والقسيمة نفس صف جدول المسير، والمبالغ زي ما هي
+  const row = branch.runLines.rows.find(entry => entry.employeeId === emp.id)
+  for (const side of ['earnings', 'deductions']) for (const line of row[side]) {
+    assert.equal(branch.runLines.columns[side].filter(column => column.key === line.key && column.name === line.name).length, line.amount !== 0 || line.key === 'BASIC' ? 1 : 0)
+  }
+  assert.deepEqual(branch.payslip.lines, { earnings: row.earnings, deductions: row.deductions, totals: row.totals })
+  assert.equal(row.totals.net, Number(money(item.netPay)))
+  const overview = branch.overviewLines.rows.find(entry => entry.employeeId === emp.id)
+  assert.deepEqual([overview.earnings, overview.deductions], [row.earnings, row.deductions], 'سطور الشهر نفس جدول المسير')
+  const review = branch.approvalReview.rows.find(entry => entry.employeeId === emp.id)
+  assert.deepEqual([review.earningLines, review.deductionLines, review.net], [row.earnings, row.deductions, row.totals.net])
+  // CR40-B01: البصمة معتمة — مفكك Codex (الشهور × الـhash العلني) مابيلاقيش ولا شهر
+  const masked = row.earnings.find(line => line.name.includes('مسير خارج نطاق صلاحيتك'))
+  assert.ok(masked, JSON.stringify(row.earnings))
+  const split = masked.key.lastIndexOf('~'), rendered = masked.key.slice(0, split), fingerprint = masked.key.slice(split + 1)
+  assert.match(fingerprint, /^[a-f0-9]{16}$/)
+  const decoded = []
+  for (let year = 2000; year <= 2035; year++) for (let month = 1; month <= 12; month++) {
+    const guess = rendered.split('مسير خارج نطاق صلاحيتك').join(`مسير ${year}-${String(month).padStart(2, '0')}`)
+    for (const algorithm of ['sha1', 'sha256']) if (crypto.createHash(algorithm).update(guess).digest('hex').startsWith(fingerprint.slice(0, 8))) decoded.push(guess)
+  }
+  assert.deepEqual(decoded, [])
+  // القراءات مابتغيرش المخزن
+  assert.deepEqual({ state: await financialState([emp.id]), item: (await query('SELECT * FROM [payroll_items] WHERE [id]=@0', [item.id]))[0].breakdown }, before)
+
+  // الشركة بتشوف النص كامل، وصاحب القسيمة بعد الصرف كمان
+  const companyLines = expectStatus(await request(users.admin, 'GET', routes.runLines), 200)
+  assert.ok(leaks(companyLines).length > 0)
+  assert.ok(leaks(expectStatus(await request(users.admin, 'GET', routes.runDetail), 200)).length > 0)
+  await repo('PayrollItem').update({ id: item.id }, { breakdown: savedBreakdown })
+  await acknowledge(september, admin4)
+  await approveAndPay(september, 'TRX-CR40-SEP')
+  const self = await repo('User').save({ email: 'self-cr40@payroll-corrections-test.invalid', displayName: 'self-cr40', passwordHash: 'test-only', role: 'employee',
+    branchId: org.other.id, employeeId: emp.id, permissions: '[]' })
+  const own = expectStatus(await request(self, 'GET', routes.payslip), 200)
+  assert.deepEqual(own.lines, expectStatus(await request(users.admin, 'GET', routes.payslip), 200).lines)
+  assert.ok(leaks(own.lines).length > 0)
+})

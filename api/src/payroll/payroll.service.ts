@@ -113,7 +113,7 @@ import { assertPayrollRunHasNoChain, voidPayrollRunApprovals } from './payroll-a
 import { assertPayrollRunNotDisbursed, closePayrollRunDisbursement } from './payroll-disbursement'
 import { PayrollItemDisbursement } from './payroll-disbursement.entities'
 // CR35-B01: مرجع مسير في موانع عكس الصرف بقاعدة رؤية المسير للحساب
-import { hiddenRunPeriodsByEmployee, scopePayrollRunRefBlockers, scrubRunPeriodsDeep } from './payroll-run-visibility'
+import { hiddenRunPeriodsByEmployee, hiddenRunPeriodsUnion, scopePayrollRunRefBlockers, scrubRunPeriods, scrubRunPeriodsDeep } from './payroll-run-visibility'
 
 // الخطوة 16: مدخلات تعريف المسير من الشاشة (تُتحقق هنا ضد القاعدة؛ الـDTO يتحقق من الشكل فقط).
 export interface PayrollRunDefinitionInput {
@@ -1725,7 +1725,10 @@ export class PayrollService {
     }
     // C8 / الخطوة 31: نوع المسير والمسير المرتبط والمسيرات التابعة وسطور العكس أو البنود المعكوسة
     const correction = await this.scopedRunCorrection(user, em, await describePayrollRunCorrection(em, run))
-    return { ...this.lightRun(run), items, members: await this.visibleMembers(user, members, em), conflicts, pendingOvertime, periodContinuity, selection, policyVersion, engine,
+    // CR40 (مسح الصنف): نص تفصيل البنود المحفوظ (اسم القيد جوه سطور الإعفاء المالي) من غير فترة أي مسير مخفي للحساب لموظفي المسير
+    const hidden = await hiddenRunPeriodsUnion(em, user, items.map(item => item.employeeId))
+    const shownItems = hidden.size ? items.map(item => ({ ...item, breakdown: scrubRunPeriods(item.breakdown, hidden) })) : items
+    return { ...this.lightRun(run), items: shownItems, members: await this.visibleMembers(user, members, em), conflicts, pendingOvertime, periodContinuity, selection, policyVersion, engine,
       actors, approvalGuard, payRecord, collection, correction }
     })
   }
@@ -1940,16 +1943,19 @@ export class PayrollService {
     const leaveDeductions = Array.isArray(savedLeaveLines) ? savedLeaveLines
       : Number(item.unpaidLeaveDeduction) > 0 ? [{ code: 'UNPAID_LEAVE', label: 'إجازة بدون راتب', days: Number(item.unpaidLeaveDays), payPercent: 0, amount: Number(item.unpaidLeaveDeduction) }] : []
     // طلب المالك 19 سبتمبر: الاستحقاقات والاستقطاعات بندًا بندًا بأسمائها (نفس جدول المسير وتصديره)، مجموعها = الأعمدة المحفوظة
-    const [lines] = await describePayrollItemsLines(em, [item])
+    // CR39-B01/CR40-B02: الأسماء والمفاتيح من غير فترة مسير مخفي للحساب (جوه describePayrollItemsLines، زي كل شاشة بتعرض البنود)
+    const [lines] = await describePayrollItemsLines(em, [item], user)
     // قارئ الرواتب اللي المسير كله في نطاقه بياخد بيانات المسير زي ما هي. صاحب القسيمة من غير الصلاحية، وقارئ فرع والمسير فيه فروع تانية
     // (صافي المسير وتعريفه ومستبعدوه مش بتوع فرعه — وGET /payroll/runs/:id نفسه بيرفضه)، بياخدوا بيانات القسيمة بس
     const payrollReader = userHasPerm(user, 'payroll.view') && allowed && await this.runAccessible(user, run, em)
-    // CR38-B02 (مسح الصنف): أسماء القيود والإعفاءات وسطور القسيمة من غير فترة مسير مخفي للحساب لصاحب القسيمة («مرحّل من قيد … (مسير 2026-07)»)
+    // CR38-B02 (مسح الصنف): أسماء القيود والإعفاءات من غير فترة مسير مخفي للحساب لصاحب القسيمة («مرحّل من قيد … (مسير 2026-07)»)،
+    // ونص تفصيل البند المحفوظ نفسه (CR40: اسم القيد جوه سطور الإعفاء المالي)
     const hiddenPeriods = user.employeeId != null && user.employeeId === item.employeeId ? undefined
       : (await hiddenRunPeriodsByEmployee(em, scope, [item.employeeId], user.employeeId ?? null)).get(item.employeeId)
-    return { item, run: payrollReader ? this.lightRun(run) : this.ownPayslipRun(run), employee, member, identitySource: snapshot ? 'SNAPSHOT' : 'CURRENT_NAME_ONLY',
+    return { item: hiddenPeriods?.size ? { ...item, breakdown: scrubRunPeriods(item.breakdown, hiddenPeriods) } : item,
+      run: payrollReader ? this.lightRun(run) : this.ownPayslipRun(run), employee, member, identitySource: snapshot ? 'SNAPSHOT' : 'CURRENT_NAME_ONLY',
       obligationDetails: scrubRunPeriodsDeep(obligationDetails, hiddenPeriods), financialExemptions: scrubRunPeriodsDeep(financialExemptions, hiddenPeriods), reversal, leaveDeductions,
-      lines: scrubRunPeriodsDeep(lines, hiddenPeriods) }
+      lines }
     })
   }
 
@@ -1958,14 +1964,11 @@ export class PayrollService {
     return this.readRun(runId, async (em, run) => {
       await this.assertRunAccess(user, run, em)
       const items = await em.getRepository(PayrollItem).find({ where: { runId }, order: { employeeId: 'ASC' } })
-      const lines = await describePayrollItemsLines(em, items)
+      // CR39-B01/CR40-B02: أسماء السطور ومفاتيحها من غير فترة أي مسير مخفي للحساب لموظفي المسير (اتحاد الفترات جوه describePayrollItemsLines)،
+      // والأعمدة من الصفوف المحجوبة نفسها فالمفتاح يفضل مطابق بين الصف والعمود. الشركة زي ما هي
+      const lines = await describePayrollItemsLines(em, items, user)
       const rows = items.map((item, index) => ({ itemId: item.id, employeeId: item.employeeId, ...lines[index] }))
-      // CR39-B01: أسماء السطور ومفاتيحها (في الصفوف والأعمدة) من غير فترة أي مسير مخفي للحساب لموظفي المسير — نفس الحجب في الاتنين
-      // فالمفتاح يفضل مطابق بين الصف والعمود. الشركة زي ما هي
-      const scope = branchScopeOf(user)
-      const hidden = scope === null ? new Map<number, Set<string>>() : await hiddenRunPeriodsByEmployee(em, scope, items.map(item => item.employeeId), user.employeeId ?? null)
-      const union = new Set([...hidden.values()].flatMap(periods => [...periods]))
-      return scrubRunPeriodsDeep({ runId, columns: payrollLineColumns(rows), rows }, union)
+      return { runId, columns: payrollLineColumns(rows), rows }
     })
   }
 

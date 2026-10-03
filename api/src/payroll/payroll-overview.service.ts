@@ -414,24 +414,28 @@ export class PayrollOverviewService {
     const names = await this.orgNames()
     const rows: Array<{ runId: number; runName: string | null; runStatus: string; itemId: number; employeeId: number; employeeCode: string; fullName: string
       branchName: string | null; departmentName: string | null } & PayrollItemLines> = []
+    const visible: Array<{ item: Record<string, any>; employeeId: number; snapshot: Record<string, any>; employee: EmployeeRow | undefined
+      place: { branchId: number | null; departmentId: number | null; teamId: number | null } }> = []
     for (const chunk of chunks(runs.map(run => run.id))) {
       const items: Array<Record<string, any>> = await this.em.query(`SELECT i.*, CAST(m.[snapshot] AS nvarchar(max)) AS [memberSnapshot]
         FROM [payroll_items] i LEFT JOIN [payroll_run_members] m ON m.[runId] = i.[runId] AND m.[employeeId] = i.[employeeId]
         WHERE i.[runId] IN (${idList(chunk)})`, chunk)
       const employees = await this.employees(items.map(item => Number(item.employeeId)))
-      const visible = items.map(item => {
+      visible.push(...items.map(item => {
         const employeeId = Number(item.employeeId), snapshot = parseJson(item.memberSnapshot), employee = employees.get(employeeId)
         return { item, employeeId, snapshot, employee, place: this.placeOf(snapshot, employee) }
-      }).filter(row => inBranchScope(scope, row.place.branchId))
-      const lines = await describePayrollItemsLines(this.em, visible.map(row => row.item))
-      visible.forEach(({ item, employeeId, snapshot, employee, place }, index) => {
-        const run = runs.find(row => row.id === Number(item.runId))!
-        rows.push({ runId: run.id, runName: run.name, runStatus: run.status, itemId: Number(item.id), employeeId,
-          employeeCode: snapshot.employeeCode ?? employee?.employeeCode ?? '', fullName: snapshot.fullName ?? employee?.fullName ?? `#${employeeId}`,
-          branchName: place.branchId ? names.branches.get(place.branchId) ?? null : null,
-          departmentName: place.departmentId ? names.departments.get(place.departmentId) ?? null : null, ...lines[index] })
-      })
+      }).filter(row => inBranchScope(scope, row.place.branchId)))
     }
+    // CR40-B02: البنود مرة واحدة لكل صفوف الشهر بالقارئ — أسماء السطور ومفاتيحها من غير فترة أي مسير مخفي له (نفس جدول المسير والقسيمة)،
+    // والاتحاد على الشهر كله فالمفتاح الواحد واحد في كل الصفوف والأعمدة
+    const lines = await describePayrollItemsLines(this.em, visible.map(row => row.item), user)
+    visible.forEach(({ item, employeeId, snapshot, employee, place }, index) => {
+      const run = runs.find(row => row.id === Number(item.runId))!
+      rows.push({ runId: run.id, runName: run.name, runStatus: run.status, itemId: Number(item.id), employeeId,
+        employeeCode: snapshot.employeeCode ?? employee?.employeeCode ?? '', fullName: snapshot.fullName ?? employee?.fullName ?? `#${employeeId}`,
+        branchName: place.branchId ? names.branches.get(place.branchId) ?? null : null,
+        departmentName: place.departmentId ? names.departments.get(place.departmentId) ?? null : null, ...lines[index] })
+    })
     rows.sort((a, b) => a.fullName.localeCompare(b.fullName, 'ar') || a.runId - b.runId)
     return { period, runs: (await this.runsInScope(scope, runs)).map(run => ({ id: run.id, name: run.name, status: run.status })), columns: payrollLineColumns(rows), rows }
   }

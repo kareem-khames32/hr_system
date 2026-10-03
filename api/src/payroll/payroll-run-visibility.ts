@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 import { In, type EntityManager } from 'typeorm'
 import { branchScopeOf, inBranchScope, type BranchScope } from '../auth/guards'
 import type { JwtPayload } from '../auth/auth.service'
@@ -35,14 +35,23 @@ export function maskPayloadRunRefs<T>(payload: T, visible: (runId: number) => bo
 /** CR38-B02: الوصف العام لمسير مخفي في نص («عكس صرف مسير 2026-08» ← «عكس صرف مسير خارج نطاق صلاحيتك») */
 export const HIDDEN_RUN_TEXT = 'مسير خارج نطاق صلاحيتك'
 
-/** CR38-B02: «مسير YYYY-MM» لفترة مسير مخفي بيبقى الوصف العام. تاريخ العمل والشهر المستهدف من غير كلمة «مسير» قبلهم مابيتلمسوش */
+// «مسير YYYY-MM» أو قايمة فترات بعد كلمة «مسير» («عكس خصم #3 — مسير 2026-07، 2026-08»)
+const RUN_PERIOD_TEXT = /مسير (\d{4}-\d{2}(?:، \d{4}-\d{2})*)/g
+
+/**
+ * CR38-B02: «مسير YYYY-MM» لفترة مسير مخفي بيبقى الوصف العام. تاريخ العمل والشهر المستهدف من غير كلمة «مسير» قبلهم مابيتلمسوش.
+ * CR40: في القايمة («مسير 2026-07، 2026-08») كل فترة مخفية بتتشال، والمرئي يفضل والوصف العام بعده.
+ */
 export function scrubRunPeriods(text: string | null | undefined, hiddenPeriods: Iterable<string | null | undefined> = []): string | null {
   if (text == null) return null
-  let out = text
-  for (const period of new Set(hiddenPeriods)) {
-    if (typeof period === 'string' && /^\d{4}-\d{2}$/.test(period)) out = out.split(`مسير ${period}`).join(HIDDEN_RUN_TEXT)
-  }
-  return out
+  const hidden = new Set([...hiddenPeriods].filter((period): period is string => typeof period === 'string' && /^\d{4}-\d{2}$/.test(period)))
+  if (!hidden.size) return text
+  return text.replace(RUN_PERIOD_TEXT, (match, list: string) => {
+    const periods = list.split('، ')
+    if (!periods.some(period => hidden.has(period))) return match
+    const shown = periods.filter(period => !hidden.has(period))
+    return shown.length ? `مسير ${shown.join('، ')}، ${HIDDEN_RUN_TEXT}` : HIDDEN_RUN_TEXT
+  })
 }
 
 /**
@@ -93,6 +102,16 @@ export async function hiddenRunPeriodsByEmployee(em: EntityManager, scope: Branc
     result.get(employeeId)!.add(period)
   }
   return result
+}
+
+/**
+ * CR40-B02: اتحاد الفترات المخفية للحساب لكل الموظفين — للرد اللي فيه صفوف كتير وأعمدة مشتركة (جدول المسير، سطور الشهر، مراجعة الاعتماد،
+ * بنود المسير): المفتاح الواحد بيتحجب بنفس الشكل في كل الصفوف والأعمدة (الأأمن). viewer = null (داخلي) أو الشركة = فاضي
+ */
+export async function hiddenRunPeriodsUnion(em: EntityManager, viewer: JwtPayload | null, employeeIds: Iterable<number | null | undefined>): Promise<Set<string>> {
+  if (!viewer) return new Set()
+  const byEmployee = await hiddenRunPeriodsByEmployee(em, branchScopeOf(viewer), employeeIds, viewer.employeeId ?? null)
+  return new Set([...byEmployee.values()].flatMap(periods => [...periods]))
 }
 
 // CR32-B01 وCR33-B01 (مراجعة Codex الجولتين 32 و33): مرجع مسير (رقمه أو اسمه أو حالته) في رد أو رسالة رفض أو عرض لحساب فرع بيظهر بس لو
@@ -156,13 +175,22 @@ export async function scopeRunRefRows<T extends object>(em: EntityManager, viewe
 /** CR38-B02 وCR39-B01: حقول النص اللي ممكن تحمل «مسير YYYY-MM» (اسم القيد، السبب، الملاحظة، واسم سطر القسيمة) في صفوف الدفتر والقسيمة وسجلات الإضافي */
 const RUN_PERIOD_TEXT_KEYS = new Set(['label', 'reason', 'note', 'notes', 'description', 'name'])
 
+// CR40-B01: بصمة المفتاح المحجوب HMAC بسر الخادم، مش hash علني للنص الأصلي: اللي معاه الرد بس مايقدرش يجرّب الشهور ويطابق البصمة.
+// السر مشتق من JWT_SECRET (الإقلاع مابيتمش من غيره) بغرض منفصل، فالبصمة ثابتة بين القراءات وإعادة التشغيل. من غيره: سر عشوائي للعملية.
+let lineKeySecret: Buffer | null = null
+function lineKeyFingerprint(key: string): string {
+  if (!lineKeySecret) lineKeySecret = createHmac('sha256', process.env.JWT_SECRET || randomBytes(32)).update('hr-system/payroll-run-line-key/v1').digest()
+  return createHmac('sha256', lineKeySecret).update(key, 'utf8').digest('hex').slice(0, 16)
+}
+
 /**
- * CR39-B01: مفتاح سطر القسيمة أو عمود جدول المسير («ALLOWANCE:إعادة قيد #1 بعد عكس صرف مسير 2026-07: …»): نفس الحجب + بصمة قصيرة من المفتاح الأصلي،
- * عشان مفتاحين مختلفين مايبقوش واحد بعد الحجب، ونفس المفتاح يفضل مطابق بين الصف والعمود. المفتاح من غير فترة مخفية زي ما هو.
+ * CR39-B01: مفتاح سطر القسيمة أو عمود جدول المسير («ALLOWANCE:إعادة قيد #1 بعد عكس صرف مسير 2026-07: …»): نفس الحجب + بصمة من المفتاح الأصلي،
+ * عشان مفتاحين مختلفين مايبقوش واحد بعد الحجب، ونفس المفتاح يفضل مطابق بين الصف والعمود وبين المسارات. المفتاح من غير فترة مخفية زي ما هو.
+ * CR40-B01: البصمة معتمة (HMAC بسر الخادم) — مابتثبتش صحة تخمين للفترة المحجوبة.
  */
 export function scrubRunLineKey(key: string, hiddenPeriods: Iterable<string | null | undefined>): string {
   const scrubbed = scrubRunPeriods(key, hiddenPeriods) as string
-  return scrubbed === key ? key : `${scrubbed}~${createHash('sha1').update(key).digest('hex').slice(0, 8)}`
+  return scrubbed === key ? key : `${scrubbed}~${lineKeyFingerprint(key)}`
 }
 
 /** CR38-B02: نسخة من القيمة (أي عمق) حقول نصها (ومفاتيح السطور) من غير فترة أي مسير مخفي — التواريخ والمبالغ والأرقام زي ما هي */
