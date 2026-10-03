@@ -32,6 +32,7 @@ import { PublicHoliday, Shift, WorkSchedule } from '../assets/assets.entities'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { AttendanceCorrection, OvertimeEntry } from '../requests/entities/attendance.entities'
+import { ONE_PERSON_CONTROL_KEYS } from '../payroll/one-person-controls'
 import { Leave } from '../requests/entities/leave.entities'
 import { Request } from '../requests/entities/request.entity'
 import { RequestType } from '../requests/entities/request-type.entity'
@@ -554,6 +555,29 @@ export class AttendanceService {
     return new Set(rows.map(row => row.id))
   }
 
+  // B1.7 (R11 / Q-008، إعداد مقفول): «اعتماد تلقائي» على فترة جديدة أو بتتعدل محتاج سقف إضافي شهري عام أكبر من صفر
+  // (الصفر = من غير سقف). المقفول = زي ما كان. الفحص برّه معاملة التعديل لأنه على إعدادات عامة مش على صف الفترة
+  async assertOvertimeAutoApproveCap(autoApprove: boolean): Promise<void> {
+    if (!autoApprove || (await this.configValue(ONE_PERSON_CONTROL_KEYS.overtimeExcludeManual, 'false')) !== 'true') return
+    const cap = Number(await this.configValue('overtime.max_hours_per_month', '0'))
+    if (!(Number.isFinite(cap) && cap > 0)) throw new BadRequestException('«اعتماد تلقائي» محتاج سقف إضافي شهري أكبر من صفر — حطه من الإعدادات (الحد الأقصى لساعات الإضافي في الشهر) أو شيل «اعتماد تلقائي»')
+  }
+
+  // الفترة بعد التعديل: مفتوحة وشغالة وعليها العلامة = محتاجة السقف؛ الإيقاف أو القفل أو شيل العلامة مسموحين دايمًا
+  async assertOvertimeAutoApproveCapForUpdate(id: number, dto: { autoApprove?: unknown; isActive?: unknown; effect?: unknown }): Promise<void> {
+    const current = await this.overtimePeriods.findOne({ where: { id }, select: { id: true, autoApprove: true, isActive: true, effect: true } })
+    const after = <K extends 'autoApprove' | 'isActive' | 'effect'>(key: K) => dto?.[key] !== undefined && dto?.[key] !== null ? dto[key] : current?.[key]
+    return this.assertOvertimeAutoApproveCap(after('autoApprove') === true && after('isActive') !== false && after('effect') !== 'CLOSED')
+  }
+
+  // B1.7: يوم فيه بصمة يدوية (من شاشة الحضور) أو تصحيح بصمة معتمد — جوه إطار يوم العمل نفسه (الليلية لصباح الغد)
+  private async dayHasManualPunches(employeeId: number, date: string): Promise<boolean> {
+    if (await this.corrections.count({ where: { employeeId, date } })) return true
+    const shift = await this.shiftFor(employeeId, date)
+    const frame = await this.workdayFrame(employeeId, date, shift)
+    return (await this.punches.count({ where: { employeeId, source: 'MANUAL', punchTime: Between(frame.from, frame.to) } })) > 0
+  }
+
   // هل يوم الإضافي المكتشف بيتعتمد تلقائي؟ الفترات المفتوحة اللي بتحكم اليوم (نفس اختيار overtimeWindow: فرع يوم العمل المؤرخ،
   // وأي فترة مقفولة بتغطيه بتكسب) وعليها «اعتماد تلقائي»، ولحظة ما اليوم يخلص. null = اليوم مش جوه فترة اعتماد تلقائي
   // (أو فيه فترة مقفولة) فالإضافي بيمشي في سلسلته زي الأول. evidence = دليل نفس المعاملة: الفترات لازم تكون من نافذته
@@ -567,6 +591,8 @@ export class AttendanceService {
     if (covering.some(p => p.effect === 'CLOSED')) return null
     const periods = covering.filter(p => p.effect === 'OPEN' && p.autoApprove).sort((a, b) => a.id - b.id)
     if (!periods.length || periods.some(p => !evidence.window.governingWindowIds.includes(p.id))) return null
+    // B1.7 (R11 / Q-008، إعداد مقفول): «اعتماد تلقائي» معناه «بصمة الجهاز كفاية» — يوم فيه بصمة يدوية أو تصحيح بيروح لسلسلة الإضافي العادية
+    if ((await this.configValue(ONE_PERSON_CONTROL_KEYS.overtimeExcludeManual, 'false')) === 'true' && await this.dayHasManualPunches(employeeId, date)) return null
     const end = await this.overtimeWorkdayEnd(employeeId, date)
     return {
       periods: periods.map(p => ({ id: p.id, name: p.name, branchId: p.branchId ?? null })),

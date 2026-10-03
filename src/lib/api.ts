@@ -1147,7 +1147,20 @@ export const deleteLanguage = (employeeId: number, rowId: number) =>
 // ===== الرواتب =====
 export const fetchPayrollRuns = () => get<ApiPayrollRun[]>('/payroll/runs')
 export const fetchPayrollRun = (id: number) => get<ApiPayrollRun>(`/payroll/runs/${id}`)
-export const approvePayroll = (id: number) => post<ApiPayrollRun>(`/payroll/runs/${id}/approve`)
+// B1.7: سبب تعدّي مدير النظام لضابط «اللي غيّر مايعتمدش لوحده» (لما يكون مفتوح)
+export const approvePayroll = (id: number, overrideReason?: string) =>
+  post<ApiPayrollRun>(`/payroll/runs/${id}/approve`, overrideReason ? { overrideReason } : undefined)
+// B1.7 (R10): «اتغيّر إيه من آخر مسير»
+export interface PayrollRunChanges {
+  runId: number; period: string; previousSeriesPeriod: string | null
+  rows: Array<{ employeeId: number; employeeCode: string | null; fullName: string | null; isNew: boolean; previousPeriod: string | null
+    salary: { previous: number; current: number } | null; payMethod: { previous: string; current: string } | null
+    changes: Array<{ kind: 'SALARY' | 'PAYMENT'; field: string | null; label: string; oldValue: string | null; newValue: string | null
+      changedByUserId: number | null; changedByName: string | null; changedAt: string; source: string | null; reason: string | null }> }>
+  leavers: Array<{ employeeId: number; employeeCode: string | null; fullName: string | null }>
+  counts: { changed: number; new: number; leavers: number }
+}
+export const fetchPayrollRunChanges = (id: number) => get<PayrollRunChanges>(`/payroll/runs/${id}/changes`)
 export const reopenPayroll = (id: number, reason: string) => post<ApiPayrollRun>(`/payroll/runs/${id}/reopen`, { reason })
 export const cancelPayroll = (id: number, reason: string) => post<ApiPayrollRun>(`/payroll/runs/${id}/cancel`, { reason })
 export const fetchPayrollRunEvents = (id: number) => get<ApiPayrollRunEvent[]>(`/payroll/runs/${id}/events`)

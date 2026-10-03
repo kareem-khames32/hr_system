@@ -19,6 +19,8 @@
 //  AA-11ب) الشاشة: خانة العلامة وجملة شرحها للفترة المفتوحة بس وشغالة افتراضيًا، والشارة، و«اعتماد تلقائي» في السجل والطلبات.
 //  AA-12) نوع OVERTIME_AUTO لازم يكون مفعّل، وسلسلته مش شرط للاعتماد التلقائي.
 //  AA-13) ترحيل 20260928_074 عبر المُرحّل المجمّع نفسه: إضافي، آمن للتكرار، الفترات القائمة صفر، وفرق المخطط صفر.
+//  AA-14) B1.7 «بصمة الجهاز بس» (مقفول افتراضيًا): مفتوح = يوم بصمات الجهاز بيتعتمد تلقائي، ويوم فيه بصمة يدوية أو تصحيح بصمة بيروح لسلسلته.
+//  AA-15) B1.7 السقف: الضابط مفتوح والسقف الشهري صفر = الفترة التلقائية الجديدة أو المعدّلة مرفوضة؛ الإيقاف والقفل وشيل العلامة مسموحين.
 // Run (من api/): node --test test/overtime-auto-approve-period.integration.cjs
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
@@ -771,4 +773,87 @@ test('AA-13: ترحيل 20260928_074 — إضافي بعمود واحد بقيد
   assert.deepEqual(await shape(), EXPECTED_SHAPE)
   assert.deepEqual(await ds.query(`SELECT ${columns} FROM dbo.overtime_periods ORDER BY [id]`), before)
   assert.deepEqual((await ds.driver.createSchemaBuilder().log()).upQueries.map(q => q.query), [])
+})
+
+// B1.7: بصمات جهاز حقيقية (مفتاح الجهاز، من غير مستخدم) ليوم خلص
+async function devicePunches(f, key, clocks = ['08:00', '19:35']) {
+  const response = await fetch(`${baseUrl}/attendance/punches`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-device-key': key },
+    body: JSON.stringify({ punches: clocks.map(time => ({ employeeCode: f.emp.fingerprintCode, timestamp: new Date(`${f.day}T${time}:00`).toISOString(), deviceSn: 'AA-B17' })) }) })
+  assert.equal(response.status, 201, await response.text())
+}
+const routed = async f => {
+  const [entry] = await entriesOf(f)
+  assert.equal(entry.status, 'SUBMITTED', JSON.stringify(entry)); assert.equal(entry.amountSnapshot, null)
+  const pending = await repo('Request').findOneByOrFail({ id: entry.requestId })
+  assert.deepEqual([pending.typeCode, pending.status, pending.currentStep], ['OVERTIME_AUTO', 'UNDER_REVIEW', 1])
+  assert.deepEqual(await decisionsOf(pending.id), [])
+  assert.deepEqual((await eventsOf(entry.id)).map(event => event.eventType), ['DETECTED', 'SUBMITTED'])
+  return { entry, pending }
+}
+
+test('AA-14 (B1.7): «بصمة الجهاز بس» مفتوح — يوم بصمات الجهاز بيتعتمد تلقائي، ويوم فيه بصمة يدوية أو تصحيح بصمة بيروح لسلسلته؛ والمقفول زي النهارده', async () => {
+  assert.equal((await repo('RequestsConfig').findOneBy({ key: 'overtime.auto_approve.exclude_manual' }))?.value, 'false', 'مبذور مقفول')
+  const key = crypto.randomBytes(24).toString('hex')
+  await configDuring({ 'overtime.auto_approve.exclude_manual': 'true', 'overtime.max_hours_per_month': '60', 'attendance.device_key': key }, async () => {
+    // بصمات الجهاز: الاعتماد التلقائي زي الأول بالقيمة نفسها
+    const device = await fixture()
+    const window = await period(device.hr, { name: `تلقائي جهاز ${device.n}`, branchId: device.branch.id, autoApprove: true })
+    await devicePunches(device, key)
+    await reconcile()
+    const [auto] = await entriesOf(device)
+    assert.deepEqual(money(auto), EXPECTED_MONEY)
+    assert.deepEqual(toObject(auto.calculationSnapshot).approval.autoApproval, { periodIds: [window.id] })
+    assert.equal((await repo('Request').findOneByOrFail({ id: auto.requestId })).status, 'COMPLETED')
+    // بصمة يدوية في اليوم: سلسلته (مدير ثم رئيس قسم ثم موارد بشرية)، واعتمادها بنفس القيمة
+    const manual = await fixture()
+    await period(manual.hr, { name: `تلقائي يدوي ${manual.n}`, branchId: manual.branch.id, autoApprove: true })
+    await punches(manual)
+    await reconcile()
+    const { entry, pending } = await routed(manual)
+    for (const actor of [manual.manager, manual.head, manual.hr]) assert.equal((await decide(actor, pending.id)).status, 201)
+    assert.deepEqual(money(await repo('OvertimeEntry').findOneByOrFail({ id: entry.id })), EXPECTED_MONEY)
+    // تصحيح بصمة معتمد على يوم بصمات جهاز: سلسلته كمان
+    const corrected = await fixture()
+    await period(corrected.hr, { name: `تلقائي تصحيح ${corrected.n}`, branchId: corrected.branch.id, autoApprove: true })
+    await repo('AttendanceCorrection').save({ employeeId: corrected.emp.id, date: corrected.day, reason: 'تصحيح بصمة معتمد لاختبار B1.7',
+      correctedPunch: JSON.stringify({ in: '08:00', out: '19:35' }) })
+    await devicePunches(corrected, key)
+    await reconcile()
+    await routed(corrected)
+  })
+  // مقفول: البصمة اليدوية بتتعتمد تلقائي زي النهارده (AA-01)
+  const plain = await fixture()
+  await period(plain.hr, { name: `تلقائي مقفول ${plain.n}`, branchId: plain.branch.id, autoApprove: true })
+  await punches(plain)
+  const [entry] = await entriesOf(plain)
+  assert.deepEqual(money(entry), EXPECTED_MONEY)
+})
+
+test('AA-15 (B1.7): الضابط مفتوح والسقف الشهري صفر — فترة «اعتماد تلقائي» جديدة أو معدّلة مرفوضة برسالة، والإيقاف والقفل وشيل العلامة مسموحين؛ والسقف أكبر من صفر بيعدّي', async () => {
+  const f = await fixture()
+  const flagged = await period(f.hr, { name: `تلقائي قبل الضابط ${f.n}`, branchId: f.branch.id, autoApprove: true })
+  const plain = await period(f.hr, { name: `مفتوحة عادية ${f.n}`, branchId: f.branch.id })
+  await configDuring({ 'overtime.auto_approve.exclude_manual': 'true', 'overtime.max_hours_per_month': '0' }, async () => {
+    const CAP = /«اعتماد تلقائي» محتاج سقف إضافي شهري أكبر من صفر/
+    const created = await request(f.hr, 'POST', '/attendance/overtime-periods', { name: `تلقائي جديدة ${f.n}`, fromDate: workDate, toDate: workDate, effect: 'OPEN',
+      branchId: f.branch.id, autoApprove: true })
+    assert.equal(created.status, 400, JSON.stringify(created.body)); assert.match(created.body.message, CAP)
+    for (const body of [{ autoApprove: true }, { name: 'اسم جديد' }]) {
+      const id = body.autoApprove ? plain.id : flagged.id
+      const refused = await request(f.hr, 'PATCH', `/attendance/overtime-periods/${id}`, body)
+      assert.equal(refused.status, 400, JSON.stringify(refused.body)); assert.match(refused.body.message, CAP)
+    }
+    // الفترة العادية والإيقاف وشيل العلامة بيعدّوا
+    assert.equal((await request(f.hr, 'POST', '/attendance/overtime-periods', { name: `عادية جديدة ${f.n}`, fromDate: workDate, toDate: workDate, effect: 'OPEN',
+      branchId: f.branch.id })).status, 201)
+    const stopped = await request(f.hr, 'PATCH', `/attendance/overtime-periods/${flagged.id}`, { isActive: false })
+    assert.equal(stopped.status, 200, JSON.stringify(stopped.body))
+    const unflagged = await request(f.hr, 'PATCH', `/attendance/overtime-periods/${flagged.id}`, { autoApprove: false, isActive: true })
+    assert.equal(unflagged.status, 200, JSON.stringify(unflagged.body)); assert.equal(unflagged.body.autoApprove, false)
+  })
+  // السقف أكبر من صفر: نفس الإنشاء بيعدّي
+  await configDuring({ 'overtime.auto_approve.exclude_manual': 'true', 'overtime.max_hours_per_month': '40' }, async () => {
+    const saved = await period(f.hr, { name: `تلقائي بسقف ${f.n}`, branchId: f.branch.id, autoApprove: true })
+    assert.equal(saved.autoApprove, true)
+  })
 })

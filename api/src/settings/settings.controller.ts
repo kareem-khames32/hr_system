@@ -651,6 +651,11 @@ export class SettingsController {
     'payroll.exempt_unpaid_leave_deductible': ['true', 'false'],
     // B1.6 حارس الفترة
     'payroll.period_deduction_guard.enabled': ['true', 'false'],
+    // B1.7 ضوابط الشخص الواحد
+    'payroll.approval.block_recent_changers': ['true', 'false'],
+    'payroll.bank_change.secure_path_always': ['true', 'false'],
+    'overtime.auto_approve.exclude_manual': ['true', 'false'],
+    'employees.transfer_checks.enabled': ['true', 'false'],
     'attendance.flex.count_early_work_toward_required': ['true', 'false'],
     'attendance.flex.prorate_window_on_partial_leave': ['true', 'false'],
     'attendance.flex.window_supersedes_grace': ['true', 'false'],

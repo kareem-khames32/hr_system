@@ -381,6 +381,11 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'payroll.exempt_unpaid_leave_deductible', value: 'false' },
   // B1.6 حارس الفترة (R02): الإجازة بدون راتب والإيقاف والمرضية ماتعديش راتب الفترة — مقفول = زي ما كان
   { key: 'payroll.period_deduction_guard.enabled', value: 'false' },
+  // B1.7 ضوابط الشخص الواحد (R10، R11، D08) — مقفولة لحد ما المالك يرد على Q-002 وQ-008 وQ-009
+  { key: 'payroll.approval.block_recent_changers', value: 'false' },
+  { key: 'payroll.bank_change.secure_path_always', value: 'false' },
+  { key: 'overtime.auto_approve.exclude_manual', value: 'false' },
+  { key: 'employees.transfer_checks.enabled', value: 'false' },
   { key: 'payroll.exemption_reason_min_length', value: '20' },
   // C2 / الخطوة 25 (DD-03/05): الخصومات المصنفة — أقل طول للسبب، نافذة كشف التكرار بالساعات،
   // إنشاء المدير الهيكلي (مباشر/فريق/قسم/فرع) بحسب نطاق النوع، وحد الإنشاء الجماعي في الدفعة.

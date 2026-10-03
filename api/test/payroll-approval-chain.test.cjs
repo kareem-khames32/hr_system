@@ -121,10 +121,12 @@ test('CHAIN-07b: حل سلسلة المسير — الخاصة باسمه الد
 
 test('CHAIN-08: خطافات المسير الكبير قليلة ومحددة — الاعتماد القديم يتحقق من السلسلة، وآخر خطوة تنادي approveLocked نفسها، والقسيمة على APPROVED/PAID كما هي', () => {
   const service = read('src/payroll/payroll.service.ts')
-  const approve = service.slice(service.indexOf('  async approve(user: JwtPayload, runId: number) {'), service.indexOf('  async approveLocked('))
+  // B1.7: approve خد باراميتر اختياري (سبب تعدّي مدير النظام) بيتبعت لـapproveLocked — نفس النداء
+  const approve = service.slice(service.indexOf('  async approve(user: JwtPayload, runId: number'), service.indexOf('  async approveLocked('))
+  assert.ok(approve.length > 0)
   for (const text of ['await this.lockRun(em, runId)', 'await this.assertRunAccess(user, run, em)', "if (run.status !== 'CALCULATED')", 'await assertPayrollRunHasNoChain(em, run)',
     // B0.1s-2: نفس النداء، والرد من غير لقطة السياسة وتقرير التكافؤ
-    'return this.runResponse(user, await this.approveLocked(em, user, run, null))']) assert.ok(approve.includes(text), text)
+    'return this.runResponse(user, await this.approveLocked(em, user, run, null, options))']) assert.ok(approve.includes(text), text)
   assert.ok(approve.indexOf('assertPayrollRunHasNoChain') < approve.indexOf('approveLocked'), 'فحص السلسلة قبل الاعتماد')
   const locked = service.slice(service.indexOf('  async approveLocked('), service.indexOf('  // ===== الصرف: يقفل الأوفرتايم'))
   for (const text of ['payrollSelfApprovalIssue({ calculatedBy, approverId: user.sub, selfApprovalAllowed })', 'await claimPayrollPeriod(em, run, employeeIds)',

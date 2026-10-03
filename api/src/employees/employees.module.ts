@@ -11,6 +11,7 @@ import { EmployeeStatusHistory } from '../requests/entities/employment.entities'
 import { LeaveBalance } from '../requests/entities/leave.entities'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { Employee } from './employee.entity'
+import { EmployeePaymentChange } from './employee-payment-change.entity'
 import { EmployeeSuspension } from './employee-suspension.entity'
 import {
   EmployeeCertification,
@@ -29,6 +30,8 @@ import { EmployeeExportService } from './employee-export.service'
   imports: [
     TypeOrmModule.forFeature([
       Employee,
+      // B1.7: سجل تغييرات الصرف (ترحيل 081)
+      EmployeePaymentChange,
       User,
       Branch,
       Department,

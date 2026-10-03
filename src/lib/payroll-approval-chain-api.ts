@@ -80,7 +80,9 @@ export const savePayrollSeriesChain = (seriesName: string, steps: PayrollChainSt
   send<PayrollChainConfig>('/payroll/approval-chain/config/series', 'PUT', { seriesName, steps, expectedRevision })
 
 export const fetchPayrollRunChain = (runId: number) => apiFetch<PayrollRunChain>(`/payroll/runs/${runId}/approval-chain`)
-export const approvePayrollChainStep = (runId: number) => send<PayrollChainActionResult>(`/payroll/runs/${runId}/approval-chain/approve`, 'POST')
+/** overrideReason: سبب تعدّي مدير النظام لضابط «اللي غيّر مايعتمدش لوحده» (B1.7) */
+export const approvePayrollChainStep = (runId: number, overrideReason?: string) =>
+  send<PayrollChainActionResult>(`/payroll/runs/${runId}/approval-chain/approve`, 'POST', overrideReason ? { overrideReason } : undefined)
 export const rejectPayrollChainStep = (runId: number, reason: string) =>
   send<PayrollChainActionResult>(`/payroll/runs/${runId}/approval-chain/reject`, 'POST', { reason })
 export const fetchMyPayrollApprovals = () => apiFetch<PayrollPendingApproval[]>('/payroll/approval-chain/my-pending')

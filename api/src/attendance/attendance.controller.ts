@@ -510,7 +510,9 @@ export class AttendanceController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.manage')
   @Post('overtime-periods')
-  createOvertimePeriod(@Body() dto: OvertimePeriodDto, @CurrentUser() user: JwtPayload) {
+  async createOvertimePeriod(@Body() dto: OvertimePeriodDto, @CurrentUser() user: JwtPayload) {
+    // B1.7 (Q-008، إعداد مقفول): الفترة التلقائية محتاجة سقف شهري
+    await this.service.assertOvertimeAutoApproveCap(dto.autoApprove === true && (dto as { isActive?: unknown }).isActive !== false && dto.effect !== 'CLOSED')
     return this.service.createOvertimePeriod(dto, user)
   }
 
@@ -518,11 +520,12 @@ export class AttendanceController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.manage')
   @Patch('overtime-periods/:id')
-  updateOvertimePeriod(
+  async updateOvertimePeriod(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: Record<string, any>,
     @CurrentUser() user: JwtPayload
   ) {
+    await this.service.assertOvertimeAutoApproveCapForUpdate(id, dto)
     return this.service.updateOvertimePeriod(id, dto, user)
   }
 

@@ -10,6 +10,7 @@ import {
   cancelPayroll,
   ApiError,
   can,
+  getCurrentUser,
   fetchPayMethodReport,
   type ApiPayMethodReportRow,
   fetchPayrollRunAccrual,
@@ -58,6 +59,8 @@ import { defaultPayRecord, PayrollPayRecordForm, PayrollPayRecordSummary, payRec
 // قرار المالك (22 سبتمبر): سلسلة اعتماد المسير — مين اعتمد ومين عليه الدور، و«اعتمد خطوتي» / «ارفض بسبب» لصاحب الخطوة
 import { PayrollApprovalChainStrip } from '@/components/payroll/PayrollApprovalChainStrip'
 import { approvePayrollChainStep, fetchPayrollRunChain, rejectPayrollChainStep, type PayrollRunChain } from '@/lib/payroll-approval-chain-api'
+// B1.7: اتغيّر إيه من آخر مسير
+import { PayrollRunChangesPanel } from '@/components/payroll/PayrollRunChangesPanel'
 import {
   Search,
   Download,
@@ -223,6 +226,8 @@ export default function PayrollPage() {
   const [removeDeductionFor, setRemoveDeductionFor] = useState<{ employeeId: number; name: string; branchId: number | null; lines: RunDeductionLine[] } | null>(null)
   // «نقل لمسير آخر» لموظف من صف المسير — عضوية دائمة من شهر المسير ورايح
   const [moveMemberFor, setMoveMemberFor] = useState<{ employeeId: number; name: string } | null>(null)
+  // B1.7: سبب تعدّي مدير النظام (null = مفيش رفض بالضابط)
+  const [changerOverride, setChangerOverride] = useState<string | null>(null)
   // «مكافأة» لموظف من صف المسير — نافذة اقتراح لموظف واحد بشهر المسير جاهز
   const [bonusFor, setBonusFor] = useState<{ employeeId: number; name: string } | null>(null)
   // طلب المالك 19 سبتمبر: بنود كل موظف (استحقاقات واستقطاعات بأسمائها) للجدول والتصدير
@@ -388,16 +393,19 @@ export default function PayrollPage() {
     }
   }
 
-  const handleApprove = async () => {
+  const handleApprove = async (overrideReason?: string) => {
     if (!runDetail || runDetail.status !== 'CALCULATED' || actionBusy || detailLoading || runBlocked || approvalBlocked || !can('payroll.approve')) return
     setActionBusy(true)
     setError('')
     try {
-      await approvePayroll(runDetail.id)
+      await approvePayroll(runDetail.id, overrideReason)
+      setChangerOverride(null)
       await refreshRuns(runDetail.id)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'تعذر اعتماد المسير')
       setActionConflicts(errorConflicts(e))
+      // B1.7: مدير النظام يقدر يعدّي ضابط «اللي غيّر مايعتمدش لوحده» بسبب مكتوب
+      if (e instanceof ApiError && e.details?.code === 'PAYRUN-RECENT-CHANGER' && getCurrentUser()?.role === 'super_admin') setChangerOverride(changerOverride ?? '')
     } finally {
       setActionBusy(false)
     }
@@ -414,11 +422,17 @@ export default function PayrollPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : fallback)
       setActionConflicts(errorConflicts(e))
+      // B1.7: نفس تعدّي مدير النظام في الخطوة الأخيرة من السلسلة
+      if (e instanceof ApiError && e.details?.code === 'PAYRUN-RECENT-CHANGER' && getCurrentUser()?.role === 'super_admin') setChangerOverride(changerOverride ?? '')
     } finally {
       setActionBusy(false)
     }
   }
-  const handleChainApprove = () => handleChainDecision(() => approvePayrollChainStep(runDetail!.id), 'تعذر اعتماد الخطوة')
+  // السبب نص بس (الشريط بينادي المعالج من غير سبب، وأي قيمة تانية زي حدث الضغط بتتجاهل)
+  const handleChainApprove = (overrideReason?: unknown) => handleChainDecision(async () => {
+    await approvePayrollChainStep(runDetail!.id, typeof overrideReason === 'string' ? overrideReason : undefined)
+    setChangerOverride(null)
+  }, 'تعذر اعتماد الخطوة')
   const handleChainReject = (reason: string) => handleChainDecision(() => rejectPayrollChainStep(runDetail!.id, reason), 'تعذر رفض المسير')
 
   const handlePay = async () => {
@@ -947,7 +961,7 @@ export default function PayrollPage() {
                 )}
                 {runDetail.status === 'CALCULATED' && can('payroll.approve') && !chainGoverned && (
                   <button
-                    onClick={handleApprove}
+                    onClick={() => handleApprove()}
                     disabled={actionBusy || detailLoading || runBlocked || approvalBlocked}
                     title={selfApprovalBlocked ? SELF_APPROVAL_MESSAGE : negativeNetCount > 0 ? 'صافي سالب يمنع الاعتماد' : snapshotMissing ? SNAPSHOT_MISSING_MESSAGE : undefined}
                     className="btn-primary flex items-center gap-2 text-sm disabled:opacity-50"
@@ -1002,6 +1016,14 @@ export default function PayrollPage() {
               onClick={() => { setError(''); loadDetail(runDetail.id) }} disabled={actionBusy || detailLoading}
               className="btn-secondary text-sm mt-2 mb-3 disabled:opacity-50">تحديث حالة التعارضات</button>}
             {snapshotMissing && can('payroll.approve') && <p role="alert" className="p-3 mb-3 bg-amber-50 text-amber-900 rounded-xl text-sm">{SNAPSHOT_MISSING_MESSAGE}</p>}
+            {/* B1.7: تعدّي مدير النظام بسبب مكتوب بيتسجل في حدث الاعتماد */}
+            {changerOverride !== null && runDetail.status === 'CALCULATED' && <div className="p-3 mb-3 bg-amber-50 rounded-xl text-sm space-y-2">
+              <label htmlFor="changer-override" className="block font-medium text-amber-900">سبب اعتماد المسير رغم إنك غيّرت بيانات موظفين فيه (بيتسجل)</label>
+              <textarea id="changer-override" className="input w-full" rows={2} value={changerOverride} onChange={(event) => setChangerOverride(event.target.value)} />
+              <button type="button" className="btn-primary text-sm disabled:opacity-50" disabled={actionBusy || changerOverride.trim().length < 10} onClick={() => chainGoverned ? handleChainApprove(changerOverride.trim()) : handleApprove(changerOverride.trim())}>اعتمد بالسبب</button>
+            </div>}
+            {/* B1.7 (R10): اتغيّر إيه من آخر مسير — قبل الاعتماد */}
+            {can('payroll.view') && ['CALCULATED', 'APPROVED'].includes(runDetail.status) && <PayrollRunChangesPanel runId={runDetail.id} />}
             {runDetail.status === 'CALCULATED' && selfApprovalBlocked && can('payroll.approve') && !chainGoverned && <p role="alert" className="p-3 mb-3 bg-amber-50 text-amber-900 rounded-xl text-sm">
               {SELF_APPROVAL_MESSAGE}</p>}
             {negativeNetCount > 0 && ['CALCULATED', 'APPROVED'].includes(runDetail.status) && <div role="alert" className="p-3 mb-3 bg-red-50 text-red-700 rounded-xl text-sm space-y-2">

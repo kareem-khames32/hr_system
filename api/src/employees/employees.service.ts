@@ -55,6 +55,11 @@ import { addDays, currentSuspension, displayEmployeeStatus, overlappingLeave, ov
   SUSPENSION_CLOSED_PAYROLL_MESSAGE, SUSPENSION_LEAVE_OVERLAP_MESSAGE, suspensionEndPlan, suspensionFreedRange, suspensionInputIssue,
   upcomingSuspension } from './employee-suspension-rules'
 import { EmployeeSuspension } from './employee-suspension.entity'
+// B1.7: سجل تغييرات الصرف وضوابط الشخص الواحد (مقفولة افتراضيًا)
+import { recordEmployeePaymentChanges } from './employee-payment-changes'
+import { BANK_SECURE_FIELDS, onePersonControlEnabled } from '../payroll/one-person-controls'
+import { CustodyAssignment } from '../requests/entities/custody.entities'
+import { openCustodyStatuses } from '../requests/employment-destinations'
 import { readEmployeeSuspensions, readOpenSuspensions, suspensionTableReady, suspensionView } from './employee-suspensions'
 import type { CreateEmployeeSuspensionDto, EndEmployeeSuspensionDto } from './employees.dto'
 
@@ -485,6 +490,7 @@ export class EmployeesService {
         dto.photoFileId ? `file:${dto.photoFileId}` : undefined], actorId)
       await this.saveContractDocument(result.id, { contractFileRef, contractNumber: dto.contractNumber, contractStart: dto.contractStart, contractEnd: dto.contractEnd }, em)
       await this.saveDocuments(result.id, documentRefs, em)
+      await recordEmployeePaymentChanges(em, { employeeId: result.id, before: null, after: result, actorUserId: actorId, source: 'CREATE' })
       if (gosiFirstRegisteredAt) await saveGosiFirstRegistered(em, result.id, gosiFirstRegisteredAt)
       // الخطوة 13: أجر التعيين يُوثَّق «يسري من راتب شهر» في المعاملة نفسها؛ بدونه يُستبعد الموظف الجديد من أول مسير
       // (NO_SALARY_DEFINED) حتى توثيق منفصل. فشل التوثيق (عملة غير مدعومة، شهر خارج المدى) يرجّع الإنشاء كله.
@@ -658,7 +664,7 @@ export class EmployeesService {
 
   // audit (اختياري — التحديث الجماعي من ملف): سبب سجل التغييرات وحقول إضافية تتسجل في نفس المعاملة
   async update(id: number, dto: UpdateEmployeeDto, branchScope: BranchScope, actorId?: number,
-    audit?: { reason: string; fields?: ReadonlyArray<keyof Employee> }) {
+    audit?: { reason: string; fields?: ReadonlyArray<keyof Employee>; source?: 'PROFILE' | 'EXCEL' }) {
     const emp = await this.findOne(id, branchScope)
     // العملة تبع الفرع (قرار المالك 30 سبتمبر): العملة المبعوتة بتتجاهل. التعديل العادي مابيعيدش كتابة عملة الملف (جزء من الأجر
     // الموثق)، والنقل لفرع عملته مختلفة بيغيّرها تحت، وتغيير الأجر بيتسجل بعملة الفرع
@@ -711,6 +717,11 @@ export class EmployeesService {
         bankName: pick('bankName'), iban: pick('iban') }, emp)
       if (payIssue) throw new BadRequestException(payIssue)
       if ((pick('payMethod') ?? 'transfer') !== 'mixed' && (emp.bankTransferAmount != null || dto.bankTransferAmount != null)) dto.bankTransferAmount = null
+    }
+    // B1.7 (D08 / Q-002 الخيار ج، إعداد مقفول): تغيير الآيبان أو البنك بطلب «تغيير حساب بنكي» بس (HR ثم المالية) — التعديل وExcel مايغيّروهمش
+    if (BANK_SECURE_FIELDS.some(field => dto[field] !== undefined && String(dto[field] ?? '').trim() !== String(emp[field] ?? '').trim())
+      && await onePersonControlEnabled(this.employees.manager, 'bankSecurePathAlways')) {
+      throw new BadRequestException('تغيير الآيبان أو البنك بقى بطلب «تغيير حساب بنكي» بس (المسار الأمني: الموارد البشرية ثم المالية) — اعمل الطلب للموظف')
     }
     this.assertContractDates({
       contractStart: dto.contractStart !== undefined ? dto.contractStart : emp.contractStart,
@@ -811,6 +822,15 @@ export class EmployeesService {
       }
       // نقل لفرع تاني والجدول الساري (أو المؤرخ بعد النقل) خاص بفرع غيره → يترفض لحد ما يتختار جدول للفرع الجديد أو لكل الشركة
       if (branchChanged) await assertEmployeeSchedulesFitBranch(em, fresh, dto.branchId!, calendarChange?.effectiveFrom ?? attendanceRuleToday())
+      // B1.7 (Q-009 الخيار ج، إعداد مقفول): النقل لفرع تاني من التعديل أو Excel بنفس فحوص طلب النقل — العهدة المفتوحة والمدير المباشر.
+      // مين يقدر ينقل زي ما هو (نطاق الفروع)
+      if (branchChanged && await onePersonControlEnabled(em, 'transferChecks')) {
+        const custody = await em.getRepository(CustodyAssignment).count({ where: { employeeId: id, status: In(openCustodyStatuses) } })
+        if (custody) throw new BadRequestException(`على الموظف ${custody} عهدة مفتوحة — لازم ترجع أو تتنقل قبل نقله لفرع تاني`)
+        const managerId = dto.managerEmployeeId !== undefined ? dto.managerEmployeeId : fresh.managerEmployeeId
+        const manager = managerId ? await em.getRepository(Employee).findOne({ where: { id: managerId }, select: { id: true, branchId: true } }) : null
+        if (manager && manager.branchId !== dto.branchId) throw new BadRequestException('المدير المباشر في فرع تاني — اختار مدير من الفرع الجديد أو شيل المدير قبل النقل')
+      }
       // العملة تبع الفرع (قرار المالك 30 سبتمبر): تغيير الأجر بيتسجل دايمًا بعملة فرع الموظف بعد الحفظ (العملة المبعوتة بتتجاهل)، والنقل
       // لفرع عملته غير عملة الفرع القديم بيغيّر عملة الملف (تحت، بعد تغيير الأجر لو معاه). النقل بين فرعين بنفس العملة مابيلمسهاش
       let branchCurrencyChange: string | null = null
@@ -849,6 +869,8 @@ export class EmployeesService {
           changedByUserId: actorId, reason: audit?.reason ?? 'تعديل من ملف الموظف' })
       }
       const result = await em.findOneByOrFail(Employee, { id })
+      // B1.7: سجل تغييرات الصرف (ترحيل 081) — المصدر الملف أو Excel، واللي غيّر
+      await recordEmployeePaymentChanges(em, { employeeId: id, before: beforeChange, after: result, actorUserId: actorId, source: audit?.source ?? 'PROFILE' })
       await linkEmployeeFiles(em, id, [contractFileRef, ...(documentRefs ?? []).map(r => r.fileRef),
         dto.photoFileId ? `file:${dto.photoFileId}` : undefined], actorId)
       await this.saveContractDocument(id, {

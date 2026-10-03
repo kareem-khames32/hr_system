@@ -245,7 +245,7 @@ export class EmployeeBulkUpdateService {
     const messages = flattenValidation(await validate(instance, { whitelist: true, forbidNonWhitelisted: true }))
     if (messages.length) throw new BadRequestException(messages)
     await this.employees.update(id, instance, scope, user.sub, {
-      reason: context.auditReason, fields: Object.keys(row.update) as Array<keyof Employee>,
+      reason: context.auditReason, fields: Object.keys(row.update) as Array<keyof Employee>, source: 'EXCEL',
     })
   }
 

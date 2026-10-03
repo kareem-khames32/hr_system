@@ -9,7 +9,7 @@ import {
   NotFoundException,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Between, EntityManager, In, LessThanOrEqual, MoreThanOrEqual, Not, Repository } from 'typeorm'
+import { Between, EntityManager, In, IsNull, LessThanOrEqual, MoreThanOrEqual, Not, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, inBranchScope, isEmptyBranchScope, scopeWord, userHasPerm } from '../auth/guards'
 import type { BranchScope } from '../auth/guards'
@@ -116,6 +116,10 @@ import { PayrollItemDisbursement } from './payroll-disbursement.entities'
 // B1.6: قايمة الصافي السالب بالاسم والسبب، واعتماد واحد بس شغال للمسير في نفس اللحظة
 import { explainPayrollNegativeNet, payrollNegativeNetMessage, type PayrollNegativeNetRow } from './payroll-negative-net'
 import { claimPayrollApproval } from './payroll-approval-lock'
+// B1.7: اتغيّر إيه من آخر مسير، وضابط الشخص الواحد في الاعتماد (مقفول افتراضيًا)
+import { collectPayrollRunMemberChanges, payrollItemMonthlyGross, payrollRunChangeItems, payrollRunLeavers } from './payroll-run-changes'
+import { onePersonControlEnabled } from './one-person-controls'
+import { PayrollRunApproval } from './payroll-approval-chain.entities'
 
 // B1.5: مكان «بدل السكن» في مكونات الراتب الشهرية (أساس التأمينات السعودي «الأساسي + السكن» لما الإعداد مفتوح)
 const HOUSING_COMPONENT = MONTHLY_SALARY_COMPONENTS.findIndex(component => component.code === 'HOUSING')
@@ -1386,7 +1390,7 @@ export class PayrollService {
   // ===== الاعتماد =====
   // الاعتماد بخطوة واحدة (السلوك القائم): حامل payroll.approve غير من احتسب. مسير تحكمه سلسلة اعتماد لا يُعتمد من هنا —
   // كل معتمد بيعتمد خطوته (payroll-approval-chain.service) وآخر خطوة بتنادي approveLocked نفسها.
-  async approve(user: JwtPayload, runId: number) {
+  async approve(user: JwtPayload, runId: number, options: { overrideReason?: string | null } = {}) {
     return this.runs.manager.transaction(async em => {
       // B1.6 (R15): طلب اعتماد تاني لنفس المسير وهو شغال بيترفض على طول
       await claimPayrollApproval(em, runId)
@@ -1400,15 +1404,66 @@ export class PayrollService {
       // صلاحية الاعتماد وحدها لا تتخطى سلسلة الاعتماد؛ بلا سلسلة = لا مانع
       await assertPayrollRunHasNoChain(em, run)
       // الرد من غير لقطة السياسة وتقرير التكافؤ (فيهم أرقام كل موظف): صلاحية الاعتماد لوحدها مش صلاحية عرض الرواتب
-      return this.runResponse(user, await this.approveLocked(em, user, run, null))
+      return this.runResponse(user, await this.approveLocked(em, user, run, null, options))
     })
+  }
+
+  /**
+   * B1.7 (R10): «اتغيّر إيه من آخر مسير» لقارئ الرواتب بنطاق المسير — لكل عضو: الراتب الشهري (آخر مسير ← ده)، وتغييرات الراتب
+   * والحساب البنكي وطريقة الصرف ومين وإمتى من بعد آخر مسير معتمد ليه، والجداد، والخارجين من آخر مسير في نفس السلسلة. قراءة بس
+   */
+  async runChanges(user: JwtPayload, runId: number) {
+    return this.readRun(runId, async (em, run) => {
+      await this.assertRunAccess(user, run, em)
+      const members = await em.getRepository(PayrollRunMember).find({ where: { runId }, select: { id: true, employeeId: true, membershipStatus: true, snapshot: true } })
+      const included = members.filter(member => member.membershipStatus === 'INCLUDED' || member.membershipStatus == null)
+      const items = await em.getRepository(PayrollItem).find({ where: { runId }, select: { id: true, runId: true, employeeId: true, breakdown: true, payMethod: true } })
+      const ids = [...new Set([...included.map(member => member.employeeId), ...items.map(item => item.employeeId)])]
+      const changes = await collectPayrollRunMemberChanges(em, run, ids)
+      const previousItems = await payrollRunChangeItems(em, [...new Set([...changes.values()].map(entry => entry.previousRunId).filter((id): id is number => id != null))], ids)
+      const names = await this.userNames(em, [...changes.values()].flatMap(entry => entry.changes.map(change => change.changedByUserId)))
+      const identity = new Map(members.map(member => [member.employeeId, member.snapshot]))
+      const rows = ids.map(employeeId => {
+        const entry = changes.get(employeeId)!, snapshot = identity.get(employeeId)
+        const item = items.find(row => row.employeeId === employeeId)
+        const previous = entry.previousRunId ? previousItems.find(row => row.runId === entry.previousRunId && row.employeeId === employeeId) : undefined
+        const previousGross = payrollItemMonthlyGross(previous), currentGross = payrollItemMonthlyGross(item)
+        return { employeeId, employeeCode: snapshot?.employeeCode ?? null, fullName: snapshot?.fullName ?? null, isNew: entry.previousPeriod === null,
+          previousPeriod: entry.previousPeriod,
+          salary: previousGross !== null && currentGross !== null && Math.round(previousGross * 100) !== Math.round(currentGross * 100) ? { previous: previousGross, current: currentGross } : null,
+          payMethod: previous && item && previous.payMethod !== item.payMethod ? { previous: previous.payMethod, current: item.payMethod } : null,
+          changes: entry.changes.map(change => ({ ...change, changedByName: change.changedByUserId != null ? names.get(change.changedByUserId) ?? null : null })) }
+      }).filter(row => row.isNew || row.salary || row.payMethod || row.changes.length)
+      const { previousPeriod, leavers } = await payrollRunLeavers(em, run, new Set(ids), branchScopeOf(user))
+      return { runId: run.id, period: run.period, previousSeriesPeriod: previousPeriod, rows, leavers,
+        counts: { changed: rows.filter(row => !row.isNew).length, new: rows.filter(row => row.isNew).length, leavers: leavers.length } }
+    })
+  }
+
+  /**
+   * B1.7 (R10 / Q-002 الخيار ج، إعداد مقفول): اللي غيّر راتب أو حساب بنكي أو طريقة صرف لموظف في المسير (من بعد آخر مسير معتمد ليه)
+   * مايعتمدهوش لوحده: في السلسلة لازم حد تاني يكون اعتمد خطوة على نفس نسخة الحساب، والاعتماد بخطوة واحدة بيترفض — إلا مدير النظام بسبب
+   * مكتوب بيتسجل في حدث الاعتماد. المقفول = null من غير أي قراية (زي النهارده)
+   */
+  private async assertNotLoneChanger(em: EntityManager, user: JwtPayload, run: PayrollRun, chain: Record<string, unknown> | null, overrideReason?: string | null) {
+    if (!(await onePersonControlEnabled(em, 'blockRecentChangers'))) return null
+    const items = await em.getRepository(PayrollItem).find({ where: { runId: run.id }, select: { id: true, employeeId: true } })
+    const changes = await collectPayrollRunMemberChanges(em, run, items.map(item => item.employeeId))
+    const mine = [...changes.values()].filter(entry => entry.changes.some(change => change.changedByUserId === user.sub)).map(entry => entry.employeeId)
+    if (!mine.length) return null
+    if (chain && await em.getRepository(PayrollRunApproval).count({ where: { runId: run.id, snapshotVersion: run.snapshotVersion, decision: 'APPROVED',
+      voidedAt: IsNull(), actorUserId: Not(user.sub) } }) > 0) return { changedEmployeeIds: mine, secondApprover: true, overrideReason: null }
+    const reason = typeof overrideReason === 'string' ? overrideReason.trim() : ''
+    if (user.role === 'super_admin' && reason.length >= 10) return { changedEmployeeIds: mine, secondApprover: false, overrideReason: reason.slice(0, 500) }
+    throw new ForbiddenException({ code: 'PAYRUN-RECENT-CHANGER', employeeIds: mine,
+      message: `إنت غيّرت راتب أو حساب بنكي أو طريقة صرف لـ${mine.length} موظف في المسير ده من بعد آخر مسير ليهم، فماينفعش تعتمده لوحدك. ضيف معتمد تاني في سلسلة المسير أو خلّي حد تاني يعتمد${user.role === 'super_admin' ? '، أو اكتب سبب التعدّي (10 حروف على الأقل) وهيتسجل' : ''}` })
   }
 
   /**
    * الاعتماد النهائي تحت قفل المسير وداخل معاملة المنادي: فصل المهام ثم كل فحوص الاعتماد وحجوزاته ثم APPROVED — لحظة ظهور القسيمة للموظف.
    * ينادَى من الاعتماد بخطوة واحدة (approve) ومن آخر خطوة في سلسلة الاعتماد (chain = بيانات السلسلة لحدث الاعتماد)؛ المنادي هو من قفل وفحص الحالة والنطاق.
    */
-  async approveLocked(em: EntityManager, user: JwtPayload, run: PayrollRun, chain: Record<string, unknown> | null) {
+  async approveLocked(em: EntityManager, user: JwtPayload, run: PayrollRun, chain: Record<string, unknown> | null, options: { overrideReason?: string | null } = {}) {
     const runs = em.getRepository(PayrollRun)
     const runId = run.id
     {
@@ -1428,6 +1483,8 @@ export class PayrollService {
           lineIds: ready.pairs.map(pair => pair.line.id), calculatedBy, smallCompanyException: calculatedBy === user.sub, selfApprovalSetting: selfApprovalAllowed, approvalChain: chain })
         return run
       }
+      // B1.7: ضابط الشخص الواحد (مقفول افتراضيًا) — قبل أي حجز
+      const onePerson = await this.assertNotLoneChanger(em, user, run, chain, options.overrideReason ?? null)
       // الخطوة 19: لا اعتماد بلا لقطة سياسة سليمة (بصمتها ومحتواها وشهرها)؛ اللقطة المعدلة خارج الشاشة ترفض بـPAYRUN-POLICY-SNAPSHOT-INVALID.
       const policySnapshot = parsePayrollRunPolicySnapshot(run)
       if (!policySnapshot) {
@@ -1478,7 +1535,9 @@ export class PayrollService {
         // الخطوة 22 (B5): من احتسب، واستخدام رخصة الشركة الصغيرة (المعتمِد هو المحتسِب) إن وقع
         calculatedBy, smallCompanyException: calculatedBy === user.sub, selfApprovalSetting: selfApprovalAllowed,
         // سلسلة الاعتماد: الاعتماد النهائي جه من آخر خطوة في السلسلة دي (null = اعتماد بخطوة واحدة)
-        approvalChain: chain })
+        approvalChain: chain,
+        // B1.7: المعتمد غيّر بيانات موظفين في المسير — مين، ومعتمد تاني في السلسلة ولا تعدّي مدير النظام بسببه (الضابط مقفول أو مفيش = من غير المفتاح)
+        ...(onePerson ? { onePersonControl: onePerson } : {}) })
       return run
     }
   }

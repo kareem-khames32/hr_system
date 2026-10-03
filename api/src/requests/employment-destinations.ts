@@ -17,7 +17,7 @@ import { CustodyAssignment } from './entities/custody.entities'
 import { Leave } from './entities/leave.entities'
 import { DATA_PLACEHOLDER_REJECTED, isDataPlaceholder } from '../common/data-placeholders'
 
-const openCustodyStatuses = ['PENDING_ACK', 'PENDING_MANAGER_CONFIRM', 'ACTIVE', 'RETURN_REQUESTED']
+export const openCustodyStatuses = ['PENDING_ACK', 'PENDING_MANAGER_CONFIRM', 'ACTIVE', 'RETURN_REQUESTED']
 export const EMPLOYMENT_PAYLOAD_KEYS: Record<string, string[]> = {
   employee_update: ['toTitle', 'effectiveDate'],
   employee_update_promotions: ['toTitle', 'effectiveDate', 'employeeId'],

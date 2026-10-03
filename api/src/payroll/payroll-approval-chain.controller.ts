@@ -18,6 +18,10 @@ class PayrollSeriesChainSaveDto extends PayrollChainSaveDto {
 class PayrollChainRejectDto {
   @Allow() reason?: unknown
 }
+// B1.7: سبب تعدّي ضابط «اللي غيّر مايعتمدش لوحده» في الخطوة الأخيرة — لمدير النظام بس (الخدمة بتتحقق)
+class PayrollChainApproveDto {
+  @IsOptional() @IsString() @MaxLength(500) overrideReason?: string
+}
 class PayrollApproverSearchDto {
   @IsOptional() @IsString() @MaxLength(100) search?: string
 }
@@ -76,8 +80,8 @@ export class PayrollApprovalChainController {
   }
 
   @Post('runs/:id/approval-chain/approve')
-  approveStep(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number) {
-    return this.service.approveStep(user, id)
+  approveStep(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: PayrollChainApproveDto = {}) {
+    return this.service.approveStep(user, id, { overrideReason: dto?.overrideReason ?? null })
   }
 
   @Post('runs/:id/approval-chain/reject')

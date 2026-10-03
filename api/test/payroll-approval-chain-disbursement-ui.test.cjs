@@ -87,8 +87,10 @@ test('CHAIN-UI-04: محرر السلسلة — الخطوات بالترتيب �
 test('CHAIN-UI-05: شاشة المسير — الشريط محمّل مع المسير، وزرار الاعتماد بخطوة واحدة مابيظهرش لمسير تحكمه سلسلة، وباقي الشاشة كما هي', () => {
   const page = read('src/app/payroll/page.tsx')
   for (const text of ['fetchPayrollRunChain(id)', 'const chainGoverned = chain?.governed === true', "runDetail.status === 'CALCULATED' && can('payroll.approve') && !chainGoverned && (",
-    '<PayrollApprovalChainStrip', 'onApprove={handleChainApprove} onReject={handleChainReject}', 'approvePayrollChainStep(runDetail!.id)', 'rejectPayrollChainStep(runDetail!.id, reason)',
-    "can('payroll.chain_manage') && <Link href=\"/payroll/approval-chain\"", '`/payroll/disbursement?runId=${runDetail.id}`', '|| approvalBlocked', 'await approvePayroll(runDetail.id)']) assert.ok(page.includes(text), text)
+    '<PayrollApprovalChainStrip', 'onApprove={handleChainApprove} onReject={handleChainReject}', 'approvePayrollChainStep(runDetail!.id, ', 'rejectPayrollChainStep(runDetail!.id, reason)',
+    "can('payroll.chain_manage') && <Link href=\"/payroll/approval-chain\"", '`/payroll/disbursement?runId=${runDetail.id}`', '|| approvalBlocked', 'await approvePayroll(runDetail.id, overrideReason)']) assert.ok(page.includes(text), text)
+  // B1.7: سبب تعدّي مدير النظام (اختياري) في الاعتماد بخطوة واحدة وفي «اعتمد خطوتي» — نص بس
+  assert.ok(page.includes("typeof overrideReason === 'string' ? overrideReason : undefined"))
   // فشل تحميل السلسلة لا يوقف شاشة المسير
   assert.ok(page.includes('Promise.allSettled([fetchPayMethodReport(id), fetchPayrollRunLines(id), fetchPayrollRunChain(id)])'))
   const approvals = read('src/app/payroll/my-approvals/page.tsx')

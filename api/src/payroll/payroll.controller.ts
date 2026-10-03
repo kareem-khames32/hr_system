@@ -168,6 +168,11 @@ class PayrollRunCalculateDraftDto {
   @IsOptional() @IsBoolean() refreshInstallmentPolicy?: boolean
 }
 
+// B1.7: سبب تعدّي ضابط «اللي غيّر مايعتمدش لوحده» — لمدير النظام بس (الخدمة بتتحقق)
+class PayrollApproveDto {
+  @IsOptional() @IsString() @MaxLength(500) overrideReason?: string
+}
+
 class PayrollRunRecalculateDto extends PayrollRunCalculateDraftDto {
   // السبب يُتحقق في الخدمة (PAYRUN-REASON-001 برسالة عربية)، لا بنص class-validator الإنجليزي.
   @IsOptional() @Allow() reason?: unknown
@@ -398,9 +403,17 @@ export class PayrollController {
   @Post('runs/:id/approve')
   approve(
     @CurrentUser() user: JwtPayload,
-    @Param('id', ParseIntPipe) id: number
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: PayrollApproveDto = {},
   ) {
-    return this.service.approve(user, id)
+    return this.service.approve(user, id, { overrideReason: dto?.overrideReason ?? null })
+  }
+
+  // B1.7 (R10): «اتغيّر إيه من آخر مسير» — قراءة بس لقارئ الرواتب بنطاق المسير
+  @Perm('payroll.view')
+  @Get('runs/:id/changes')
+  runChanges(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number) {
+    return this.service.runChanges(user, id)
   }
 
   // الخطوة 22 (B5): الصرف يسجل من صرف وقناة الصرف ومرجعه؛ صرف مسير غير معتمد ← PAYRUN-STATE-001

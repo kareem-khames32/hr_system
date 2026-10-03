@@ -72,7 +72,8 @@ test('اعتماد واحد شغال للمسير: القفل من غير انت
   const lock = fs.readFileSync(path.join(apiRoot, 'src/payroll/payroll-approval-lock.ts'), 'utf8')
   assert.match(lock, /@LockTimeout = 0/); assert.match(lock, /hr:payroll:approve:\$\{runId\}/); assert.match(lock, /PAYRUN-APPROVAL-RUNNING/)
   const payroll = fs.readFileSync(path.join(apiRoot, 'src/payroll/payroll.service.ts'), 'utf8')
-  assert.match(payroll, /async approve\(user: JwtPayload, runId: number\) \{\r?\n\s+return this\.runs\.manager\.transaction\(async em => \{\r?\n(?:\s*\/\/[^\n]*\r?\n)*\s+await claimPayrollApproval\(em, runId\)\r?\n\s+await this\.lockRun\(em, runId\)/)
+  // B1.7: approve خد باراميتر اختياري (سبب تعدّي مدير النظام) — نفس الترتيب
+  assert.match(payroll, /async approve\(user: JwtPayload, runId: number(?:, options: \{[^}]*\} = \{\})?\) \{\r?\n\s+return this\.runs\.manager\.transaction\(async em => \{\r?\n(?:\s*\/\/[^\n]*\r?\n)*\s+await claimPayrollApproval\(em, runId\)\r?\n\s+await this\.lockRun\(em, runId\)/)
   const chain = fs.readFileSync(path.join(apiRoot, 'src/payroll/payroll-approval-chain.service.ts'), 'utf8')
   assert.match(chain, /if \(approval\) await claimPayrollApproval\(em, runId\)\r?\n\s+await lockPayrollRunForCorrection\(em, runId\)/)
   // «اعتمد خطوتي» بيبعت true، و«ارفض» لأ

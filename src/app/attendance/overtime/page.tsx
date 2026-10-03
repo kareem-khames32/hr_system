@@ -666,6 +666,8 @@ const recomputeNote = (r?: ApiOvertimePeriodRecompute) =>
 
 function OvertimePeriodsSection({ onChanged }: { onChanged: () => void }) {
   const [periods, setPeriods] = useState<ApiOvertimePeriod[]>([])
+  // B1.7: فترات «اعتماد تلقائي» مفتوحة والسقف الشهري صفر وضابط بصمة الجهاز مفتوح
+  const [uncappedWarning, setUncappedWarning] = useState(false)
   const [branches, setBranches] = useState<ApiBranch[]>([])
   const [globalOpen, setGlobalOpen] = useState<boolean | null>(null)
   const [loading, setLoading] = useState(true)
@@ -700,6 +702,9 @@ function OvertimePeriodsSection({ onChanged }: { onChanged: () => void }) {
       .then((rows) => {
         const row = rows.find((r) => r.key === 'overtime.enabled')
         setGlobalOpen(row ? row.value === 'true' : true)
+        // B1.7: الضابط مفتوح والسقف الشهري صفر = الفترات التلقائية المفتوحة النهارده تتعرض في تحذير
+        const cap = Number(rows.find((r) => r.key === 'overtime.max_hours_per_month')?.value ?? '0')
+        setUncappedWarning(rows.find((r) => r.key === 'overtime.auto_approve.exclude_manual')?.value === 'true' && !(Number.isFinite(cap) && cap > 0))
       })
       .catch(() => setGlobalOpen(null))
   }, [])
@@ -778,6 +783,13 @@ function OvertimePeriodsSection({ onChanged }: { onChanged: () => void }) {
           إضافة فترة
         </button>
       </div>
+
+      {uncappedWarning && periods.some((p) => p.isActive && p.effect === 'OPEN' && p.autoApprove) && (
+        <p role="alert" className="mb-4 p-3 rounded-xl bg-amber-50 text-amber-900 text-sm">
+          فترات عليها «اعتماد تلقائي» والسقف الشهري للإضافي صفر (من غير حد): {periods.filter((p) => p.isActive && p.effect === 'OPEN' && p.autoApprove).map((p) => p.name).join('، ')}.
+          حط سقف شهري من «أيام العمل والدوام» أو شيل «اعتماد تلقائي» منها — الفترات الجديدة أو المعدّلة مش هتتحفظ من غيره.
+        </p>
+      )}
 
       {/* شرح مختصر: يعني إيه مفتوحة ومقفولة */}
       <div className="grid md:grid-cols-2 gap-3 mb-4">

@@ -44,6 +44,7 @@ import {
   Transfer,
 } from './entities/employment.entities'
 import { recordEmployeeChange } from '../employees/employee-change-log'
+import { recordEmployeePaymentChanges } from '../employees/employee-payment-changes'
 import { Asset, CustodyAssignment } from './entities/custody.entities'
 import { RequestsConfig } from './entities/requests-config.entity'
 import { LettersService } from '../letters/letters.service'
@@ -697,15 +698,20 @@ export class DestinationsService {
     // نفس regex الـDTO — ويُتحقق منه عند التقديم أيضاً (SEC-EMP-2)
     const iban = assertIban(payload.iban)
     const old = emp.iban
+    const before = { iban: emp.iban, bankName: emp.bankName }
     emp.iban = iban
     if (payload.bankName) emp.bankName = assertBankName(payload.bankName)
     await em.getRepository(Employee).save(emp)
+    // B1.7: اللي نفّذ التغيير = آخر معتمد في الطلب (سجل القرار الحقيقي)، وسجل تغييرات الصرف بمصدر الطلب
+    const actor = (await em.getRepository(RequestApproval).findOne({ where: { requestId: req.id, action: 'APPROVED' }, order: { id: 'DESC' } }))?.approverId ?? null
     const hist = await recordEmployeeChange(em, {
       employeeId: emp.id,
       fieldName: 'iban', oldValue: old, newValue: emp.iban,
+      changedByUserId: actor,
       reason: 'تغيير حساب بنكي — مسار أمني',
       requestId: req.id,
     })
+    await recordEmployeePaymentChanges(em, { employeeId: emp.id, before, after: { iban: emp.iban, bankName: emp.bankName }, actorUserId: actor, source: 'REQUEST', requestId: req.id })
     return { ref: refOf('BNK', hist.id), completed: true }
   }
 

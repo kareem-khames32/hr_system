@@ -94,6 +94,7 @@ import { assertLoanRequestClientPayload, EARLY_SETTLEMENT_FIELDS, isEarlySettlem
 import { PERSONAL_DATA_FIELDS, personalDataField } from '../employees/employee-personal-data'
 import { ModulesService } from '../modules-registry/modules.service'
 import { moduleOfRequestType } from '../modules-registry/registry'
+import { onePersonControlEnabled } from '../payroll/one-person-controls'
 import { assertPersonalDataKeys, PERSONAL_DATA_HANDLER, validatePersonalDataRequest } from './personal-data-requests'
 
 export interface ActDto {
@@ -972,11 +973,14 @@ export class RequestsService {
     // العقد (كانت مستثناة وبتمشي في دورتها). بلا مسار تنفيذ ثانٍ: نفس executeDestinationLocked ونفس جدول
     // الاعتمادات، وأي أثر بيكتبه الاعتماد اليدوي خطوة بخطوة بيتكتب هنا بنفس دواله (approveInstantlyOnBehalf).
     // طلب الموارد البشرية لنفسها كموظف يفضل يمشي في سلسلته
+    // B1.7 (D08 / Q-002 الخيار ج، إعداد مقفول): طلب «تغيير حساب بنكي» بيمشي في مساره الأمني (الموارد البشرية ثم المالية) حتى لو
+    // صاحب سلطة الموارد البشرية هو اللي قدّمه — من غير اعتماد فوري
     if (
       resolved.length > 0 &&
       userHasPerm(user, 'requests.create_on_behalf') &&
       this.resolver.hasHrOverride(user) &&
-      !(await this.actorIsRequester(em, user, req))
+      !(await this.actorIsRequester(em, user, req)) &&
+      !(type.destinationHandler === 'payroll_bank_secure' && await onePersonControlEnabled(em, 'bankSecurePathAlways'))
     ) {
       return this.approveInstantlyOnBehalf(em, req, type, resolved, user)
     }
@@ -1318,6 +1322,12 @@ export class RequestsService {
         )
       }
 
+      // B1.7 (D08، إعداد مقفول): نفس الشخص مايعتمدش خطوتين في نفس طلب «تغيير حساب بنكي» — حتى بسلطة الموارد البشرية
+      if (dto.action === 'APPROVE' && await onePersonControlEnabled(em, 'bankSecurePathAlways')
+        && (await em.getRepository(RequestType).findOne({ where: { code: definitionCodeOf(req) } }))?.destinationHandler === 'payroll_bank_secure'
+        && await em.getRepository(RequestApproval).count({ where: { requestId: req.id, approverId: user.sub, action: 'APPROVED' } }) > 0) {
+        throw new ForbiddenException('اعتمدت خطوة قبل كده في نفس طلب تغيير الحساب البنكي — لازم حد تاني يعتمد الخطوة دي (المسار الأمني)')
+      }
       if (this.isOvertimeRequest(req, em)) {
         if (req.requesterId === user.employeeId) throw new ForbiddenException('لا يجوز اعتماد أو تعديل طلب الإضافي الخاص بك')
         if (dto.action === 'APPROVE') await this.reviewOvertimeApproval(em, req, user, dto)

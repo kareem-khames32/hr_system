@@ -414,7 +414,7 @@ export class PayrollApprovalChainService {
   }
 
   /** «اعتمد خطوتي»: خطوة وسطى تتسجل؛ آخر خطوة = الاعتماد النهائي بكل فحوصه وحجوزاته في نفس المعاملة (فشله يرجّع الخطوة كمان). */
-  async approveStep(user: JwtPayload, runId: number) {
+  async approveStep(user: JwtPayload, runId: number, options: { overrideReason?: string | null } = {}) {
     return this.act(user, runId, async (em, context) => {
       const { run, chain, step, calculatedBy, licence } = context
       await em.getRepository(PayrollRunApproval).save(this.decisionRow(context, user, 'APPROVED', null))
@@ -423,7 +423,8 @@ export class PayrollApprovalChainService {
         payload: { snapshotVersion: run.snapshotVersion, stepOrder: step.order, stepCount: chain.steps.length, stepLabel: step.label, final: isFinal,
           chainId: chain.chainId, chainScope: chain.scope, chainHash: chain.hash, calculatedBy, smallCompanyException: calculatedBy === user.sub, selfApprovalSetting: licence } })
       if (isFinal) {
-        await this.payroll.approveLocked(em, user, run, { chainId: chain.chainId, chainScope: chain.scope, chainHash: chain.hash, steps: chain.steps.length })
+        await this.payroll.approveLocked(em, user, run, { chainId: chain.chainId, chainScope: chain.scope, chainHash: chain.hash, steps: chain.steps.length },
+          { overrideReason: options.overrideReason ?? null })
       }
     }, true)
   }
