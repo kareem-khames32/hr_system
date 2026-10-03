@@ -842,9 +842,9 @@ test('P2 — مسير كامل: مسودة ← احتساب ← اعتماد ←
       if (c.legacy !== c.policy) console.log(`        فرق ${c.code} (${c.label}): قديم=${c.legacy} سياسة=${c.policy} سبب=${c.reasonCode ?? '—'}`)
     }
   }
-  // المصروف هو الحساب القديم ما دام وضع المحرك SHADOW — مجموعة المعدلات المنشورة لا تحكم المبلغ
+  // المصروف هو الحساب القديم — B1.10 (D03): المسير بيتحسب بالحساب الحالي بس (LEGACY) ومجموعة المعدلات المنشورة لا تحكم المبلغ
   expect('المسير يعلن صراحة أن المصروف من الحساب القديم لا من مجموعة المعدلات', () => assert.deepEqual(
-    [engine.mode, engine.report?.paidResult], ['SHADOW', 'LEGACY']))
+    [engine.mode, engine.report?.paidResult], ['LEGACY', 'LEGACY']))
   // ظل الحضور هنا PARTIAL لأن أيام التجربة بلا بصمات (مكتوبة مباشرة)، فلا يمكن إثبات التكافؤ:
   // المطلوب أن يكون لكل فرق سبب نظام مسجل، لا أن يختفي الفرق
   const unexplained = (parityRow?.components ?? []).filter(c => c.legacy !== c.policy && !c.reasonCode)

@@ -141,6 +141,8 @@ test('Owner scenario: two runs for two branches with different rate sets, end to
   // مسير لكل فرع مربوط بمجموعته، والفترة من دورة المجموعة
   let runA = await createDraft({ name: 'مسير القاهرة — أغسطس', policyVersionId: policyA.versionId, period, filters: { branchIds: [branchA.id] } }, hrA)
   let runB = await createDraft({ name: 'مسير الجيزة — أغسطس', policyVersionId: policyB.versionId, period, filters: { branchIds: [branchB.id] } }, admin)
+  // B1.10 (D03): المسير الجديد بالحساب الحالي بس؛ فترة التكافؤ التشغيلية (الخطوة 23) بتتحسب بمسيرات فحص التكافؤ (SHADOW) اللي مدير النظام بيختارها
+  for (const run of [runA, runB]) expectStatus(await request(admin, 'POST', `/payroll/runs/${run.id}/engine-mode`, { mode: 'SHADOW', reason: 'فحص التكافؤ لفترة التشغيل' }), 201)
   assert.deepEqual([runA.startDate, runA.endDate, runB.startDate, runB.endDate], ['2026-07-23', '2026-08-22', '2026-07-23', '2026-08-22'])
   runA = await calculate(runA, hrA)
   runB = await calculate(runB, admin)
@@ -203,8 +205,8 @@ test('Owner scenario: two runs for two branches with different rate sets, end to
   const byType = type => events.filter(event => event.eventType === type).at(-1)
   assert.deepEqual(['DRAFT_CREATED', 'CALCULATED', 'UNASSIGNED_ACKNOWLEDGED', 'APPROVED', 'PAID'].map(type => byType(type)?.actorName),
     ['هالة — فرع القاهرة', 'هالة — فرع القاهرة', 'مدير النظام', 'مدير النظام', 'هالة — فرع القاهرة'])
-  assert.deepEqual([byType('APPROVED').payload.calculatedBy, byType('APPROVED').payload.smallCompanyException, typeof byType('APPROVED').payload.parityReportHash],
-    [hrA.id, false, 'string'])
+  assert.deepEqual([byType('APPROVED').payload.calculatedBy, byType('APPROVED').payload.smallCompanyException, typeof byType('APPROVED').payload.parityReportHash, byType('APPROVED').payload.engineMode],
+    [hrA.id, false, 'string', 'SHADOW'])
   assert.deepEqual([byType('PAID').payload.paidBy, byType('PAID').payload.channel, byType('PAID').payload.reference], [hrA.id, 'BANK_TRANSFER', 'TRX-2026-08-CAIRO'])
   assert.deepEqual(byType('CALCULATED').payload.collection, { source: 'DEFAULT', order: ['ATTENDANCE', 'RECOVERY', 'TYPED', 'ADMINISTRATIVE', 'LOAN'], versionId: policyA.versionId })
   // تصحيح المراجعة: وقت الحدث في لوحة الأحداث = وقت المنفّذ في سطر «احتسبه/اعتمده/صرفه» للإجراء نفسه (لا فرق ساعات UTC/محلي)

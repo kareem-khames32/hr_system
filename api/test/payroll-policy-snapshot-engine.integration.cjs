@@ -86,6 +86,13 @@ async function runWith(policy, name, employeeIds) {
   const draft = expect(await request('POST', '/payroll/runs', { name, policyVersionId: policy.versionId, period: '2026-08', filters: { employeeIds } }), 201)
   return expect(await request('POST', `/payroll/runs/${draft.id}/calculate`, {}), 201)
 }
+// B1.10 (D03): المسير الجديد LEGACY؛ فحص التكافؤ (SHADOW) بيختاره مدير النظام على المسودة قبل الحساب
+async function shadowRunWith(policy, name, employeeIds) {
+  const draft = expect(await request('POST', '/payroll/runs', { name, policyVersionId: policy.versionId, period: '2026-08', filters: { employeeIds } }), 201)
+  assert.equal(draft.engineMode, 'LEGACY', 'a new run is LEGACY (D03)')
+  expect(await request('POST', `/payroll/runs/${draft.id}/engine-mode`, { mode: 'SHADOW', reason: 'فحص التكافؤ' }), 201)
+  return expect(await request('POST', `/payroll/runs/${draft.id}/calculate`, {}), 201)
+}
 
 before(async () => {
   assert.equal(env.DB_TYPE || 'mssql', 'mssql'); assert.match(database, /^hr_policy_engine_test_[a-f0-9]{16}$/); assert.notEqual(database, env.DB_DATABASE)
@@ -191,8 +198,8 @@ test('steps 19–21 on a real run: 61 minutes × 1.5 on the payslip, SHADOW pari
   assert.equal((await repo('AttendanceDay').findOneByOrFail({ employeeId: absent.id, date: '2026-08-22' })).status, 'absent')
 
   const policy = await publishedPolicy('معادلات لقطة السياسة والشرائح', saved.savedId)
-  const run = await runWith(policy, 'مسير B4 — لقطة ومحرك وشرائح', [late.id, absent.id])
-  assert.equal(run.engineMode, 'SHADOW', 'a new run is SHADOW by default (D13)')
+  const run = await shadowRunWith(policy, 'مسير B4 — لقطة ومحرك وشرائح', [late.id, absent.id])
+  assert.equal(run.engineMode, 'SHADOW', 'parity check chosen by the system admin (B1.10)')
   assert.match(run.policySnapshotHash, /^[a-f0-9]{64}$/)
   assert.equal(run.policySnapshot, undefined, 'the raw snapshot text is not returned twice')
   // الخطوة 21: 61 × 1.5 × (9000 / 30 / 8 / 60 = 0.625) = 57.1875 → 57.18 (قص لخانتين)
@@ -215,7 +222,7 @@ test('steps 19–21 on a real run: 61 minutes × 1.5 on the payslip, SHADOW pari
   const lateRow = report.rows.find(row => row.employeeId === late.id)
   assert.deepEqual(lateRow.components.find(item => item.code === 'LATENESS'), { code: 'LATENESS', label: 'خصم التأخير', legacy: '57.18', policy: '57.18', difference: null, differenceKey: null, reasonCode: null, reason: null })
   assert.equal(detailsOf(lateItem).policyEngine.paidResult, 'LEGACY')
-  assert.deepEqual(run.engine.switchIssues, [], 'zero differences: switching to POLICY is allowed')
+  assert.deepEqual(run.engine.switchIssues, [], 'zero differences')
 
   // الخطوة 19: تغيير absence_penalty_days بعد الحساب لا يغير إعادة الحساب
   const absentBefore = number(itemOf(run, absent).absenceDeduction)
@@ -249,85 +256,75 @@ test('steps 19–21 on a real run: 61 minutes × 1.5 on the payslip, SHADOW pari
   assert.equal(last.payload.policySnapshot.previousHash, run.policySnapshotHash)
   assert.equal(refreshed.engine.report.rows.find(row => row.employeeId === absent.id).status, 'MATCHED', 'the policy engine uses the same refreshed snapshot')
 
-  // الخطوة 20: التحويل إلى POLICY (فروق صفر) يلزم إعادة الحساب قبل الاعتماد، ثم الاعتماد يرفق بصمة التقرير
-  const switched = expect(await request('POST', `/payroll/runs/${run.id}/engine-mode`, { mode: 'POLICY', reason: 'تكافؤ صفري لكل الموظفين' }), 201)
-  assert.equal(switched.mode, 'POLICY'); assert.equal(switched.recalcRequired, true)
-  await acknowledge(run.id)
-  assert.equal(expect(await request('POST', `/payroll/runs/${run.id}/approve`), 409).code, 'PAYRUN-ENGINE-RECALC-REQUIRED')
-  const policyRun = expect(await request('POST', `/payroll/runs/${run.id}/recalculate`, { reason: 'إعادة الحساب بوضع POLICY' }), 201)
-  assert.deepEqual([policyRun.engineMode, policyRun.engine.report.engineMode, policyRun.engine.report.paidResult], ['POLICY', 'POLICY', 'POLICY'])
-  assert.equal(detailsOf(itemOf(policyRun, late)).policyEngine.paidResult, 'POLICY')
-  assert.deepEqual([number(itemOf(policyRun, late).latenessDeduction), number(itemOf(policyRun, absent).absenceDeduction)], [57.18, 600])
+  // B1.10 (D03): POLICY متركن — التحويل مرفوض حتى بفروق صفر، والمسير بيتعتمد بالحساب الحالي ومعاه بصمة تقرير الفحص (كله مطابق)
+  const parked = expect(await request('POST', `/payroll/runs/${run.id}/engine-mode`, { mode: 'POLICY', reason: 'تكافؤ صفري لكل الموظفين' }), 409)
+  assert.equal(parked.code, 'PAYRUN-ENGINE-POLICY-PARKED')
+  assert.equal((await repo('PayrollRun').findOneByOrFail({ id: run.id })).engineMode, 'SHADOW')
   await acknowledge(run.id)
   const approved = expect(await request('POST', `/payroll/runs/${run.id}/approve`), 201)
   assert.equal(approved.status, 'APPROVED')
   const approval = expect(await request('GET', `/payroll/runs/${run.id}/events`), 200).find(row => row.eventType === 'APPROVED')
-  assert.deepEqual([approval.payload.engineMode, approval.payload.parityReportHash, approval.payload.policySnapshotHash], ['POLICY', policyRun.engine.report.reportHash, policyRun.policySnapshotHash])
+  assert.deepEqual([approval.payload.engineMode, approval.payload.parityReportHash, approval.payload.policySnapshotHash], ['SHADOW', refreshed.engine.report.reportHash, refreshed.policySnapshotHash])
+  assert.deepEqual([number(itemOf(refreshed, late).latenessDeduction), number(itemOf(refreshed, absent).absenceDeduction)], [57.18, 600], 'the current calculation is paid')
   await repo('RequestsConfig').update({ key: 'attendance.absence_penalty_days' }, { value: '1' })
 })
 
-test('step 20: a run with differences cannot switch to POLICY until every difference has a written reason; POLICY then pays the engine result', async () => {
+test('B1.10 (D03): فروق فحص التكافؤ (SHADOW) للعرض بس — التحويل لـPOLICY مرفوض (متركن)، والأسباب المكتوبة بتتسجل للعرض، والمصروف والاعتماد بالحساب الحالي', async () => {
   // مكونات متساوية 1000 × 3 ويوم مغطى واحد، والراتب على 30 يوم مع قص لخانتين: القديم يقص الإجمالي 3000 ÷ 30 = 100.00
   // وكل مكوّن 33.33 ثم يضع القرش الباقي على أكبر مكوّن (الأساسي 33.34)، والمحرك يقص كل مكوّن على حدة (33.33 × 3 = 99.99)
-  // — فرق قرش مقصود يختبر منع التحويل إلى POLICY بلا سبب مكتوب.
   const odd = await employee({ basicSalary: 1000, housingAllowance: 1000, transportAllowance: 1000 })
   await punch(odd, ['2026-08-22T09:00:00', '2026-08-22T17:00:00'])
   expect(await request('POST', '/attendance/recompute?date=2026-08-22'), 201)
-  const run = await runWith(await publishedPolicy('معادلات فروق التكافؤ'), 'مسير B4 — فروق التكافؤ', [odd.id])
+  const policy = await publishedPolicy('معادلات فروق التكافؤ')
+  // المسير العادي: الحساب الحالي بس، من غير تقرير تكافؤ ولا شروط
+  const plain = await runWith(policy, 'مسير B4 — حساب واحد', [odd.id])
+  assert.deepEqual([plain.engineMode, plain.engine.mode, plain.engine.report?.engineMode ?? 'LEGACY', plain.engine.approvalIssueCount], ['LEGACY', 'LEGACY', 'LEGACY', 0])
+  assert.equal(detailsOf(itemOf(plain, odd)).policyEngine.mode, 'LEGACY')
+  expect(await request('POST', `/payroll/runs/${plain.id}/cancel`, { reason: 'تنظيف المسير العادي' }), 201)
+  // فحص التكافؤ: لمدير النظام بس
+  const branchAdmin = await repo('User').save({ email: 'branch-approver@policy-engine-test.invalid', displayName: 'branch-approver', passwordHash: 'test-only', role: 'hr_manager',
+    branchId: branch.id, permissions: JSON.stringify(['payroll.view', 'payroll.calculate', 'payroll.approve']) })
+  const draft = expect(await request('POST', '/payroll/runs', { name: 'مسير B4 — فروق التكافؤ', policyVersionId: policy.versionId, period: '2026-08', filters: { employeeIds: [odd.id] } }), 201)
+  // حساب على كل الفروع بصلاحية الاعتماد (مش مدير النظام): الفحص مرفوض بكوده
+  const payroll = app.get(require('../src/payroll/payroll.service').PayrollService)
+  await assert.rejects(payroll.setEngineMode({ sub: branchAdmin.id, role: 'hr_manager', scopeAllBranches: true, branchId: null, employeeId: null,
+    permissions: ['payroll.view', 'payroll.calculate', 'payroll.approve'] }, draft.id, { mode: 'SHADOW', reason: 'فحص من حساب الشركة' }),
+  error => error.getStatus?.() === 403 && error.getResponse().code === 'PAYRUN-ENGINE-SHADOW-ADMIN-ONLY')
+  expect(await request('POST', `/payroll/runs/${draft.id}/engine-mode`, { mode: 'SHADOW', reason: 'فحص التكافؤ' }), 201)
+  const run = expect(await request('POST', `/payroll/runs/${draft.id}/calculate`, {}), 201)
   const row = run.engine.report.rows[0]
   assert.equal(row.status, 'DIFFERENT', JSON.stringify(row))
   const basic = row.components.find(item => item.code === 'BASIC'), net = row.components.find(item => item.code === 'NET')
-  // الراتب على 30 يوم وقص لخانتين: الأساسي القديم 33.34 والمحرك 33.33، والصافي 100.00 مقابل 99.99
   assert.deepEqual([basic.legacy, basic.policy, basic.reasonCode], ['33.34', '33.33', 'SALARY_ROUNDING_DISTRIBUTION'])
   assert.deepEqual([net.legacy, net.policy, net.reasonCode], ['100.00', '99.99', 'FOLLOWS_UPSTREAM_DIFFERENCE'])
-  assert.equal(number(itemOf(run, odd).netPay), 100, 'SHADOW pays the legacy result')
-
-  const refused = expect(await request('POST', `/payroll/runs/${run.id}/engine-mode`, { mode: 'POLICY', reason: 'محاولة بلا أسباب' }), 409)
-  assert.equal(refused.code, 'PAYRUN-ENGINE-PARITY-REQUIRED')
-  assert.deepEqual(refused.issues.map(issue => [issue.component, issue.issue]), [['BASIC', 'UNEXPLAINED'], ['NET', 'UNEXPLAINED']])
+  assert.equal(number(itemOf(run, odd).netPay), 100, 'SHADOW pays the current calculation')
+  // الفروق اللي من غير سبب معلومة بس (الأسباب اختيارية والاعتماد مابيستناهاش)
+  assert.equal(run.engine.approvalIssueCount, 2)
+  // POLICY متركن، والمسير بيفضل SHADOW
+  const parked = expect(await request('POST', `/payroll/runs/${run.id}/engine-mode`, { mode: 'POLICY', reason: 'محاولة تحويل' }), 409)
+  assert.equal(parked.code, 'PAYRUN-ENGINE-POLICY-PARKED')
   assert.equal((await repo('PayrollRun').findOneByOrFail({ id: run.id })).engineMode, 'SHADOW')
+  // الأسباب المكتوبة بتتسجل للعرض (نفس الفحص)
   expect(await request('POST', `/payroll/runs/${run.id}/parity-explanations`, { explanations: [{ employeeId: odd.id, component: 'BASIC', reason: 'x' }] }), 400)
   expect(await request('POST', `/payroll/runs/${run.id}/parity-explanations`, { explanations: [{ employeeId: odd.id, component: 'OVERTIME', reason: 'لا يوجد فرق هنا' }] }), 400)
-  const explained = expect(await request('POST', `/payroll/runs/${run.id}/parity-explanations`, { explanations: [{ employeeId: odd.id, component: 'BASIC', reason: 'قرش توزيع التناسب؛ قاعدة المحرك مقبولة' }] }), 201)
-  assert.deepEqual(explained.switchIssues.map(issue => issue.component), ['NET'])
-  const switched = expect(await request('POST', `/payroll/runs/${run.id}/engine-mode`, { mode: 'POLICY', reason: 'كل فرق له سبب مكتوب',
-    explanations: [{ employeeId: odd.id, component: 'NET', reason: 'الصافي يتبع قرش الأساسي' }] }), 201)
-  assert.deepEqual([switched.mode, switched.switchIssues.length, switched.explanations.length], ['POLICY', 0, 2])
-  const policyRun = expect(await request('POST', `/payroll/runs/${run.id}/recalculate`, { reason: 'إعادة الحساب بوضع POLICY بعد تفسير الفروق' }), 201)
-  const item = itemOf(policyRun, odd)
-  // المحرك: كل مكوّن 1000 ÷ 30 = 33.333 ← 33.33 بالقص، البدلات 66.66، والصافي 99.99
-  assert.deepEqual([number(item.basicSalary), number(item.allowances), number(item.netPay)], [33.33, 66.66, 99.99], 'POLICY pays the engine result')
-  assert.equal(detailsOf(item).policyEngine.paidResult, 'POLICY')
-  assert.deepEqual(detailsOf(item).salaryComponents.map(component => component.earnedAmount).slice(0, 3), [33.33, 33.33, 33.33])
+  const explained = expect(await request('POST', `/payroll/runs/${run.id}/parity-explanations`, { explanations: [{ employeeId: odd.id, component: 'BASIC', reason: 'قرش توزيع التناسب' }] }), 201)
+  assert.equal(explained.explanations.length, 1)
+  // الاعتماد بالحساب الحالي من غير ما يستنى سبب الصافي
+  await acknowledge(run.id)
+  assert.equal(expect(await request('POST', `/payroll/runs/${run.id}/approve`), 201).status, 'APPROVED')
+  assert.equal(number((await repo('PayrollItem').findOneByOrFail({ runId: run.id, employeeId: odd.id })).netPay), 100)
   const events = expect(await request('GET', `/payroll/runs/${run.id}/events`), 200).map(row => row.eventType)
   assert.ok(events.includes('PARITY_EXPLAINED') && events.includes('ENGINE_MODE_CHANGED'), JSON.stringify(events))
-  // تغيّر الفرق (مبلغ مختلف) يحتاج سببًا جديدًا: POLICY يرفض الحساب بدل صرف فرق غير مفسر
-  // إضافة دفتر 5.00 بعد التحويل: الصافي القديم 105.00 والمحرك 104.99 (الراتب على 30 يوم) — فرق بمبلغ جديد لم يُكتب له سبب
-  await repo('EmployeeObligation').save({ employeeId: odd.id, type: 'CREDIT', category: 'bonus', amount: 5, label: 'مكافأة اختبار بعد التحويل', status: 'PENDING' })
-  const blocked = expect(await request('POST', `/payroll/runs/${run.id}/recalculate`, { reason: 'إضافة دفتر بعد التحويل' }), 409)
-  assert.equal(blocked.code, 'PAYRUN-POLICY-PARITY-UNEXPLAINED')
-  // أرقام الفرق لكل موظف في الرفض لقارئ الرواتب؛ صلاحية الحساب لوحدها بتاخد الموظف والبند والسبب من غير المبلغين
-  assert.ok(blocked.issues.length > 0 && blocked.issues.every(issue => 'legacy' in issue && 'policy' in issue), JSON.stringify(blocked.issues))
-  const calcOnly = await repo('User').save({ email: 'calc-only@policy-engine-test.invalid', displayName: 'calc-only', passwordHash: 'test-only', role: 'employee',
-    branchId: branch.id, permissions: JSON.stringify(['payroll.calculate']) })
-  const blind = expect(await request('POST', `/payroll/runs/${run.id}/recalculate`, { reason: 'إضافة دفتر بعد التحويل' }, calcOnly), 409)
-  assert.equal(blind.code, 'PAYRUN-POLICY-PARITY-UNEXPLAINED')
-  assert.deepEqual(blind.issues.map(issue => Object.keys(issue).sort()), blocked.issues.map(() => ['component', 'employeeId', 'reason']))
-  assert.deepEqual(blind.issues.map(issue => [issue.employeeId, issue.component]), blocked.issues.map(issue => [issue.employeeId, issue.component]))
-  // يبقى صافي المحرك المصروف قبل الإضافة: 99.99
-  assert.equal(number((await repo('PayrollItem').findOneByOrFail({ runId: run.id, employeeId: odd.id })).netPay), 99.99, 'the refused recalculation writes nothing')
-  expect(await request('POST', `/payroll/runs/${run.id}/engine-mode`, { mode: 'SHADOW', reason: 'العودة للظل حتى تُفسر الفروق الجديدة' }), 201)
-  expect(await request('POST', `/payroll/runs/${run.id}/cancel`, { reason: 'تنظيف مسير اختبار الفروق' }), 201)
 })
 
-test('steps 19–20 at approval (payroll simplification): a tampered or missing snapshot is still refused before any write; for SHADOW and LEGACY runs the parity report and its written reasons are information only (POLICY still needs them), so approval attaches null parity fields', async () => {
+test('steps 19–20 at approval (payroll simplification): a tampered or missing snapshot is still refused before any write; for SHADOW and LEGACY runs the parity report and its written reasons are information only (POLICY is parked, B1.10), so approval attaches null parity fields', async () => {
   const proven = await employee(), legacySource = await employee()
   await punch(proven, ['2026-08-22T09:00:00', '2026-08-22T17:00:00'])
   // بصمتان قديمتان بلا مصدر ولا مُدخِل (مثل بصمات hr_system قبل حقل المصدر): الحساب القديم يقرؤهما، وظل الحضور يرفضهما دليلًا فتغيب قيمه
   await repo('AttendancePunch').save(['2026-08-22T09:00:00', '2026-08-22T17:00:00'].map(stamp => ({ employeeCode: legacySource.employeeCode, employeeId: legacySource.id,
     punchTime: new Date(stamp), deviceSn: null, source: null, createdByUserId: null, reason: null })))
   expect(await request('POST', '/attendance/recompute?date=2026-08-22'), 201)
-  const created = await runWith(await publishedPolicy('معادلات شروط الاعتماد'), 'مسير B4 — شروط الاعتماد', [proven.id, legacySource.id])
+  const created = await shadowRunWith(await publishedPolicy('معادلات شروط الاعتماد'), 'مسير B4 — شروط الاعتماد', [proven.id, legacySource.id])
   const report = created.engine.report
   const rowOf = emp => report.rows.find(row => row.employeeId === emp.id)
   assert.equal(rowOf(proven).status, 'MATCHED', JSON.stringify(rowOf(proven)))
@@ -352,9 +349,9 @@ test('steps 19–20 at approval (payroll simplification): a tampered or missing 
   const one = expect(await request('POST', `/payroll/runs/${created.id}/parity-explanations`, { explanations: [{ employeeId: legacySource.id, component: 'LATENESS',
     reason: 'بصمات قديمة بلا مصدر؛ المصروف هو الحساب القديم' }] }), 201)
   assert.equal(one.approvalIssueCount, unavailable.length - 1)
+  // B1.10 (D03): POLICY متركن
   const policyRefused = expect(await request('POST', `/payroll/runs/${created.id}/engine-mode`, { mode: 'POLICY', reason: 'محاولة مع قيم غائبة' }), 409)
-  assert.equal(policyRefused.code, 'PAYRUN-ENGINE-PARITY-REQUIRED')
-  assert.ok(policyRefused.issues.some(issue => issue.issue === 'UNAVAILABLE' && issue.component === 'LATENESS'), 'an explained unavailable value still blocks POLICY')
+  assert.equal(policyRefused.code, 'PAYRUN-ENGINE-POLICY-PARKED')
   const reasonCode = unavailable[0].reasonCode
   assert.equal(expect(await request('POST', `/payroll/runs/${created.id}/parity-explanations`, { explanations: [{ reasonCode, employeeId: legacySource.id, reason: 'هدف مختلط' }] }), 400).code, 'PAYRUN-PARITY-TARGET')
   assert.equal(expect(await request('POST', `/payroll/runs/${created.id}/parity-explanations`, { explanations: [{ reasonCode: 'NO_SUCH_REASON', reason: 'رمز غير موجود' }] }), 400).code, 'PAYRUN-PARITY-DIFFERENCE-NOT-FOUND')
@@ -389,7 +386,7 @@ test('steps 19–20 at approval (payroll simplification): a tampered or missing 
   assert.deepEqual([approval.payload.parityReportHash, approval.payload.parityTotals, approval.payload.parityExplanationIds, approval.payload.parityExplained,
     approval.payload.unassignedAckId, approval.payload.unassignedReportHash], [null, null, null, null, null, null])
 
-  // 6) مصدر قيمة تغيّر بلا تغير القيمة (افتراضي ← إعداد مكتوب بنفس القيمة): «التحديث مطلوب» مع فرق مسمى؛ ثم LEGACY بلا ظل يُعتمد بلا تقرير تكافؤ
+  // 6) مصدر قيمة تغيّر بلا تغير القيمة (افتراضي ← إعداد مكتوب بنفس القيمة): «التحديث مطلوب» مع فرق مسمى؛ والمسير العادي (LEGACY، B1.10) يُعتمد بلا تقرير تكافؤ
   const other = await employee()
   await punch(other, ['2026-08-22T09:00:00', '2026-08-22T17:00:00'])
   expect(await request('POST', '/attendance/recompute?date=2026-08-22'), 201)
@@ -401,7 +398,7 @@ test('steps 19–20 at approval (payroll simplification): a tampered or missing 
   const view = expect(await request('GET', `/payroll/runs/${legacyRun.id}/policy-snapshot`), 200)
   assert.equal(view.refreshRequired, true)
   assert.deepEqual(view.differences.map(row => row.key), ['sources.exemptOvertimeEligible'], JSON.stringify(view.differences))
-  expect(await request('POST', `/payroll/runs/${legacyRun.id}/engine-mode`, { mode: 'LEGACY', reason: 'تشخيص بلا ظل' }), 201)
+  assert.equal(legacyRun.engineMode, 'LEGACY', 'a new run is LEGACY (D03)')
   const legacyCalc = expect(await request('POST', `/payroll/runs/${legacyRun.id}/recalculate`, { reason: 'إعادة حساب LEGACY بعد عرض الفرق', refreshPolicySnapshot: true,
     expectedPolicySnapshotHash: view.currentHash }), 201)
   assert.equal(legacyCalc.engine.report.engineMode, 'LEGACY')
@@ -410,12 +407,12 @@ test('steps 19–20 at approval (payroll simplification): a tampered or missing 
   assert.deepEqual([legacyApproval.payload.engineMode, legacyApproval.payload.parityReportHash], ['LEGACY', null])
 })
 
-test('work-pressure allowance (owner decision 26 Sep) stays outside the policy engine: SHADOW parity is MATCHED on the six, POLICY pays the same item plus the allowance, and approval passes', async () => {
+test('work-pressure allowance (owner decision 26 Sep) stays outside the policy engine: SHADOW parity is MATCHED on the six, POLICY is parked (B1.10) and approval passes with the allowance in the current calculation', async () => {
   // يوم خدمة واحد من 30 بمبالغ بتتقسم من غير قرش توزيع: الأساسي 9000 ← 300.00، وبدل ضغط العمل 600 ← 20.00 بنفس التناسب
   const pressured = await employee({ workPressureAllowance: 600 }), control = await employee()
   for (const emp of [pressured, control]) await punch(emp, ['2026-08-22T09:00:00', '2026-08-22T17:00:00'])
   expect(await request('POST', '/attendance/recompute?date=2026-08-22'), 201)
-  const run = await runWith(await publishedPolicy('معادلات بدل ضغط العمل'), 'مسير بدل ضغط العمل مع المحرك', [pressured.id, control.id])
+  const run = await shadowRunWith(await publishedPolicy('معادلات بدل ضغط العمل'), 'مسير بدل ضغط العمل مع المحرك', [pressured.id, control.id])
   const rowOf = emp => run.engine.report.rows.find(row => row.employeeId === emp.id)
   assert.deepEqual([rowOf(pressured).status, rowOf(control).status], ['MATCHED', 'MATCHED'], JSON.stringify(run.engine.report.rows))
   // التكافؤ بيقارن المكونات الست في الطرفين: عمود البدلات صفر في القديم والمحرك، والبدل بيتضاف بعد التقرير
@@ -427,14 +424,44 @@ test('work-pressure allowance (owner decision 26 Sep) stays outside the policy e
   assert.deepEqual([number(shadowItem.basicSalary), number(shadowItem.allowances)], [300, 20])
   assert.equal(Math.round(number(shadowItem.netPay) * 100) - Math.round(number(controlItem.netPay) * 100), 2000, 'the only difference from the control is the earned allowance')
 
-  expect(await request('POST', `/payroll/runs/${run.id}/engine-mode`, { mode: 'POLICY', reason: 'تكافؤ صفري مع بدل ضغط العمل' }), 201)
-  const policyRun = expect(await request('POST', `/payroll/runs/${run.id}/recalculate`, { reason: 'إعادة الحساب بوضع POLICY مع بدل ضغط العمل' }), 201)
-  assert.deepEqual([policyRun.engineMode, policyRun.engine.report.paidResult], ['POLICY', 'POLICY'])
-  const policyItem = itemOf(policyRun, pressured), detail = detailsOf(policyItem)
-  assert.equal(detail.policyEngine.paidResult, 'POLICY')
-  for (const key of ['basicSalary', 'allowances', 'socialInsuranceDeduction', 'loanInstallments', 'netPay']) assert.equal(number(policyItem[key]), number(shadowItem[key]), key)
-  assert.deepEqual(detail.workPressureAllowance, { monthlyAmount: 600, earnedAmount: 20 })
+  // B1.10 (D03): POLICY متركن — البدل في الحساب الحالي اللي بيتصرف، والاعتماد من غير تحويل
+  assert.equal(expect(await request('POST', `/payroll/runs/${run.id}/engine-mode`, { mode: 'POLICY', reason: 'تكافؤ صفري مع بدل ضغط العمل' }), 409).code, 'PAYRUN-ENGINE-POLICY-PARKED')
+  const detail = detailsOf(shadowItem)
+  assert.equal(detail.policyEngine.paidResult, 'LEGACY')
   assert.deepEqual(detail.salaryComponents.at(-1), { code: 'WORK_PRESSURE', nameAr: 'بدل ضغط العمل', nameEn: 'Work Pressure Allowance', monthlyAmount: 600, earnedAmount: 20 })
   await acknowledge(run.id)
   assert.equal(expect(await request('POST', `/payroll/runs/${run.id}/approve`), 201).status, 'APPROVED')
 })
+
+// B1.10 (D03): اختبار المطابقة الآلي — المسير بيتصرف بالحساب الحالي، والمحرك متركن لحد B4.3. الاختبار ده بيحسب نفس البيانات بالاتنين
+// (فحص التكافؤ) ولازم الفرق يبقى صفر في الحالات اللي المحرك بيدعمها. الحالات اللي حالات إثباتها ناقصة متعلّمة skip بسببها.
+test('B1.10 اختبار المطابقة الآلي: الحالات المدعومة (حضور كامل وبدلات، غياب، إضافة وخصم من الدفتر، قسط سلفة) فرقها صفر', async () => {
+  const onTime = await employee(), absent = await employee(), credit = await employee(), debit = await employee(), loan = await employee()
+  const allowances = await employee({ basicSalary: 6000, housingAllowance: 1500, transportAllowance: 600, otherAllowance: 900 })
+  for (const emp of [onTime, credit, debit, loan, allowances]) await punch(emp, ['2026-08-22T09:00:00', '2026-08-22T17:00:00'])
+  expect(await request('POST', '/attendance/recompute?date=2026-08-22'), 201)
+  await repo('EmployeeObligation').save({ employeeId: credit.id, type: 'CREDIT', category: 'bonus', amount: 250, label: 'إضافة مطابقة', status: 'PENDING' })
+  await repo('EmployeeObligation').save({ employeeId: debit.id, type: 'DEBIT', category: 'manual', amount: 75.5, label: 'خصم مطابقة', status: 'PENDING' })
+  const savedLoan = await repo('Loan').save({ employeeId: loan.id, amount: 120, status: 'DISBURSED', disbursedAt: new Date('2026-07-01T08:00:00Z') })
+  await repo('LoanInstallment').save({ loanId: savedLoan.id, dueDate: '2026-08-10', amount: 120, paid: false })
+  const people = [onTime, absent, credit, debit, loan, allowances]
+  const run = await shadowRunWith(await publishedPolicy('معادلات اختبار المطابقة'), 'مسير اختبار المطابقة الآلي', people.map(emp => emp.id))
+  const report = run.engine.report
+  const differences = report.rows.flatMap(row => row.components.filter(item => item.differenceKey).map(item => ({ employeeId: row.employeeId, code: item.code, legacy: item.legacy, policy: item.policy, reason: item.reasonCode })))
+  assert.deepEqual(differences, [], 'كل الحالات المدعومة مطابقة')
+  assert.deepEqual(report.rows.map(row => row.status), people.map(() => 'MATCHED'))
+  assert.equal(report.totals.differences, 0)
+  // الحالات اتغطت فعلًا في الحساب الحالي (مش أصفار)
+  const amountOf = (emp, key) => number(itemOf(run, emp)[key])
+  assert.ok(amountOf(absent, 'absenceDeduction') > 0 && amountOf(debit, 'otherDeductions') === 75.5 &&
+    amountOf(credit, 'otherAdditions') === 250 && amountOf(loan, 'loanInstallments') > 0 && amountOf(allowances, 'allowances') > 0,
+    JSON.stringify(people.map(emp => itemOf(run, emp))))
+  expect(await request('POST', `/payroll/runs/${run.id}/cancel`, { reason: 'تنظيف مسير اختبار المطابقة' }), 201)
+})
+for (const [label, reason] of [
+  ['الإذونات', 'حالات إثبات الإذن (بخصم ومن غير خصم) في محرك المعادلات ناقصة — ملاحظة Codex؛ بتتكمل مع B4.3'],
+  ['تصحيحات البصمة', 'محرك المعادلات مابيقراش تصحيح البصمة المعتمد كدليل حضور لسه — بيتكمل مع B4.3'],
+  ['استثناءات الحضور', 'استثناء الحضور (مستثنى من البصمة) مالوش حالات إثبات في المحرك — بيتكمل مع B4.3'],
+  ['الإجازة المرضية بشرائح', 'شرائح المرضية (75% و0%) بتظهر في الظل بس حالات إثباتها ناقصة — بيتكمل مع B4.3'],
+  ['الإجازة بدون راتب', 'ظل الحضور مابيقدرش يثبت يوم الإجازة بدون راتب (ATTENDANCE_SHADOW_PARTIAL) فقيم المحرك بتغيب — بيتكمل مع B4.3'],
+]) test(`B1.10 اختبار المطابقة الآلي: ${label}`, { skip: reason }, () => {})

@@ -132,6 +132,9 @@ before(async () => {
 
   run = ok(await request(U.admin, 'POST', '/payroll/runs/calculate-defined', { period, scopeType: 'CUSTOM', employeeIds: [E.me.id, E.colleague.id, E.outside.id],
     name: 'مسير اختبار التسريبات' }), 201)
+  // B1.10 (D03): المسير بالحساب الحالي بس؛ فحص التكافؤ (SHADOW) عشان تقرير التكافؤ المحفوظ يبقى فيه أرقام الزميل (دليل إن التسريب كان ممكن)
+  ok(await request(U.admin, 'POST', `/payroll/runs/${run.id}/engine-mode`, { mode: 'SHADOW', reason: 'فحص التكافؤ لاختبار التسريب' }), 201)
+  run = ok(await request(U.admin, 'POST', `/payroll/runs/${run.id}/recalculate`, { reason: 'إعادة الحساب بفحص التكافؤ' }), 201)
   mineItem = run.items.find(item => item.employeeId === E.me.id); colleagueItem = run.items.find(item => item.employeeId === E.colleague.id)
   assert.ok(mineItem && colleagueItem)
   const report = ok(await request(U.admin, 'GET', `/payroll/runs/${run.id}/unassigned`))
@@ -163,6 +166,8 @@ before(async () => {
     { expectedRevision: version.revision, reason: 'نشر معادلة اختبار العضوية' }))
   const draft = ok(await request(U.admin, 'POST', '/payroll/runs', { name: 'مسير العضوية', policyVersionId: published.version.id, period,
     filters: { employeeIds: [E.m1.id, E.m2.id] } }), 201)
+  // B1.10 (D03): المسير الجديد بالحساب الحالي بس؛ فحص التكافؤ (SHADOW) عشان تقرير التكافؤ المحفوظ يبقى فيه أرقام الزملاء (اللي القسيمة مابترجعهاش)
+  ok(await request(U.admin, 'POST', `/payroll/runs/${draft.id}/engine-mode`, { mode: 'SHADOW', reason: 'فحص التكافؤ لاختبار التسريب' }), 201)
   run3 = ok(await request(U.admin, 'POST', `/payroll/runs/${draft.id}/calculate`, {}), 201)
   assert.deepEqual([run3.status, run3.items.length], ['CALCULATED', 2])
 }, { timeout: 300000 })

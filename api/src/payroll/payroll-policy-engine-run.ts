@@ -18,10 +18,14 @@ import { protectPayrollObligations, type PayrollCollectionClass, type PayrollObl
  */
 export const PAYROLL_ENGINE_MODES = ['LEGACY', 'SHADOW', 'POLICY'] as const
 export type PayrollEngineMode = typeof PAYROLL_ENGINE_MODES[number]
-export const PAYROLL_DEFAULT_ENGINE_MODE: PayrollEngineMode = 'SHADOW'
+// B1.10 / D03: مسار حساب واحد — المسير الجديد بالحساب الحالي بس (كان SHADOW = حسابين)
+export const PAYROLL_DEFAULT_ENGINE_MODE: PayrollEngineMode = 'LEGACY'
+/** B1.10 / D03: المحرك متركن لحد B4.3 — اللي بيتصرف هو الحساب الحالي */
+export const PAYROLL_POLICY_PARKED_MESSAGE = 'محرك المعادلات متركن (D03)؛ اللي بيتصرف هو الحساب الحالي — أعد حساب المسير قبل اعتماده'
 export const PAYROLL_POLICY_ENGINE_RUN_VERSION = 'POLICY_ENGINE_RUN_V1_20260914' as const
 export const PAYROLL_ENGINE_MODE_LABELS: Record<PayrollEngineMode, string> = {
-  LEGACY: 'الحساب القديم وحده (بلا ظل)', SHADOW: 'ظل: المصروف القديم ومحرك السياسة بجانبه', POLICY: 'السياسة: المصروف من محرك السياسة',
+  // B1.10 (D03): مسار حساب واحد — الحالي بيتصرف، والظل فحص، وPOLICY متركن
+  LEGACY: 'الحساب الحالي (مسار حساب واحد)', SHADOW: 'فحص التكافؤ: الحساب الحالي ومحرك المعادلات جنبه للعرض', POLICY: 'متركن: نتيجة محرك المعادلات (مابيتعتمدش)',
 }
 
 export const PAYROLL_PARITY_COMPONENTS = [

@@ -2,14 +2,14 @@
 
 import { useMemo, useState } from 'react'
 import { Cpu } from 'lucide-react'
-import { can } from '../../lib/api'
+import { can, getCurrentUser } from '../../lib/api'
 import { ENGINE_MODE_LABELS, engineOf, explainPayrollParity, parityDifferences, parityReasonText, setPayrollEngineMode, type PayrollEngineMode, type PayrollParityExplanationInput } from '../../lib/payroll-engine-api'
 import { PayrollParityOperationsNote } from './PayrollParityOperationsNote'
 import { PayrollParityCountingControl, type PayrollParityCountingRun } from './PayrollParityCountingControl'
 
 // الخطوة 20 / D13: وضع محرك الحساب للمسير وتقرير التكافؤ لكل موظف ولكل بند.
-// SHADOW (الافتراضي) يصرف القديم ويحسب المحرك بجانبه. الاعتماد يتطلب تقرير تكافؤ للنسخة الحالية وكل فرق أو قيمة غائبة بسبب مكتوب؛
-// التحويل إلى POLICY لحامل «اعتماد المسير» بعد أن يكون لكل فرق سبب مكتوب ولا قيمة غائبة.
+// B1.10 (D03): مسار حساب واحد — المسير بيتحسب بالحساب الحالي (LEGACY) وهو اللي بيتصرف. POLICY متركن لحد B4.3،
+// وفحص التكافؤ (SHADOW: المحرك جنب الحساب الحالي) لمدير النظام بس، وتقريره للعرض والاعتماد مابيستناهوش.
 const STATUS_LABELS: Record<string, { label: string; className: string }> = {
   MATCHED: { label: 'مطابق', className: 'badge badge-success' }, DIFFERENT: { label: 'فروق بأسباب', className: 'badge badge-warning' },
   UNAVAILABLE: { label: 'قيمة غائبة', className: 'badge bg-gray-100 text-gray-700' }, ERROR: { label: 'تعذر الحساب', className: 'badge badge-danger' },
@@ -27,7 +27,8 @@ export function PayrollRunEnginePanel({ run, employeeName, onChanged }: { run: u
   const [showMatched, setShowMatched] = useState(false)
   const differences = useMemo(() => parityDifferences(engine), [engine])
   if (!engine) return null
-  const report = engine.report
+  // B1.10: مسير LEGACY بيتحفظ له تقرير فاضي (من غير محرك جنبه) — ده مش تقرير تكافؤ
+  const report = engine.report && engine.report.engineMode !== 'LEGACY' ? engine.report : null
   const runId = (run as { id: number }).id
   const approver = can('payroll.approve') && ['DRAFT', 'CALCULATED'].includes(status)
   const pending = differences.filter(row => !row.explanation)
@@ -44,8 +45,8 @@ export function PayrollRunEnginePanel({ run, employeeName, onChanged }: { run: u
     try { await action(); setReasons({}); setGroupReasons({}); setModeReason(''); await onChanged() } catch (e) { setError(e instanceof Error ? e.message : 'تعذر تنفيذ العملية') }
     finally { setBusy(false) }
   }
-  const switchTo = (mode: PayrollEngineMode) => act(() => setPayrollEngineMode(runId, { mode, reason: modeReason.trim(), explanations: mode === 'POLICY' ? draftExplanations : undefined }))
-  const unresolvedForPolicy = engine.switchIssues.filter(issue => !(issue.issue === 'UNEXPLAINED' && draftExplanations.some(row => 'employeeId' in row && row.employeeId === issue.employeeId && row.component === issue.component)))
+  const switchTo = (mode: PayrollEngineMode) => act(() => setPayrollEngineMode(runId, { mode, reason: modeReason.trim() }))
+  const superAdmin = getCurrentUser()?.role === 'super_admin'
 
   return (
     <div className="card space-y-3">
@@ -59,11 +60,13 @@ export function PayrollRunEnginePanel({ run, employeeName, onChanged }: { run: u
         {report && <span className="text-xs text-gray-500">نسخة الحساب {report.snapshotVersion} • بصمة التقرير <span className="font-mono" dir="ltr">{report.reportHash.slice(0, 12)}</span></span>}
       </div>
       {engine.recalcRequired && <p role="alert" className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">وضع المحرك تغيّر بعد آخر حساب؛ أعد حساب المسير قبل الاعتماد حتى يُصرف بالوضع المختار.</p>}
-      {status === 'CALCULATED' && approvalIssueCount !== null && (approvalIssueCount === 0
+      {status === 'CALCULATED' && engine.mode === 'POLICY' && approvalIssueCount !== null && (approvalIssueCount === 0
         ? <p className="rounded-xl bg-gray-50 p-3 text-sm text-success-700">تقرير التكافؤ مستوفٍ للاعتماد: كل فرق أو قيمة غائبة له سبب مكتوب، ويُرفق التقرير وبصمته بحدث الاعتماد.</p>
         : <p role="alert" className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">الاعتماد متوقف على تقرير التكافؤ: {approvalIssueCount} شرطًا غير مستوفى{firstApprovalIssue ? ` (${firstApprovalIssue.reason})` : ''}.</p>)}
       {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
-      {!report ? <p className="text-sm text-gray-500">لا تقرير تكافؤ لهذا المسير بعد (المسير قبل الخطوة 20 أو لم يُحتسب).</p> : <>
+      {engine.mode === 'POLICY' && <p role="alert" className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">محرك المعادلات متركن (D03): المسير ده محسوب POLICY ومابيتعتمدش — أعد حسابه بالحساب الحالي.</p>}
+      {engine.mode === 'SHADOW' && report && <p className="rounded-xl bg-blue-50 p-3 text-sm text-blue-900">فحص التكافؤ: المحرك محسوب جنب الحساب الحالي للعرض بس — اللي بيتصرف هو الحساب الحالي، والاعتماد مابيستناش التقرير ولا أسبابه.</p>}
+      {!report ? <p className="text-sm text-gray-500">المسير بيتحسب بالحساب الحالي بس (مسار حساب واحد) — مفيش تقرير تكافؤ.{superAdmin ? ' «فحص التكافؤ» تحت بيحسب المحرك جنبه.' : ''}</p> : <>
         <p className="text-sm text-gray-700">{report.message}</p>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-sm">
           {[['الموظفون', report.totals.employees], ['مطابق', report.totals.matched], ['بفروق', report.totals.different], ['قيمة غائبة', report.totals.unavailable + report.totals.error], ['عدد الفروق', report.totals.differences]]
@@ -117,15 +120,12 @@ export function PayrollRunEnginePanel({ run, employeeName, onChanged }: { run: u
         </div>}
         {pending.length > 0 && <button type="button" onClick={() => act(() => explainPayrollParity(runId, [...draftExplanations, ...draftGroups]))}
           disabled={busy || !(draftExplanations.length + draftGroups.length)} className="btn-secondary text-sm disabled:opacity-50">حفظ الأسباب المكتوبة ({draftExplanations.length + draftGroups.length})</button>}
-        <div className="flex flex-wrap items-center gap-2">
+        {/* B1.10: صف التحويل بيظهر بس لو فيه تحويل متاح (الرجوع للحساب الحالي، أو فحص التكافؤ لمدير النظام) */}
+        {(engine.mode !== 'LEGACY' || superAdmin) && <div className="flex flex-wrap items-center gap-2">
           <input value={modeReason} onChange={e => setModeReason(e.target.value)} maxLength={500} className="input-field flex-1 min-w-64" placeholder="سبب تغيير وضع المحرك (مطلوب)" />
-          {engine.mode !== 'POLICY' && <button type="button" onClick={() => switchTo('POLICY')} disabled={busy || modeReason.trim().length < 3 || unresolvedForPolicy.length > 0 || status !== 'CALCULATED'}
-            title={unresolvedForPolicy.length ? unresolvedForPolicy.slice(0, 3).map(issue => issue.reason).join('؛ ') : undefined} className="btn-primary text-sm disabled:opacity-50">تحويل إلى POLICY</button>}
-          {engine.mode !== 'SHADOW' && <button type="button" onClick={() => switchTo('SHADOW')} disabled={busy || modeReason.trim().length < 3} className="btn-secondary text-sm disabled:opacity-50">العودة إلى SHADOW</button>}
-          {engine.mode !== 'LEGACY' && <button type="button" onClick={() => switchTo('LEGACY')} disabled={busy || modeReason.trim().length < 3}
-            title="LEGACY بلا ظل لا يُعتمد: الاعتماد يتطلب تقرير تكافؤ SHADOW" className="btn-secondary text-sm disabled:opacity-50">LEGACY بلا ظل (لا يُعتمد)</button>}
-        </div>
-        {engine.mode !== 'POLICY' && unresolvedForPolicy.length > 0 && <p className="text-xs text-gray-500">التحويل إلى POLICY متوقف: {unresolvedForPolicy.length} شرط غير مستوفى ({unresolvedForPolicy[0].reason}). السبب المكتوب لقيمة غائبة يكفي للاعتماد ولا يرفع هذا المنع.</p>}
+          {superAdmin && engine.mode !== 'SHADOW' && <button type="button" onClick={() => switchTo('SHADOW')} disabled={busy || modeReason.trim().length < 3} className="btn-secondary text-sm disabled:opacity-50">فحص التكافؤ (SHADOW)</button>}
+          {engine.mode !== 'LEGACY' && <button type="button" onClick={() => switchTo('LEGACY')} disabled={busy || modeReason.trim().length < 3} className="btn-secondary text-sm disabled:opacity-50">الحساب الحالي بس</button>}
+        </div>}
         <p className="text-xs text-gray-500">{Object.entries(ENGINE_MODE_LABELS).map(([mode, label]) => `${mode}: ${label}`).join(' • ')}. تغيير الوضع يلزم إعادة حساب المسير قبل الاعتماد.</p>
       </div>}
       {/* الخطوة 23 (B5): فترة التكافؤ التشغيلية الموثقة وعدّاد الأشهر من المسيرات الحقيقية، وتعليم المسير التجريبي «لا يُحتسب» */}

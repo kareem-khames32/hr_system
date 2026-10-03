@@ -64,7 +64,8 @@ test('engine panel: approval readiness from the server check, the source plan wi
     components: [{ code: 'LATENESS', label: 'خصم التأخير', legacy: '12.00', policy: null, difference: null, differenceKey: 'k-late', reasonCode: 'ATTENDANCE_SHADOW_UNAVAILABLE', reason: 'مصادر الحضور غير مثبتة لهذه الفترة' }] }
   const report = { ...base.engine.report, rows: [...base.engine.report.rows, unavailableRow],
     sourceReadiness: [{ code: 'SCHEDULE_TIMING_FIELDS_MISSING', employees: 1, employeeIds: [6], remedy: 'أكمل دقائق العمل المطلوبة من جداول العمل' }] }
-  const run = { ...base, engine: { ...base.engine, report, approvalIssueCount: 2,
+  // B1.10 (D03): شروط الاعتماد بتظهر لمسير POLICY بس (المحرك متركن، والاعتماد بيفحص التكافؤ لـPOLICY بس)
+  const run = { ...base, engine: { ...base.engine, mode: 'POLICY', report, approvalIssueCount: 2,
     approvalIssues: [{ employeeId: 5, component: 'NET', label: 'الصافي', legacy: '100.00', policy: '99.99', differenceKey: 'k-net', reasonCode: 'FOLLOWS_UPSTREAM_DIFFERENCE', issue: 'UNEXPLAINED_DIFFERENCE', reason: 'فرق بلا سبب مكتوب من حامل صلاحية اعتماد المسير' }],
     approvalPendingGroups: [{ reasonCode: 'ATTENDANCE_SHADOW_UNAVAILABLE', count: 1, unavailable: 1, employees: 1 }] } }
   assert.equal(ui.parityReasonText(report, 'ATTENDANCE_SHADOW_UNAVAILABLE'), 'مصادر الحضور غير مثبتة لهذه الفترة')
@@ -75,11 +76,17 @@ test('engine panel: approval readiness from the server check, the source plan wi
   assert.doesNotMatch(html, /لا يُفسَّر/, 'an unavailable value can receive a written reason for approval')
   const ready = renderToStaticMarkup(React.createElement(PayrollRunEnginePanel, { run: { ...run, engine: { ...run.engine, approvalIssueCount: 0, approvalIssues: [], approvalPendingGroups: [] } }, employeeName: String, onChanged: () => {} }))
   assert.match(ready, /تقرير التكافؤ مستوفٍ للاعتماد/)
+  assert.match(html, /محرك المعادلات متركن \(D03\)/)
+  // SHADOW (فحص التكافؤ): التقرير للعرض بس — من غير شروط اعتماد
+  const shadow = renderToStaticMarkup(React.createElement(PayrollRunEnginePanel, { run: { ...run, engine: { ...run.engine, mode: 'SHADOW' } }, employeeName: String, onChanged: () => {} }))
+  assert.doesNotMatch(shadow, /الاعتماد متوقف على تقرير التكافؤ/); assert.match(shadow, /الاعتماد مابيستناش التقرير/)
   // عناصر حامل الاعتماد (لا تُرسم في SSR بلا مستخدم): سبب جماعي لكل رمز، سبب للقيمة الغائبة، وتحذير LEGACY
   const panel = read('src/components/payroll/PayrollRunEnginePanel.tsx')
   assert.match(panel, /reasonCode: group\.reasonCode, reason: groupReasons\[group\.reasonCode\]\.trim\(\)/)
   assert.match(panel, /سبب مكتوب للقيمة الغائبة \(للاعتماد فقط\)/)
-  assert.match(panel, /LEGACY بلا ظل \(لا يُعتمد\)/)
+  // B1.10: من غير زرار POLICY، والفحص (SHADOW) لمدير النظام بس، والرجوع للحساب الحالي
+  assert.doesNotMatch(panel, /تحويل إلى POLICY/)
+  assert.match(panel, /superAdmin && engine\.mode !== 'SHADOW'/); assert.match(panel, /الحساب الحالي بس/)
 })
 
 test('screens are wired (payroll simplification): the run page no longer shows the snapshot and engine panels, recalculation always refreshes to the current formula with the shown fingerprint, dated editor on formulas, tier effect on the payslip; legacy tier writes removed', () => {

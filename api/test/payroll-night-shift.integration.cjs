@@ -75,8 +75,11 @@ async function documentMonthly(emp, effectivePayrollPeriod) {
       otherAllowance: '0.00', currency: emp.currency ?? 'SAR', effectivePayrollPeriod, effectiveToPayrollPeriod: null }] }), 201)
 }
 async function payrollRun(emp, period) {
-  const run = expect(await request('POST', '/payroll/runs/calculate-defined', { period, scopeType: 'CUSTOM', employeeIds: [emp.id],
+  const calculated = expect(await request('POST', '/payroll/runs/calculate-defined', { period, scopeType: 'CUSTOM', employeeIds: [emp.id],
     name: `مسير اختبار الوردية الليلية ${period}` }), 201)
+  // B1.10 (D03): المسير بيتحسب بالحساب الحالي بس؛ فحص التكافؤ (SHADOW) بيختاره مدير النظام عشان نتأكد إن المحرك شايف الليلة صح
+  expect(await request('POST', `/payroll/runs/${calculated.id}/engine-mode`, { mode: 'SHADOW', reason: 'فحص تكافؤ الوردية الليلية' }), 201)
+  const run = expect(await request('POST', `/payroll/runs/${calculated.id}/recalculate`, { reason: 'إعادة الحساب بفحص التكافؤ' }), 201)
   const item = run.items.find(row => row.employeeId === emp.id)
   assert.ok(item, `موظف الاختبار داخل المسير: ${JSON.stringify({ ...run, items: (run.items ?? []).map(row => row.employeeId) }).slice(0, 3000)}`)
   return { run, item, details: JSON.parse(item.breakdown) }

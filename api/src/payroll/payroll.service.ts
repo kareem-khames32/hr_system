@@ -91,7 +91,7 @@ import { syncHolidayWorkPayroll } from '../attendance/holiday-work'
 import { PayrollDailyAccrualService } from './payroll-daily-accrual.service'
 // بدل ضغط العمل (قرار المالك 26 سبتمبر): خانة في الراتب بتتصرف كاملة فوق الصافي «من غير مؤثرات» — برّه كل أساس وكل خصم وكل قسط
 import { payrollItemWorkPressureEarned, payrollProrateCents, payrollWorkPressurePay, payrollWorkPressureSalaryLine, withWorkPressurePay } from './payroll-work-pressure'
-import { computePayrollPolicyEnginePreNet, parsePayrollEngineParityReport, PAYROLL_DEFAULT_ENGINE_MODE, PAYROLL_ENGINE_MODE_LABELS, PAYROLL_ENGINE_MODES, PAYROLL_PARITY_COMPONENTS,
+import { computePayrollPolicyEnginePreNet, parsePayrollEngineParityReport, PAYROLL_DEFAULT_ENGINE_MODE, PAYROLL_ENGINE_MODE_LABELS, PAYROLL_ENGINE_MODES, PAYROLL_PARITY_COMPONENTS, PAYROLL_POLICY_PARKED_MESSAGE,
   payrollParityDifferenceKey, payrollParityEmployeeRow, payrollPolicySwitchIssues, summarizePayrollEngineParity, type PayrollEngineMode, type PayrollParityEmployeeRow,
   payrollApprovalParityIssues, payrollParityPendingGroups, payrollShadowSourceIssueCodes, payrollPolicyEngineWithLoans, type PayrollPolicyEngineFacts } from './payroll-policy-engine-run'
 import { PayrollRunParityExplanation } from './payroll-lateness-tier-sets.entities'
@@ -664,6 +664,8 @@ export class PayrollService {
       if (!run) {
         run = runs.create({
             name: dto.name ?? null,
+            // B1.10 / D03: صريح (افتراضي العمود القديم SHADOW)
+            engineMode: PAYROLL_DEFAULT_ENGINE_MODE,
             scopeType: dto.scopeType,
             scopeIds: dto.scopeIds ? JSON.stringify(dto.scopeIds) : (null as any),
             employeeIds: dto.employeeIds
@@ -700,8 +702,11 @@ export class PayrollService {
       const absencePenalty = policyValues.absencePenaltyDays
       // B1.6: حارس الفترة من اللقطة (غيابه = مقفول = زي ما كان)
       const periodDeductionGuard = policyValues.periodDeductionGuard === true
-      // الخطوة 20 / D13: وضع المحرك للمسير (الجديد SHADOW)؛ POLICY يصرف نتيجة المحرك بشرط تكافؤ مفسر.
-      const engineMode: PayrollEngineMode = run.engineMode && PAYROLL_ENGINE_MODES.includes(run.engineMode) ? run.engineMode : PAYROLL_DEFAULT_ENGINE_MODE
+      // B1.10 / D03: مسار حساب واحد — الحساب الحالي هو اللي بيتصرف. SHADOW بيفضل بس لو مدير النظام اختاره للفحص (آخر حدث تحويل وضع
+      // لـSHADOW)؛ SHADOW من افتراضي العمود القديم وPOLICY (متركن) والفاضي = LEGACY
+      const chosenShadow = run.engineMode === 'SHADOW' && !!run.id && (await em.getRepository(PayrollRunEvent).findOne({ where: { runId: run.id, eventType: 'ENGINE_MODE_CHANGED' },
+        order: { id: 'DESC' } }))?.payload?.to === 'SHADOW'
+      const engineMode: PayrollEngineMode = chosenShadow ? 'SHADOW' : PAYROLL_DEFAULT_ENGINE_MODE
       const explainedKeys = new Set(run.id ? (await em.getRepository(PayrollRunParityExplanation).find({ where: { runId: run.id }, select: { differenceKey: true } })).map(row => row.differenceKey) : [])
       const parityRows: PayrollParityEmployeeRow[] = []
       const policyBlocked: Array<{ employeeId: number; component: string; legacy: string; policy: string | null; reason: string }> = []
@@ -1494,9 +1499,9 @@ export class PayrollService {
       // تبسيط الرواتب (2026-09-15): شرط التكافؤ لا يوقف الاعتماد إلا لمسير يصرف نتيجة محرك السياسة (POLICY)؛
       // SHADOW/LEGACY يصرف الحساب القائم فتقرير الفروق معلومة فقط: يُرفق بالاعتماد متى كان سليمًا ومفسَّرًا (لسجل فترة التكافؤ)، وإلا null بلا منع.
       // وإقرار «موظفون بلا مسير» لم يعد شرطًا للاعتماد (التقرير متاح للقراءة).
-      const parity = run.engineMode === 'POLICY'
-        ? await this.assertApprovalParity(em, run, policySnapshot.fingerprint)
-        : await this.assertApprovalParity(em, run, policySnapshot.fingerprint).catch(error => { if (error instanceof ConflictException) return null; throw error })
+      // B1.10 / D03: مسير POLICY (محسوب قبل ركن المحرك) مابيتعتمدش — إعادة الحساب بترجّعه للحساب الحالي
+      if (run.engineMode === 'POLICY') throw new ConflictException({ code: 'PAYRUN-ENGINE-POLICY-PARKED', message: PAYROLL_POLICY_PARKED_MESSAGE })
+      const parity = await this.assertApprovalParity(em, run, policySnapshot.fingerprint).catch(error => { if (error instanceof ConflictException) return null; throw error })
       const items = await em.getRepository(PayrollItem).find({ where: { runId } })
       const employeeIds = await this.validateRunMembers(em, run, items)
       await lockPayrollEmployees(em, employeeIds)
@@ -2430,7 +2435,7 @@ export class PayrollService {
       this.assertNonEmptyScope(preview.totals.candidates, definition)
       const saved = await this.saveRunRow(em, em.getRepository(PayrollRun).create({ name, ...payrollRunDefinitionColumns(definition),
         policyId: context.policy.id, policyVersionId: context.version.id, period: context.period, startDate: context.startDate, endDate: context.endDate,
-        status: 'DRAFT', totalNet: 0, snapshotVersion: 0,
+        status: 'DRAFT', totalNet: 0, snapshotVersion: 0, engineMode: PAYROLL_DEFAULT_ENGINE_MODE,
         ...(correction ? { runType: 'SUPPLEMENTARY' as const, parentRunId: correction.parentRunId, correctionReason: correction.correctionReason } : {}) }))
       await this.event(em, user, saved.id, 'DRAFT_CREATED', correction ? correction.correctionReason.slice(0, 500) : null, { name, definition, policy: this.policyViewOf(context),
         period: { period: context.period, startDate: context.startDate, endDate: context.endDate }, previewTotals: preview.totals, previewHash: preview.previewHash,
@@ -2663,7 +2668,9 @@ export class PayrollService {
     const mode = run.engineMode ?? null
     // شروط الاعتماد نفسها التي يفحصها approve (قراءة فقط) — تظهر في اللوحة قبل الضغط على «اعتماد»
     const itemEmployeeIds = run.status === 'CALCULATED' ? (await em.getRepository(PayrollItem).find({ where: { runId: run.id }, select: { employeeId: true } })).map(row => row.employeeId) : []
-    const approvalIssues = run.status === 'CALCULATED' ? payrollApprovalParityIssues(report, { engineMode: mode, snapshotVersion: run.snapshotVersion,
+    // B1.10: الاعتماد بيفحص التكافؤ لمسير POLICY بس (من «تبسيط الرواتب» 15 سبتمبر). لمسير SHADOW (فحص) الفروق اللي من غير سبب معلومة
+    // (والأسباب اختيارية، والشاشة مابتعرضهاش كمانع)، ولمسير LEGACY مفيش تقرير أصلًا
+    const approvalIssues = run.status === 'CALCULATED' && mode !== 'LEGACY' ? payrollApprovalParityIssues(report, { engineMode: mode, snapshotVersion: run.snapshotVersion,
       policySnapshotHash: run.policySnapshotHash ?? null }, keys, itemEmployeeIds) : []
     return { mode, modeLabel: mode ? PAYROLL_ENGINE_MODE_LABELS[mode] : 'مسير قبل D13 (بلا وضع محرك)', report, explanations,
       switchIssues: payrollPolicySwitchIssues(report, { snapshotVersion: run.snapshotVersion, policySnapshotHash: run.policySnapshotHash ?? null }, keys),
@@ -2741,22 +2748,16 @@ export class PayrollService {
       if (!['DRAFT', 'CALCULATED'].includes(run.status)) throw this.stateError('تغيير وضع محرك الحساب', run.status)
       const from = run.engineMode ?? null
       if (from === dto.mode) this.bad('PAYRUN-ENGINE-MODE-UNCHANGED', `المسير بالفعل بوضع ${dto.mode}`)
-      let issues: ReturnType<typeof payrollPolicySwitchIssues> = []
-      const saved = dto.mode === 'POLICY' && dto.explanations?.length ? await this.recordParityExplanations(em, user, run, dto.explanations) : []
-      const report = parsePayrollEngineParityReport(run.parityReport)
-      if (dto.mode === 'POLICY') {
-        if (run.status !== 'CALCULATED') this.bad('PAYRUN-ENGINE-POLICY-NEEDS-REPORT', 'التحويل إلى POLICY بعد حساب المسير بوضع SHADOW وظهور تقرير التكافؤ')
-        const keys = new Set((await em.getRepository(PayrollRunParityExplanation).find({ where: { runId: run.id }, select: { differenceKey: true } })).map(row => row.differenceKey))
-        issues = payrollPolicySwitchIssues(report, { snapshotVersion: run.snapshotVersion, policySnapshotHash: run.policySnapshotHash ?? null }, keys)
-        if (issues.length) {
-          throw new ConflictException({ code: 'PAYRUN-ENGINE-PARITY-REQUIRED', issues: issues.slice(0, 100),
-            message: `لا يُحوّل المسير إلى POLICY قبل أن يكون تقرير التكافؤ صفرًا أو لكل فرق سبب مكتوب: ${issues.length} شرطًا غير مستوفى (${issues[0].reason})` })
-        }
+      // B1.10 / D03: POLICY متركن، وSHADOW (حساب تاني جنب الحالي) أداة فحص لمدير النظام بس
+      if (dto.mode === 'POLICY') throw new ConflictException({ code: 'PAYRUN-ENGINE-POLICY-PARKED', message: PAYROLL_POLICY_PARKED_MESSAGE })
+      if (dto.mode === 'SHADOW' && user.role !== 'super_admin') {
+        throw new ForbiddenException({ code: 'PAYRUN-ENGINE-SHADOW-ADMIN-ONLY', message: 'فحص التكافؤ (SHADOW) لمدير النظام بس — المسير بيتحسب بالحساب الحالي' })
       }
+      const report = parsePayrollEngineParityReport(run.parityReport)
       run.engineMode = dto.mode
       await this.saveRunRow(em, run)
       await this.event(em, user, run.id, 'ENGINE_MODE_CHANGED', reason, { from, to: dto.mode, snapshotVersion: run.snapshotVersion,
-        parityReportHash: report?.reportHash ?? null, parityTotals: report?.totals ?? null, explanationIds: saved.map(row => row.id),
+        parityReportHash: report?.reportHash ?? null, parityTotals: report?.totals ?? null, explanationIds: [],
         recalculationRequired: run.status === 'CALCULATED' })
     })
     return this.readRun(runId, async (em, run) => this.engineView(em, run))

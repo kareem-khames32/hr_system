@@ -54,8 +54,11 @@ async function employee(overrides = {}) {
 const sickLeave = (emp, fromDate, toDate, extra = {}) => repo('Leave').save({ employeeId: emp.id, leaveTypeCode: 'SICK_T', fromDate, toDate,
   days: Math.round((Date.parse(toDate) - Date.parse(fromDate)) / 86400000) + 1, period: 'FULL', isUnpaid: false, status: 'APPROVED', ...extra })
 async function calculate(period, employees) {
-  return expectStatus(await request(admin, 'POST', '/payroll/runs/calculate-defined', { period, scopeType: 'CUSTOM', employeeIds: employees.map(e => e.id),
+  const run = expectStatus(await request(admin, 'POST', '/payroll/runs/calculate-defined', { period, scopeType: 'CUSTOM', employeeIds: employees.map(e => e.id),
     name: `اختبار المرضية ${crypto.randomUUID().slice(0, 8)}` }), 201)
+  // B1.10 (D03): المسير بيتحسب بالحساب الحالي بس؛ فحص التكافؤ (SHADOW) بيختاره مدير النظام عشان نتأكد إن المحرك شايف سطر المرضية
+  expectStatus(await request(admin, 'POST', `/payroll/runs/${run.id}/engine-mode`, { mode: 'SHADOW', reason: 'فحص تكافؤ المرضية' }), 201)
+  return expectStatus(await request(admin, 'POST', `/payroll/runs/${run.id}/recalculate`, { reason: 'إعادة الحساب بفحص التكافؤ' }), 201)
 }
 const itemOf = (run, emp) => { const found = run.items.find(row => row.employeeId === emp.id); assert.ok(found, emp.employeeCode); return found }
 async function assertUnpaidParity(run, emp) {

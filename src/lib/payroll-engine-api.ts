@@ -4,7 +4,8 @@ import { apiFetch } from './api'
 
 export type PayrollEngineMode = 'LEGACY' | 'SHADOW' | 'POLICY'
 export const ENGINE_MODE_LABELS: Record<PayrollEngineMode, string> = {
-  LEGACY: 'الحساب القديم وحده (بلا ظل)', SHADOW: 'ظل: المصروف القديم ومحرك السياسة بجانبه', POLICY: 'السياسة: المصروف من محرك السياسة',
+  // B1.10 (D03): مسار حساب واحد — الحالي بيتصرف، والظل فحص، وPOLICY متركن
+  LEGACY: 'الحساب الحالي (مسار حساب واحد)', SHADOW: 'فحص التكافؤ: الحساب الحالي ومحرك المعادلات جنبه للعرض', POLICY: 'متركن: نتيجة محرك المعادلات (مابيتعتمدش)',
 }
 
 export type LatenessTierMode = 'FRACTION' | 'MULTIPLIER' | 'MINUTES' | 'NONE'
