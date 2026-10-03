@@ -7,7 +7,7 @@ import { PayrollRunMember } from './payroll.entities'
 const RUN_REF_KEY = /^runId$|RunId$/
 export function payloadRunIds(payload: unknown, out: number[] = []): number[] {
   if (Array.isArray(payload)) for (const value of payload) payloadRunIds(value, out)
-  else if (payload && typeof payload === 'object') {
+  else if (payload && typeof payload === 'object' && !(payload instanceof Date)) {
     for (const [key, value] of Object.entries(payload)) RUN_REF_KEY.test(key) && typeof value === 'number' ? out.push(value) : payloadRunIds(value, out)
   }
   return out
@@ -18,7 +18,7 @@ export function maskPayloadRunRefs<T>(payload: T, visible: (runId: number) => bo
   let hidden = false
   const walk = (value: unknown): unknown => {
     if (Array.isArray(value)) return value.map(walk)
-    if (!value || typeof value !== 'object') return value
+    if (!value || typeof value !== 'object' || value instanceof Date) return value
     const copy: Record<string, unknown> = {}
     for (const [key, item] of Object.entries(value)) {
       if (RUN_REF_KEY.test(key) && typeof item === 'number' && !visible(item)) { copy[key] = null; hidden = true } else copy[key] = walk(item)
@@ -72,6 +72,21 @@ export async function payrollRunRefVisibility(em: EntityManager, scope: BranchSc
   return (runId, employeeId) => runId != null && (
     (selfEmployeeId != null && employeeId === selfEmployeeId) ||
     (parentOf.has(runId) ? !!parentShown && parentShown(parentOf.get(runId)!, employeeId) : own(runId, employeeId)))
+}
+
+/**
+ * CR36-B01: صفوف خام (قيد دفتر، سجل إضافي، …) فيها مراجع مسير (runId أو *RunId في أي عمق) — المرجع المخفي للحساب لموظف الصف بيبقى
+ * null. الصف من غير مرجع مخفي بيرجع زي ما هو بالظبط، والتواريخ والمبالغ مابتتلمسش. viewer = null (داخلي) = من غير حجب
+ */
+export async function scopeRunRefRows<T extends object>(em: EntityManager, viewer: JwtPayload | null, rows: readonly T[], employeeIdOf: (row: T) => number): Promise<T[]> {
+  const refs = rows.map(row => payloadRunIds(row))
+  if (!viewer || !refs.some(ids => ids.length)) return [...rows]
+  const shown = await payrollRunRefVisibility(em, branchScopeOf(viewer), refs.flat(), rows.map(employeeIdOf), viewer.employeeId ?? null)
+  return rows.map((row, index) => {
+    if (!refs[index].length) return row
+    const { payload, hidden } = maskPayloadRunRefs(row, runId => shown(runId, employeeIdOf(row)))
+    return hidden ? payload : row
+  })
 }
 
 /** مانع فيه مرجع مسير في تفاصيله (runId أو *RunId) ونص بديل من غير المرجع (redactedMessage) */

@@ -11,6 +11,8 @@ import { branchScopeOf, inBranchScope, scopeWord, userHasPerm } from '../auth/gu
 import { Employee } from '../employees/employee.entity'
 import { roundPayrollMoney } from './payroll-money'
 import { lockPayrollEmployees } from './payroll-settlement-boundary'
+// CR36-B01: مراجع المسير في صفوف الدفتر بقاعدة رؤية المسير
+import { scopeRunRefRows } from './payroll-run-visibility'
 import {
   EmployeeObligation,
   ObligationType,
@@ -101,10 +103,12 @@ export class ObligationsService {
 
   async listByEmployee(user: JwtPayload, employeeId: number) {
     await this.assertEmployeeInScope(user, employeeId)
-    return this.repo.find({
+    const rows = await this.repo.find({
       where: { employeeId },
       order: { id: 'DESC' },
     })
+    // CR36-B01: مرجع المسير في الصف (محجوز/مصروف/معكوس) بقاعدة رؤية المسير لموظف القيد — مسير فرع تاني بعد نقله مابيظهرش
+    return scopeRunRefRows(this.repo.manager, user, rows, row => row.employeeId)
   }
 
   async cancel(user: JwtPayload, id: number) {
@@ -113,7 +117,9 @@ export class ObligationsService {
     await this.assertEmployeeInScope(user, row.employeeId)
     // صف القيد (مبلغه وسببه ومسيره) لقارئ الرواتب بس — صلاحية الحساب لوحدها بتلغي وبتاخد رقم القيد وحالته
     // (GET /obligations/employee/:id نفسه محتاج عرض مسيرات الرواتب)
-    const view = (saved: EmployeeObligation) => userHasPerm(user, 'payroll.view') ? saved : { id: saved.id, status: saved.status }
+    // CR36-B01: وصف القيد لقارئ الرواتب بمرجع المسير بقاعدة رؤية المسير (نفس القايمة)
+    const view = async (saved: EmployeeObligation, em: EntityManager) => userHasPerm(user, 'payroll.view')
+      ? (await scopeRunRefRows(em, user, [saved], row => row.employeeId))[0] : { id: saved.id, status: saved.status }
     // CR29-B01: الإلغاء تحت قفل الموظف المالي (النقل بياخده)، والنطاق والحالة بيتقروا تاني تحته
     return this.repo.manager.transaction(async em => {
       await lockPayrollEmployees(em, [row.employeeId])
@@ -124,9 +130,9 @@ export class ObligationsService {
       if (current.status === 'APPLIED') {
         throw new BadRequestException('طُبِّقت في مسير مصروف — لا يمكن إلغاؤها')
       }
-      if (current.status === 'CANCELLED') return view(current)
+      if (current.status === 'CANCELLED') return view(current, em)
       current.status = 'CANCELLED'
-      return view(await repo.save(current))
+      return view(await repo.save(current), em)
     })
   }
 }

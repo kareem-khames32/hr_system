@@ -94,6 +94,8 @@ import { assertLoanRequestClientPayload, EARLY_SETTLEMENT_FIELDS, isEarlySettlem
   LOAN_REQUEST_SERVER_FIELDS, readEarlySettlementPayload, reviewLoanRequestApproval, stageLoanRequestSubmission } from '../loans/loan-request-caps'
 import { PERSONAL_DATA_FIELDS, personalDataField } from '../employees/employee-personal-data'
 import { assertPersonalDataKeys, PERSONAL_DATA_HANDLER, validatePersonalDataRequest } from './personal-data-requests'
+// CR36-B01: مرجع المسير في إضافي تفاصيل الطلب بقاعدة رؤية المسير
+import { scopeRunRefRows } from '../payroll/payroll-run-visibility'
 
 export interface ActDto {
   action: 'APPROVE' | 'REJECT' | 'RETURN'
@@ -2083,7 +2085,9 @@ export class RequestsService {
     // الخطوة 13: جاهزية راتب شهر يوم العمل قبل الاعتماد النهائي، حتى لا يُفاجأ المعتمد الأخير بـOT_SALARY_MONTH_EVIDENCE_REQUIRED.
     const wageEvidence = !approved && ['DETECTED', 'SUBMITTED'].includes(entry.status)
       ? await this.ds.transaction(em => overtimeWageEvidence(em, entry.employeeId, entry.date)).catch(() => null) : null
-    return { ...full, overtime: {
+    // CR36-B01: مرجع المسير اللي اتأجل منه الإضافي (deferredFromRunId) بقاعدة رؤية المسير لموظف السجل
+    const [overtime] = await scopeRunRefRows(this.ds.manager, user, [{
+      employeeId: entry.employeeId,
       wageEvidence,
       id: entry.id, requestId: entry.requestId, date: entry.date, status: entry.status, source: entry.source,
       hoursRequested: entry.hoursRequested, hoursActual: entry.hoursActual, approvedMinutes: entry.approvedMinutes,
@@ -2104,7 +2108,9 @@ export class RequestsService {
         actorName: event.actorUserId ? actorNames.get(event.actorUserId) || null : null,
         stepOrder: event.stepOrder, reason: event.reason, createdAt: event.createdAt,
         beforeMinutes: event.payload?.beforeMinutes ?? null, approvedMinutes: event.payload?.approvedMinutes ?? null })),
-    } }
+    }], row => row.employeeId)
+    const { employeeId: _employee, ...view } = overtime
+    return { ...full, overtime: view }
   }
 
   // بطاقة صاحب الطلب: هويته وتنظيمه الحالي ومديره المباشر (نفس حل خطوة «المدير المباشر» في السلسلة)، ومين قدّمه

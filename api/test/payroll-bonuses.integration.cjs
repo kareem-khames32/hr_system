@@ -759,3 +759,56 @@ test('CR34-B01: أحداث الخصم (الترحيل) مابتكشفش رقم �
   assert.equal(expectStatus(await request(users.admin, 'GET', `/deductions/${row.id}`), 200).events.find(event => event.id === carry.id).payload.runId, privateRun.id)
   assert.equal(JSON.parse((await repo('DeductionRequestEvent').findOneByOrFail({ id: carry.id })).payload).runId, privateRun.id)
 })
+
+test('CR36-B01: «دفتر المستحقات» ورد إلغاء القيد وسجل الإضافي مابيكشفوش رقم مسير فرع تاني بعد نقل الموظف (محجوز ومصروف)، والشركة بتشوفه', { timeout: 300000 }, async () => {
+  const period = '2026-05'
+  const credit = (emp, label) => repo('EmployeeObligation').save({ employeeId: emp.id, type: 'CREDIT', category: 'manual', amount: 123.45, label,
+    status: 'PENDING', effectiveDate: '2026-05-01', sourceRef: `cr36:${emp.id}:${label}` })
+  // موظف مسيره في ب اتصرف (القيد مستهلك)، وموظف مسيره في ب معتمد بس (القيدين محجوزين)
+  const paid = await employee('BN_R36_PAID', { branchId: org.branchB.id, departmentId: null })
+  const held = await employee('BN_R36_HELD', { branchId: org.branchB.id, departmentId: null })
+  for (const emp of [paid, held]) await exempt(emp)
+  const paidCredit = await credit(paid, 'بدل مصروف')
+  const heldCredits = [await credit(held, 'بدل محجوز 1'), await credit(held, 'بدل محجوز 2')]
+  const paidRun = await calc(period, [paid]); await approveRun(paidRun); expectStatus(await transition(paidRun, 'pay'), 201)
+  const heldRun = await calc(period, [held]); await approveRun(heldRun)
+  const stored = await repo('EmployeeObligation').findOneByOrFail({ id: paidCredit.id })
+  assert.deepEqual([stored.status, stored.appliedPayrollRunId, stored.reservedPayrollRunId], ['APPLIED', paidRun.id, paidRun.id])
+  assert.equal((await repo('EmployeeObligation').findOneByOrFail({ id: heldCredits[0].id })).reservedPayrollRunId, heldRun.id)
+  // إضافي اتصرف في مسير ب
+  const overtime = await repo('OvertimeEntry').save({ employeeId: paid.id, date: '2026-05-12', source: 'PRE_REQUESTED', status: 'PAID', payrollRunId: paidRun.id,
+    deferredFromRunId: heldRun.id, hoursActual: 2, payableHours: 2, approvedMinutes: 120 })
+  for (const emp of [paid, held]) expectStatus(await transferTo(emp, org.branchA), 200)
+  for (const run of [paidRun, heldRun]) assert.equal((await request(users.hr, 'GET', `/payroll/runs/${run.id}`)).status, 403)
+  const leaks = (body, ids) => ids.filter(id => [`RunId":${id},`, `RunId":${id}}`].some(text => JSON.stringify(body).includes(text)))
+
+  // دفتر المستحقات لموارد أ: من غير مراجع مسيرات ب، والمبالغ والحالات زي ما هي
+  const paidLedger = expectStatus(await request(users.hr, 'GET', `/obligations/employee/${paid.id}`), 200)
+  assert.deepEqual(leaks(paidLedger, [paidRun.id, heldRun.id]), [])
+  const paidRow = paidLedger.find(row => row.id === paidCredit.id)
+  assert.deepEqual([paidRow.status, Number(paidRow.amount), paidRow.appliedPayrollRunId, paidRow.reservedPayrollRunId], ['APPLIED', 123.45, null, null])
+  const heldLedger = expectStatus(await request(users.hr, 'GET', `/obligations/employee/${held.id}`), 200)
+  assert.deepEqual(leaks(heldLedger, [heldRun.id]), [])
+  assert.deepEqual(heldLedger.map(row => row.reservedPayrollRunId), [null, null])
+  // الشركة بتشوف المراجع
+  const companyLedger = expectStatus(await request(users.admin, 'GET', `/obligations/employee/${paid.id}`), 200)
+  assert.deepEqual([companyLedger.find(row => row.id === paidCredit.id).appliedPayrollRunId], [paidRun.id])
+  // رد الإلغاء: نفس الحكم، والإلغاء نفسه زي ما هو
+  const cancelled = expectStatus(await request(users.hr, 'POST', `/obligations/${heldCredits[0].id}/cancel`, {}), 201)
+  assert.deepEqual([cancelled.status, cancelled.reservedPayrollRunId], ['CANCELLED', null])
+  const companyCancel = expectStatus(await request(users.admin, 'POST', `/obligations/${heldCredits[1].id}/cancel`, {}), 201)
+  assert.equal(companyCancel.reservedPayrollRunId, heldRun.id)
+  // سجل الإضافي لقارئ حضور ورواتب فرع أ: من غير مسير الصرف ولا المسير اللي اتأجل منه
+  const attendanceA = await repo('User').save({ email: 'attendance-a-cr36@payroll-bonuses.invalid', displayName: 'attendance-a-cr36', passwordHash: 'test-only',
+    role: 'employee', branchId: org.branchA.id, employeeId: null, permissions: JSON.stringify(['attendance.view_all', 'payroll.view']) })
+  const log = expectStatus(await request(attendanceA, 'GET', '/attendance/overtime?from=2026-05-01&to=2026-05-31'), 200)
+  const entry = log.entries.find(row => row.id === overtime.id)
+  assert.ok(entry, 'السجل ظاهر لقارئ الفرع')
+  assert.deepEqual([entry.payrollRunId, entry.deferredFromRunId], [null, null])
+  assert.deepEqual(leaks(log, [paidRun.id, heldRun.id]), [])
+  const companyLog = expectStatus(await request(users.admin, 'GET', '/attendance/overtime?from=2026-05-01&to=2026-05-31'), 200)
+  const companyEntry = companyLog.entries.find(row => row.id === overtime.id)
+  assert.deepEqual([companyEntry.payrollRunId, companyEntry.deferredFromRunId], [paidRun.id, heldRun.id])
+  // المخزن زي ما هو
+  assert.equal((await repo('OvertimeEntry').findOneByOrFail({ id: overtime.id })).payrollRunId, paidRun.id)
+})

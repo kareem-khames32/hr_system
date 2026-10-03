@@ -32,6 +32,8 @@ import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { AttendanceCorrection, OvertimeEntry } from '../requests/entities/attendance.entities'
 import { Leave } from '../requests/entities/leave.entities'
+// CR36-B01: مراجع المسير في سجل الإضافي بقاعدة رؤية المسير
+import { scopeRunRefRows } from '../payroll/payroll-run-visibility'
 import { Request } from '../requests/entities/request.entity'
 import { RequestType } from '../requests/entities/request-type.entity'
 import { RequestApproval } from '../requests/entities/request-approval.entity'
@@ -3920,12 +3922,14 @@ export class AttendanceService {
     // «اعتماد تلقائي»: المعتمد تلقائيًا بيتعرف من لقطة اعتماده، والمكتشف اللي نافذة يومه فيها فترة اعتماد تلقائي شغالة
     // بيستنى يومه يخلص (مش واقف) — علامتين بلا أرقام مالية فبتظهر لكل اللي يشوف السطر
     const autoPeriodIds = rows.some((r) => r.status === 'DETECTED' && !r.requestId) ? await this.autoApproveOvertimePeriodIds() : new Set<number>()
+    // CR36-B01: مرجع مسير صرف السجل أو تأجيله (payrollRunId وdeferredFromRunId ومراجع اللقطة) بقاعدة رؤية المسير لموظف السجل
+    const scoped = (entries: Array<{ employeeId: number }>) => scopeRunRefRows(this.days.manager, user, entries, entry => entry.employeeId)
     return {
       month: range.month,
       from: range.from,
       to: range.to,
       requiresConfirmation,
-      entries: rows.map((r) => {
+      entries: await scoped(rows.map((r) => {
         const emp = empById.get(r.employeeId)
         const req = r.requestId ? reqById.get(r.requestId) : undefined
         const { calculationSnapshot: storedSnapshot, hourlyRateSnapshot, amountSnapshot, ...attendanceFields } = r
@@ -3955,7 +3959,7 @@ export class AttendanceService {
             !!emp &&
             this.writeBlock(user, emp, 'self') === null,
         }
-      }),
+      })),
     }
   }
 
