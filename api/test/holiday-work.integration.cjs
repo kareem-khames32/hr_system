@@ -370,3 +370,169 @@ test('يوم عطلة اتعتمد بعد اعتماد مسير فترته: بي
   assert.equal(Number(september.item(emp.id).otherAdditions), 0)
   assert.equal(breakdownOf(september.item(emp.id)).holidayWork, undefined)
 })
+
+// CR29-B01 (مراجعة Codex الجولة 29): حاجز ماسك القفل المالي للموظف زي النقل بالظبط؛ الإجراء لازم يكون واقف عليه، وبعدين النقل بيتحفظ جوه نفس المعاملة
+async function whileTransferHoldsFinance(emp, action) {
+  const barrier = ds.createQueryRunner()
+  let pending, committed = false
+  try {
+    await barrier.connect(); await barrier.startTransaction()
+    const spid = (await barrier.query('SELECT @@SPID AS spid'))[0].spid
+    const locked = await barrier.query("DECLARE @result int; EXEC @result=sys.sp_getapplock @Resource=@0,@LockMode='Exclusive',@LockOwner='Transaction',@LockTimeout=5000; SELECT @result AS result",
+      [`hr:employee-finance:${emp.id}`])
+    assert.ok(locked[0].result >= 0)
+    pending = action()
+    const deadline = Date.now() + 8000
+    let waiting = false
+    while (!waiting && Date.now() < deadline) {
+      waiting = (await master.request().input('spid', sql.Int, spid).input('database', sql.NVarChar, database)
+        .query("SELECT session_id FROM sys.dm_exec_requests WHERE database_id=DB_ID(@database) AND blocking_session_id=@spid AND wait_type LIKE 'LCK%'")).recordset.length > 0
+      if (!waiting) await new Promise(done => setTimeout(done, 25))
+    }
+    assert.equal(waiting, true, 'الإجراء لازم يستنى القفل المالي للموظف قبل ما يقرا فرعه')
+    await barrier.query('UPDATE employees SET branchId=@0 WHERE id=@1', [branchB.id, emp.id])
+    await barrier.commitTransaction(); committed = true
+    return await pending
+  } finally {
+    if (!committed && barrier.isTransactionActive) await barrier.rollbackTransaction()
+    if (pending) await Promise.allSettled([pending])
+    await barrier.release()
+  }
+}
+
+test('CR29-B01: أمر دوام العطلة لموظفين بالاسم بيتحفظ تحت قفلهم المالي — موظف اتنقل لفرع تاني قبل القفل بيرفض الأمر كله، وكمان تعديل أمر قائم ليه', async () => {
+  const NAMED_DAY = '2026-08-07', NAMED_DAY_2 = '2026-08-08'
+  const named = await employee(deptA)
+  const body = { name: 'جرد بالاسم وقت النقل', targetLevel: 'employees', branchId: branchA.id, employeeIds: [named.id], dates: [NAMED_DAY] }
+  const refused = await whileTransferHoldsFinance(named, () => request(hrA, 'POST', '/attendance/holiday-work', body))
+  assert.equal(refused.status, 400, JSON.stringify(refused.body))
+  assert.equal(await repo('HolidayWorkOrder').countBy({ name: body.name }), 0)
+  const other = await employee(deptA)
+  const existing = expectStatus(await request(hrA, 'POST', '/attendance/holiday-work', { name: 'جرد قسم قبل التعديل', targetLevel: 'departments',
+    branchId: branchA.id, departmentIds: [deptA2.id], dates: [NAMED_DAY_2] }), 201).order
+  const edited = await whileTransferHoldsFinance(other, () => request(hrA, 'PATCH', `/attendance/holiday-work/${existing.id}`,
+    { name: 'جرد بالاسم', targetLevel: 'employees', branchId: branchA.id, employeeIds: [other.id], dates: [NAMED_DAY_2] }))
+  assert.equal(edited.status, 400, JSON.stringify(edited.body))
+  const stored = await repo('HolidayWorkOrder').findOneByOrFail({ id: existing.id })
+  assert.deepEqual([stored.targetLevel, stored.name], ['departments', 'جرد قسم قبل التعديل'])
+})
+
+// CR30-B01 (مراجعة Codex الجولة 30): حاجز ماسك صف السجل (أمر العطلة أو فترة الإضافي) زي تعديل حساب الشركة بالظبط؛ الإجراء لازم يكون
+// واقف عليه، وبعدين فرع السجل بيتغيّر جوه نفس المعاملة
+async function whileRowMovesBranch(table, id, branchId, action) {
+  assert.ok(['holiday_work_orders', 'overtime_periods'].includes(table))
+  const barrier = ds.createQueryRunner()
+  let pending, committed = false
+  try {
+    await barrier.connect(); await barrier.startTransaction()
+    const spid = (await barrier.query('SELECT @@SPID AS spid'))[0].spid
+    assert.equal((await barrier.query(`SELECT [id] FROM [${table}] WITH (UPDLOCK, ROWLOCK) WHERE [id] = @0`, [id])).length, 1)
+    pending = action()
+    const deadline = Date.now() + 8000
+    let waiting = false
+    while (!waiting && Date.now() < deadline) {
+      waiting = (await master.request().input('spid', sql.Int, spid).input('database', sql.NVarChar, database)
+        .query("SELECT session_id FROM sys.dm_exec_requests WHERE database_id=DB_ID(@database) AND blocking_session_id=@spid AND wait_type LIKE 'LCK%'")).recordset.length > 0
+      if (!waiting) await new Promise(done => setTimeout(done, 25))
+    }
+    assert.equal(waiting, true, 'الإجراء لازم يستنى صف السجل قبل ما يقرا نطاقه')
+    await barrier.query(`UPDATE [${table}] SET [branchId] = @0 WHERE [id] = @1`, [branchId, id])
+    await barrier.commitTransaction(); committed = true
+    return await pending
+  } finally {
+    if (!committed && barrier.isTransactionActive) await barrier.rollbackTransaction()
+    if (pending) await Promise.allSettled([pending])
+    await barrier.release()
+  }
+}
+
+test('CR30-B01: تعديل أو إلغاء أمر عطلة، وتعديل أو حذف فترة إضافي، بصلاحية الفرع القديم وقت ما السجل نفسه بيتنقل لفرع تاني — مابيتحفظوش', async () => {
+  const ORDER_DAY = '2026-08-14'
+  const order = async name => expectStatus(await request(hrA, 'POST', '/attendance/holiday-work', { name, targetLevel: 'branch', branchId: branchA.id, dates: [ORDER_DAY] }), 201).order
+  const toCancel = await order('أمر فرع أ للإلغاء وقت نقله')
+  const cancelled = await whileRowMovesBranch('holiday_work_orders', toCancel.id, branchB.id,
+    () => request(hrA, 'POST', `/attendance/holiday-work/${toCancel.id}/cancel`, { reason: 'إلغاء وقت النقل' }))
+  assert.equal(cancelled.status, 404, JSON.stringify(cancelled.body))
+  const stillActive = await repo('HolidayWorkOrder').findOneByOrFail({ id: toCancel.id })
+  assert.deepEqual([stillActive.status, stillActive.branchId], ['ACTIVE', branchB.id])
+  const toEdit = await order('أمر فرع أ للتعديل وقت نقله')
+  const edited = await whileRowMovesBranch('holiday_work_orders', toEdit.id, branchB.id, () => request(hrA, 'PATCH', `/attendance/holiday-work/${toEdit.id}`,
+    { name: 'تعديل وقت النقل', targetLevel: 'branch', branchId: branchA.id, dates: [ORDER_DAY] }))
+  assert.equal(edited.status, 404, JSON.stringify(edited.body))
+  const unchanged = await repo('HolidayWorkOrder').findOneByOrFail({ id: toEdit.id })
+  assert.deepEqual([unchanged.name, unchanged.branchId], ['أمر فرع أ للتعديل وقت نقله', branchB.id])
+  // فترات الإضافي: نفس الشيء
+  const period = async name => expectStatus(await request(hrA, 'POST', '/attendance/overtime-periods',
+    { name, fromDate: '2026-08-01', toDate: '2026-08-31', effect: 'OPEN', branchId: branchA.id }), 201)
+  const toUpdate = await period('فترة فرع أ للتعديل وقت نقلها')
+  const updated = await whileRowMovesBranch('overtime_periods', toUpdate.id, branchB.id,
+    () => request(hrA, 'PATCH', `/attendance/overtime-periods/${toUpdate.id}`, { name: 'تعديل وقت النقل', effect: 'CLOSED' }))
+  assert.equal(updated.status, 403, JSON.stringify(updated.body))
+  const sameUpdate = await repo('OvertimePeriod').findOneByOrFail({ id: toUpdate.id })
+  assert.deepEqual([sameUpdate.name, sameUpdate.effect, sameUpdate.branchId], ['فترة فرع أ للتعديل وقت نقلها', 'OPEN', branchB.id])
+  const toDelete = await period('فترة فرع أ للحذف وقت نقلها')
+  const deleted = await whileRowMovesBranch('overtime_periods', toDelete.id, branchB.id, () => request(hrA, 'DELETE', `/attendance/overtime-periods/${toDelete.id}`))
+  assert.equal(deleted.status, 403, JSON.stringify(deleted.body))
+  assert.equal(await repo('OvertimePeriod').countBy({ id: toDelete.id }), 1)
+})
+
+// CR31-B01 (مراجعة Codex الجولة 31): تعديل حساب الشركة (نقل لفرع تاني واسم جديد) واقف ورا تعديل الفرع على صف الأمر، فبيتنفذ
+// على طول بعد commit تعديل الفرع وقبل ما رده يتبني. القراية بعد الـcommit بتستنى كتابة الشركة؛ الرد البديل لازم يتبني من اللي
+// الفرع حفظه جوه معاملته، مش من الاسم الجديد اللي في الفرع التاني
+// blocking_session_id بيشاور على أول واحد في طابور القفل، فالواقف ورا طلب واقف بيتعد على الطلب ده مش على الماسك
+async function blockedBy(spid) {
+  return (await master.request().input('spid', sql.Int, spid).input('database', sql.NVarChar, database)
+    .query("SELECT session_id FROM sys.dm_exec_requests WHERE database_id=DB_ID(@database) AND blocking_session_id=@spid AND wait_type LIKE 'LCK%'")).recordset.length
+}
+async function waiting(spid) {
+  return (await master.request().input('spid', sql.Int, spid)
+    .query("SELECT session_id FROM sys.dm_exec_requests WHERE session_id=@spid AND wait_type LIKE 'LCK%'")).recordset.length
+}
+async function waitBlocked(spid, count, message, probe = blockedBy) {
+  const deadline = Date.now() + 8000
+  while (Date.now() < deadline) {
+    if (await probe(spid) >= count) return
+    await new Promise(done => setTimeout(done, 25))
+  }
+  assert.fail(message)
+}
+
+test('CR31-B01: تعديل أمر عطلة اتحفظ والأمر اتنقل لفرع تاني واتسمّى بعدها على طول — الرد مابيكشفش الاسم الجديد', async () => {
+  const ORDER_DAY = '2026-08-21'
+  const body = name => ({ name, targetLevel: 'branch', branchId: branchA.id, dates: [ORDER_DAY] })
+  const order = expectStatus(await request(hrA, 'POST', '/attendance/holiday-work', body('أمر فرع أ قبل التعديل')), 201).order
+  const submitted = 'اسم حفظه فرع أ', foreign = 'اسم خاص بفرع ب بس'
+  const gate = ds.createQueryRunner(), company = ds.createQueryRunner()
+  let pending, moving, gateOpen = true, companyOpen = true
+  try {
+    await gate.connect(); await gate.startTransaction()
+    await company.connect(); await company.startTransaction()
+    const gateSpid = (await gate.query('SELECT @@SPID AS spid'))[0].spid, companySpid = (await company.query('SELECT @@SPID AS spid'))[0].spid
+    assert.equal((await gate.query('SELECT [id] FROM [holiday_work_orders] WITH (UPDLOCK, ROWLOCK) WHERE [id] = @0', [order.id])).length, 1)
+    // تعديل الفرع الأول في الطابور، وتعديل الشركة وراه على نفس الصف
+    pending = request(hrA, 'PATCH', `/attendance/holiday-work/${order.id}`, body(submitted))
+    await waitBlocked(gateSpid, 1, 'تعديل الفرع لازم يستنى صف الأمر')
+    moving = company.query('UPDATE [holiday_work_orders] SET [branchId] = @0, [name] = @1 WHERE [id] = @2', [branchB.id, foreign, order.id])
+    await waitBlocked(companySpid, 1, 'تعديل الشركة لازم يقف ورا تعديل الفرع', waiting)
+    await gate.commitTransaction(); gateOpen = false
+    // تعديل الفرع اتحفظ، وكتابة الشركة اتنفذت بعده ولسه ماثبتتش: أي قراية للأمر بعد commit الفرع بتستناها
+    await moving
+    assert.equal((await repo('HolidayWorkOrder').createQueryBuilder('o').setLock('dirty_read').where('o.id = :id', { id: order.id }).getOneOrFail()).name, foreign)
+    await waitBlocked(companySpid, 1, 'رد التعديل لازم يكون واقف على كتابة الشركة بعد ما الفرع حفظ')
+    await company.commitTransaction(); companyOpen = false
+    const result = await pending
+    assert.equal(result.status, 200, JSON.stringify(result.body))
+    assert.equal(result.body.order.movedOutOfScope, true)
+    assert.ok(!JSON.stringify(result.body).includes(foreign), 'الرد كشف اسم الأمر في الفرع التاني: ' + JSON.stringify(result.body))
+    assert.deepEqual([result.body.order.id, result.body.order.name, result.body.order.status], [order.id, submitted, 'ACTIVE'])
+  } finally {
+    if (gateOpen && gate.isTransactionActive) await gate.rollbackTransaction()
+    await Promise.allSettled([moving].filter(Boolean))
+    if (companyOpen && company.isTransactionActive) await company.rollbackTransaction()
+    await Promise.allSettled([pending].filter(Boolean))
+    await gate.release(); await company.release()
+  }
+  const stored = await repo('HolidayWorkOrder').findOneByOrFail({ id: order.id })
+  assert.deepEqual([stored.name, stored.branchId], [foreign, branchB.id])
+  assert.equal((await request(hrA, 'GET', `/attendance/holiday-work/${order.id}`)).status, 404)
+})

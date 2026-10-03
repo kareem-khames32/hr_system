@@ -1,0 +1,10 @@
+'use strict'
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict')
+const source=fs.readFileSync(path.join(__dirname,'payroll-overtime-request.integration.cjs'),'utf8')
+const end=source.indexOf("test('OT-06 preview:");assert.ok(end>0)
+const prefix=source.slice(0,end).replaceAll('hr_payroll_ot_test_','hr_codex_r37_ot_test_')
+ .replace("let workDate = dateAfter(today, -2)","let workDate = '2026-07-08'")
+ .replace("{ key: 'overtime.request_backdate_days', value: '30' }","{ key: 'overtime.request_backdate_days', value: '400' }")
+const target=path.join(__dirname,'codex-review-round37-overtime.integration.cjs');assert.equal(fs.existsSync(target),false)
+fs.writeFileSync(target,prefix+fs.readFileSync(path.join(__dirname,'codex-review-round37-overtime-cases.cjs'),'utf8'))
+console.log('CR37 overtime test fixture copied; product and original test untouched')

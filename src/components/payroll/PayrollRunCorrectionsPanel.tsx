@@ -182,8 +182,10 @@ export function PayrollRunCorrectionsPanel({ run, employeeName, onOpenRun }: {
               {correction.children.map(child => (
                 <li key={child.id} className="flex flex-wrap items-center gap-2 border-t border-gray-100 pt-1">
                   <span className={`badge ${TYPE_BADGE[child.runType]}`}>{child.runTypeLabel}</span>
-                  <button type="button" className="text-primary-700 underline" onClick={() => onOpenRun(child.id)}>#{child.id} {child.name ?? ''}</button>
-                  <span className="text-gray-600">{STATUS_LABELS[child.status] ?? child.status} • صافي <span className="font-mono">{formatMoney(child.totalNet)}</span></span>
+                  {/* مسير تابع فيه فروع برّه نطاقك: رأسه بس، من غير صافيه ولا فتحه */}
+                  {child.totalNet === null ? <span className="text-gray-700">#{child.id} {child.name ?? ''}</span>
+                    : <button type="button" className="text-primary-700 underline" onClick={() => onOpenRun(child.id)}>#{child.id} {child.name ?? ''}</button>}
+                  <span className="text-gray-600">{STATUS_LABELS[child.status] ?? child.status}{child.totalNet !== null && <> • صافي <span className="font-mono">{formatMoney(child.totalNet)}</span></>}</span>
                 </li>
               ))}
             </ul>

@@ -64,7 +64,9 @@ test('D6 الخصومات والمكافآت: اللي مالوش صفة على 
     // رد واحد معرَّف مرة واحدة، والعرض بيرميه للغايب وللخارج عن النطاق
     assert.equal(source.split(`code: '${code}_NOT_FOUND'`).length - 1, code === 'DEDUCTION' ? 2 : 1, `${file}: رد «غير موجود» من مصدر واحد (+ اعتراض الموظف في الخصومات)`)
     assert.ok(source.includes(`private notFound() { return new NotFoundException({ code: '${code}_NOT_FOUND', message: '${message}' }) }`))
-    assert.match(source, /async detail\(user: JwtPayload, id: number\) \{\n    const row = await this\.requests\.findOneBy\(\{ id \}\)\n    if \(!row\) throw this\.notFound\(\)\n    const \[view\] = await this\.views\(this\.manager, user, \[row\], 'all'\)\n    if \(!view\) throw this\.notFound\(\)/)
+    // CR28-B01: العرض من detailIn (الإجراءات بتبنيه جوه معاملتها) — الطلب الغايب والمخفي الاتنين null، وdetail بيرميهم نفس الرد
+    assert.match(source, /async detail\(user: JwtPayload, id: number\) \{\n    const view = await this\.detailIn\(this\.manager, user, id\)\n    if \(!view\) throw this\.notFound\(\)/)
+    assert.match(source, /private async detailIn\(em: EntityManager, user: JwtPayload, id: number\) \{\n    const row = await em\.getRepository\(\w+Request\)\.findOneBy\(\{ id \}\)\n    if \(!row\) return null\n    const \[view\] = await this\.views\(em, user, \[row\], 'all'\)\n    if \(!view\) return null/)
     assert.ok(!source.includes('خارج نطاق صلاحيتك\' })'), `${file}: رد 403 القديم للعرض اتشال`)
     // الإجراءات: فحص الصفة قبل فحص النسخة والحالة (D12 لنفس المسارات)
     const locked = source.slice(source.indexOf('private async lockedRequest('))

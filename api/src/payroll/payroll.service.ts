@@ -112,6 +112,8 @@ import { cancelPayrollReversalLines, carryReversedRunExemptions, describePayroll
 import { assertPayrollRunHasNoChain, voidPayrollRunApprovals } from './payroll-approval-chain'
 import { assertPayrollRunNotDisbursed, closePayrollRunDisbursement } from './payroll-disbursement'
 import { PayrollItemDisbursement } from './payroll-disbursement.entities'
+// CR35-B01: مرجع مسير في موانع عكس الصرف بقاعدة رؤية المسير للحساب
+import { hiddenRunPeriodsByEmployee, scopePayrollRunRefBlockers, scrubRunPeriods, scrubRunPeriodsDeep } from './payroll-run-visibility'
 
 // الخطوة 16: مدخلات تعريف المسير من الشاشة (تُتحقق هنا ضد القاعدة؛ الـDTO يتحقق من الشكل فقط).
 export interface PayrollRunDefinitionInput {
@@ -315,6 +317,47 @@ export class PayrollService {
       const snapshot = snapshots.get(`${runId}:${employeeId}`)
       return snapshot ? inBranchScope(scope, snapshot.branchId) : this.legacyBranchesInScope(run, scope)
     }
+  }
+
+  // CR25-B01: روابط التصحيح بنفس حكم المسير والبند. المسير التابع (تكميلي أو عكس) اللي كله في نطاق القارئ زي ما هو؛ واللي فيه بند أو عضو
+  // من نطاقه وفروع تانية رأسه بس (رقمه واسمه وحالته) من غير صافيه وسبب تصحيحه؛ واللي مفيهوش حاجة من نطاقه مايتعرضش خالص.
+  async scopedRunCorrection(user: JwtPayload, em: EntityManager, correction: Awaited<ReturnType<typeof describePayrollRunCorrection>>) {
+    if (branchScopeOf(user) === null || !correction.children.length) return correction
+    const views = await this.linkedRunViews(user, em, correction.children.map(child => child.id))
+    const children: Array<Omit<(typeof correction.children)[number], 'totalNet' | 'correctionReason'> & { totalNet: string | null; correctionReason: string | null }> = []
+    for (const child of correction.children) {
+      const view = views.get(child.id) ?? 'hidden'
+      if (view === 'full') children.push(child)
+      else if (view === 'head') children.push({ ...child, totalNet: null, correctionReason: null })
+    }
+    return { ...correction, children }
+  }
+
+  // حكم مسير مربوط لقارئ فرع: 'full' المسير كله في نطاقه، 'head' فيه بند أو عضو من نطاقه وفروع تانية (رقمه واسمه وحالته بس)،
+  // 'hidden' مفيهوش حاجة من نطاقه (مايتسمّاش خالص). حساب الشركة: كله 'full'.
+  async linkedRunViews(user: JwtPayload, em: EntityManager, runIds: number[]): Promise<Map<number, 'full' | 'head' | 'hidden'>> {
+    const ids = [...new Set(runIds.filter(id => Number.isSafeInteger(id) && id > 0))]
+    if (branchScopeOf(user) === null) return new Map(ids.map(id => [id, 'full' as const]))
+    if (!ids.length) return new Map()
+    const inScope = await this.itemScopeOf(user, ids, em)
+    const rows = [
+      ...await em.getRepository(PayrollRunMember).find({ where: { runId: In(ids) }, select: { runId: true, employeeId: true } }),
+      ...await em.getRepository(PayrollItem).find({ where: { runId: In(ids) }, select: { runId: true, employeeId: true } }),
+    ]
+    const views = new Map<number, 'full' | 'head' | 'hidden'>()
+    for (const run of await em.getRepository(PayrollRun).find({ where: { id: In(ids) } })) {
+      views.set(run.id, await this.runAccessible(user, run, em) ? 'full'
+        : rows.some(row => row.runId === run.id && inScope(run.id, row.employeeId)) ? 'head' : 'hidden')
+    }
+    return views
+  }
+
+  // CR25-B01: قسيمة التكميلي المربوطة ببند معكوس بنفس حكم البند: قارئ الفرع بيشوف اللي بندها في نطاقه بس، وصاحب القسيمة بيشوف قسايمه كلها
+  async scopedItemReversal(user: JwtPayload, em: EntityManager, reversal: Awaited<ReturnType<typeof describePayrollItemReversal>>, employeeId: number, own: boolean) {
+    if (!reversal || own || branchScopeOf(user) === null || !reversal.supplementary.length) return reversal
+    const inScope = await this.itemScopeOf(user, reversal.supplementary.map(row => row.runId), em)
+    const supplementary = reversal.supplementary.filter(row => inScope(row.runId, employeeId))
+    return reversal.line || supplementary.length ? { ...reversal, supplementary } : null
   }
 
   // يقبل أي قيمة من الطلب (نص ناقص أو غير نصي) ويرد بكود عربي موحد بدل رسالة class-validator.
@@ -1384,7 +1427,7 @@ export class PayrollService {
       if (selfApproval) throw new ForbiddenException(selfApproval)
       // C8 / الخطوة 31: مسير العكس — فصل المهام أعلاه (من أنشأ العكس لا يعتمده)، ثم إعادة التحقق من كل سطر؛ لا حجز ولا دفاتر قبل التنفيذ
       if (payrollRunTypeOf(run) === 'REVERSAL') {
-        const ready = await this.reversalLinesReady(em, run)
+        const ready = await this.reversalLinesReady(em, run, user)
         run.status = 'APPROVED'
         run.approvedBy = user.sub
         run.approvedAt = new Date()
@@ -1499,7 +1542,7 @@ export class PayrollService {
       // قيد الصرف هنا قيد الاسترداد (القناة والمرجع). صفوف المسير الأصلي لا تُعدَّل.
       if (payrollRunTypeOf(run) === 'REVERSAL') {
         if (run.parentRunId) await lockPayrollRunForCorrection(em, run.parentRunId)
-        const ready = await this.reversalLinesReady(em, run)
+        const ready = await this.reversalLinesReady(em, run, user)
         const effects = []
         for (const pair of ready.pairs) effects.push(await postPayrollReversalLine(em, { reversalRun: run, parentRun: ready.parent, line: pair.line, item: pair.item, actorUserId: user.sub }))
         run.status = 'PAID'
@@ -1681,14 +1724,18 @@ export class PayrollService {
       collection = { source: 'INVALID', message: (error.getResponse() as { message?: string }).message ?? 'ترتيب التحصيل في نسخة السياسة غير صالح' }
     }
     // C8 / الخطوة 31: نوع المسير والمسير المرتبط والمسيرات التابعة وسطور العكس أو البنود المعكوسة
-    const correction = await describePayrollRunCorrection(em, run)
-    return { ...this.lightRun(run), items, members: await this.visibleMembers(user, members, em), conflicts, pendingOvertime, periodContinuity, selection, policyVersion, engine,
+    const correction = await this.scopedRunCorrection(user, em, await describePayrollRunCorrection(em, run))
+    // CR40 (مسح الصنف): نص تفصيل البنود المحفوظ (اسم القيد جوه سطور الإعفاء المالي) من غير فترة أي مسير مخفي للحساب — كل بند بفترات موظفه (CR41)
+    const scope = branchScopeOf(user)
+    const hidden = scope === null ? new Map<number, Set<string>>() : await hiddenRunPeriodsByEmployee(em, scope, items.map(item => item.employeeId), user.employeeId ?? null)
+    const shownItems = hidden.size ? items.map(item => hidden.has(item.employeeId) ? { ...item, breakdown: scrubRunPeriods(item.breakdown, hidden.get(item.employeeId)) } : item) : items
+    return { ...this.lightRun(run), items: shownItems, members: await this.visibleMembers(user, members, em), conflicts, pendingOvertime, periodContinuity, selection, policyVersion, engine,
       actors, approvalGuard, payRecord, collection, correction }
     })
   }
 
   // C8 / الخطوة 31: سطور مسير العكس المعلقة جاهزة للاعتماد أو التنفيذ — المسير الأصلي ما زال مصروفًا، والبند بلقطته، ولا مانع لاحق (الموظفون مقفولون)
-  private async reversalLinesReady(em: EntityManager, run: PayrollRun) {
+  private async reversalLinesReady(em: EntityManager, run: PayrollRun, viewer: JwtPayload | null = null) {
     const parent = run.parentRunId ? await em.getRepository(PayrollRun).findOneBy({ id: run.parentRunId }) : null
     if (!parent || parent.status !== 'PAID' || payrollRunTypeOf(parent) === 'REVERSAL') {
       throw new ConflictException({ code: 'PAYRUN-REVERSAL-PARENT', message: 'المسير الأصلي لمسير العكس غير موجود أو لم يعد مصروفًا' })
@@ -1708,7 +1755,11 @@ export class PayrollService {
       blockers.push(...plan.blockers)
       pairs.push({ line, item })
     }
-    if (blockers.length) throw new ConflictException({ code: 'PAYRUN-REVERSAL-BLOCKED', message: `تعذر المتابعة في مسير العكس: ${blockers[0].message}`, blockers })
+    if (blockers.length) {
+      // CR35-B01: مرجع المسير اللاحق في الموانع بقاعدة رؤية المسير للحساب اللي بيعتمد أو بيصرف
+      const shown = await scopePayrollRunRefBlockers(em, viewer, blockers)
+      throw new ConflictException({ code: 'PAYRUN-REVERSAL-BLOCKED', message: `تعذر المتابعة في مسير العكس: ${shown[0].message}`, blockers: shown })
+    }
     return { parent, pairs, employeeIds }
   }
 
@@ -1765,6 +1816,11 @@ export class PayrollService {
     const events = await em.getRepository(PayrollRunEvent).find({ where: { runId }, order: { id: 'ASC' } })
     const branch = branchScopeOf(user)
     if (branch !== null) {
+      // CR25-B01: «اتعمل منه مسير تكميلي» — التكميلي اللي مفيهوش حاجة من نطاق القارئ (الموظف اتنقل لفرع تاني) مايتسمّاش
+      const supplementaryIds = events.filter(event => event.eventType === 'SUPPLEMENTARY_CREATED').map(event => Number(event.payload?.supplementaryRunId))
+      const supplementary = await this.linkedRunViews(user, em, supplementaryIds)
+      // CR26-B02: تكميلي مختلط (رأسه بس) ← نسخ الإعفاءات المنقولة لموظفي نطاق القارئ فيه بس
+      const inSupplementary = supplementaryIds.length ? await this.itemScopeOf(user, supplementaryIds.filter(id => Number.isSafeInteger(id) && id > 0), em) : () => false
       // نسخة سابقة من مسير مخصّص قد تضم فرعًا آخر؛ لا تُكشف بمجرد تغير عضويته الحالية.
       const legacyInScope = this.legacyBranchesInScope(run, branch)
       for (const event of events) {
@@ -1790,6 +1846,14 @@ export class PayrollService {
         if (scopes === null || scopes.some(id => !inBranchScope(branch, id))) {
           const { rowCount: _rowCount, byReason: _byReason, reportHash: _reportHash, ...visible } = event.payload
           event.payload = visible
+        }
+      }
+      if (event.eventType === 'SUPPLEMENTARY_CREATED' && event.payload?.supplementaryRunId != null) {
+        const runId = Number(event.payload.supplementaryRunId), view = supplementary.get(runId) ?? 'hidden'
+        if (view === 'hidden') event.payload = { ...event.payload, supplementaryRunId: null, name: null, carriedExemptions: [] }
+        else if (view === 'head' && Array.isArray(event.payload.carriedExemptions)) {
+          event.payload = { ...event.payload, carriedExemptions: (event.payload.carriedExemptions as Array<{ employeeId?: unknown }>)
+            .filter(row => inSupplementary(runId, Number(row.employeeId))) }
         }
       }
       for (const phase of ['before', 'after']) {
@@ -1874,17 +1938,25 @@ export class PayrollService {
     // الخطوة 26 (EX-04): الإعفاءات المطبقة على البند برقمها وسببها والمانح بالدور
     const financialExemptions = await describePayslipExemptions(em, savedBreakdown)
     // C8 / الخطوة 31: هل عُكس صرف هذا البند (بأي مسير وسبب) وقسيمة المسير التكميلي المربوطة
-    const reversal = await describePayrollItemReversal(em, item)
+    const reversal = await this.scopedItemReversal(user, em, await describePayrollItemReversal(em, item), item.employeeId, ownPublished)
     // سطور عمود الإجازة بلا أجر (بدون راتب + خصم الإجازة المرضية لكل نسبة أجر)؛ البند القديم بلا سطور = سطر واحد بالعمود
     const savedLeaveLines = (savedBreakdown as { leaveDeductionLines?: unknown }).leaveDeductionLines
     const leaveDeductions = Array.isArray(savedLeaveLines) ? savedLeaveLines
       : Number(item.unpaidLeaveDeduction) > 0 ? [{ code: 'UNPAID_LEAVE', label: 'إجازة بدون راتب', days: Number(item.unpaidLeaveDays), payPercent: 0, amount: Number(item.unpaidLeaveDeduction) }] : []
     // طلب المالك 19 سبتمبر: الاستحقاقات والاستقطاعات بندًا بندًا بأسمائها (نفس جدول المسير وتصديره)، مجموعها = الأعمدة المحفوظة
-    const [lines] = await describePayrollItemsLines(em, [item])
+    // CR39-B01/CR40-B02: الأسماء والمفاتيح من غير فترة مسير مخفي للحساب (جوه describePayrollItemsLines، زي كل شاشة بتعرض البنود)
+    const [lines] = await describePayrollItemsLines(em, [item], user)
     // قارئ الرواتب اللي المسير كله في نطاقه بياخد بيانات المسير زي ما هي. صاحب القسيمة من غير الصلاحية، وقارئ فرع والمسير فيه فروع تانية
     // (صافي المسير وتعريفه ومستبعدوه مش بتوع فرعه — وGET /payroll/runs/:id نفسه بيرفضه)، بياخدوا بيانات القسيمة بس
     const payrollReader = userHasPerm(user, 'payroll.view') && allowed && await this.runAccessible(user, run, em)
-    return { item, run: payrollReader ? this.lightRun(run) : this.ownPayslipRun(run), employee, member, identitySource: snapshot ? 'SNAPSHOT' : 'CURRENT_NAME_ONLY', obligationDetails, financialExemptions, reversal, leaveDeductions, lines }
+    // CR38-B02 (مسح الصنف): أسماء القيود والإعفاءات من غير فترة مسير مخفي للحساب لصاحب القسيمة («مرحّل من قيد … (مسير 2026-07)»)،
+    // ونص تفصيل البند المحفوظ نفسه (CR40: اسم القيد جوه سطور الإعفاء المالي)
+    const hiddenPeriods = user.employeeId != null && user.employeeId === item.employeeId ? undefined
+      : (await hiddenRunPeriodsByEmployee(em, scope, [item.employeeId], user.employeeId ?? null)).get(item.employeeId)
+    return { item: hiddenPeriods?.size ? { ...item, breakdown: scrubRunPeriods(item.breakdown, hiddenPeriods) } : item,
+      run: payrollReader ? this.lightRun(run) : this.ownPayslipRun(run), employee, member, identitySource: snapshot ? 'SNAPSHOT' : 'CURRENT_NAME_ONLY',
+      obligationDetails: scrubRunPeriodsDeep(obligationDetails, hiddenPeriods), financialExemptions: scrubRunPeriodsDeep(financialExemptions, hiddenPeriods), reversal, leaveDeductions,
+      lines }
     })
   }
 
@@ -1893,7 +1965,9 @@ export class PayrollService {
     return this.readRun(runId, async (em, run) => {
       await this.assertRunAccess(user, run, em)
       const items = await em.getRepository(PayrollItem).find({ where: { runId }, order: { employeeId: 'ASC' } })
-      const lines = await describePayrollItemsLines(em, items)
+      // CR39-B01/CR40-B02: أسماء السطور ومفاتيحها من غير فترة أي مسير مخفي للحساب لموظفي المسير (اتحاد الفترات جوه describePayrollItemsLines)،
+      // والأعمدة من الصفوف المحجوبة نفسها فالمفتاح يفضل مطابق بين الصف والعمود. الشركة زي ما هي
+      const lines = await describePayrollItemsLines(em, items, user)
       const rows = items.map((item, index) => ({ itemId: item.id, employeeId: item.employeeId, ...lines[index] }))
       return { runId, columns: payrollLineColumns(rows), rows }
     })
@@ -2890,6 +2964,9 @@ export class PayrollService {
           // السلسلة بالاسم على مستوى الشركة. مسير شهر لاحق بنفس الاسم الحساب مايقدرش يقراه، وتعريفه فيه فرع أو رقم برّه نطاقه:
           // مايتعدّلش من هنا، ومن غير رفض يسمّي أرقام تعريفه. (مسودة لسه من غير أعضاء وتعريفها كله جوه نطاقه بتتعدّل زي الأول.)
           const readable = await this.runAccessible(user, run, em)
+          // CR25-B02: مسير مايقدرش يقراه مايتكتبش فيه — إلا مسودة لسه فاضية (من غير أعضاء ولا بنود) وتعريفها كله جوه نطاقه (العضوية الدائمة)
+          if (!readable && (run.status !== 'DRAFT' || await em.getRepository(PayrollRunMember).count({ where: { runId: run.id } })
+            || await em.getRepository(PayrollItem).count({ where: { runId: run.id } }))) continue
           let result: Awaited<ReturnType<PayrollService['applyRunMembership']>>
           try { result = await this.applyRunMembership(em, user, run, { ...change, reason }) }
           catch (error) {

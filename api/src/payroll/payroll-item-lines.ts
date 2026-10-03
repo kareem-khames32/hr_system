@@ -1,7 +1,10 @@
 import type { EntityManager } from 'typeorm'
 import { HOLIDAY_WORK_LABEL, HOLIDAY_WORK_SOURCE_PREFIX } from '../attendance/holiday-work'
+import type { JwtPayload } from '../auth/auth.service'
+import { branchScopeOf } from '../auth/guards'
 import { PAID_SALARY_COMPONENTS } from '../employees/compensation'
 import { PAYROLL_OBLIGATION_CATEGORY_LABELS } from './payroll-obligation-trace'
+import { hiddenRunPeriodsByEmployee, scrubRunPeriodsDeep } from './payroll-run-visibility'
 
 // بنود الاستحقاقات والاستقطاعات لكل موظف في المسير (طلب المالك 19 سبتمبر): كل بند عمود باسمه بدل «البدلات» و«إضافات أخرى» و«خصومات أخرى».
 // قراءة فقط من المحفوظ مع البند: أعمدة payroll_items + تفصيل breakdown (مكونات الراتب، أيام الحضور، سطور الإجازة) + قيود الدفتر بأسمائها.
@@ -35,6 +38,7 @@ export interface PayrollLineItem {
   latenessDeduction?: unknown; shortfallDeduction?: unknown; absenceDeduction?: unknown; unpaidLeaveDeduction?: unknown
   loanInstallments?: unknown; otherDeductions?: unknown; socialInsuranceDeduction?: unknown; netPay?: unknown
   breakdown?: string | null
+  employeeId?: unknown
 }
 
 export const PAYROLL_LINE_NAMES = {
@@ -304,8 +308,16 @@ export async function loadPayrollLineFacts(em: EntityManager, items: ReadonlyArr
   return facts
 }
 
-/** بنود كل صف (بنفس ترتيب المدخلات) بعد تحميل قيود الدفتر مرة واحدة. */
-export async function describePayrollItemsLines<T extends PayrollLineItem>(em: EntityManager, items: readonly T[]): Promise<PayrollItemLines[]> {
+/**
+ * بنود كل صف (بنفس ترتيب المدخلات) بعد تحميل قيود الدفتر مرة واحدة.
+ * CR40-B02: القارئ إجباري — كل شاشة بتعرض البنود بتعدّي من هنا (القسيمة، جدول المسير، سطور الشهر، مراجعة الاعتماد).
+ * CR41: أسماء سطور كل صف ومفاتيحها من غير فترة أي مسير مخفي للحساب لموظف الصف ده بس (مش اتحاد الصفوف)، فسطر موظف مايتغيرش حسب مسيرات
+ * موظف تاني. الأعمدة بتتبني من الصفوف المحجوبة نفسها، فالمفتاح بيطابق بين الصف والعمود. viewer = null = داخلي من غير حجب
+ */
+export async function describePayrollItemsLines<T extends PayrollLineItem>(em: EntityManager, items: readonly T[], viewer: JwtPayload | null): Promise<PayrollItemLines[]> {
   const facts = await loadPayrollLineFacts(em, items)
-  return items.map(item => projectPayrollItemLines(item, facts))
+  const lines = items.map(item => projectPayrollItemLines(item, facts))
+  if (!viewer) return lines
+  const hidden = await hiddenRunPeriodsByEmployee(em, branchScopeOf(viewer), items.map(item => Number(item.employeeId)), viewer.employeeId ?? null)
+  return hidden.size ? lines.map((line, index) => scrubRunPeriodsDeep(line, hidden.get(Number(items[index].employeeId)))) : lines
 }

@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, Logger } from '@nestjs/common'
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger } from '@nestjs/common'
 import { overtimeFinancialValue } from '../payroll/overtime-financial'
 import { payrollPeriodOfDate } from '../payroll/payroll-period'
 import { salaryPayrollPeriodBounds } from '../payroll/payroll-period-salary'
@@ -6,6 +6,7 @@ import { deferLoanInstallment, repayLoanEarly } from '../payroll/payroll-install
 import { readApprovedLoanRequest, readEarlySettlementPayload } from '../loans/loan-request-caps'
 import { readLoanInstallmentPositions } from '../payroll/payroll-installment-balances'
 import { LOAN_DEFERRAL_HANDLER, LOAN_DEFERRAL_TYPE, assertLoanReferenceId, loanScheduleAmounts, readStoredLoanDeferralPayload } from './loan-installment-requests'
+import { REQUESTER_BRANCH_CHANGED, REQUESTER_BRANCH_HANDLERS } from './request-money-handlers'
 import { claimOvertimeDay } from './overtime-day-claims'
 import { recordHolidayWorkRequest } from '../attendance/holiday-work'
 import {
@@ -265,7 +266,16 @@ export class DestinationsService {
       this.logger.warn(`لا يوجد handler لـ ${type.destinationHandler} — رُفض تنفيذ الطلب #${req.id}`)
       throw new BadRequestException(this.unsupportedMessage(type))
     }
+    if (REQUESTER_BRANCH_HANDLERS.has(type.destinationHandler)) await this.assertRequesterInRequestBranch(em, req)
     return this.handlers[type.destinationHandler](em, req, type, payload)
+  }
+
+  // CR28-B01 / CR29-B01 (مراجعة Codex): حركة فلوس الموظف أو حسابه البنكي من طلب بتتنفذ على فرعه وقت تقديم الطلب بس (request-money-handlers).
+  // الفرع بيتقرا تحت قفل الموظف المالي (النقل بياخد نفس القفل) فمايتغيرش لحد ما الحركة تتحفظ. طلب من غير فرع = سلسلة الشركة كلها
+  private async assertRequesterInRequestBranch(em: EntityManager, req: Request) {
+    await lockPayrollEmployees(em, [req.requesterId])
+    const [employee] = await em.query('SELECT [branchId] FROM dbo.employees WHERE [id]=@0', [req.requesterId])
+    if (req.branchId != null && (!employee || Number(employee.branchId) !== Number(req.branchId))) throw new ForbiddenException(REQUESTER_BRANCH_CHANGED)
   }
 
   // ========== الإجازات ==========
@@ -464,6 +474,7 @@ export class DestinationsService {
 
   private async loanRequestActor(em: EntityManager, req: Request): Promise<number | null> {
     if (!em.queryRunner?.isTransactionActive || req.status !== 'APPROVED') throw new BadRequestException('تنفيذ حركة السلفة يتطلب طلبًا معتمدًا داخل معاملته')
+    // فرع الموظف وقت تقديم الطلب اتأكد في execute (assertRequesterInRequestBranch) تحت قفله المالي — CR28-B01
     // المعتمد من سجل القرار الحقيقي؛ حمولة الطلب لا تحدد هوية المعتمد أو صلاحياته.
     const decision = await em.getRepository(RequestApproval).findOne({ where: { requestId: req.id, action: 'APPROVED' }, order: { id: 'DESC' } })
     return decision?.approverId ?? null
