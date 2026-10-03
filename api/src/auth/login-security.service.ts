@@ -80,9 +80,9 @@ export class LoginSecurityService {
     try {
       const rows: Array<{ failedLoginCount: number; lockedUntil: Date | null }> = await this.ds.query(
         `UPDATE dbo.users SET
-           [failedLoginCount] = CASE WHEN [lockedUntil] IS NOT NULL AND [lockedUntil] <= @1 THEN 1 ELSE [failedLoginCount] + 1 END,
+           [failedLoginCount] = CASE WHEN [lockedUntil] IS NOT NULL AND [lockedUntil] <= @1 THEN 1 ELSE ISNULL([failedLoginCount], 0) + 1 END,
            [lockedUntil] = CASE
-             WHEN (CASE WHEN [lockedUntil] IS NOT NULL AND [lockedUntil] <= @1 THEN 1 ELSE [failedLoginCount] + 1 END) >= @2 THEN @3
+             WHEN (CASE WHEN [lockedUntil] IS NOT NULL AND [lockedUntil] <= @1 THEN 1 ELSE ISNULL([failedLoginCount], 0) + 1 END) >= @2 THEN @3
              WHEN [lockedUntil] IS NOT NULL AND [lockedUntil] <= @1 THEN NULL
              ELSE [lockedUntil] END
          OUTPUT inserted.[failedLoginCount] AS [failedLoginCount], inserted.[lockedUntil] AS [lockedUntil]
@@ -97,7 +97,7 @@ export class LoginSecurityService {
     try {
       const rows: unknown[] = await em.query(
         `UPDATE dbo.users SET [failedLoginCount] = 0, [lockedUntil] = NULL OUTPUT inserted.[id]
-         WHERE [id] = @0 AND ([failedLoginCount] <> 0 OR [lockedUntil] IS NOT NULL)`, [userId])
+         WHERE [id] = @0 AND (ISNULL([failedLoginCount], 0) <> 0 OR [lockedUntil] IS NOT NULL)`, [userId])
       return rows.length > 0
     } catch (error) { this.warnMissing(error); return false }
   }

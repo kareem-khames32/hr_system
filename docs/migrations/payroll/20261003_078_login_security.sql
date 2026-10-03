@@ -1,17 +1,18 @@
 -- 20261003_078: أمان الدخول (خطة التنفيذ — الدفعة B1.3).
--- (1) عمودين على users: failedLoginCount int NOT NULL افتراضي 0 (محاولات كلمة السر الغلط ورا بعض)، وlockedUntil datetime2 NULL (الحساب مقفول لحد إمتى).
+-- (1) عمودين على users: failedLoginCount int NULL (محاولات كلمة السر الغلط ورا بعض — NULL = صفر)، وlockedUntil datetime2 NULL (الحساب مقفول لحد إمتى).
+--     من غير افتراضي عن قصد: الكيان بيستبعدهم من الإنشاء والحفظ والقراءة، فإنشاء حساب شغال قبل الترحيل وبعده.
 --     الحسابات الموجودة: العداد صفر ومفيش قفل = نفس السلوك النهارده بالحرف.
 -- (2) جدول جديد login_events: سجل الدخول (كل محاولة بوقتها ونتيجتها والـIP والجهاز، وفك القفل ومين فكه) — إضافة بس، فاضي بعد الترحيل.
 -- الكود بيشتغل قبل الترحيل ده (من غير قفل ولا سجل، ودخول زي الأول بالحرف) وبعده.
 -- إضافي فقط: بلا DROP ولا DELETE ولا UPDATE ولا تعبئة رجعية. آمن للتكرار بحراسة COL_LENGTH وOBJECT_ID. متوافق مع SQL Server 2019.
--- الأسماء بالحرف اللي الكيانات بتطلعها عشان فرق المخطط يبقى صفرًا: DF_a8ac18549203fc5a1ed18768b59 (اسم TypeORM لافتراضي users.failedLoginCount)،
+-- الأسماء بالحرف اللي الكيانات بتطلعها عشان فرق المخطط يبقى صفرًا:
 -- وPK_login_events وIX_login_events_at وIX_login_events_user (صريحة في الكيان LoginEvent).
 SET NOCOUNT ON;
 GO
 
 -- (1) القفل المؤقت على حسابات الدخول
 IF COL_LENGTH(N'dbo.users', N'failedLoginCount') IS NULL
-  ALTER TABLE dbo.users ADD [failedLoginCount] int NOT NULL CONSTRAINT [DF_a8ac18549203fc5a1ed18768b59] DEFAULT 0;
+  ALTER TABLE dbo.users ADD [failedLoginCount] int NULL;
 GO
 IF COL_LENGTH(N'dbo.users', N'lockedUntil') IS NULL
   ALTER TABLE dbo.users ADD [lockedUntil] datetime2 NULL;
@@ -43,15 +44,15 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_login_events_user' AN
   CREATE INDEX [IX_login_events_user] ON dbo.login_events ([userId], [at]);
 GO
 
--- تحقق: العمودين بنوعهم وقابلية الفراغ والافتراضي باسمه، والجدول بأعمدته ومفتاحه وفهرسيه بأسمائهم
+-- تحقق: العمودين بنوعهم وقابلية الفراغ ومن غير افتراضي، والجدول بأعمدته ومفتاحه وفهرسيه بأسمائهم
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.users') AND name = N'failedLoginCount'
-               AND system_type_id = TYPE_ID(N'int') AND is_nullable = 0)
+               AND system_type_id = TYPE_ID(N'int') AND is_nullable = 1)
   OR NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.users') AND name = N'lockedUntil'
                AND system_type_id = TYPE_ID(N'datetime2') AND is_nullable = 1)
   THROW 78001, N'20261003_078: عمودي القفل على users ناقصين أو بنوع غلط', 1;
-IF NOT EXISTS (SELECT 1 FROM sys.default_constraints d JOIN sys.columns c ON c.object_id = d.parent_object_id AND c.column_id = d.parent_column_id
-               WHERE d.name = N'DF_a8ac18549203fc5a1ed18768b59' AND d.parent_object_id = OBJECT_ID(N'dbo.users') AND c.name = N'failedLoginCount')
-  THROW 78002, N'20261003_078: افتراضي users.failedLoginCount مش موجود باسمه', 1;
+IF EXISTS (SELECT 1 FROM sys.default_constraints d JOIN sys.columns c ON c.object_id = d.parent_object_id AND c.column_id = d.parent_column_id
+           WHERE d.parent_object_id = OBJECT_ID(N'dbo.users') AND c.name IN (N'failedLoginCount', N'lockedUntil'))
+  THROW 78002, N'20261003_078: عمودي القفل على users لازم يكونوا من غير افتراضي (زي الكيان)', 1;
 IF OBJECT_ID(N'dbo.login_events', N'U') IS NULL
   THROW 78003, N'20261003_078: جدول login_events غير موجود بعد الترحيل', 1;
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.login_events') AND name = N'id'

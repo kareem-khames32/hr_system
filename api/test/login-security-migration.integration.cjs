@@ -22,7 +22,6 @@ const base = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-login-security-migrations
 const uploads = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-login-security-files-'))
 const MIGRATIONS = path.join(apiRoot, '..', 'docs/migrations/payroll')
 const FILE = '20261003_078_login_security.sql'
-const DF = 'DF_a8ac18549203fc5a1ed18768b59'
 let app, ds, master, pool, security, created = false
 
 function assertDisposable() {
@@ -34,7 +33,7 @@ const content = file => fs.readFileSync(path.join(MIGRATIONS, file), 'utf8').rep
 const runFile = async file => { for (const batch of migrate.splitBatches(content(file))) await pool.request().batch(batch) }
 const dropNew = () => {
   assertDisposable()
-  return pool.request().batch(`ALTER TABLE dbo.users DROP CONSTRAINT [${DF}]; ALTER TABLE dbo.users DROP COLUMN [failedLoginCount], [lockedUntil]; DROP TABLE dbo.login_events;`)
+  return pool.request().batch(`ALTER TABLE dbo.users DROP COLUMN [failedLoginCount], [lockedUntil]; DROP TABLE dbo.login_events;`)
 }
 const shape = async () => ({
   columns: await ds.query(`SELECT OBJECT_NAME(c.object_id) AS tableName, c.name AS columnName, t.name AS type, c.max_length AS maxLength,
@@ -60,7 +59,7 @@ const EXPECTED_SHAPE = {
     col('login_events', 'ip', 'nvarchar', 128, true),
     col('login_events', 'userAgent', 'nvarchar', 800, true),
     col('login_events', 'actorUserId', 'int', 4, true),
-    col('users', 'failedLoginCount', 'int', 4, false, false, DF),
+    col('users', 'failedLoginCount', 'int', 4, true),
     col('users', 'lockedUntil', 'datetime2', 8, true),
   ],
   keys: [{ name: 'PK_login_events', type: 'PK' }],
@@ -129,7 +128,6 @@ test('LSM-1: الملف LF من غير BOM ومن غير عبارة ممنوعة
   const meta = ds.getMetadata('LoginEvent')
   assert.deepEqual([meta.tableName, meta.primaryColumns[0].primaryKeyConstraintName], ['login_events', 'PK_login_events'])
   assert.deepEqual(meta.indices.map(index => [index.name, index.columns.map(c => c.propertyName)]).sort(), [['IX_login_events_at', ['at']], ['IX_login_events_user', ['userId', 'at']]])
-  assert.equal(ds.namingStrategy.defaultConstraintName('users', 'failedLoginCount'), DF)
   assert.deepEqual(await shape(), EXPECTED_SHAPE)
   assert.deepEqual((await ds.driver.createSchemaBuilder().log()).upQueries.map(q => q.query), [])
 })
@@ -148,6 +146,11 @@ test('LSM-2: المخطط القديم بحسابات قائمة — الكود 
   await assert.rejects(auth.login(user.email, 'wrong-password-1'), error => error.getStatus?.() === 401)
   const session = await auth.login(user.email, 'Correct-horse-9')
   assert.ok(session.accessToken)
+  // إنشاء حساب جديد وحفظ حساب قائم قبل الترحيل (TypeORM بيحط كل عمود insert في INSERT): العمودين برّه الكيان في الكتابة
+  const fresh = await ds.getRepository('User').save({ email: 'new-before-078@login-migration.test', displayName: 'حساب جديد قبل الترحيل', role: 'employee',
+    permissions: '[]', passwordHash: 'not-a-password' })
+  await ds.getRepository('User').save({ ...fresh, displayName: 'اسم اتعدّل قبل الترحيل' })
+  await ds.getRepository('User').delete({ id: fresh.id })
   const before = await ds.query('SELECT [id], [email], [passwordHash], [role], [isActive] FROM dbo.users ORDER BY [id]')
 
   const record = await migrate.apply({ database, base, trial: true, schemaDiff: false, quiet: true })
@@ -159,7 +162,7 @@ test('LSM-2: المخطط القديم بحسابات قائمة — الكود 
   assert.deepEqual(record.columns.removedOrRenamed, [])
   assert.deepEqual(await shape(), EXPECTED_SHAPE)
   assert.deepEqual(await ds.query('SELECT [id], [email], [passwordHash], [role], [isActive] FROM dbo.users ORDER BY [id]'), before, 'ولا صف قائم اتغيّر')
-  assert.deepEqual(await ds.query('SELECT DISTINCT [failedLoginCount], [lockedUntil] FROM dbo.users'), [{ failedLoginCount: 0, lockedUntil: null }])
+  assert.deepEqual(await ds.query('SELECT DISTINCT [failedLoginCount], [lockedUntil] FROM dbo.users'), [{ failedLoginCount: null, lockedUntil: null }], 'NULL = صفر')
   assert.deepEqual((await ds.driver.createSchemaBuilder().log()).upQueries.map(q => q.query), [])
   const plan = await migrate.plan({ database, base })
   assert.equal(plan.readOnly, true); assert.equal(plan.pendingCount, 0); assert.deepEqual(plan.problems, [])

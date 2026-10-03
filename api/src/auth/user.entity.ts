@@ -82,10 +82,12 @@ export class User {
   domainObjectGuid: string | null
 
   // أمان الدخول (B1.3 — ترحيل 078): محاولات كلمة السر الغلط ورا بعض، والحساب مقفول لحد إمتى (null = مش مقفول).
-  // select: false — بتتقري وتتكتب صراحةً بس (LoginSecurityService)، فباقي النظام والكود قبل الترحيل مايتأثروش بيهم
-  @Column({ type: 'int', default: 0, select: false })
-  failedLoginCount: number
+  // بتتقري وتتكتب صراحةً بس (LoginSecurityService بـSQL صريح): select وinsert وupdate مقفولين، فإنشاء الحساب وحفظه وقراءته
+  // مابيلمسوهمش — والكود قبل ترحيل 078 شغال (TypeORM بيحط كل عمود insert في INSERT حتى لو قيمته فاضية)
+  // من غير افتراضي عن قصد: TypeORM بيرجّع الأعمدة اللي ليها افتراضي في OUTPUT بعد الإنشاء. NULL = صفر في SQL
+  @Column({ type: 'int', nullable: true, select: false, insert: false, update: false })
+  failedLoginCount: number | null
 
-  @Column({ type: 'datetime2', nullable: true, select: false })
+  @Column({ type: 'datetime2', nullable: true, select: false, insert: false, update: false })
   lockedUntil: Date | null
 }
