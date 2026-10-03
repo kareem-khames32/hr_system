@@ -15,7 +15,7 @@ import {
 import { CompanyWideReadOnlyNote, useCompanyWideWrite } from '@/components/CompanyWideReadOnly'
 import { DayRangeFilter, PayrollPeriodSelect, usePayrollDayRange } from '@/components/DayRangeFilter'
 import { validDayRange, type DayRange, type PayrollMonthContext } from '@/lib/payroll-month-range'
-import { useBranchCurrency } from '@/lib/currency'
+import { useBranchCurrency, useMixedCurrencies } from '@/lib/currency'
 import { useOrgFilter } from '@/components/OrgFilter'
 
 // الخطوة 25: مساحة الخصومات المصنفة — القائمة والاعتماد (مع الاعتراض والعكس وقرارات الأقساط المعلقة)، والإنشاء لموظف أو
@@ -641,6 +641,8 @@ const emptyType = (): DeductionTypeInput => ({ code: '', nameAr: '', nameEn: '',
 const blank = (value: unknown) => value === '' || value === undefined ? null : value
 
 function DeductionTypesPanel({ onChanged }: { onChanged: () => void }) {
+  // B1.1: شركة فيها فروع بعملتين ← المبالغ والحدود بتتقري بعملة فرع الموظف
+  const mixedCurrencies = useMixedCurrencies()
   const [types, setTypes] = useState<DeductionTypeView[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -762,6 +764,7 @@ function DeductionTypesPanel({ onChanged }: { onChanged: () => void }) {
               <label className="text-gray-600">الحد الأعلى للمبلغ (فارغ = بلا)<input className="input mt-1" dir="ltr" value={form.maxAmount ?? ''} onChange={event => setForm(value => ({ ...value, maxAmount: event.target.value }))} /></label>
               <label className="text-gray-600">أقصى % من إجمالي الراتب<input className="input mt-1" dir="ltr" value={form.maxPctOfGross ?? ''} onChange={event => setForm(value => ({ ...value, maxPctOfGross: event.target.value }))} /></label>
             </div>
+            {mixedCurrencies && <p className="text-xs text-amber-700" data-type-currency-note>المبالغ هنا (القيمة الافتراضية والحدود) رقم واحد لكل الفروع وبيتقري بعملة فرع الموظف، من غير تحويل بين العملات.</p>}
             <div className="flex flex-wrap gap-4 text-sm">
               <label className="flex items-center gap-1"><input type="checkbox" checked={protectedCategory ? false : !!form.isExemptable} disabled={protectedCategory} onChange={event => setForm(value => ({ ...value, isExemptable: event.target.checked }))} />يقبل الإعفاء المالي{protectedCategory ? ' (ممنوع للنظامي والحكم القضائي، والفئة ثابتة)' : ''}</label>
               <label className="flex items-center gap-1"><input type="checkbox" checked={!!form.installmentAllowed} onChange={event => setForm(value => ({ ...value, installmentAllowed: event.target.checked, maxInstallments: event.target.checked ? Math.max(2, value.maxInstallments ?? 2) : 1 }))} />يسمح بالتقسيط</label>

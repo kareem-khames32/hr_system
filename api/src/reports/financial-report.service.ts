@@ -5,6 +5,8 @@ import { DataSource } from 'typeorm'
 import { branchScopeSql } from '../auth/guards'
 import type { BranchScope } from '../auth/guards'
 import { localDateOf } from '../attendance/attendance.service'
+import { readBranchCurrencyOf } from '../org/branch-currency-db'
+import { singleCurrency, splitByCurrency, totalsByCurrency } from '../org/currency-totals'
 import { payrollLineNotReversedSql } from '../payroll/payroll-reversal-sql'
 import { PayrollService } from '../payroll/payroll.service'
 import {
@@ -169,24 +171,60 @@ export class FinancialReportService {
     return map
   }
 
+  /**
+   * B1.1: عملة كل بند من فرعه في لقطة المسير (فرع مصري ← جنيه، سعودي ← ريال، من غير دولة ← عملة النظام).
+   * التقرير اللي بيجمع فرعين بعملتين بيرجّع الإجمالي العام زي ما هو (للتوافق) ومعاه byCurrency: نفس الإجماليات لكل عملة لوحدها
+   * بنفس دالة التقرير على بنودها هي بس — فمجموع العملات = الإجمالي العام بالظبط، ومفيش تحويل.
+   */
+  private async currencies(rows: readonly FinancialRow[]) {
+    const currencyOfBranch = await readBranchCurrencyOf(this.ds.manager)
+    const ofRow = (row: FinancialRow) => currencyOfBranch(row.branchId)
+    const byItem = new Map(rows.map(row => [`${row.runId}:${row.employeeId}`, ofRow(row)]))
+    const sets = (key: (row: FinancialRow) => number | null) => {
+      const map = new Map<number | null, string[]>()
+      for (const row of rows) map.set(key(row), [...(map.get(key(row)) ?? []), ofRow(row)])
+      return (id: number | null) => singleCurrency(map.get(id) ?? [])
+    }
+    return { currencyOfBranch, ofRow, byItem, ofEmployee: sets(row => row.employeeId), ofDepartment: sets(row => row.departmentId) }
+  }
+
   async payrollRegister(query: FinancialReportQuery) {
     const { header, rows, insurance } = await this.loadMonth(query)
-    return { ...header, ...buildPayrollRegister(rows, insurance) }
+    const report = buildPayrollRegister(rows, insurance)
+    const currency = await this.currencies(rows)
+    return { ...header, ...report, rows: report.rows.map(row => ({ ...row, currency: currency.byItem.get(`${row.runId}:${row.employeeId}`) ?? null })),
+      byCurrency: totalsByCurrency(rows, currency.ofRow, group => buildPayrollRegister(group, insurance).totals) }
   }
 
   async payrollCost(query: FinancialReportQuery) {
     const { header, rows, insurance } = await this.loadMonth(query)
-    return { ...header, ...buildPayrollCostSummary(rows, insurance) }
+    const report = buildPayrollCostSummary(rows, insurance)
+    const currency = await this.currencies(rows)
+    return { ...header, ...report,
+      byBranch: report.byBranch.map(group => ({ ...group, currency: currency.currencyOfBranch(group.id) })),
+      // القسم تبع فرع واحد، و«بدون قسم» ممكن يجمع فرعين بعملتين ← null (والإجمالي لكل عملة في byCurrency)
+      byDepartment: report.byDepartment.map(group => ({ ...group, currency: currency.ofDepartment(group.id) })),
+      byCurrency: totalsByCurrency(rows, currency.ofRow, group => buildPayrollCostSummary(group, insurance).totals) }
   }
 
   async deductions(query: FinancialReportQuery) {
     const { header, rows } = await this.loadMonth(query)
-    return { ...header, ...buildDeductionsReport(rows) }
+    const report = buildDeductionsReport(rows)
+    const currency = await this.currencies(rows)
+    return { ...header, ...report, employees: report.employees.map(row => ({ ...row, currency: currency.ofEmployee(row.employeeId) })),
+      byCurrency: totalsByCurrency(rows, currency.ofRow, group => {
+        const part = buildDeductionsReport(group)
+        return { ...part.totals, kinds: part.kinds, typedByType: part.typedByType, otherByCategory: part.otherByCategory }
+      }) }
   }
 
   async overtime(query: FinancialReportQuery) {
     const { header, rows } = await this.loadMonth(query)
-    return { ...header, ...buildOvertimeReport(rows) }
+    const report = buildOvertimeReport(rows)
+    const currency = await this.currencies(rows)
+    return { ...header, ...report, employees: report.employees.map(row => ({ ...row, currency: currency.ofEmployee(row.employeeId) })),
+      departments: report.departments.map(group => ({ ...group, currency: currency.ofDepartment(group.departmentId) })),
+      byCurrency: totalsByCurrency(rows, currency.ofRow, group => buildOvertimeReport(group).totals) }
   }
 
   // السلف: الموظف بفرعه وقسمه ومركز تكلفته الحاليين (السلفة مش مرتبطة بلقطة مسير)، والمخصوم في مسيرات الشهر من بنودها
@@ -206,9 +244,9 @@ export class FinancialReportService {
     filter('teamId', query.teamId)
     filter('costCenterId', query.costCenterId)
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
-    const loans: FinancialLoanSource[] = await this.ds.query(
+    const loans: Array<FinancialLoanSource & { branchId: number | null }> = await this.ds.query(
       `SELECT l.[id], l.[employeeId], CONVERT(varchar(40), l.[amount]) AS [amount], l.[status], CONVERT(varchar(10), l.[disbursedAt], 23) AS [disbursedAt],
-         e.[employeeCode], e.[fullName], b.[name] AS [branchName], d.[name] AS [departmentName]
+         e.[employeeCode], e.[fullName], e.[branchId], b.[name] AS [branchName], d.[name] AS [departmentName]
        FROM [loans] l
        INNER JOIN [employees] e ON e.[id] = l.[employeeId]
        LEFT JOIN [branches] b ON b.[id] = e.[branchId]
@@ -223,6 +261,13 @@ export class FinancialReportService {
        ${whereSql}`, params) : []
     const deducted = new Map<number, bigint>()
     for (const row of rows) if (row.deductions.LOANS !== 0n) deducted.set(row.employeeId, (deducted.get(row.employeeId) ?? 0n) + row.deductions.LOANS)
-    return { ...header, ...buildLoansReport({ loans, installments, startDate: header.startDate, endDate: header.endDate, deductedByEmployee: deducted }) }
+    const build = (list: typeof loans) => buildLoansReport({ loans: list, installments, startDate: header.startDate, endDate: header.endDate, deductedByEmployee: deducted })
+    const report = build(loans)
+    // B1.1: السلفة بعملة فرع الموظف الحالي (السلفة مش مرتبطة بلقطة مسير)، والإجمالي لكل عملة بنفس الدالة على سلف العملة دي بس
+    const currencyOfBranch = await readBranchCurrencyOf(this.ds.manager)
+    const loanCurrency = (loan: { branchId: number | null }) => currencyOfBranch(loan.branchId)
+    const byEmployee = new Map(loans.map(loan => [Number(loan.employeeId), loanCurrency(loan)]))
+    return { ...header, ...report, employees: report.employees.map(row => ({ ...row, currency: byEmployee.get(row.employeeId) ?? null })),
+      byCurrency: splitByCurrency(loans, loanCurrency).map(group => ({ currency: group.currency, totals: build(group.rows).totals })) }
   }
 }

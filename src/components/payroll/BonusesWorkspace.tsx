@@ -15,7 +15,7 @@ import {
 import { CompanyWideReadOnlyNote, useCompanyWideWrite } from '@/components/CompanyWideReadOnly'
 import { DayRangeFilter, PayrollPeriodSelect, usePayrollDayRange } from '@/components/DayRangeFilter'
 import { dayRangeKey, validDayRange, type DayRange, type PayrollMonthContext } from '@/lib/payroll-month-range'
-import { useBranchCurrency } from '@/lib/currency'
+import { useBranchCurrency, useMixedCurrencies } from '@/lib/currency'
 import { useOrgFilter } from '@/components/OrgFilter'
 
 // C4 / الخطوة 27: مساحة المكافآت — القائمة والاعتماد (المدير الأعلى عند التصعيد ثم الموارد البشرية)، والاقتراح لموظف واحد
@@ -603,6 +603,8 @@ const blank = (value: unknown) => value === '' || value === undefined ? null : v
 const toggleList = <T,>(items: T[] | undefined, item: T) => (items ?? []).includes(item) ? (items ?? []).filter(value => value !== item) : [...(items ?? []), item]
 
 function BonusTypesPanel({ onChanged }: { onChanged: () => void }) {
+  // B1.1: شركة فيها فروع بعملتين ← المبالغ والحدود بتتقري بعملة فرع الموظف
+  const mixedCurrencies = useMixedCurrencies()
   const [types, setTypes] = useState<BonusTypeView[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -690,6 +692,7 @@ function BonusTypesPanel({ onChanged }: { onChanged: () => void }) {
               <label className="text-gray-600">السقف % من الأساسي (فارغ = بلا)<input className="input mt-1" dir="ltr" value={form.maxPctOfBase ?? ''} onChange={event => setForm(value => ({ ...value, maxPctOfBase: event.target.value }))} /></label>
               <label className="flex items-center gap-2 text-gray-600 self-end pb-2"><input type="checkbox" checked={!!form.isActive} onChange={event => setForm(value => ({ ...value, isActive: event.target.checked }))} />مفعل</label>
             </div>
+            {mixedCurrencies && <p className="text-xs text-amber-700" data-type-currency-note>المبالغ هنا (القيمة الافتراضية والحدود) رقم واحد لكل الفروع وبيتقري بعملة فرع الموظف، من غير تحويل بين العملات.</p>}
             <div className="text-sm text-gray-600">
               <p className="font-medium">من يقترح</p>
               <div className="flex flex-wrap gap-3 mt-1">{CREATOR_BASES.map(role => <label key={role} className="flex items-center gap-1"><input type="checkbox" checked={(form.creatorScopes ?? []).includes(role)} onChange={() => setForm(value => ({ ...value, creatorScopes: toggleList(value.creatorScopes, role) }))} />{BONUS_ROLE_LABELS[role]}</label>)}</div>

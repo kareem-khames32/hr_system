@@ -148,6 +148,12 @@ export function useCurrency(branchId?: number | null): string {
   return currencyLabel(useCurrencyCode(branchId))
 }
 
+/** B1.1: الشركة فيها فروع بأكتر من عملة؟ (لجملة «بيتقري بعملة فرع الموظف» في محررات الحدود والسلاسل) */
+export function useMixedCurrencies(): boolean {
+  const context = useCurrencyContext()
+  return new Set((context?.branches ?? []).map((branch) => branch.currency)).size > 1
+}
+
 /** عملة الحساب نفسه (فرع موظفه) — لشاشات بياناته هو زي «ملفي». */
 export function useOwnCurrency(): string {
   const context = useCurrencyContext()

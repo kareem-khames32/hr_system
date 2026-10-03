@@ -16,7 +16,7 @@ import { FinancialReportLinks } from '@/app/reports/_financial/links'
 import { DayRangeFilter, PayrollPeriodSelect, usePayrollDayRange, usePayrollMonthContext } from '@/components/DayRangeFilter'
 import { dayRangeKey, payrollMonthBounds, periodOverlapsRange, validDayRange, type DayRange } from '@/lib/payroll-month-range'
 import { downloadCsv } from '@/lib/csv'
-import { useCurrency } from '@/lib/currency'
+import { currencyLabel, useCurrency } from '@/lib/currency'
 import { useOrgFilter } from '@/components/OrgFilter'
 import { orgFilterQueryValues } from '@/lib/org-filter'
 import {
@@ -38,6 +38,7 @@ import {
   reportFileName,
   runRefLabel,
   runStatusLabel,
+  runsNetByCurrency,
   runsReportCsv,
   sumReportMoney,
   unassignedReportCsv,
@@ -178,6 +179,11 @@ function RunsTab() {
   })
   const active = shownRuns.filter((run) => run.status !== 'CANCELLED')
   const totalNet = sumReportMoney(active.map((run) => run.totalNet))
+  // B1.1: فروع بعملتين ← صافي كل عملة لوحده (في البطاقة وفي صف المسير اللي فيه العملتين)، وطرق الصرف والفترات بعملتها
+  const netGroups = runsNetByCurrency(active)
+  const multi = new Set([...runsNetByCurrency(runs).map((group) => group.currency), ...(report?.byMethod ?? []).flatMap((row) => (row.currency ? [row.currency] : [])),
+    ...(report?.deductions ?? []).flatMap((row) => (row.currency ? [row.currency] : []))]).size > 1
+  const tag = (code?: string) => (multi && code ? ` ${currencyLabel(code)}` : '')
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -199,7 +205,8 @@ function RunsTab() {
       {loading ? <Spinner /> : report && (
         <>
           <div className="grid grid-cols-2 gap-4">
-            <Stat label={`صافي المسيرات غير الملغاة (${currency})`} value={formatReportMoney(totalNet)} />
+            <Stat label={netGroups.length > 1 ? 'صافي المسيرات غير الملغاة' : `صافي المسيرات غير الملغاة (${netGroups[0]?.currency ? currencyLabel(netGroups[0].currency) : currency})`}
+              value={netGroups.length > 1 ? netGroups.map((group) => `${formatReportMoney(group.totalNet)} ${currencyLabel(group.currency)}`).join(' — ') : formatReportMoney(totalNet)} />
             <Stat label="عدد المسيرات" value={shownRuns.length} />
           </div>
           <div className="card overflow-x-auto">
@@ -220,7 +227,11 @@ function RunsTab() {
                     <td className="px-4 py-3 text-center"><span className={runStatusBadge[run.status] ?? 'badge bg-gray-100 text-gray-600'}>{runStatusLabel(run.status)}</span></td>
                     <td className="px-4 py-3 text-center text-gray-600">{run.employees}</td>
                     <td className="px-4 py-3 text-center text-gray-600">{run.excluded}</td>
-                    <td className="px-4 py-3 text-center font-bold text-gray-800" dir="ltr">{formatReportMoney(run.totalNet)}</td>
+                    <td className="px-4 py-3 text-center font-bold text-gray-800" dir="ltr">
+                      {multi && run.netByCurrency?.length
+                        ? run.netByCurrency.map((part) => <div key={part.currency}>{formatReportMoney(part.totalNet)} {currencyLabel(part.currency)}</div>)
+                        : formatReportMoney(run.totalNet)}
+                    </td>
                   </tr>
                 ))}
                 {shownRuns.length === 0 && <EmptyRow colSpan={8} text={runs.length === 0 ? 'لا توجد مسيرات رواتب بعد' : 'لا توجد مسيرات في الفترة المختارة'} />}
@@ -232,9 +243,9 @@ function RunsTab() {
               <h2 className="text-lg font-bold text-gray-800 mb-4">حسب طريقة الدفع</h2>
               <div className="space-y-3">
                 {report.byMethod.map((method) => (
-                  <div key={method.payMethod} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+                  <div key={`${method.payMethod}:${method.currency ?? ''}`} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
                     <span className="flex items-center gap-2 text-gray-700"><CreditCard size={18} className="text-primary-600" />{lookup(PAY_METHOD_LABELS, method.payMethod)} — {method.count} موظف</span>
-                    <span className="font-bold text-primary-600" dir="ltr">{formatReportMoney(method.total)}</span>
+                    <span className="font-bold text-primary-600" dir="ltr">{formatReportMoney(method.total)}{tag(method.currency)}</span>
                   </div>
                 ))}
                 {report.byMethod.length === 0 && <p className="text-sm text-gray-400">لا توجد بنود في مسيرات معتمدة أو مصروفة</p>}
@@ -248,8 +259,8 @@ function RunsTab() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {periodRows.map((row) => (
-                    <tr key={row.period}>
-                      <td className="px-4 py-3 font-medium">{row.period}</td>
+                    <tr key={`${row.period}:${row.currency ?? ''}`}>
+                      <td className="px-4 py-3 font-medium">{row.period}{multi && row.currency && <span className="text-xs text-gray-500 mr-1">({currencyLabel(row.currency)})</span>}</td>
                       <td className="px-4 py-3 text-center" dir="ltr">{formatReportMoney(row.basic)} + {formatReportMoney(row.allowances)}</td>
                       <td className="px-4 py-3 text-center text-success-600" dir="ltr">{formatReportMoney(row.overtime)}</td>
                       <td className="px-4 py-3 text-center text-red-600" dir="ltr">{formatReportMoney(row.lateness)} / {formatReportMoney(row.shortfall)}</td>

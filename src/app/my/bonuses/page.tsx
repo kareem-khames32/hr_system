@@ -3,14 +3,15 @@
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import { Gift } from 'lucide-react'
-import { useCurrency } from '@/lib/currency'
+import { useOwnCurrency } from '@/lib/currency'
 import { bonusBadgeClass, fetchMyBonuses, formatBonusMoney, type MyBonusView } from '@/lib/bonuses-api'
 import { BonusesWorkspace } from '@/components/payroll/BonusesWorkspace'
 
 // C4 / الخطوة 27 (EX-05): الموظف يرى كل مكافأة مقترحة له من لحظة الاقتراح بحالتها وشهر مسيرها ومصير صرفها،
 // و«مصروف» لا تظهر إلا بعد صرف مسير ذلك الشهر. المدير الهيكلي يجد تحتها مساحة اقتراح مكافآت مرؤوسيه ومتابعة اعتمادها.
 export default function MyBonusesPage() {
-  const currency = useCurrency()
+  // B1.1: بيانات الحساب نفسه بعملة فرعه هو، حتى لو معاه صلاحيات إدارة (مش عملة الشاشة العامة)
+  const currency = useOwnCurrency()
   const [rows, setRows] = useState<MyBonusView[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')

@@ -1159,16 +1159,21 @@ export interface ApiBankSheetRow {
   bankName: string | null; iban: string | null; netPay: number; bankAmount: number; cashAmount: number
   /** بيانات صرف ناقصة أو غلط على الصف ده (بدون آيبان، «نقدي + بنك» بلا مبلغ…) أو null لو سليم */
   issue: string | null
+  // B1.1: عملة فرع الموظف في لقطة المسير (EGP / SAR)
+  currency?: string | null
 }
 export interface ApiBankSheet {
   run: { id: number; name: string | null; period: string; status: string; startDate: string; endDate: string }
   rows: ApiBankSheetRow[]
-  banks: { bankName: string; employees: number; total: number }[]
+  banks: { bankName: string; employees: number; total: number; currency?: string | null }[]
   totals: { employees: number; bank: number; cash: number; net: number }
   issues: { employees: number; bank: number; cash: number; rows: ApiBankSheetRow[] }
   // راتب آخر شهر بيتصرف مع التصفية — خارج الكشف والمبلغ المستحق، وبيتقال للعلم
   settlement: { employees: number; total: number
-    rows: { employeeId: number; employeeCode: string; fullName: string; netPay: number; lastWorkingDay: string | null; caseId: number | null }[] }
+    rows: { employeeId: number; employeeCode: string; fullName: string; netPay: number; lastWorkingDay: string | null; caseId: number | null; currency?: string | null }[] }
+  // B1.1: الإجماليات لكل عملة لوحدها (نفس الإجمالي + بنوك العملة وتنبيهاتها ومصروفها مع التصفية)
+  byCurrency?: Array<{ currency: string; totals: ApiBankSheet['totals'] & { banks: ApiBankSheet['banks']
+    issues: { employees: number; bank: number; cash: number }; settlement: { employees: number; total: number } } }>
 }
 export const fetchBankSheet = (runId: number) => get<ApiBankSheet>(`/payroll/runs/${runId}/bank-sheet`)
 

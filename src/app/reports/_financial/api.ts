@@ -23,11 +23,13 @@ export interface FinancialReportHeader {
 
 export type Money = string
 export interface ColumnDef { key: string; label: string; total: Money }
+// B1.1: الإجمالي لكل عملة (نفس شكل totals) — عملة واحدة أو أكتر؛ والصف بعملة فرعه (null = مجموعة فيها عملتين)
+export interface CurrencyTotals<T> { currency: string; totals: T }
 
 export interface RegisterRow {
   runId: number; runName: string | null; runStatus: string
   employeeId: number; employeeCode: string | null; fullName: string | null
-  branchName: string | null; departmentName: string | null; costCenterName: string | null; payMethod: string
+  branchName: string | null; departmentName: string | null; costCenterName: string | null; payMethod: string; currency?: string | null
   basic: Money; allowances: Money; allowanceBuckets: Record<string, Money>; additions: Record<string, Money>; otherAdditions: Money
   overtime: Money; overtimeMinutes: number; holidayWork: Money; gross: Money
   // settlement = صافي الصف لو راتبه «مصروف مع التصفية» (برّه كشف البنك)، وإلا 0.00 — الصافي = بنك + نقدي + مع التصفية
@@ -43,15 +45,17 @@ export interface PayrollRegisterReport extends FinancialReportHeader {
     otherAdditions: Money; overtime: Money; overtimeMinutes: number; holidayWork: Money; gross: Money; deductions: Record<string, Money>
     totalDeductions: Money; net: Money; bank: Money; cash: Money; settlement: Money; employerInsurance: Money | null
   }
+  byCurrency?: Array<CurrencyTotals<PayrollRegisterReport['totals']>>
 }
 
 export interface CostGroup {
   id: number | null; name: string; branchNames: string[]; headcount: number
-  gross: Money; deductions: Money; net: Money; overtime: Money; holidayWork: Money; employerInsurance: Money | null; totalCost: Money
+  gross: Money; deductions: Money; net: Money; overtime: Money; holidayWork: Money; employerInsurance: Money | null; totalCost: Money; currency?: string | null
 }
 export interface PayrollCostReport extends FinancialReportHeader {
   byBranch: CostGroup[]; byDepartment: CostGroup[]
-  totals: Omit<CostGroup, 'id' | 'name' | 'branchNames'>
+  totals: Omit<CostGroup, 'id' | 'name' | 'branchNames' | 'currency'>
+  byCurrency?: Array<CurrencyTotals<PayrollCostReport['totals']>>
 }
 
 export interface DeductionsReport extends FinancialReportHeader {
@@ -59,15 +63,17 @@ export interface DeductionsReport extends FinancialReportHeader {
   typedByType: Array<{ name: string; amount: Money; employees: number }>
   otherByCategory: Array<{ name: string; amount: Money; employees: number }>
   employees: Array<{ employeeId: number; employeeCode: string | null; fullName: string | null; branchName: string | null; departmentName: string | null
-    amounts: Record<string, Money>; total: Money }>
+    amounts: Record<string, Money>; total: Money; currency?: string | null }>
   totals: { amount: Money; employees: number }
+  byCurrency?: Array<CurrencyTotals<DeductionsReport['totals'] & Pick<DeductionsReport, 'kinds' | 'typedByType' | 'otherByCategory'>>>
 }
 
 export interface OvertimePayReport extends FinancialReportHeader {
   employees: Array<{ employeeId: number; employeeCode: string | null; fullName: string | null; branchName: string | null; departmentName: string | null
-    entries: number; minutes: number; amount: Money; holidayWork: Money }>
-  departments: Array<{ departmentId: number | null; name: string; employees: number; entries: number; minutes: number; amount: Money; holidayWork: Money }>
+    entries: number; minutes: number; amount: Money; holidayWork: Money; currency?: string | null }>
+  departments: Array<{ departmentId: number | null; name: string; employees: number; entries: number; minutes: number; amount: Money; holidayWork: Money; currency?: string | null }>
   totals: { employees: number; entries: number; minutes: number; amount: Money; holidayWork: Money }
+  byCurrency?: Array<CurrencyTotals<OvertimePayReport['totals']>>
 }
 
 export interface LoanLine {
@@ -77,9 +83,10 @@ export interface LoanLine {
 export interface LoansReport extends FinancialReportHeader {
   employees: Array<{ employeeId: number; employeeCode: string | null; fullName: string | null; branchName: string | null; departmentName: string | null
     loansCount: number; principal: Money; paid: Money; outstanding: Money; dueCount: number; dueAmount: Money; duePaid: Money; dueRemaining: Money
-    overdue: Money; deductedInPayroll: Money; loans: LoanLine[] }>
+    overdue: Money; deductedInPayroll: Money; loans: LoanLine[]; currency?: string | null }>
   totals: { employees: number; loans: number; principal: Money; paid: Money; outstanding: Money; dueCount: number; dueAmount: Money; duePaid: Money
     dueRemaining: Money; overdue: Money; deductedInPayroll: Money }
+  byCurrency?: Array<CurrencyTotals<LoansReport['totals']>>
 }
 
 function query(filters: FinancialFilters) {

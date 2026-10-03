@@ -3,6 +3,8 @@ import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource } from 'typeorm'
 import { branchScopeSql } from '../auth/guards'
 import type { BranchScope } from '../auth/guards'
+import { readBranchCurrencyOf } from '../org/branch-currency-db'
+import { singleCurrency, totalsByCurrency } from '../org/currency-totals'
 import { payrollLineNotReversedSql } from '../payroll/payroll-reversal-sql'
 import { aggregateCostCenterReport, COST_CENTER_DEDUCTION_FIELDS, COST_CENTER_EARNING_FIELDS, type CostCenterReportRow } from './cost-center-report'
 
@@ -77,7 +79,16 @@ export class CostCenterReportService {
        ${branchFilter}`,
       params,
     )
-    return { period: query.period, branchId: query.branchId, includeDraft: query.includeDraft, employerInsuranceAvailable: insurance,
-      ...aggregateCostCenterReport(rows, insurance) }
+    // B1.1: البند بعملة فرعه في لقطة المسير؛ المركز اللي فيه فرعين بعملتين عملته null، والإجمالي لكل عملة بنفس دالة التجميع
+    const currencyOfBranch = await readBranchCurrencyOf(this.ds.manager)
+    const ofRow = (row: CostCenterReportRow) => currencyOfBranch(row.branchId == null ? null : Number(row.branchId))
+    const report = aggregateCostCenterReport(rows, insurance)
+    const centerKey = (id: unknown) => (id === null || id === undefined ? null : Number(id))
+    const ofItem = new Map(rows.map(row => [`${Number(row.runId)}:${Number(row.employeeId)}`, ofRow(row)]))
+    return { period: query.period, branchId: query.branchId, includeDraft: query.includeDraft, employerInsuranceAvailable: insurance, ...report,
+      centers: report.centers.map(center => ({ ...center,
+        currency: singleCurrency(rows.filter(row => centerKey(row.costCenterId) === center.costCenterId).map(ofRow)),
+        employees: center.employees.map(row => ({ ...row, currency: ofItem.get(`${row.runId}:${row.employeeId}`) ?? null })) })),
+      byCurrency: totalsByCurrency(rows, ofRow, group => aggregateCostCenterReport(group, insurance).totals) }
   }
 }

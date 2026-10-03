@@ -7,7 +7,7 @@ import { MainLayout } from '@/components/layout'
 import { can } from '@/lib/api'
 import { formatDateTime } from '@/lib/dates'
 import { formatMoney } from '@/lib/money'
-import { useCurrency } from '@/lib/currency'
+import { currencyLabel, useCurrency } from '@/lib/currency'
 import { dayRangeLabel } from '@/lib/payroll-month-range'
 import { PayrollApprovalChainStrip } from '@/components/payroll/PayrollApprovalChainStrip'
 import { PayrollApprovalReviewTable, PayrollApprovalReviewTotals } from '@/components/payroll/PayrollApprovalReviewTable'
@@ -87,7 +87,9 @@ export default function PayrollMyApprovalsPage() {
               <div>
                 <h2 className="font-bold text-gray-800">{runTitle(run)} — {run.period}{RUN_TYPES[run.runType] ? ` (${RUN_TYPES[run.runType]})` : ''}</h2>
                 <p className="text-xs text-gray-500 mt-1">
-                  {dayRangeLabel({ from: String(run.startDate).slice(0, 10), to: String(run.endDate).slice(0, 10) })} • {run.employees} موظف • صافي {formatMoney(run.totalNet)} {currency}
+                  {dayRangeLabel({ from: String(run.startDate).slice(0, 10), to: String(run.endDate).slice(0, 10) })} • {run.employees} موظف • صافي {run.netByCurrency && run.netByCurrency.length > 1
+                    ? run.netByCurrency.map(part => `${formatMoney(part.totalNet)} ${currencyLabel(part.currency)}`).join(' — ')
+                    : `${formatMoney(run.totalNet)} ${run.netByCurrency?.length ? currencyLabel(run.netByCurrency[0].currency) : currency}`}
                 </p>
                 <p className="text-xs text-gray-600 mt-1">
                   احتسبه: {run.calculatedBy?.name ?? 'غير معروف'}{run.calculatedAt ? ` — ${formatDateTime(run.calculatedAt)}` : ''}
@@ -110,7 +112,7 @@ export default function PayrollMyApprovalsPage() {
             {openId === run.runId && review && (
               <div className="space-y-4 border-t border-gray-100 pt-4">
                 {review.run.correctionReason && <p className="rounded-xl bg-sky-50 text-sky-900 text-sm p-3">سبب التصحيح: {review.run.correctionReason}</p>}
-                <PayrollApprovalReviewTotals totals={review.totals} />
+                <PayrollApprovalReviewTotals totals={review.totals} byCurrency={review.byCurrency} />
                 <PayrollApprovalReviewTable key={run.runId} rows={review.rows} />
 
                 <PayrollApprovalChainStrip chain={review.chain} busy={busy}

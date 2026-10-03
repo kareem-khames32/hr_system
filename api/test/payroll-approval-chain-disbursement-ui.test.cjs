@@ -93,7 +93,7 @@ test('CHAIN-UI-05: شاشة المسير — الشريط محمّل مع الم
   assert.ok(page.includes('Promise.allSettled([fetchPayMethodReport(id), fetchPayrollRunLines(id), fetchPayrollRunChain(id)])'))
   const approvals = read('src/app/payroll/my-approvals/page.tsx')
   for (const text of ['<h1 className="text-2xl font-bold text-gray-800">مسيرات بانتظار اعتمادي</h1>', 'fetchMyPayrollApprovals()', 'fetchPayrollApprovalReview(runId)', '<PayrollApprovalChainStrip chain={review.chain}',
-    'راجع المسير', 'مفيش مسيرات منتظرة اعتمادك دلوقتي.', '<PayrollApprovalReviewTotals totals={review.totals} />', '<PayrollApprovalReviewTable key={run.runId} rows={review.rows} />']) assert.ok(approvals.includes(text), text)
+    'راجع المسير', 'مفيش مسيرات منتظرة اعتمادك دلوقتي.', '<PayrollApprovalReviewTotals totals={review.totals} byCurrency={review.byCurrency} />', '<PayrollApprovalReviewTable key={run.runId} rows={review.rows} />']) assert.ok(approvals.includes(text), text)
   const editor = read('src/app/payroll/approval-chain/page.tsx')
   for (const text of ['<h1 className="text-2xl font-bold text-gray-800">سلسلة اعتماد المسير</h1>', 'سلسلة الشركة', 'سلسلة خاصة بمسير دائم', 'savePayrollCompanyChain(steps, config.company.revision)',
     'savePayrollSeriesChain(series, steps, override?.revision ?? 0)', 'disabled={!config.canEditCompany}', '«إنشاء مسيرات الشهر الجديد» بينقلها معاه']) assert.ok(editor.includes(text), text)
@@ -104,7 +104,7 @@ test('CHAIN-UI-05: شاشة المسير — الشريط محمّل مع الم
 test('DISB-UI-01: «صرف الرواتب» — الفلاتر والعلامة والتعليم الجماعي والإجماليات من الخادم، والتصدير بنفس الصفوف، وبلا حساب فلوس في المتصفح', () => {
   const page = read('src/app/payroll/disbursement/page.tsx')
   for (const text of ['<h1 className="text-2xl font-bold text-gray-800">صرف الرواتب</h1>', 'fetchDisbursementRuns()', 'fetchDisbursementView(id, next)', "new URLSearchParams(window.location.search).get('runId')",
-    '<PayrollDisbursementTotalsCards totals={view.totals} />', '<PayrollDisbursementTable rows={view.rows} canMark={canMark} disabled={busy || loading} onToggle={toggle} />',
+    '<PayrollDisbursementTotalsCards totals={view.totals} byCurrency={view.byCurrency} />', '<PayrollDisbursementTable rows={view.rows} canMark={canMark} disabled={busy || loading} onToggle={toggle} />',
     '<PayrollDisbursementSummaryTable summary={summary} />',
     // الفرع والإدارة والقسم والفريق: الفلتر الموحد (طلب المالك 30 سبتمبر) مكان القوائم التلاتة، وبيتبعت للخادم مع باقي الفلاتر
     '{org.element}', 'departmentIds: org.params.departmentIds ?? null', 'load(runId, effective)', 'markDisbursementFiltered(runId!, { paid, note, expectedCount }, effective)',
@@ -122,7 +122,7 @@ test('DISB-UI-01: «صرف الرواتب» — الفلاتر والعلامة 
   const row = { itemId: 1, employeeId: 1, employeeCode: 'E001', fullName: 'سامي', branchId: 1, branchName: 'فرع المعادي', departmentId: 2, departmentName: 'الحسابات', teamId: null, teamName: null,
     payMethod: 'mixed', payMethodLabel: 'نقدي + بنك', bankName: 'بنك أ', iban: 'SA01', netPay: 6000.5, bankAmount: 2000, cashAmount: 4000.5, issue: null, state: 'PAID', stateLabel: 'تم الصرف', tickable: true,
     markedBy: { id: 7, name: 'صلاح' }, markedAt: '2026-09-22T10:05:33.000Z', note: 'تحويل 88', settlement: null }
-  assert.deepEqual(disbursementApi.disbursementCsvRows([row]), [['E001', 'سامي', 'فرع المعادي', 'الحسابات', '', 'نقدي + بنك', 'بنك أ', 'SA01', '6000.50', '2000.00', '4000.50', 'تم الصرف', 'صلاح', '2026-09-22 10:05', 'تحويل 88']])
+  assert.deepEqual(disbursementApi.disbursementCsvRows([row]), [['E001', 'سامي', 'فرع المعادي', 'الحسابات', '', 'نقدي + بنك', 'بنك أ', 'SA01', '6000.50', '2000.00', '4000.50', '', 'تم الصرف', 'صلاح', '2026-09-22 10:05', 'تحويل 88']])
   assert.equal(disbursementApi.DISBURSEMENT_CSV_HEADER.length, disbursementApi.disbursementCsvRows([row])[0].length)
   const bucket = (count, total, bank, cash) => ({ count, total, bank, cash })
   const totals = disbursementApi.disbursementCsvTotals({ paid: bucket(1, 6000.5, 2000, 4000.5), unpaid: bucket(2, 9000, 9000, 0), payable: bucket(3, 15000.5, 11000, 4000.5), settlement: { count: 0, total: 0 }, noAmount: 0, issues: 0 })

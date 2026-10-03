@@ -3,6 +3,8 @@ import { DataSource, EntityManager, In } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { assertCompanyWideWrite, branchScopeOf, userHasPerm } from '../auth/guards'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
+import { readBranchCurrencyOf } from '../org/branch-currency-db'
+import { totalsByCurrency } from '../org/currency-totals'
 import { PayrollItem, PayrollRun, PayrollRunMember } from './payroll.entities'
 import { PayrollRunEvent } from './payroll-membership.entities'
 import { PayrollApprovalChain, PayrollRunApproval } from './payroll-approval-chain.entities'
@@ -291,6 +293,8 @@ export class PayrollApprovalChainService {
     const members = await em.getRepository(PayrollRunMember).find({ where: { runId } })
     const snapshots = new Map(members.map(member => [member.employeeId, member.snapshot]))
     const lines = await describePayrollItemsLines(em, items)
+    // B1.1: البند بعملة فرع الموظف في لقطة المسير، والإجماليات لكل عملة لوحدها (مسير فيه فرعين بعملتين)
+    const currencyOfBranch = await readBranchCurrencyOf(em)
     let earnings = 0, deductions = 0, net = 0
     const rows = items.map((item, index) => {
       const snapshot = snapshots.get(item.employeeId) ?? null
@@ -299,13 +303,17 @@ export class PayrollApprovalChainService {
       return { itemId: item.id, employeeId: item.employeeId, employeeCode: snapshot?.employeeCode ?? '', fullName: snapshot?.fullName ?? `موظف رقم ${item.employeeId}`,
         branchName: snapshot?.branchName ?? null, departmentName: snapshot?.departmentName ?? null, teamName: snapshot?.teamName ?? null,
         earnings: totals.earnings, deductions: totals.deductions, net: totals.net, earningLines: lines[index].earnings, deductionLines: lines[index].deductions,
-        settlementPayout: !!payrollItemSettlementPayout(item.breakdown) }
+        settlementPayout: !!payrollItemSettlementPayout(item.breakdown), currency: currencyOfBranch(snapshot?.branchId ?? null) }
     }).sort((a, b) => a.employeeCode.localeCompare(b.employeeCode, 'en') || a.employeeId - b.employeeId)
     return {
       run: { id: run.id, name: run.name, period: run.period, startDate: run.startDate, endDate: run.endDate, status: run.status, runType: payrollRunTypeOf(run),
         correctionReason: run.correctionReason ?? null, calculatedAt: run.calculatedAt ?? null },
       chain: await this.describe(em, user, run, chain, progress),
       totals: { employees: rows.length, earnings: earnings / 100, deductions: deductions / 100, net: net / 100, negativeNet: rows.filter(row => row.net < 0).length },
+      byCurrency: totalsByCurrency(rows, row => row.currency, list => {
+        const sum = (pick: (row: (typeof rows)[number]) => number) => list.reduce((total, row) => total + Math.round(pick(row) * 100), 0) / 100
+        return { employees: list.length, earnings: sum(row => row.earnings), deductions: sum(row => row.deductions), net: sum(row => row.net), negativeNet: list.filter(row => row.net < 0).length }
+      }),
       rows,
     }
   }
@@ -334,6 +342,17 @@ export class PayrollApprovalChainService {
     const counts: Array<{ runId: number; employees: number }> = await em.query(
       `SELECT [runId], COUNT(*) AS [employees] FROM [payroll_items] WHERE [runId] IN (${waiting.map((_, index) => `@${index}`).join(', ')}) GROUP BY [runId]`, waiting.map(row => row.run.id))
     const names = await this.userNames(em, waiting.map(row => row.calculatedBy))
+    // B1.1: صافي كل مسير لكل عملة (عملة البند من فرع الموظف في لقطة المسير، ومن غير لقطة فرعه الحالي)
+    const currencyOfBranch = await readBranchCurrencyOf(em)
+    const nets: Array<{ runId: number; netPay: string; branchId: number | null }> = await em.query(
+      `SELECT i.[runId], CONVERT(varchar(40), i.[netPay]) AS [netPay],
+        COALESCE(TRY_CAST(JSON_VALUE(CAST(m.[snapshot] AS nvarchar(max)), '$.branchId') AS int), e.[branchId]) AS [branchId]
+       FROM [payroll_items] i LEFT JOIN [payroll_run_members] m ON m.[runId]=i.[runId] AND m.[employeeId]=i.[employeeId]
+       LEFT JOIN [employees] e ON e.[id]=i.[employeeId]
+       WHERE i.[runId] IN (${waiting.map((_, index) => `@${index}`).join(', ')})`, waiting.map(row => row.run.id))
+    const netByCurrency = (runId: number) => totalsByCurrency(nets.filter(row => Number(row.runId) === runId),
+      row => currencyOfBranch(row.branchId == null ? null : Number(row.branchId)), list => list.reduce((sum, row) => sum + Math.round(Number(row.netPay) * 100), 0) / 100)
+      .map(group => ({ currency: group.currency, totalNet: group.totals }))
     return waiting.map(({ run, progress, calculatedBy }) => {
       const step = progress.currentStep!
       const previous = progress.steps.filter(row => row.status === 'APPROVED').slice(-1)[0]
@@ -341,7 +360,7 @@ export class PayrollApprovalChainService {
       const blocked = sod ? 'أنت من احتسب نسخة المسير دي — من احتسب المسير لا يعتمد أي خطوة فيه'
         : progress.actedUserIds.includes(user.sub) ? 'اعتمدت خطوة سابقة على نفس المسير' : null
       return { runId: run.id, name: run.name, period: run.period, startDate: run.startDate, endDate: run.endDate, runType: payrollRunTypeOf(run), totalNet: Number(run.totalNet),
-        employees: Number(counts.find(row => Number(row.runId) === run.id)?.employees ?? 0),
+        employees: Number(counts.find(row => Number(row.runId) === run.id)?.employees ?? 0), netByCurrency: netByCurrency(run.id),
         calculatedBy: calculatedBy == null ? null : { id: calculatedBy, name: names.get(calculatedBy) ?? null }, calculatedAt: run.calculatedAt ?? null,
         stepOrder: step.order, stepCount: progress.steps.length, stepLabel: step.label, isFinal: step.order === progress.steps.length,
         waitingSince: previous?.decidedAt ?? run.calculatedAt ?? null, canAct: !blocked, blocked }

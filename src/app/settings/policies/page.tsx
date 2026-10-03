@@ -22,7 +22,7 @@ import {
   type ApiTerminationReason, type ApiTerminationReasons, type SecurityStatus,
 } from '@/lib/api'
 import { customTerminationReasonsIssue, TERMINATION_REASON_FACTOR_HINT } from '@/lib/termination-reasons'
-import { invalidateCurrency, useCurrency } from '@/lib/currency'
+import { invalidateCurrency, useCurrency, useMixedCurrencies } from '@/lib/currency'
 import {
   createLoanCapPolicy, createLoanCapPolicyVersion, fetchLoanCapPolicies, formatLoanMoney,
   type LoanCapPolicy, type LoanCapPolicyInput,
@@ -236,6 +236,8 @@ const todayText = () => { const d = new Date(); return `${d.getFullYear()}-${Str
 
 function LoanAdvanceCapBlock({ onSaveConfig, pendingConfigCount }: { onSaveConfig: () => Promise<void>; pendingConfigCount: number }) {
   const currency = useCurrency()
+  // B1.1: شركة فيها فروع بعملتين ← المبلغ الثابت بيتقري بعملة فرع الموظف
+  const mixedCurrencies = useMixedCurrencies()
   const [policy, setPolicy] = useState<LoanCapPolicy | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -319,7 +321,7 @@ function LoanAdvanceCapBlock({ onSaveConfig, pendingConfigCount }: { onSaveConfi
           </label>
           <label className="text-sm text-gray-700">الحد الأقصى
             <select className="input mt-1 w-44" disabled={!canManage} value={capKind} onChange={e => { setCapKind(e.target.value as 'FLAT' | 'PERCENT'); setSaved('') }}>
-              <option value="FLAT">مبلغ ثابت ({currency})</option>
+              <option value="FLAT">مبلغ ثابت ({mixedCurrencies ? 'بعملة فرع الموظف' : currency})</option>
               <option value="PERCENT">نسبة من الراتب %</option>
             </select>
           </label>
@@ -339,8 +341,9 @@ function LoanAdvanceCapBlock({ onSaveConfig, pendingConfigCount }: { onSaveConfi
             {busy ? 'جارٍ الحفظ...' : pendingConfigCount > 0 ? `حفظ سقف السلفة و${pendingConfigCount} إعداد` : 'حفظ سقف السلفة'}</button>}
         </div>
       )}
+      {mixedCurrencies && capKind === 'FLAT' && <p className="text-xs text-amber-700" data-loan-cap-currency-note>المبلغ الثابت رقم واحد لكل الفروع وبيتقري بعملة فرع الموظف، من غير تحويل بين العملات.</p>}
       <p className="text-xs text-gray-400">
-        {policy ? `الساري الآن: ${policy.percentOfSalary ? `${Number(policy.percentOfSalary)}% من ${policy.salaryBase === 'BASIC' ? 'الراتب الأساسي' : 'إجمالي الراتب'}` : policy.flatCapAmount ? `${formatLoanMoney(policy.flatCapAmount)} ${currency}` : 'بلا حد مبلغ'}`
+        {policy ? `الساري الآن: ${policy.percentOfSalary ? `${Number(policy.percentOfSalary)}% من ${policy.salaryBase === 'BASIC' ? 'الراتب الأساسي' : 'إجمالي الراتب'}` : policy.flatCapAmount ? `${formatLoanMoney(policy.flatCapAmount)} ${mixedCurrencies ? 'بعملة فرع الموظف' : currency}` : 'بلا حد مبلغ'}`
           : 'لا يوجد سقف سلفة الآن — أي مبلغ يمر في الاعتماد.'}
       </p>
     </div>

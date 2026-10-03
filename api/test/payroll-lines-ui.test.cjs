@@ -14,7 +14,7 @@ test('جدول المسير: الأعمدة من بنود الخادم بمجم�
   const page = read('src/app/payroll/page.tsx')
   for (const text of ['fetchPayrollRunLines(id)', '{PAYROLL_LINE_GROUP_LABELS.earnings}', '{PAYROLL_LINE_GROUP_LABELS.deductions}',
     'earningColumns.map(column =>', 'deductionColumns.map(column =>', 'payrollLineAmount(lines?.earnings, column.key)', 'payrollLineAmount(lines?.deductions, column.key)',
-    'formatMoney(earningColumnTotals[column.key])', 'formatMoney(deductionColumnTotals[column.key])', 'onClick={exportRunCsv}',
+    'formatMoney(row.earnings[column.key])', 'formatMoney(row.deductions[column.key])', 'earnings: earningColumnTotals, deductions: deductionColumnTotals', 'onClick={exportRunCsv}',
     "...earningColumns.map(column => column.name), PAYROLL_LINE_TOTAL_LABELS.earnings", 'payrollItemEarnings(item)', 'payrollItemDeductions(item)']) {
     assert.ok(page.includes(text), text)
   }

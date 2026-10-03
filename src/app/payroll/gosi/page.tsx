@@ -5,6 +5,8 @@ import Link from 'next/link'
 import { MainLayout } from '@/components/layout'
 import { downloadCsv } from '@/lib/csv'
 import { formatMoney } from '@/lib/money'
+import { currencyLabel } from '@/lib/currency'
+import { currencyTotalRows, moneyByCurrency } from '@/lib/currency-totals'
 import { PayrollPeriodSelect, usePayrollMonthContext } from '@/components/DayRangeFilter'
 import { useOrgFilter } from '@/components/OrgFilter'
 import {
@@ -35,11 +37,17 @@ const Th =({ children, center }: { children: React.ReactNode; center?: boolean }
   <th className={`px-4 py-3 ${center ? 'text-center' : 'text-right'} text-sm font-medium text-gray-600 whitespace-nowrap`}>{children}</th>
 
 function reportTable(report: SocialInsuranceReport) {
-  const header = ['كود الموظف', 'الموظف', 'الفرع', 'النظام', 'الفئة', 'رقم التأمينات', 'الأجر التأميني', 'نسبة الموظف %', 'حصة الموظف', 'نسبة صاحب العمل %', 'حصة صاحب العمل', 'الإجمالي', 'المصدر']
+  const header = ['كود الموظف', 'الموظف', 'الفرع', 'النظام', 'الفئة', 'رقم التأمينات', 'العملة', 'الأجر التأميني', 'نسبة الموظف %', 'حصة الموظف', 'نسبة صاحب العمل %', 'حصة صاحب العمل', 'الإجمالي', 'المصدر']
   const rows = report.rows.map(row => [row.employeeCode, row.fullName, row.branchName ?? '', INSURANCE_SYSTEM_LABELS[row.system], INSURANCE_CATEGORY_LABELS[row.category ?? ''] ?? '',
-    row.gosiNumber ?? '', row.insuredSalary.toFixed(2), row.employeePct, row.employeeShare.toFixed(2), row.employerPct, row.employerShare.toFixed(2),
+    row.gosiNumber ?? '', currencyLabel(row.currency), row.insuredSalary.toFixed(2), row.employeePct, row.employeeShare.toFixed(2), row.employerPct, row.employerShare.toFixed(2),
     ((Math.round(row.employeeShare * 100) + Math.round(row.employerShare * 100)) / 100).toFixed(2), row.source === 'PAYROLL' ? 'من المسير' : 'تقديري من الملف'])
-  rows.push(['', 'الإجمالي', '', '', '', '', report.totals.insuredSalary, '', report.totals.employeeShare, '', report.totals.employerShare, report.totals.total, ''])
+  // B1.1: إجمالي لكل عملة لوحده لو فيه فروع بعملتين
+  const perCurrency = currencyTotalRows(report.byCurrency)
+  const totals = perCurrency.length ? perCurrency.map(group => ({ label: `الإجمالي ${group.label}`, currency: group.label, totals: group.totals }))
+    : [{ label: 'الإجمالي', currency: currencyLabel(report.byCurrency?.[0]?.currency), totals: report.totals }]
+  for (const line of totals) {
+    rows.push(['', line.label, '', '', '', '', line.currency, line.totals.insuredSalary, '', line.totals.employeeShare, '', line.totals.employerShare, line.totals.total, ''])
+  }
   return { header, rows }
 }
 
@@ -128,6 +136,11 @@ export default function PayrollGosiPage() {
     [fullReport, org.active, org.matches])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // B1.1: فروع بعملتين (تأمينات سعودية بالريال ومصرية بالجنيه) ← كل إجمالي لكل عملة لوحده
+  const perCurrency = report ? currencyTotalRows(report.byCurrency) : []
+  const footers = !report ? [] : perCurrency.length ? perCurrency.map(group => ({ key: group.currency, label: `الإجمالي ${group.label}`, totals: group.totals }))
+    : [{ key: 'all', label: 'الإجمالي', totals: report.totals }]
+  const money = (pick: (totals: SocialInsuranceReport['totals']) => string) => report ? moneyByCurrency(report.byCurrency, pick, pick(report.totals), '', formatMoney) : ''
 
   const load = (target = period) => {
     if (!target) return
@@ -184,9 +197,9 @@ export default function PayrollGosiPage() {
           <>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="card"><p className="text-sm text-gray-500">الموظفين المسجلين</p><p className="text-2xl font-bold text-gray-800">{report.totals.employees}</p></div>
-              <div className="card"><p className="text-sm text-gray-500">حصة الموظفين</p><p className="text-2xl font-bold text-gray-800">{formatMoney(report.totals.employeeShare)}</p></div>
-              <div className="card"><p className="text-sm text-gray-500">حصة صاحب العمل</p><p className="text-2xl font-bold text-gray-800">{formatMoney(report.totals.employerShare)}</p></div>
-              <div className="card"><p className="text-sm text-gray-500">إجمالي الاشتراكات</p><p className="text-2xl font-bold text-primary-700">{formatMoney(report.totals.total)}</p></div>
+              <div className="card"><p className="text-sm text-gray-500">حصة الموظفين</p><p className="text-2xl font-bold text-gray-800" dir="ltr">{money(t => t.employeeShare)}</p></div>
+              <div className="card"><p className="text-sm text-gray-500">حصة صاحب العمل</p><p className="text-2xl font-bold text-gray-800" dir="ltr">{money(t => t.employerShare)}</p></div>
+              <div className="card"><p className="text-sm text-gray-500">إجمالي الاشتراكات</p><p className="text-2xl font-bold text-primary-700" dir="ltr">{money(t => t.total)}</p></div>
             </div>
             <div className="card overflow-x-auto">
               <table className="w-full text-sm">
@@ -200,7 +213,7 @@ export default function PayrollGosiPage() {
                         <Link href={`/employees/${row.employeeId}`} className="font-medium text-gray-800 hover:text-primary-600">{row.fullName}</Link>
                         <p className="text-xs text-gray-400">{row.employeeCode} — {INSURANCE_CATEGORY_LABELS[row.category ?? ''] ?? ''}</p>
                       </td>
-                      <td className="px-4 py-3 text-gray-600">{row.branchName ?? '—'}<p className="text-xs text-gray-400">{INSURANCE_SYSTEM_LABELS[row.system]}</p></td>
+                      <td className="px-4 py-3 text-gray-600">{row.branchName ?? '—'}<p className="text-xs text-gray-400">{INSURANCE_SYSTEM_LABELS[row.system]}{perCurrency.length > 0 && row.currency ? ` · ${currencyLabel(row.currency)}` : ''}</p></td>
                       <td className="px-4 py-3 text-gray-600" dir="ltr">{row.gosiNumber || '—'}</td>
                       <td className="px-4 py-3 text-center">{formatMoney(row.insuredSalary)}{row.salarySource === 'BASIC' && <p className="text-xs text-gray-400">على الأساسي</p>}</td>
                       <td className="px-4 py-3 text-center">{formatMoney(row.employeeShare)}<p className="text-xs text-gray-400">{row.employeePct}%</p></td>
@@ -216,13 +229,15 @@ export default function PayrollGosiPage() {
                 </tbody>
                 {report.rows.length > 0 && (
                   <tfoot className="bg-gray-50 font-semibold">
-                    <tr>
-                      <td className="px-4 py-3" colSpan={3}>الإجمالي</td>
-                      <td className="px-4 py-3 text-center">{formatMoney(report.totals.insuredSalary)}</td>
-                      <td className="px-4 py-3 text-center">{formatMoney(report.totals.employeeShare)}</td>
-                      <td className="px-4 py-3 text-center">{formatMoney(report.totals.employerShare)}</td>
-                      <td className="px-4 py-3 text-center">{formatMoney(report.totals.total)}</td>
-                    </tr>
+                    {footers.map(({ key, label, totals }) => (
+                      <tr key={key} data-currency-total={key}>
+                        <td className="px-4 py-3" colSpan={3}>{label}</td>
+                        <td className="px-4 py-3 text-center">{formatMoney(totals.insuredSalary)}</td>
+                        <td className="px-4 py-3 text-center">{formatMoney(totals.employeeShare)}</td>
+                        <td className="px-4 py-3 text-center">{formatMoney(totals.employerShare)}</td>
+                        <td className="px-4 py-3 text-center">{formatMoney(totals.total)}</td>
+                      </tr>
+                    ))}
                   </tfoot>
                 )}
               </table>

@@ -1,4 +1,5 @@
 import { apiFetch } from './api'
+import { totalsByCurrency } from '../../api/src/org/currency-totals'
 
 // التأمينات الاجتماعية (السعودية / المصرية): إعدادات الشركة ونظام كل فرع وتقرير الشهر
 export type InsuranceSystem = 'NONE' | 'SAUDI' | 'EGYPTIAN'
@@ -21,10 +22,14 @@ export interface SocialInsuranceReportRow {
   employeeId: number; employeeCode: string; fullName: string; branchId: number; branchName: string | null
   nationality: string | null; gosiNumber: string | null; system: InsuranceSystem; category: string | null; salarySource: 'DECLARED' | 'BASIC' | null
   insuredSalary: number; employeePct: number; employerPct: number; employeeShare: number; employerShare: number; source: 'PAYROLL' | 'ESTIMATE'
+  // B1.1: عملة فرع الموظف (التأمينات السعودية بالريال والمصرية بالجنيه)
+  currency?: string
 }
 export interface SocialInsuranceReport {
   period: string; branchId: number | null; rows: SocialInsuranceReportRow[]
   totals: { employees: number; insuredSalary: string; employeeShare: string; employerShare: string; total: string }
+  // B1.1: نفس الإجمالي لكل عملة لوحدها
+  byCurrency?: Array<{ currency: string; totals: SocialInsuranceReport['totals'] }>
 }
 
 export const fetchSocialInsuranceSettings = () => apiFetch<SocialInsuranceSettingsView>('/social-insurance/settings')
@@ -39,12 +44,14 @@ export const fetchSocialInsuranceReport = (period: string, branchId?: number | n
  */
 export function filterSocialInsuranceReport(report: SocialInsuranceReport, keep: (employeeId: number) => boolean): SocialInsuranceReport {
   const rows = report.rows.filter(row => keep(row.employeeId))
+  // B1.1: والإجمالي لكل عملة من نفس الصفوف المتفلترة وبنفس الحساب (مفيش رقم بيجمع جنيه على ريال)
+  return { ...report, rows, totals: socialInsuranceTotals(rows), byCurrency: totalsByCurrency(rows, row => row.currency ?? '', socialInsuranceTotals) }
+}
+
+function socialInsuranceTotals(rows: readonly SocialInsuranceReportRow[]): SocialInsuranceReport['totals'] {
   const cents = (pick: (row: SocialInsuranceReportRow) => number) => rows.reduce((sum, row) => sum + Math.round(pick(row) * 100), 0)
   const money = (value: number) => (value / 100).toFixed(2)
   const employeeCents = cents(row => row.employeeShare), employerCents = cents(row => row.employerShare)
-  return {
-    ...report, rows,
-    totals: { employees: rows.length, insuredSalary: money(cents(row => row.insuredSalary)), employeeShare: money(employeeCents),
-      employerShare: money(employerCents), total: money(employeeCents + employerCents) },
-  }
+  return { employees: rows.length, insuredSalary: money(cents(row => row.insuredSalary)), employeeShare: money(employeeCents),
+    employerShare: money(employerCents), total: money(employeeCents + employerCents) }
 }

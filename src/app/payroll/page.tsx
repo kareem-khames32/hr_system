@@ -76,7 +76,8 @@ import {
   CalendarPlus,
 } from 'lucide-react'
 import Link from 'next/link'
-import { useCurrency } from '@/lib/currency'
+import { currencyCodeFor, currencyLabel, useCurrency, useCurrencyContext } from '@/lib/currency'
+import { splitByCurrency } from '@/lib/currency-totals'
 import { downloadCsv, csvDateStamp } from '@/lib/csv'
 import { dayRangeLabel } from '@/lib/payroll-month-range'
 import { PayrollOvertimeBreakdown } from '@/components/PayrollOvertimeBreakdown'
@@ -180,6 +181,8 @@ const coverageLine = (item: ApiPayrollItem) => {
 
 export default function PayrollPage() {
   const currency = useCurrency()
+  // B1.1: عملة كل بند من فرع الموظف (المسير ممكن يضم فرع مصري وفرع سعودي)
+  const currencyContext = useCurrencyContext()
   const [runs, setRuns] = useState<ApiPayrollRun[]>([])
   const [branches, setBranches] = useState<ApiBranch[]>([])
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
@@ -570,6 +573,15 @@ export default function PayrollPage() {
   const totals = { totalEarnings: runTotals.earnings, totalDeductions: runTotals.deductions, netSalary: runTotals.net }
   // قرار المالك (20 سبتمبر): المستحق للصرف = الصافي ناقص صفوف «مصروف مع التصفية»
   const payable = payrollRunPayable(filteredItems)
+  // B1.1: مسير فيه موظفين من فروع بعملتين ← إجمالي كل عملة لوحده (عملة البند من فرع الموظف في لقطة المسير، ومن غير لقطة فرعه الحالي).
+  // مفيش رقم بيجمع جنيه على ريال، ومفيش تحويل: عملة واحدة = نفس الكروت والإجمالي زي الأول.
+  const itemCurrency = (item: ApiPayrollItem) => currencyCodeFor(currencyContext, snapshotOf(item.employeeId)?.branchId ?? employeeOf(item.employeeId)?.branchId ?? null)
+  const rowCurrency = (item: ApiPayrollItem) => currencyLabel(itemCurrency(item)) || currency
+  const currencyGroups = (currencyContext ? splitByCurrency(filteredItems, itemCurrency) : [])
+    .map((group) => ({ currency: group.currency, rows: group.rows, totals: { ...payrollRunTotals(group.rows), payable: payrollRunPayable(group.rows) } }))
+  const multiCurrency = currencyGroups.length > 1
+  const runCurrency = currencyGroups.length === 1 ? currencyLabel(currencyGroups[0].currency) : currency
+  const runMultiCurrency = !!currencyContext && new Set(items.map(itemCurrency)).size > 1
   // طلب المالك 19 سبتمبر: أعمدة الاستحقاقات والاستقطاعات = البنود الموجودة فعلًا في المسير (مفيش عمود فاضي)، ومجموع كل صف = أعمدة بنده المحفوظة
   const earningColumns: PayrollLineColumn[] = runLines?.columns.earnings ?? []
   const deductionColumns: PayrollLineColumn[] = runLines?.columns.deductions ?? []
@@ -577,6 +589,13 @@ export default function PayrollPage() {
   const shownLines = filteredItems.flatMap(item => linesByItem.get(item.id) ?? [])
   const earningColumnTotals = payrollLineColumnTotals(shownLines, 'earnings', earningColumns)
   const deductionColumnTotals = payrollLineColumnTotals(shownLines, 'deductions', deductionColumns)
+  // سطر «الإجمالي» تحت الجدول: سطر لكل عملة لو المسير فيه عملتين
+  const footerRows = multiCurrency ? currencyGroups.map((group) => {
+    const lines = group.rows.flatMap(item => linesByItem.get(item.id) ?? [])
+    return { key: group.currency, label: `الإجمالي ${currencyLabel(group.currency)}`, earnings: payrollLineColumnTotals(lines, 'earnings', earningColumns),
+      deductions: payrollLineColumnTotals(lines, 'deductions', deductionColumns), totalEarnings: group.totals.earnings, totalDeductions: group.totals.deductions, net: group.totals.net }
+  }) : [{ key: 'all', label: 'الإجمالي', earnings: earningColumnTotals, deductions: deductionColumnTotals,
+    totalEarnings: totals.totalEarnings, totalDeductions: totals.totalDeductions, net: totals.netSalary }]
   const tableColumns = 1 + earningColumns.length + 1 + deductionColumns.length + 1 + 4
   const linesReady = !!runLines && filteredItems.every(item => linesByItem.has(item.id))
   // تصدير CSV بنفس أعمدة الجدول: كل بند باسمه ثم إجمالي كل مجموعة والصافي
@@ -584,20 +603,20 @@ export default function PayrollPage() {
     if (!runDetail || !linesReady) return
     downloadCsv(`payroll-run-${runDetail.id}-${runDetail.period}-${csvDateStamp()}.csv`,
       ['الرقم الوظيفي', 'الموظف', ...earningColumns.map(column => column.name), PAYROLL_LINE_TOTAL_LABELS.earnings,
-        ...deductionColumns.map(column => column.name), PAYROLL_LINE_TOTAL_LABELS.deductions, PAYROLL_LINE_TOTAL_LABELS.net, 'طريقة الدفع'],
+        ...deductionColumns.map(column => column.name), PAYROLL_LINE_TOTAL_LABELS.deductions, PAYROLL_LINE_TOTAL_LABELS.net, 'طريقة الدفع', 'العملة'],
       filteredItems.map((item) => {
         const lines = linesByItem.get(item.id)
         return [snapshotOf(item.employeeId)?.employeeCode ?? employeeOf(item.employeeId)?.employeeCode ?? '', employeeName(item.employeeId),
           ...earningColumns.map(column => payrollLineAmount(lines?.earnings, column.key)), payrollItemEarnings(item),
           ...deductionColumns.map(column => payrollLineAmount(lines?.deductions, column.key)), payrollItemDeductions(item), item.netPay,
-          payMethodLabel(item.payMethod)]
+          payMethodLabel(item.payMethod), rowCurrency(item)]
       }))
   }
   // تفصيل تحت مبلغ البند في الخلية (الساعات والدقائق والأيام وتفصيل الإضافي والأقساط) من أعمدة البند نفسه
   const lineExtra = (item: ApiPayrollItem, key: string) => {
     if (key === PAYROLL_LINE_KEYS.overtime) return <>
       {n(item.overtimeHours) > 0 && <span className="text-xs text-success-600">{n(item.overtimeHours)} ساعة</span>}
-      <PayrollOvertimeBreakdown item={item} currency={currency} compact />
+      <PayrollOvertimeBreakdown item={item} currency={rowCurrency(item)} compact />
     </>
     if (key === PAYROLL_LINE_KEYS.lateness && n(item.lateMinutes) > 0) return <span className="text-xs text-danger-600">{n(item.lateMinutes)} دقيقة</span>
     // «إذن بخصم» سطر مستقل بجانب «التأخير»: دقائقه من تفصيل البند، ودقائق التأخير في عمودها ما بقتش تجمع الاثنين
@@ -613,7 +632,7 @@ export default function PayrollPage() {
       const days = leaveLineDays(item, key)
       return days > 0 ? <span className="text-xs text-danger-600">{days} يوم</span> : null
     }
-    if (key === PAYROLL_LINE_KEYS.loan) return <PayrollInstallmentBreakdown item={item} currency={currency} compact />
+    if (key === PAYROLL_LINE_KEYS.loan) return <PayrollInstallmentBreakdown item={item} currency={rowCurrency(item)} compact />
     return null
   }
 
@@ -826,8 +845,9 @@ export default function PayrollPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-primary-100 text-sm">إجمالي الاستحقاقات</p>
+                {multiCurrency ? currencyGroups.map((group) => <p key={group.currency} className="text-xl font-bold mt-1" dir="ltr" data-currency-total={group.currency}>{formatMoney(group.totals.earnings)} {currencyLabel(group.currency)}</p>) : <>
                 <p className="text-3xl font-bold mt-1">{formatMoney(totals.totalEarnings)}</p>
-                <p className="text-primary-200 text-sm mt-1">{currency}</p>
+                <p className="text-primary-200 text-sm mt-1">{runCurrency}</p></>}
               </div>
               <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center">
                 <TrendingUp size={28} />
@@ -839,8 +859,9 @@ export default function PayrollPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-danger-100 text-sm">إجمالي الخصومات</p>
+                {multiCurrency ? currencyGroups.map((group) => <p key={group.currency} className="text-xl font-bold mt-1" dir="ltr" data-currency-total={group.currency}>{formatMoney(group.totals.deductions)} {currencyLabel(group.currency)}</p>) : <>
                 <p className="text-3xl font-bold mt-1">{formatMoney(totals.totalDeductions)}</p>
-                <p className="text-danger-200 text-sm mt-1">{currency}</p>
+                <p className="text-danger-200 text-sm mt-1">{runCurrency}</p></>}
               </div>
               <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center">
                 <DollarSign size={28} />
@@ -852,10 +873,14 @@ export default function PayrollPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-success-100 text-sm">صافي الرواتب</p>
+                {multiCurrency ? currencyGroups.map((group) => <div key={group.currency} data-currency-total={group.currency}>
+                  <p className="text-xl font-bold mt-1" dir="ltr">{formatMoney(group.totals.net)} {currencyLabel(group.currency)}</p>
+                  {group.totals.payable.settlementCount > 0 && <p className="text-success-100 text-xs">المستحق للصرف {formatMoney(group.totals.payable.payable)} — {formatMoney(group.totals.payable.settlement)} لـ{group.totals.payable.settlementCount} موظف مصروف مع التصفية</p>}
+                </div>) : <>
                 <p className="text-3xl font-bold mt-1">{formatMoney(totals.netSalary)}</p>
-                <p className="text-success-200 text-sm mt-1">{currency}</p>
+                <p className="text-success-200 text-sm mt-1">{runCurrency}</p></>}
                 {/* قرار المالك (20 سبتمبر): راتب شهر آخر يوم عمل داخل الإجمالي وبرّه المستحق للصرف — بيتصرف مع التصفية */}
-                {payable.settlementCount > 0 && <p className="text-success-100 text-xs mt-1">
+                {!multiCurrency && payable.settlementCount > 0 && <p className="text-success-100 text-xs mt-1">
                   المستحق للصرف {formatMoney(payable.payable)} — {formatMoney(payable.settlement)} لـ{payable.settlementCount} موظف مصروف مع التصفية
                 </p>}
               </div>
@@ -1080,7 +1105,12 @@ export default function PayrollPage() {
         {runDetail && payMethods && Object.keys(payMethods).length > 0 && org.active && (
           <p className="text-xs text-gray-500" data-pay-methods-hidden>ملخص طرق الصرف للمسير كله — بيظهر لما تمسح فلتر الفرع/الإدارة/القسم/الفريق.</p>
         )}
-        {runDetail && payMethods && Object.keys(payMethods).length > 0 && !org.active && (
+        {/* B1.1: ملخص طرق الصرف من الخادم رقم واحد لكل طريقة — مسير فيه عملتين بيتوزع لكل عملة في كشف البنوك */}
+        {runDetail && payMethods && Object.keys(payMethods).length > 0 && !org.active && runMultiCurrency && (
+          <p className="text-xs text-gray-500" data-pay-methods-currencies>المسير فيه موظفين بعملتين — توزيع الصرف (بنك / نقدي) لكل عملة لوحدها في{' '}
+            <Link href={`/payroll/bank-sheet?runId=${runDetail.id}`} className="text-primary-600 underline">كشف البنوك</Link>.</p>
+        )}
+        {runDetail && payMethods && Object.keys(payMethods).length > 0 && !org.active && !runMultiCurrency && (
           <div className="card border-2 border-teal-200">
             <div className="flex items-center justify-between mb-4">
               <div>
@@ -1095,7 +1125,7 @@ export default function PayrollPage() {
                 <div key={method} className="p-4 bg-gray-50 rounded-xl border border-gray-100">
                   <p className="text-xs text-gray-500">{data.label || payMethodLabel(method)}</p>
                   <p className="text-lg font-bold text-gray-800">
-                    {formatMoney(data.total)} {currency}
+                    {formatMoney(data.total)} {runCurrency}
                   </p>
                   <p className="text-xs text-gray-500 mt-1">
                     بنك <span className="font-bold text-primary-700">{formatMoney(data.bank)}</span>
@@ -1106,9 +1136,9 @@ export default function PayrollPage() {
               ))}
             </div>
             <div className="mt-4 pt-3 border-t border-teal-100 text-sm text-gray-700">
-              الإجمالي: تحويل بنكي <span className="font-bold text-primary-700">{formatMoney(payMethodTotals.bank)} {currency}</span>
-              {' · '}نقدي <span className="font-bold text-success-700">{formatMoney(payMethodTotals.cash)} {currency}</span>
-              {' · '}الصافي المستحق للصرف <span className="font-bold text-gray-800">{formatMoney(payMethodTotals.total)} {currency}</span>
+              الإجمالي: تحويل بنكي <span className="font-bold text-primary-700">{formatMoney(payMethodTotals.bank)} {runCurrency}</span>
+              {' · '}نقدي <span className="font-bold text-success-700">{formatMoney(payMethodTotals.cash)} {runCurrency}</span>
+              {' · '}الصافي المستحق للصرف <span className="font-bold text-gray-800">{formatMoney(payMethodTotals.total)} {runCurrency}</span>
             </div>
           </div>
         )}
@@ -1240,10 +1270,11 @@ export default function PayrollPage() {
                     <td className="table-cell text-center font-mono font-bold text-danger-600 bg-danger-50">
                       {formatMoney(totalDeductions)}
                       {/* C2: تتبع قيود الدفتر (الخصومات المسجلة والبدلات والمكافآت) سطرًا سطرًا: النوع والسبب والطلب وسعر اليوم */}
-                      <div className="font-normal"><PayrollObligationBreakdown item={item} currency={currency} compact /></div>
+                      <div className="font-normal"><PayrollObligationBreakdown item={item} currency={rowCurrency(item)} compact /></div>
                     </td>
                     <td className={`table-cell text-center font-mono font-bold bg-primary-50 text-lg ${negativeNet ? 'text-red-700' : 'text-primary-600'}`}>
                       {formatMoney(item.netPay)}
+                      {multiCurrency && <span className="block text-xs font-normal text-gray-500">{rowCurrency(item)}</span>}
                       {negativeNet && <p className="text-xs font-sans">صافي سالب — يمنع الاعتماد</p>}
                     </td>
                     <td className="table-cell text-center">
@@ -1319,25 +1350,27 @@ export default function PayrollPage() {
               </tbody>
               {filteredItems.length > 0 && runLines && (
               <tfoot>
-                <tr className="bg-gray-100">
-                  <td className="px-4 py-4 font-bold text-gray-800">الإجمالي</td>
+                {footerRows.map(row => (
+                <tr key={row.key} className="bg-gray-100" data-currency-total={multiCurrency ? row.key : undefined}>
+                  <td className="px-4 py-4 font-bold text-gray-800">{row.label}</td>
                   {earningColumns.map(column => <td key={column.key} className="px-4 py-4 text-center font-mono font-bold">
-                    {formatMoney(earningColumnTotals[column.key])}
+                    {formatMoney(row.earnings[column.key])}
                   </td>)}
                   <td className="px-4 py-4 text-center font-mono font-bold text-success-600 bg-success-100">
-                    {formatMoney(totals.totalEarnings)}
+                    {formatMoney(row.totalEarnings)}
                   </td>
                   {deductionColumns.map(column => <td key={column.key} className="px-4 py-4 text-center font-mono font-bold text-danger-600">
-                    {formatMoney(deductionColumnTotals[column.key])}
+                    {formatMoney(row.deductions[column.key])}
                   </td>)}
                   <td className="px-4 py-4 text-center font-mono font-bold text-danger-600 bg-danger-100">
-                    {formatMoney(totals.totalDeductions)}
+                    {formatMoney(row.totalDeductions)}
                   </td>
                   <td className="px-4 py-4 text-center font-mono font-bold text-primary-600 bg-primary-100 text-lg">
-                    {formatMoney(totals.netSalary)}
+                    {formatMoney(row.net)}
                   </td>
                   <td className="px-4 py-4" colSpan={3}></td>
                 </tr>
+                ))}
               </tfoot>
               )}
             </table>

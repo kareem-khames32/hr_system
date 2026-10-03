@@ -4,7 +4,8 @@ import { Fragment, useState } from 'react'
 import Link from 'next/link'
 import { ChevronDown, ChevronLeft } from 'lucide-react'
 import { downloadCsv } from '@/lib/csv'
-import { useCurrency } from '@/lib/currency'
+import { currencyLabel, useCurrency } from '@/lib/currency'
+import { currencyTotalRows, moneyByCurrency } from '@/lib/currency-totals'
 import { formatMoney } from '@/lib/money'
 import { fetchLoansReport, LOAN_STATUS_LABELS } from '../_financial/api'
 import { EmptyState, FinancialReportShell, StatCard, Th, useFinancialReport } from '../_financial/ReportShell'
@@ -15,24 +16,30 @@ export default function LoansReportPage() {
   const currency = useCurrency()
   const { filters, setFilters, report, loading, error, reload } = useFinancialReport(fetchLoansReport)
   const [open, setOpen] = useState<number | null>(null)
+  // B1.1: سلف موظفين بعملتين (فرع مصري وسعودي) ← عمود العملة وسطر إجمالي لكل عملة
+  const perCurrency = report ? currencyTotalRows(report.byCurrency) : []
+  const footers = !report ? [] : perCurrency.length ? perCurrency.map((group) => ({ key: group.currency, label: `الإجمالي ${group.label}`, currency: group.label, totals: group.totals }))
+    : [{ key: 'all', label: 'الإجمالي', currency: currencyLabel(report.byCurrency?.[0]?.currency), totals: report.totals }]
+  const money = (pick: (t: NonNullable<typeof report>['totals']) => string) => report ? moneyByCurrency(report.byCurrency, pick, pick(report.totals), currency, formatMoney) : ''
 
   const exportCsv = () => {
     if (!report) return
-    const header = ['الكود', 'الموظف', 'الفرع', 'القسم', 'رقم السلفة', 'حالة السلفة', 'أصل السلفة', 'المسدد', 'الرصيد القائم',
+    const header = ['الكود', 'الموظف', 'الفرع', 'القسم', 'العملة', 'رقم السلفة', 'حالة السلفة', 'أصل السلفة', 'المسدد', 'الرصيد القائم',
       'أقساط الشهر (عدد)', 'مستحق الشهر', 'اتسدد من قسط الشهر', 'الباقي من قسط الشهر', 'متأخر من قبل الشهر', 'القسط الجاي', 'اتخصم في مسير الشهر']
     const rows: unknown[][] = []
     for (const row of report.employees) {
       for (const loan of row.loans) {
-        rows.push([row.employeeCode ?? '', row.fullName ?? '', row.branchName ?? '', row.departmentName ?? '', loan.loanId,
+        rows.push([row.employeeCode ?? '', row.fullName ?? '', row.branchName ?? '', row.departmentName ?? '', currencyLabel(row.currency), loan.loanId,
           LOAN_STATUS_LABELS[loan.status ?? ''] ?? loan.status ?? '', loan.principal, loan.paid, loan.outstanding, loan.dueCount, loan.dueAmount,
           loan.duePaid, loan.dueRemaining, loan.overdue, loan.nextDueDate ?? '', ''])
       }
-      rows.push([row.employeeCode ?? '', `إجمالي ${row.fullName ?? ''}`, '', '', `${row.loansCount} سلفة`, '', row.principal, row.paid, row.outstanding,
+      rows.push([row.employeeCode ?? '', `إجمالي ${row.fullName ?? ''}`, '', '', currencyLabel(row.currency), `${row.loansCount} سلفة`, '', row.principal, row.paid, row.outstanding,
         row.dueCount, row.dueAmount, row.duePaid, row.dueRemaining, row.overdue, '', row.deductedInPayroll])
     }
-    const t = report.totals
-    rows.push(['', `الإجمالي (${t.employees} موظف)`, '', '', `${t.loans} سلفة`, '', t.principal, t.paid, t.outstanding, t.dueCount, t.dueAmount, t.duePaid,
-      t.dueRemaining, t.overdue, '', t.deductedInPayroll])
+    for (const { label, currency: code, totals: t } of footers) {
+      rows.push(['', `${label} (${t.employees} موظف)`, '', '', code, `${t.loans} سلفة`, '', t.principal, t.paid, t.outstanding, t.dueCount, t.dueAmount, t.duePaid,
+        t.dueRemaining, t.overdue, '', t.deductedInPayroll])
+    }
     downloadCsv(`loans-${report.period}.csv`, header, rows)
   }
 
@@ -54,10 +61,10 @@ export default function LoansReportPage() {
         <>
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
             <StatCard label="موظفين عليهم سلف" value={report.totals.employees} />
-            <StatCard label="الرصيد القائم" value={`${formatMoney(report.totals.outstanding)} ${currency}`} />
-            <StatCard label="مستحق الشهر" value={`${formatMoney(report.totals.dueAmount)} ${currency}`} />
-            <StatCard label="اتخصم في مسير الشهر" value={`${formatMoney(report.totals.deductedInPayroll)} ${currency}`} />
-            <StatCard label="متأخر من قبل الشهر" value={`${formatMoney(report.totals.overdue)} ${currency}`} />
+            <StatCard label="الرصيد القائم" value={money((t) => t.outstanding)} />
+            <StatCard label="مستحق الشهر" value={money((t) => t.dueAmount)} />
+            <StatCard label="اتخصم في مسير الشهر" value={money((t) => t.deductedInPayroll)} />
+            <StatCard label="متأخر من قبل الشهر" value={money((t) => t.overdue)} />
           </div>
 
           {report.employees.length === 0 ? (
@@ -67,7 +74,7 @@ export default function LoansReportPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-600">
                   <tr>
-                    <Th>الكود</Th><Th>الموظف</Th><Th>الفرع</Th><Th>القسم</Th><Th>السلف</Th><Th>أصل السلف</Th><Th>المسدد</Th><Th>الرصيد القائم</Th>
+                    <Th>الكود</Th><Th>الموظف</Th><Th>الفرع</Th><Th>القسم</Th>{perCurrency.length > 0 && <Th>العملة</Th>}<Th>السلف</Th><Th>أصل السلف</Th><Th>المسدد</Th><Th>الرصيد القائم</Th>
                     <Th>أقساط الشهر</Th><Th>مستحق الشهر</Th><Th>الباقي من قسط الشهر</Th><Th>متأخر من قبل</Th><Th>اتخصم في المسير</Th>
                   </tr>
                 </thead>
@@ -88,6 +95,7 @@ export default function LoansReportPage() {
                           </td>
                           <td className="p-3 whitespace-nowrap">{row.branchName ?? '—'}</td>
                           <td className="p-3 whitespace-nowrap">{row.departmentName ?? '—'}</td>
+                          {perCurrency.length > 0 && <td className="p-3 whitespace-nowrap">{currencyLabel(row.currency)}</td>}
                           <td className="p-3">{row.loansCount}</td>
                           <td className="p-3" dir="ltr">{formatMoney(row.principal)}</td>
                           <td className="p-3" dir="ltr">{formatMoney(row.paid)}</td>
@@ -100,7 +108,7 @@ export default function LoansReportPage() {
                         </tr>
                         {expanded && (
                           <tr className="bg-gray-50/60">
-                            <td colSpan={13} className="p-3">
+                            <td colSpan={perCurrency.length ? 14 : 13} className="p-3">
                               <table className="w-full text-xs">
                                 <thead className="text-gray-500">
                                   <tr>
@@ -135,18 +143,20 @@ export default function LoansReportPage() {
                   })}
                 </tbody>
                 <tfoot className="bg-gray-50 font-bold text-gray-800">
-                  <tr className="border-t border-gray-200">
-                    <td className="p-3" colSpan={4}>الإجمالي ({report.totals.employees} موظف)</td>
-                    <td className="p-3">{report.totals.loans}</td>
-                    <td className="p-3" dir="ltr">{formatMoney(report.totals.principal)}</td>
-                    <td className="p-3" dir="ltr">{formatMoney(report.totals.paid)}</td>
-                    <td className="p-3" dir="ltr">{formatMoney(report.totals.outstanding)}</td>
-                    <td className="p-3">{report.totals.dueCount}</td>
-                    <td className="p-3" dir="ltr">{formatMoney(report.totals.dueAmount)}</td>
-                    <td className="p-3" dir="ltr">{formatMoney(report.totals.dueRemaining)}</td>
-                    <td className="p-3" dir="ltr">{formatMoney(report.totals.overdue)}</td>
-                    <td className="p-3" dir="ltr">{formatMoney(report.totals.deductedInPayroll)}</td>
-                  </tr>
+                  {footers.map(({ key, label, totals: t }) => (
+                    <tr key={key} className="border-t border-gray-200" data-currency-total={key}>
+                      <td className="p-3" colSpan={perCurrency.length ? 5 : 4}>{label} ({t.employees} موظف)</td>
+                      <td className="p-3">{t.loans}</td>
+                      <td className="p-3" dir="ltr">{formatMoney(t.principal)}</td>
+                      <td className="p-3" dir="ltr">{formatMoney(t.paid)}</td>
+                      <td className="p-3" dir="ltr">{formatMoney(t.outstanding)}</td>
+                      <td className="p-3">{t.dueCount}</td>
+                      <td className="p-3" dir="ltr">{formatMoney(t.dueAmount)}</td>
+                      <td className="p-3" dir="ltr">{formatMoney(t.dueRemaining)}</td>
+                      <td className="p-3" dir="ltr">{formatMoney(t.overdue)}</td>
+                      <td className="p-3" dir="ltr">{formatMoney(t.deductedInPayroll)}</td>
+                    </tr>
+                  ))}
                 </tfoot>
               </table>
             </div>

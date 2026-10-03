@@ -1,6 +1,7 @@
 // صرف المسير موظف بموظف (قرار المالك 22 سبتمبر): حامل payroll.disburse يعلّم «تم الصرف / لم يتم» على كل موظف في مسير معتمد.
 // كل الأرقام والإجماليات (تم / لم يتم، بنك / نقدي) من الخادم بنفس دوال كشف البنوك؛ الشاشة بتعرض وبس.
 import { apiFetch } from './api'
+import { currencyLabel } from './currency'
 import type { PayrollPayChannel } from './payroll-runs-api'
 
 export type PayrollDisbursementState = 'PAID' | 'UNPAID' | 'SETTLEMENT' | 'NO_AMOUNT'
@@ -27,11 +28,16 @@ export interface PayrollDisbursementRow {
   state: PayrollDisbursementState; stateLabel: string; tickable: boolean
   markedBy: { id: number; name: string | null } | null; markedAt: string | null; note: string | null
   settlement: { caseId: number; lastWorkingDay: string } | null
+  // B1.1: عملة فرع الموظف في لقطة المسير
+  currency?: string
 }
+// B1.1: نفس الإجماليات لكل عملة لوحدها (مسير فيه فرعين بعملتين)
+export interface PayrollDisbursementCurrencyTotals { currency: string; totals: PayrollDisbursementTotals }
 export interface PayrollDisbursementFacet<T extends number | string = number> { id: T; name: string }
 export interface PayrollDisbursementView {
   run: PayrollDisbursementRunView
   totals: PayrollDisbursementTotals; filteredTotals: PayrollDisbursementTotals
+  byCurrency?: PayrollDisbursementCurrencyTotals[]; filteredByCurrency?: PayrollDisbursementCurrencyTotals[]
   counts: { all: number; shown: number }
   bulk: { markPaid: number; markUnpaid: number }
   facets: { branches: PayrollDisbursementFacet[]; departments: PayrollDisbursementFacet[]; teams: PayrollDisbursementFacet[]; payMethods: PayrollDisbursementFacet<string>[] }
@@ -45,8 +51,9 @@ export interface PayrollDisbursementFilter {
 }
 export interface PayrollDisbursementSummary {
   period: string | null; runId: number | null
-  runs: Array<PayrollDisbursementRunView & PayrollDisbursementTotals & { unpaidReason: string | null }>
+  runs: Array<PayrollDisbursementRunView & PayrollDisbursementTotals & { unpaidReason: string | null; byCurrency?: PayrollDisbursementCurrencyTotals[] }>
   totals: PayrollDisbursementTotals
+  byCurrency?: PayrollDisbursementCurrencyTotals[]
 }
 
 export const emptyDisbursementFilter = (): PayrollDisbursementFilter => ({ branchId: null, departmentId: null, teamId: null, payMethod: '', state: '', search: '' })
@@ -97,12 +104,18 @@ export const DISBURSEMENT_MODE_LABELS: Record<PayrollDisbursementMode, string> =
 export const disbursementUnpaidReasonReady = (reason: string) => reason.trim().length >= 3 && reason.trim().length <= 500
 
 export const DISBURSEMENT_CSV_HEADER = ['الرقم الوظيفي', 'الاسم', 'الفرع', 'القسم', 'الفريق', 'طريقة الصرف', 'البنك', 'الآيبان', 'الصافي', 'تحويل بنكي', 'نقدي',
-  'حالة الصرف', 'علّمه', 'وقت العلامة', 'ملاحظة']
+  'العملة', 'حالة الصرف', 'علّمه', 'وقت العلامة', 'ملاحظة']
 /** صفوف التصدير كما في الجدول: المبالغ بمنزلتين كما حفظها الخادم، بلا أي حساب في المتصفح. */
 export const disbursementCsvRows = (rows: readonly PayrollDisbursementRow[]) => rows.map(row => [row.employeeCode, row.fullName, row.branchName ?? '', row.departmentName ?? '',
   row.teamName ?? '', row.payMethodLabel, row.bankName ?? '', row.iban ?? '', row.netPay.toFixed(2), row.bankAmount.toFixed(2), row.cashAmount.toFixed(2),
-  row.stateLabel, row.markedBy?.name ?? '', row.markedAt ? row.markedAt.slice(0, 16).replace('T', ' ') : '', row.note ?? ''])
-export const disbursementCsvTotals = (totals: PayrollDisbursementTotals) => [
-  ['إجمالي «تم الصرف»', `${totals.paid.count} موظف`, '', '', '', '', '', '', totals.paid.total.toFixed(2), totals.paid.bank.toFixed(2), totals.paid.cash.toFixed(2), '', '', '', ''],
-  ['إجمالي «لم يتم»', `${totals.unpaid.count} موظف`, '', '', '', '', '', '', totals.unpaid.total.toFixed(2), totals.unpaid.bank.toFixed(2), totals.unpaid.cash.toFixed(2), '', '', '', ''],
-]
+  currencyLabel(row.currency), row.stateLabel, row.markedBy?.name ?? '', row.markedAt ? row.markedAt.slice(0, 16).replace('T', ' ') : '', row.note ?? ''])
+/** سطرين إجمالي (تم / لم يتم) — ولو فيه عملتين: سطرين لكل عملة بعلامتها، ومفيش سطر بيجمع جنيه على ريال. */
+export const disbursementCsvTotals = (totals: PayrollDisbursementTotals, byCurrency?: readonly PayrollDisbursementCurrencyTotals[]) => {
+  const groups = byCurrency && byCurrency.length > 1
+    ? byCurrency.map(group => ({ suffix: ` ${currencyLabel(group.currency)}`, currency: currencyLabel(group.currency), totals: group.totals }))
+    : [{ suffix: '', currency: currencyLabel(byCurrency?.[0]?.currency), totals }]
+  return groups.flatMap(({ suffix, currency, totals: t }) => [
+    [`إجمالي «تم الصرف»${suffix}`, `${t.paid.count} موظف`, '', '', '', '', '', '', t.paid.total.toFixed(2), t.paid.bank.toFixed(2), t.paid.cash.toFixed(2), currency, '', '', '', ''],
+    [`إجمالي «لم يتم»${suffix}`, `${t.unpaid.count} موظف`, '', '', '', '', '', '', t.unpaid.total.toFixed(2), t.unpaid.bank.toFixed(2), t.unpaid.cash.toFixed(2), currency, '', '', '', ''],
+  ])
+}

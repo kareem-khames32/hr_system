@@ -5,8 +5,9 @@
 import { AlertTriangle } from 'lucide-react'
 import { formatDateTime } from '../../lib/dates'
 import { formatMoney } from '../../lib/money'
-import { DISBURSEMENT_MODE_LABELS, type PayrollDisbursementBucket, type PayrollDisbursementRow, type PayrollDisbursementState, type PayrollDisbursementSummary,
-  type PayrollDisbursementTotals } from '../../lib/payroll-disbursement-api'
+import { currencyLabel, currencyName } from '../../lib/currency'
+import { DISBURSEMENT_MODE_LABELS, type PayrollDisbursementBucket, type PayrollDisbursementCurrencyTotals, type PayrollDisbursementRow, type PayrollDisbursementState,
+  type PayrollDisbursementSummary, type PayrollDisbursementTotals } from '../../lib/payroll-disbursement-api'
 
 const RUN_STATUS: Record<string, string> = { APPROVED: 'معتمد', PAID: 'مصروف' }
 const STATE_STYLE: Record<PayrollDisbursementState, string> = {
@@ -24,10 +25,27 @@ function TotalCard({ title, bucket, tone }: { title: string; bucket: PayrollDisb
   )
 }
 
-/** الإجماليات الجارية للمسير كله: تم الصرف / لم يتم / المستحق للصرف (وكل واحد بنك ونقدي)، ومصروف مع التصفية برّه الصرف هنا. */
-export function PayrollDisbursementTotalsCards({ totals }: { totals: PayrollDisbursementTotals }) {
+/**
+ * الإجماليات الجارية للمسير كله: تم الصرف / لم يتم / المستحق للصرف (وكل واحد بنك ونقدي)، ومصروف مع التصفية برّه الصرف هنا.
+ * B1.1: مسير فيه فرعين بعملتين ← كروت لكل عملة لوحدها بعنوانها (الأرقام من الخادم لكل عملة، مفيش رقم بيجمع جنيه على ريال).
+ */
+export function PayrollDisbursementTotalsCards({ totals, byCurrency }: { totals: PayrollDisbursementTotals; byCurrency?: readonly PayrollDisbursementCurrencyTotals[] }) {
+  if (byCurrency && byCurrency.length > 1) return (
+    <div className="space-y-4" data-disbursement-totals>
+      {byCurrency.map(group => (
+        <div key={group.currency} className="space-y-2" data-currency-total={group.currency}>
+          <p className="text-sm font-bold text-gray-700">{currencyName(group.currency)} ({currencyLabel(group.currency)})</p>
+          <TotalsGrid totals={group.totals} />
+        </div>
+      ))}
+    </div>
+  )
+  return <TotalsGrid totals={totals} marker />
+}
+
+function TotalsGrid({ totals, marker = false }: { totals: PayrollDisbursementTotals; marker?: boolean }) {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4" data-disbursement-totals>
+    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4" data-disbursement-totals={marker || undefined}>
       <TotalCard title="تم الصرف" bucket={totals.paid} tone="text-success-600" />
       <TotalCard title="لم يتم" bucket={totals.unpaid} tone="text-amber-600" />
       <TotalCard title="المستحق للصرف" bucket={totals.payable} tone="text-gray-800" />
@@ -48,6 +66,8 @@ export function PayrollDisbursementTable({ rows, canMark, disabled, onToggle }: 
   onToggle: (row: PayrollDisbursementRow) => void
 }) {
   if (rows.length === 0) return <p className="text-sm text-gray-400">مفيش موظفين بالفلاتر دي</p>
+  // B1.1: صفوف بعملتين (فرع مصري وسعودي) ← علامة العملة جنب الصافي
+  const multi = new Set(rows.map(row => row.currency ?? '')).size > 1
   return (
     <table className="w-full text-sm" data-disbursement-table>
       <thead className="bg-gray-50">
@@ -77,7 +97,7 @@ export function PayrollDisbursementTable({ rows, canMark, disabled, onToggle }: 
             </td>
             <td className="px-3 py-2 text-gray-600">{[row.departmentName, row.teamName].filter(Boolean).join(' / ') || row.branchName || '—'}</td>
             <td className="px-3 py-2 text-gray-600">{row.payMethodLabel}{row.bankName ? <span className="block text-xs text-gray-400">{row.bankName}</span> : null}</td>
-            <td className="px-3 py-2 text-center text-gray-800" dir="ltr">{formatMoney(row.netPay)}</td>
+            <td className="px-3 py-2 text-center text-gray-800" dir="ltr">{formatMoney(row.netPay)}{multi && row.currency ? <span className="text-xs text-gray-400"> {currencyLabel(row.currency)}</span> : null}</td>
             <td className="px-3 py-2 text-center font-bold text-primary-700" dir="ltr">{formatMoney(row.bankAmount)}</td>
             <td className="px-3 py-2 text-center font-bold text-success-700" dir="ltr">{formatMoney(row.cashAmount)}</td>
             <td className="px-3 py-2 text-xs text-gray-600">
@@ -93,6 +113,13 @@ export function PayrollDisbursementTable({ rows, canMark, disabled, onToggle }: 
 
 /** ملخص صرف الشهر للمالك: لكل مسير تم / لم يتم (عدد وإجمالي) وبنك ونقدي، وسبب الباقي لو الصرف اتقفل من غيرهم، وإجمالي الشهر. */
 export function PayrollDisbursementSummaryTable({ summary }: { summary: PayrollDisbursementSummary }) {
+  // B1.1: شهر فيه فروع بعملتين ← سطر لكل مسير في كل عملة، وإجمالي الشهر لكل عملة لوحده
+  const multi = !!summary.byCurrency && summary.byCurrency.length > 1
+  const lines = summary.runs.flatMap(run => multi && run.byCurrency?.length
+    ? run.byCurrency.map(group => ({ key: `${run.id}:${group.currency}`, run, totals: group.totals, currency: group.currency as string | null }))
+    : [{ key: String(run.id), run, totals: run as PayrollDisbursementTotals, currency: null as string | null }])
+  const footers = multi ? summary.byCurrency!.map(group => ({ key: group.currency, label: `إجمالي الشهر ${currencyLabel(group.currency)}`, totals: group.totals }))
+    : [{ key: 'all', label: 'إجمالي الشهر', totals: summary.totals }]
   return (
     <table className="w-full text-sm" data-disbursement-summary-table>
       <thead className="bg-gray-50">
@@ -100,25 +127,27 @@ export function PayrollDisbursementSummaryTable({ summary }: { summary: PayrollD
           <th key={title} className="px-3 py-2 text-right font-medium text-gray-600 whitespace-nowrap">{title}</th>)}</tr>
       </thead>
       <tbody className="divide-y divide-gray-100">
-        {summary.runs.map(run => (
-          <tr key={run.id}>
-            <td className="px-3 py-2 font-medium text-gray-800">{runLabel(run)}</td>
+        {lines.map(({ key, run, totals, currency }) => (
+          <tr key={key}>
+            <td className="px-3 py-2 font-medium text-gray-800">{runLabel(run)}{currency && <span className="text-xs text-gray-500 mr-1">({currencyLabel(currency)})</span>}</td>
             <td className="px-3 py-2 text-gray-600">{RUN_STATUS[run.status] ?? run.status} — {DISBURSEMENT_MODE_LABELS[run.mode]}</td>
-            <td className="px-3 py-2 text-success-700"><span dir="ltr" className="font-bold">{formatMoney(run.paid.total)}</span> ({run.paid.count})</td>
-            <td className="px-3 py-2 text-amber-700"><span dir="ltr" className="font-bold">{formatMoney(run.unpaid.total)}</span> ({run.unpaid.count})</td>
-            <td className="px-3 py-2 text-gray-700" dir="ltr">{formatMoney(run.paid.bank)} / {formatMoney(run.unpaid.bank)}</td>
-            <td className="px-3 py-2 text-gray-700" dir="ltr">{formatMoney(run.paid.cash)} / {formatMoney(run.unpaid.cash)}</td>
+            <td className="px-3 py-2 text-success-700"><span dir="ltr" className="font-bold">{formatMoney(totals.paid.total)}</span> ({totals.paid.count})</td>
+            <td className="px-3 py-2 text-amber-700"><span dir="ltr" className="font-bold">{formatMoney(totals.unpaid.total)}</span> ({totals.unpaid.count})</td>
+            <td className="px-3 py-2 text-gray-700" dir="ltr">{formatMoney(totals.paid.bank)} / {formatMoney(totals.unpaid.bank)}</td>
+            <td className="px-3 py-2 text-gray-700" dir="ltr">{formatMoney(totals.paid.cash)} / {formatMoney(totals.unpaid.cash)}</td>
             <td className="px-3 py-2 text-xs text-gray-600">{run.unpaidReason ?? '—'}</td>
           </tr>
         ))}
-        <tr className="bg-gray-50 font-bold">
-          <td className="px-3 py-2" colSpan={2}>إجمالي الشهر</td>
-          <td className="px-3 py-2 text-success-700"><span dir="ltr">{formatMoney(summary.totals.paid.total)}</span> ({summary.totals.paid.count})</td>
-          <td className="px-3 py-2 text-amber-700"><span dir="ltr">{formatMoney(summary.totals.unpaid.total)}</span> ({summary.totals.unpaid.count})</td>
-          <td className="px-3 py-2" dir="ltr">{formatMoney(summary.totals.paid.bank)} / {formatMoney(summary.totals.unpaid.bank)}</td>
-          <td className="px-3 py-2" dir="ltr">{formatMoney(summary.totals.paid.cash)} / {formatMoney(summary.totals.unpaid.cash)}</td>
-          <td className="px-3 py-2" />
-        </tr>
+        {footers.map(({ key, label, totals }) => (
+          <tr key={key} className="bg-gray-50 font-bold" data-currency-total={key}>
+            <td className="px-3 py-2" colSpan={2}>{label}</td>
+            <td className="px-3 py-2 text-success-700"><span dir="ltr">{formatMoney(totals.paid.total)}</span> ({totals.paid.count})</td>
+            <td className="px-3 py-2 text-amber-700"><span dir="ltr">{formatMoney(totals.unpaid.total)}</span> ({totals.unpaid.count})</td>
+            <td className="px-3 py-2" dir="ltr">{formatMoney(totals.paid.bank)} / {formatMoney(totals.unpaid.bank)}</td>
+            <td className="px-3 py-2" dir="ltr">{formatMoney(totals.paid.cash)} / {formatMoney(totals.unpaid.cash)}</td>
+            <td className="px-3 py-2" />
+          </tr>
+        ))}
       </tbody>
     </table>
   )

@@ -6,6 +6,8 @@ import { MainLayout } from '@/components/layout'
 import { fetchPayrollRuns, type ApiBankSheet, type ApiPayrollRun } from '@/lib/api'
 import { downloadCsv } from '@/lib/csv'
 import { formatMoney } from '@/lib/money'
+import { currencyLabel } from '@/lib/currency'
+import { moneyByCurrency } from '@/lib/currency-totals'
 import { dayRangeLabel } from '@/lib/payroll-month-range'
 import { useOrgFilter } from '@/components/OrgFilter'
 import { fetchBankSheetFor } from '@/lib/reports-org-api'
@@ -14,19 +16,26 @@ import { fetchBankSheetFor } from '@/lib/reports-org-api'
 // حساب الفرع بيشوف مسيرات وموظفي فرعه بس (الخادم بيفلتر).
 
 const runLabel = (run: Pick<ApiPayrollRun, 'name' | 'period'>) => run.name || `مسير ${run.period}`
-const HEADER = ['الرقم الوظيفي', 'الاسم', 'طريقة الصرف', 'البنك', 'الآيبان', 'صافي الراتب', 'تحويل بنكي', 'نقدي', 'تنبيه']
+// B1.1: عمود العملة آخر عمود (كود العملة زي ملفات البنوك: EGP / SAR)
+const HEADER = ['الرقم الوظيفي', 'الاسم', 'طريقة الصرف', 'البنك', 'الآيبان', 'صافي الراتب', 'تحويل بنكي', 'نقدي', 'تنبيه', 'العملة']
 
 function sheetRows(sheet: ApiBankSheet) {
   return sheet.rows.map(row => [row.employeeCode, row.fullName, row.payMethodLabel, row.bankName ?? '', row.iban ?? '',
-    row.netPay.toFixed(2), row.bankAmount.toFixed(2), row.cashAmount.toFixed(2), row.issue ?? ''])
+    row.netPay.toFixed(2), row.bankAmount.toFixed(2), row.cashAmount.toFixed(2), row.issue ?? '', row.currency ?? ''])
 }
 
 function sheetTotals(sheet: ApiBankSheet) {
+  // B1.1: كشف فيه فرعين بعملتين ← إجمالي كل بنك وإجمالي الكشف لكل عملة لوحده (مفيش سطر بيجمع جنيه على ريال)
+  const groups = sheet.byCurrency && sheet.byCurrency.length > 1
+    ? sheet.byCurrency.map(group => ({ suffix: ` ${group.currency}`, currency: group.currency, banks: group.totals.banks, totals: group.totals }))
+    : [{ suffix: '', currency: sheet.byCurrency?.[0]?.currency ?? '', banks: sheet.banks, totals: sheet.totals }]
   return [
-    ...sheet.banks.map(bank => [`إجمالي ${bank.bankName}`, `${bank.employees} موظف`, '', '', '', '', bank.total.toFixed(2), '', '']),
-    ['الإجمالي', `${sheet.totals.employees} موظف`, '', '', '', sheet.totals.net.toFixed(2), sheet.totals.bank.toFixed(2), sheet.totals.cash.toFixed(2), ''],
+    ...groups.flatMap(group => [
+      ...group.banks.map(bank => [`إجمالي ${bank.bankName}${group.suffix}`, `${bank.employees} موظف`, '', '', '', '', bank.total.toFixed(2), '', '', group.currency]),
+      [`الإجمالي${group.suffix}`, `${group.totals.employees} موظف`, '', '', '', group.totals.net.toFixed(2), group.totals.bank.toFixed(2), group.totals.cash.toFixed(2), '', group.currency],
+    ]),
     ...sheet.settlement.rows.map(row => [row.employeeCode, row.fullName, 'مصروف مع التصفية', '', '',
-      row.netPay.toFixed(2), '', '', `راتب آخر شهر بيتصرف مع تصفية #${row.caseId ?? ''} (آخر يوم عمل ${row.lastWorkingDay ?? ''}) — خارج الكشف`]),
+      row.netPay.toFixed(2), '', '', `راتب آخر شهر بيتصرف مع تصفية #${row.caseId ?? ''} (آخر يوم عمل ${row.lastWorkingDay ?? ''}) — خارج الكشف`, row.currency ?? '']),
   ]
 }
 
@@ -90,6 +99,12 @@ export default function PayrollBankSheetPage() {
 
   const empty = !sheet || sheet.rows.length === 0
   const bankRows = useMemo(() => sheet?.rows ?? [], [sheet])
+  // B1.1: كشف فيه فرعين بعملتين ← كل إجمالي لكل عملة لوحده بعلامتها، وعمود العملة في الجداول
+  const multi = !!sheet?.byCurrency && sheet.byCurrency.length > 1
+  type CurrencyPart = NonNullable<ApiBankSheet['byCurrency']>[number]['totals']
+  const money = (pick: (totals: CurrencyPart) => number, fallback: number) => moneyByCurrency(sheet?.byCurrency, pick, fallback, '', formatMoney)
+  const bankLines = multi ? sheet!.byCurrency!.flatMap(group => group.totals.banks.map(bank => ({ ...bank, currency: group.currency })))
+    : (sheet?.banks ?? []).map(bank => ({ ...bank, currency: '' }))
 
   return (
     <MainLayout>
@@ -138,9 +153,9 @@ export default function PayrollBankSheetPage() {
           <>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="card"><p className="text-sm text-gray-500">الموظفين</p><p className="text-2xl font-bold mt-1 text-gray-800">{sheet.totals.employees}</p></div>
-              <div className="card"><p className="text-sm text-gray-500">صافي الرواتب</p><p className="text-2xl font-bold mt-1 text-gray-800" dir="ltr">{formatMoney(sheet.totals.net)}</p></div>
-              <div className="card"><p className="text-sm text-gray-500">تحويل بنكي</p><p className="text-2xl font-bold mt-1 text-primary-600" dir="ltr">{formatMoney(sheet.totals.bank)}</p></div>
-              <div className="card"><p className="text-sm text-gray-500">نقدي</p><p className="text-2xl font-bold mt-1 text-success-600" dir="ltr">{formatMoney(sheet.totals.cash)}</p></div>
+              <div className="card"><p className="text-sm text-gray-500">صافي الرواتب</p><p className="text-2xl font-bold mt-1 text-gray-800" dir="ltr">{money(t => t.net, sheet.totals.net)}</p></div>
+              <div className="card"><p className="text-sm text-gray-500">تحويل بنكي</p><p className="text-2xl font-bold mt-1 text-primary-600" dir="ltr">{money(t => t.bank, sheet.totals.bank)}</p></div>
+              <div className="card"><p className="text-sm text-gray-500">نقدي</p><p className="text-2xl font-bold mt-1 text-success-600" dir="ltr">{money(t => t.cash, sheet.totals.cash)}</p></div>
             </div>
 
             {sheet.issues.employees > 0 && (
@@ -152,8 +167,8 @@ export default function PayrollBankSheetPage() {
                       {sheet.issues.employees} موظف بيانات صرفهم ناقصة أو غلط — صحّحها في ملف الموظف قبل الصرف
                     </p>
                     <p className="text-sm text-amber-800">
-                      منهم <span dir="ltr" className="font-bold">{formatMoney(sheet.issues.bank)}</span> محسوبة تحويل بنكي
-                      و<span dir="ltr" className="font-bold">{formatMoney(sheet.issues.cash)}</span> محسوبة نقدي.
+                      منهم <span dir="ltr" className="font-bold">{money(t => t.issues.bank, sheet.issues.bank)}</span> محسوبة تحويل بنكي
+                      و<span dir="ltr" className="font-bold">{money(t => t.issues.cash, sheet.issues.cash)}</span> محسوبة نقدي.
                       الصفوف دي لسه في الكشف بمبلغها — مفيش حد بيتشال من غير قرارك.
                     </p>
                     <ul className="text-sm text-amber-900 space-y-1 list-disc ps-5">
@@ -175,7 +190,7 @@ export default function PayrollBankSheetPage() {
                 <h2 className="text-md font-bold text-sky-900 mb-2">مصروف مع التصفية — خارج الكشف</h2>
                 <p className="text-sm text-sky-900 mb-3">
                   {sheet.settlement.employees} موظف راتب آخر شهرهم بيتصرف مع التصفية، مجموعه
-                  <span dir="ltr" className="font-bold"> {formatMoney(sheet.settlement.total)} </span>
+                  <span dir="ltr" className="font-bold"> {money(t => t.settlement.total, sheet.settlement.total)} </span>
                   — مش داخل تحويل البنك ولا النقدي فوق عشان ما يتصرفش مرتين.
                 </p>
                 <ul className="text-sm text-sky-900 space-y-1 list-disc ps-5">
@@ -183,7 +198,7 @@ export default function PayrollBankSheetPage() {
                     <li key={row.employeeId}>
                       <span className="font-medium">{row.fullName}</span>
                       <span className="font-mono text-xs text-sky-700" dir="ltr"> ({row.employeeCode})</span>
-                      {' — '}<span dir="ltr">{formatMoney(row.netPay)}</span>
+                      {' — '}<span dir="ltr">{formatMoney(row.netPay)}{multi && row.currency ? ` ${currencyLabel(row.currency)}` : ''}</span>
                       {row.lastWorkingDay ? ` · آخر يوم عمل ${row.lastWorkingDay}` : ''}
                       {row.caseId ? ` · تصفية #${row.caseId}` : ''}
                     </li>
@@ -199,14 +214,16 @@ export default function PayrollBankSheetPage() {
                   <thead className="bg-gray-50">
                     <tr>
                       <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">البنك</th>
+                      {multi && <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">العملة</th>}
                       <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">الموظفين</th>
                       <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">الإجمالي</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {sheet.banks.map(bank => (
-                      <tr key={bank.bankName}>
+                    {bankLines.map(bank => (
+                      <tr key={`${bank.bankName}:${bank.currency}`} data-currency-total={multi ? bank.currency : undefined}>
                         <td className="px-4 py-3 font-medium text-gray-800">{bank.bankName}</td>
+                        {multi && <td className="px-4 py-3 text-center text-gray-600">{currencyLabel(bank.currency)}</td>}
                         <td className="px-4 py-3 text-center text-gray-600">{bank.employees}</td>
                         <td className="px-4 py-3 text-center font-bold text-gray-800" dir="ltr">{formatMoney(bank.total)}</td>
                       </tr>
@@ -221,7 +238,7 @@ export default function PayrollBankSheetPage() {
                 <table className="w-full">
                   <thead className="bg-gray-50">
                     <tr>
-                      {HEADER.map((title, index) => (
+                      {(multi ? HEADER : HEADER.slice(0, -1)).map((title, index) => (
                         <th key={title} className={`px-4 py-3 ${index >= 5 && index <= 7 ? 'text-center' : 'text-right'} text-sm font-medium text-gray-600 whitespace-nowrap`}>{title}</th>
                       ))}
                     </tr>
@@ -240,6 +257,7 @@ export default function PayrollBankSheetPage() {
                         <td className="px-4 py-3 text-sm text-amber-800">
                           {row.issue ? <span className="flex items-start gap-1"><AlertTriangle size={14} className="mt-0.5 shrink-0" />{row.issue}</span> : '—'}
                         </td>
+                        {multi && <td className="px-4 py-3 text-gray-600">{currencyLabel(row.currency)}</td>}
                       </tr>
                     ))}
                   </tbody>

@@ -3,9 +3,12 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { downloadCsv } from '@/lib/csv'
-import { useCurrency } from '@/lib/currency'
+import { currencyLabel, useCurrency } from '@/lib/currency'
+import { currencyTotalRows, moneyByCurrency } from '@/lib/currency-totals'
 import { formatMoney } from '@/lib/money'
-import { fetchDeductionsReport, nonZero } from '../_financial/api'
+import { fetchDeductionsReport, nonZero, type DeductionsReport } from '../_financial/api'
+// إجمالي عملة واحدة في تقرير الخصومات (نفس شكل الإجمالي + الأنواع والتفاصيل)
+type CurrencyGroupTotals = NonNullable<DeductionsReport['byCurrency']>[number]['totals']
 import { EmptyState, FinancialReportShell, StatCard, Th, useFinancialReport } from '../_financial/ReportShell'
 
 // «تقرير الخصومات»: خصومات الشهر بالنوع (تأخير، غياب، بدون راتب، إيقاف، مرضية، سلف، جزاءات، عهدة، تأمينات) وبالموظف.
@@ -14,13 +17,20 @@ export default function DeductionsReportPage() {
   const { filters, setFilters, report, loading, error, reload } = useFinancialReport(fetchDeductionsReport)
   const [hideEmpty, setHideEmpty] = useState(true)
   const kinds = report ? report.kinds.filter((kind) => !hideEmpty || nonZero(kind.amount)) : []
+  // B1.1: فروع بعملتين ← مبلغ كل نوع لكل عملة لوحده، وسطر إجمالي لكل عملة (مفيش رقم بيجمع جنيه على ريال)
+  const perCurrency = report ? currencyTotalRows(report.byCurrency) : []
+  const kindAmount = (totals: { kinds: Array<{ key: string; amount: string }> }, key: string) => totals.kinds.find((kind) => kind.key === key)?.amount ?? '0.00'
+  const detailRows = (pick: (totals: CurrencyGroupTotals) => Array<{ name: string; amount: string; employees: number }>,
+    fallback: Array<{ name: string; amount: string; employees: number }>) =>
+    perCurrency.length ? perCurrency.flatMap((group) => pick(group.totals).map((row) => ({ ...row, currency: group.label }))) : fallback.map((row) => ({ ...row, currency: '' }))
 
   const exportCsv = () => {
     if (!report) return
-    const header = ['الكود', 'الموظف', 'الفرع', 'القسم', ...report.kinds.map((kind) => kind.label), 'إجمالي الخصومات']
+    const header = ['الكود', 'الموظف', 'الفرع', 'القسم', 'العملة', ...report.kinds.map((kind) => kind.label), 'إجمالي الخصومات']
     const rows: unknown[][] = report.employees.map((row) => [row.employeeCode ?? '', row.fullName ?? '', row.branchName ?? '', row.departmentName ?? '',
-      ...report.kinds.map((kind) => row.amounts[kind.key] ?? '0.00'), row.total])
-    rows.push(['', `الإجمالي (${report.totals.employees} موظف)`, '', '', ...report.kinds.map((kind) => kind.amount), report.totals.amount])
+      currencyLabel(row.currency), ...report.kinds.map((kind) => row.amounts[kind.key] ?? '0.00'), row.total])
+    if (perCurrency.length) for (const group of perCurrency) rows.push(['', `الإجمالي ${group.label} (${group.totals.employees} موظف)`, '', '', group.label, ...report.kinds.map((kind) => kindAmount(group.totals, kind.key)), group.totals.amount])
+    else rows.push(['', `الإجمالي (${report.totals.employees} موظف)`, '', '', currencyLabel(report.byCurrency?.[0]?.currency), ...report.kinds.map((kind) => kind.amount), report.totals.amount])
     downloadCsv(`deductions-${report.period}.csv`, header, rows)
   }
 
@@ -41,7 +51,7 @@ export default function DeductionsReportPage() {
       {report && (
         <>
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-            <StatCard label="إجمالي الخصومات" value={`${formatMoney(report.totals.amount)} ${currency}`} />
+            <StatCard label="إجمالي الخصومات" value={moneyByCurrency(report.byCurrency, (t) => t.amount, report.totals.amount, currency, formatMoney)} />
             <StatCard label="موظفين عليهم خصم" value={report.totals.employees} />
             <StatCard label="أنواع الخصم في الشهر" value={report.kinds.filter((kind) => nonZero(kind.amount)).length} />
           </div>
@@ -51,13 +61,14 @@ export default function DeductionsReportPage() {
               <h2 className="text-lg font-bold text-gray-800 p-4 pb-2">حسب النوع</h2>
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-600">
-                  <tr><Th>النوع</Th><Th>المبلغ</Th><Th>الموظفين</Th></tr>
+                  <tr><Th>النوع</Th>{perCurrency.length ? perCurrency.map((group) => <Th key={group.currency}>المبلغ {group.label}</Th>) : <Th>المبلغ</Th>}<Th>الموظفين</Th></tr>
                 </thead>
                 <tbody>
                   {report.kinds.map((kind) => (
                     <tr key={kind.key} className={`border-t border-gray-100 ${nonZero(kind.amount) ? '' : 'text-gray-400'}`}>
                       <td className="p-3">{kind.label}</td>
-                      <td className="p-3" dir="ltr">{formatMoney(kind.amount)}</td>
+                      {perCurrency.length ? perCurrency.map((group) => <td key={group.currency} className="p-3" dir="ltr">{formatMoney(kindAmount(group.totals, kind.key))}</td>)
+                        : <td className="p-3" dir="ltr">{formatMoney(kind.amount)}</td>}
                       <td className="p-3">{kind.employees}</td>
                     </tr>
                   ))}
@@ -65,7 +76,8 @@ export default function DeductionsReportPage() {
                 <tfoot className="bg-gray-50 font-bold">
                   <tr className="border-t border-gray-200">
                     <td className="p-3">الإجمالي</td>
-                    <td className="p-3" dir="ltr">{formatMoney(report.totals.amount)}</td>
+                    {perCurrency.length ? perCurrency.map((group) => <td key={group.currency} className="p-3" dir="ltr">{formatMoney(group.totals.amount)}</td>)
+                      : <td className="p-3" dir="ltr">{formatMoney(report.totals.amount)}</td>}
                     <td className="p-3">{report.totals.employees}</td>
                   </tr>
                 </tfoot>
@@ -76,11 +88,11 @@ export default function DeductionsReportPage() {
                 <h2 className="text-lg font-bold text-gray-800 p-4 pb-2">الخصومات والجزاءات حسب نوع الخصم</h2>
                 {report.typedByType.length === 0 ? <p className="p-4 pt-0 text-sm text-gray-400">مفيش خصومات بقرار في الشهر ده</p> : (
                   <table className="w-full text-sm">
-                    <thead className="bg-gray-50 text-gray-600"><tr><Th>نوع الخصم</Th><Th>المبلغ</Th><Th>الموظفين</Th></tr></thead>
+                    <thead className="bg-gray-50 text-gray-600"><tr><Th>نوع الخصم</Th>{perCurrency.length > 0 && <Th>العملة</Th>}<Th>المبلغ</Th><Th>الموظفين</Th></tr></thead>
                     <tbody>
-                      {report.typedByType.map((row) => (
-                        <tr key={row.name} className="border-t border-gray-100">
-                          <td className="p-3">{row.name}</td><td className="p-3" dir="ltr">{formatMoney(row.amount)}</td><td className="p-3">{row.employees}</td>
+                      {detailRows((totals) => totals.typedByType, report.typedByType).map((row) => (
+                        <tr key={`${row.name}-${row.currency}`} className="border-t border-gray-100">
+                          <td className="p-3">{row.name}</td>{perCurrency.length > 0 && <td className="p-3">{row.currency}</td>}<td className="p-3" dir="ltr">{formatMoney(row.amount)}</td><td className="p-3">{row.employees}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -91,11 +103,11 @@ export default function DeductionsReportPage() {
                 <h2 className="text-lg font-bold text-gray-800 p-4 pb-2">الخصومات الأخرى حسب السبب</h2>
                 {report.otherByCategory.length === 0 ? <p className="p-4 pt-0 text-sm text-gray-400">مفيش خصومات أخرى في الشهر ده</p> : (
                   <table className="w-full text-sm">
-                    <thead className="bg-gray-50 text-gray-600"><tr><Th>السبب</Th><Th>المبلغ</Th><Th>الموظفين</Th></tr></thead>
+                    <thead className="bg-gray-50 text-gray-600"><tr><Th>السبب</Th>{perCurrency.length > 0 && <Th>العملة</Th>}<Th>المبلغ</Th><Th>الموظفين</Th></tr></thead>
                     <tbody>
-                      {report.otherByCategory.map((row) => (
-                        <tr key={row.name} className="border-t border-gray-100">
-                          <td className="p-3">{row.name}</td><td className="p-3" dir="ltr">{formatMoney(row.amount)}</td><td className="p-3">{row.employees}</td>
+                      {detailRows((totals) => totals.otherByCategory, report.otherByCategory).map((row) => (
+                        <tr key={`${row.name}-${row.currency}`} className="border-t border-gray-100">
+                          <td className="p-3">{row.name}</td>{perCurrency.length > 0 && <td className="p-3">{row.currency}</td>}<td className="p-3" dir="ltr">{formatMoney(row.amount)}</td><td className="p-3">{row.employees}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -120,7 +132,7 @@ export default function DeductionsReportPage() {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 text-gray-600">
                     <tr>
-                      <Th>الكود</Th><Th>الموظف</Th><Th>الفرع</Th><Th>القسم</Th>
+                      <Th>الكود</Th><Th>الموظف</Th><Th>الفرع</Th><Th>القسم</Th>{perCurrency.length > 0 && <Th>العملة</Th>}
                       {kinds.map((kind) => <Th key={kind.key}>{kind.label}</Th>)}
                       <Th>الإجمالي</Th>
                     </tr>
@@ -134,6 +146,7 @@ export default function DeductionsReportPage() {
                         </td>
                         <td className="p-3 whitespace-nowrap">{row.branchName ?? '—'}</td>
                         <td className="p-3 whitespace-nowrap">{row.departmentName ?? '—'}</td>
+                        {perCurrency.length > 0 && <td className="p-3 whitespace-nowrap">{currencyLabel(row.currency)}</td>}
                         {kinds.map((kind) => (
                           <td key={kind.key} className="p-3 whitespace-nowrap" dir="ltr">{formatMoney(row.amounts[kind.key] ?? '0.00')}</td>
                         ))}
@@ -142,11 +155,19 @@ export default function DeductionsReportPage() {
                     ))}
                   </tbody>
                   <tfoot className="bg-gray-50 font-bold text-gray-800">
-                    <tr className="border-t border-gray-200">
-                      <td className="p-3" colSpan={4}>الإجمالي ({report.totals.employees} موظف)</td>
-                      {kinds.map((kind) => <td key={kind.key} className="p-3 whitespace-nowrap" dir="ltr">{formatMoney(kind.amount)}</td>)}
-                      <td className="p-3 whitespace-nowrap" dir="ltr">{formatMoney(report.totals.amount)}</td>
-                    </tr>
+                    {perCurrency.length ? perCurrency.map((group) => (
+                      <tr key={group.currency} className="border-t border-gray-200" data-currency-total={group.currency}>
+                        <td className="p-3" colSpan={5}>الإجمالي {group.label} ({group.totals.employees} موظف)</td>
+                        {kinds.map((kind) => <td key={kind.key} className="p-3 whitespace-nowrap" dir="ltr">{formatMoney(kindAmount(group.totals, kind.key))}</td>)}
+                        <td className="p-3 whitespace-nowrap" dir="ltr">{formatMoney(group.totals.amount)}</td>
+                      </tr>
+                    )) : (
+                      <tr className="border-t border-gray-200">
+                        <td className="p-3" colSpan={4}>الإجمالي ({report.totals.employees} موظف)</td>
+                        {kinds.map((kind) => <td key={kind.key} className="p-3 whitespace-nowrap" dir="ltr">{formatMoney(kind.amount)}</td>)}
+                        <td className="p-3 whitespace-nowrap" dir="ltr">{formatMoney(report.totals.amount)}</td>
+                      </tr>
+                    )}
                   </tfoot>
                 </table>
               </div>

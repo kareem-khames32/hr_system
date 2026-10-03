@@ -1,7 +1,8 @@
 'use client'
 
 import { downloadCsv } from '@/lib/csv'
-import { useCurrency } from '@/lib/currency'
+import { currencyLabel, useCurrency } from '@/lib/currency'
+import { currencyTotalRows, moneyByCurrency } from '@/lib/currency-totals'
 import { formatMoney } from '@/lib/money'
 import { fetchPayrollCost, nonZero, type CostGroup, type PayrollCostReport } from '../_financial/api'
 import { EmptyState, FinancialReportShell, StatCard, Th, useFinancialReport } from '../_financial/ReportShell'
@@ -12,7 +13,10 @@ function CostTable({ title, groupLabel, groups, report, showBranch }: {
   title: string; groupLabel: string; groups: CostGroup[]; report: PayrollCostReport; showBranch: boolean
 }) {
   const holiday = nonZero(report.totals.holidayWork)
-  const t = report.totals
+  // B1.1: فروع بعملتين ← عمود العملة وسطر إجمالي لكل عملة (مفيش إجمالي بيجمع جنيه على ريال)
+  const perCurrency = currencyTotalRows(report.byCurrency)
+  const footers = perCurrency.length ? perCurrency.map((group) => ({ key: group.currency, label: `الإجمالي ${group.label}`, totals: group.totals }))
+    : [{ key: 'all', label: 'الإجمالي', totals: report.totals }]
   return (
     <div className="card p-0">
       <h2 className="text-lg font-bold text-gray-800 p-4 pb-2">{title}</h2>
@@ -22,6 +26,7 @@ function CostTable({ title, groupLabel, groups, report, showBranch }: {
             <tr>
               <Th>{groupLabel}</Th>
               {showBranch && <Th>الفرع</Th>}
+              {perCurrency.length > 0 && <Th>العملة</Th>}
               <Th>الموظفين</Th>
               <Th>إجمالي المستحق</Th>
               <Th>الإضافي</Th>
@@ -37,6 +42,7 @@ function CostTable({ title, groupLabel, groups, report, showBranch }: {
               <tr key={group.id ?? 'none'} className="border-t border-gray-100 hover:bg-gray-50">
                 <td className="p-3 font-medium text-gray-800 whitespace-nowrap">{group.name}</td>
                 {showBranch && <td className="p-3 whitespace-nowrap">{group.branchNames.join('، ')}</td>}
+                {perCurrency.length > 0 && <td className="p-3 whitespace-nowrap">{group.currency ? currencyLabel(group.currency) : 'عملتين'}</td>}
                 <td className="p-3">{group.headcount}</td>
                 <td className="p-3" dir="ltr">{money(group.gross)}</td>
                 <td className="p-3" dir="ltr">{money(group.overtime)}</td>
@@ -49,17 +55,19 @@ function CostTable({ title, groupLabel, groups, report, showBranch }: {
             ))}
           </tbody>
           <tfoot className="bg-gray-50 font-bold text-gray-800">
-            <tr className="border-t border-gray-200">
-              <td className="p-3" colSpan={showBranch ? 2 : 1}>الإجمالي</td>
-              <td className="p-3">{t.headcount}</td>
-              <td className="p-3" dir="ltr">{money(t.gross)}</td>
-              <td className="p-3" dir="ltr">{money(t.overtime)}</td>
-              {holiday && <td className="p-3" dir="ltr">{money(t.holidayWork)}</td>}
-              <td className="p-3" dir="ltr">{money(t.deductions)}</td>
-              <td className="p-3" dir="ltr">{money(t.net)}</td>
-              <td className="p-3" dir="ltr">{money(t.employerInsurance)}</td>
-              <td className="p-3" dir="ltr">{money(t.totalCost)}</td>
-            </tr>
+            {footers.map(({ key, label, totals: t }) => (
+              <tr key={key} className="border-t border-gray-200" data-currency-total={key}>
+                <td className="p-3" colSpan={(showBranch ? 2 : 1) + (perCurrency.length ? 1 : 0)}>{label}</td>
+                <td className="p-3">{t.headcount}</td>
+                <td className="p-3" dir="ltr">{money(t.gross)}</td>
+                <td className="p-3" dir="ltr">{money(t.overtime)}</td>
+                {holiday && <td className="p-3" dir="ltr">{money(t.holidayWork)}</td>}
+                <td className="p-3" dir="ltr">{money(t.deductions)}</td>
+                <td className="p-3" dir="ltr">{money(t.net)}</td>
+                <td className="p-3" dir="ltr">{money(t.employerInsurance)}</td>
+                <td className="p-3" dir="ltr">{money(t.totalCost)}</td>
+              </tr>
+            ))}
           </tfoot>
         </table>
       </div>
@@ -75,14 +83,17 @@ export default function PayrollCostPage() {
 
   const exportCsv = () => {
     if (!report) return
-    const header = ['التجميع', 'الاسم', 'الفرع', 'الموظفين', 'إجمالي المستحق', 'الإضافي', 'بدل دوام أيام العطلات', 'الخصومات', 'الصافي',
+    const header = ['التجميع', 'الاسم', 'الفرع', 'العملة', 'الموظفين', 'إجمالي المستحق', 'الإضافي', 'بدل دوام أيام العطلات', 'الخصومات', 'الصافي',
       'حصة صاحب العمل في التأمينات', 'التكلفة على الشركة']
-    const line = (kind: string, group: Pick<CostGroup, 'name' | 'branchNames'> & PayrollCostReport['totals']) => [kind, group.name, group.branchNames.join('، '),
-      group.headcount, group.gross, group.overtime, group.holidayWork, group.deductions, group.net, group.employerInsurance ?? '', group.totalCost]
+    const line = (kind: string, group: Pick<CostGroup, 'name' | 'branchNames' | 'currency'> & PayrollCostReport['totals']) => [kind, group.name, group.branchNames.join('، '),
+      group.currency ? currencyLabel(group.currency) : '', group.headcount, group.gross, group.overtime, group.holidayWork, group.deductions, group.net, group.employerInsurance ?? '', group.totalCost]
+    // الإجمالي لكل عملة لوحده (والإجمالي العام لو عملة واحدة)
+    const perCurrency = currencyTotalRows(report.byCurrency)
     const rows = [
       ...report.byBranch.map((group) => line('فرع', group)),
       ...report.byDepartment.map((group) => line('قسم', group)),
-      line('الإجمالي', { ...report.totals, name: 'الإجمالي', branchNames: [] }),
+      ...(perCurrency.length ? perCurrency.map((group) => line('الإجمالي', { ...group.totals, name: `الإجمالي ${group.label}`, branchNames: [], currency: group.currency }))
+        : [line('الإجمالي', { ...report.totals, name: 'الإجمالي', branchNames: [], currency: report.byCurrency?.[0]?.currency ?? null })]),
     ]
     downloadCsv(`payroll-cost-${report.period}.csv`, header, rows)
   }
@@ -108,10 +119,10 @@ export default function PayrollCostPage() {
           <>
             <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
               <StatCard label="الموظفين" value={report.totals.headcount} />
-              <StatCard label="إجمالي المستحق" value={`${money(report.totals.gross)} ${currency}`} />
-              <StatCard label="صافي الرواتب" value={`${money(report.totals.net)} ${currency}`} />
-              <StatCard label="تكلفة الإضافي" value={`${money(report.totals.overtime)} ${currency}`} />
-              <StatCard label="التكلفة على الشركة" value={`${money(report.totals.totalCost)} ${currency}`} />
+              <StatCard label="إجمالي المستحق" value={moneyByCurrency(report.byCurrency, (t) => t.gross, report.totals.gross, currency, formatMoney)} />
+              <StatCard label="صافي الرواتب" value={moneyByCurrency(report.byCurrency, (t) => t.net, report.totals.net, currency, formatMoney)} />
+              <StatCard label="تكلفة الإضافي" value={moneyByCurrency(report.byCurrency, (t) => t.overtime, report.totals.overtime, currency, formatMoney)} />
+              <StatCard label="التكلفة على الشركة" value={moneyByCurrency(report.byCurrency, (t) => t.totalCost, report.totals.totalCost, currency, formatMoney)} />
             </div>
             <CostTable title="حسب الفرع" groupLabel="الفرع" groups={report.byBranch} report={report} showBranch={false} />
             <CostTable title="حسب القسم" groupLabel="القسم" groups={report.byDepartment} report={report} showBranch />

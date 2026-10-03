@@ -19,6 +19,13 @@ export async function readBranchCurrency(em: EntityManager, branchId: number | n
   return branchCurrency(rows[0]?.country, system)
 }
 
+/** دالة عملة الفرع لكل الفروع بقراءة واحدة (B1.1: إجمالي لكل عملة في التقارير)؛ فرع غايب أو null = عملة النظام. */
+export async function readBranchCurrencyOf(em: EntityManager): Promise<(branchId: number | null | undefined) => BranchCurrency> {
+  const system = await readSystemCurrency(em)
+  const map = new Map((await readBranchCurrencies(em, null, system)).map(row => [row.id, row.currency]))
+  return branchId => (branchId == null ? system : map.get(Number(branchId)) ?? system)
+}
+
 /** رقم كل فرع في النطاق وعملته بس (null = كل الفروع، [] = ولا فرع) — مفيش اسم ولا أي بيان تاني. */
 export async function readBranchCurrencies(em: EntityManager, scope: BranchScope, systemCurrency?: BranchCurrency): Promise<Array<{ id: number; currency: BranchCurrency }>> {
   const system = systemCurrency ?? await readSystemCurrency(em)

@@ -46,6 +46,8 @@ export const isPayrollRunChain = (value: PayrollChainActionResult): value is Pay
 
 export interface PayrollPendingApproval {
   runId: number; name: string | null; period: string; startDate: string; endDate: string; runType: string; totalNet: number; employees: number
+  // B1.1: صافي المسير لكل عملة (مسير فيه فرعين بعملتين ليه سطرين)
+  netByCurrency?: Array<{ currency: string; totalNet: number }>
   calculatedBy: PayrollChainActor | null; calculatedAt: string | null
   stepOrder: number; stepCount: number; stepLabel: string; isFinal: boolean; waitingSince: string | null; canAct: boolean; blocked: string | null
 }
@@ -53,11 +55,15 @@ export interface PayrollApprovalReviewRow {
   itemId: number; employeeId: number; employeeCode: string; fullName: string
   branchName: string | null; departmentName: string | null; teamName: string | null
   earnings: number; deductions: number; net: number; earningLines: PayrollLine[]; deductionLines: PayrollLine[]; settlementPayout: boolean
+  // B1.1: عملة فرع الموظف في لقطة المسير
+  currency?: string
 }
 export interface PayrollApprovalReview {
   run: { id: number; name: string | null; period: string; startDate: string; endDate: string; status: string; runType: string; correctionReason: string | null; calculatedAt: string | null }
   chain: PayrollRunChain
   totals: { employees: number; earnings: number; deductions: number; net: number; negativeNet: number }
+  // B1.1: نفس الإجماليات لكل عملة لوحدها
+  byCurrency?: Array<{ currency: string; totals: PayrollApprovalReview['totals'] }>
   rows: PayrollApprovalReviewRow[]
 }
 

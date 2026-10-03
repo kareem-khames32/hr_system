@@ -1,4 +1,6 @@
 import { apiFetch } from './api'
+import { currencyLabel } from './currency'
+import { splitByCurrency } from '../../api/src/org/currency-totals'
 
 // تقارير الرواتب (الخطوة 30): المسيرات، بلا مسير، الإضافي بالمبالغ، السلف، الفروق — كل التصدير من هذه البناة
 export type Money = string
@@ -9,15 +11,18 @@ export interface PayrollRunsReportRun {
   employees: number; excluded: number; totalNet: Money; storedTotalNet: Money | null; partial: boolean
   // C8 / الخطوة 31: نوع المسير وربطه، وبنوده التي نُفّذ عكس صرفها (لا تدخل مجاميع الفترة؛ مسير العكس يُعرض بسطوره سالبة)
   runType?: 'REGULAR' | 'REVERSAL' | 'SUPPLEMENTARY'; parentRunId?: number | null; reversedEmployees?: number; reversedNet?: Money
+  // B1.1: صافي المسير لكل عملة (كل بند بعملة فرعه في لقطة المسير) — مسير فيه فرعين بعملتين ليه سطرين
+  netByCurrency?: Array<{ currency: string; totalNet: Money }>
 }
 export interface PayrollRunsReport {
   // مجاميع طرق الصرف والخصومات من المسيرات المعتمدة والمصروفة وحدها؛ includeDraft=true يضيف المحسوب اللي لسه ما اتعتمدش
   // (نفس علم التقارير المالية). الشاشة ما بتبعتوش، فالأرقام دايمًا = أرقام كشف الرواتب المالي لنفس الشهر.
   includeDraft?: boolean
   runs: PayrollRunsReportRun[]
-  byMethod: Array<{ payMethod: string; count: number; total: Money }>
+  // B1.1: طرق الصرف والفترات لكل عملة لوحدها (نفس الطريقة أو الفترة بعملتين = صفين)
+  byMethod: Array<{ payMethod: string; count: number; total: Money; currency?: string }>
   deductions: Array<{
-    period: string; employees: number; basic: Money; allowances: Money; overtime: Money; otherAdditions: Money
+    period: string; currency?: string; employees: number; basic: Money; allowances: Money; overtime: Money; otherAdditions: Money
     lateness: Money; shortfall: Money; absence: Money; unpaidLeave: Money; loans: Money; otherDeductions: Money; net: Money
   }>
 }
@@ -167,6 +172,12 @@ export function sumReportMoney(values: Array<Money | null | undefined>): Money {
   return `${negative ? '-' : ''}${abs / BigInt(100)}.${String(abs % BigInt(100)).padStart(2, '0')}`
 }
 
+// B1.1: صافي مسيرات لكل عملة لوحدها (مفيش رقم بيجمع جنيه على ريال). مسير من غير تفصيل (خادم قديم) = صافيه من غير عملة
+export function runsNetByCurrency(runs: ReadonlyArray<Pick<PayrollRunsReportRun, 'totalNet' | 'netByCurrency'>>): Array<{ currency: string; totalNet: Money }> {
+  const parts = runs.flatMap(run => run.netByCurrency ?? [{ currency: '', totalNet: run.totalNet }])
+  return splitByCurrency(parts, part => part.currency).map(group => ({ currency: group.currency, totalNet: sumReportMoney(group.rows.map(part => part.totalNet)) }))
+}
+
 export const runRefLabel = (run: ReportRunRef | null) =>
   run ? `${run.name ?? `مسير ${run.period}`} (${runStatusLabel(run.status)})` : '—'
 
@@ -176,11 +187,18 @@ export const minutesLabel = (minutes: number | null) => (minutes == null ? '—'
 export interface CsvTable { header: string[]; rows: unknown[][] }
 
 export function runsReportCsv(report: PayrollRunsReport): CsvTable {
+  // B1.1: عملة واحدة = عمود العملة جنب الصافي؛ عملتين = عمود صافي لكل عملة (مسير فيه الفرعين بيتملى في العمودين)
+  const currencies = runsNetByCurrency(report.runs).map(group => group.currency)
+  const multi = currencies.length > 1
+  const netIn = (run: PayrollRunsReportRun, currency: string) =>
+    (run.netByCurrency ?? [{ currency: '', totalNet: run.totalNet }]).find(part => part.currency === currency)?.totalNet ?? '0.00'
   return {
     // تبسيط الرواتب (2026-09-15): عمود «جزئي لنطاقك» أُخفي من الملف كما أُخفيت ملاحظته من الصفحة
-    header: ['رقم المسير', 'الاسم', 'الفترة', 'من', 'إلى', 'النطاق', 'الفرع', 'الحالة', 'الموظفون', 'المستبعدون', 'صافي الإجمالي'],
+    header: ['رقم المسير', 'الاسم', 'الفترة', 'من', 'إلى', 'النطاق', 'الفرع', 'الحالة', 'الموظفون', 'المستبعدون',
+      ...(multi ? currencies.map(currency => `صافي الإجمالي ${currencyLabel(currency)}`) : ['العملة', 'صافي الإجمالي'])],
     rows: report.runs.map(run => [run.id, run.name ?? '', run.period, run.startDate, run.endDate, run.scopeLabel, run.branchName ?? '',
-      runStatusLabel(run.status), run.employees, run.excluded, run.totalNet]),
+      runStatusLabel(run.status), run.employees, run.excluded,
+      ...(multi ? currencies.map(currency => netIn(run, currency)) : [currencyLabel(currencies[0]), run.totalNet])]),
   }
 }
 

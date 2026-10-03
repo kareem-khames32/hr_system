@@ -6,6 +6,8 @@ import { assertCompanyWideWrite, branchScopeOf, inBranchScope, isEmptyBranchScop
 import type { BranchScope } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
+import { readBranchCurrencyOf } from '../org/branch-currency-db'
+import { totalsByCurrency } from '../org/currency-totals'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { PayrollItem, PayrollRun } from './payroll.entities'
 import {
@@ -120,12 +122,19 @@ export class SocialInsuranceService {
         employeePct: Number(result.employeePct), employerPct: Number(result.employerPct), employeeShare: Number(result.employeeShare), employerShare: Number(result.employerShare),
         source: fromPayroll ? 'PAYROLL' : 'ESTIMATE' }
     }).filter(row => row.insuredSalary > 0)
-    const cents = (pick: (row: typeof rows[number]) => number) => rows.reduce((sum, row) => sum + Math.round(pick(row) * 100), 0)
-    const employeeCents = cents(row => row.employeeShare), employerCents = cents(row => row.employerShare)
+    const totalsOf = (list: readonly (typeof rows)[number][]) => {
+      const cents = (pick: (row: typeof rows[number]) => number) => list.reduce((sum, row) => sum + Math.round(pick(row) * 100), 0)
+      const employeeCents = cents(row => row.employeeShare), employerCents = cents(row => row.employerShare)
+      return { employees: list.length, insuredSalary: cutReportMoney(cents(row => row.insuredSalary)), employeeShare: cutReportMoney(employeeCents),
+        employerShare: cutReportMoney(employerCents), total: cutReportMoney(employeeCents + employerCents) }
+    }
+    // B1.1: الصف بعملة فرع الموظف (التأمينات السعودية بالريال والمصرية بالجنيه)، والإجمالي لكل عملة لوحده
+    const currencyOfBranch = await readBranchCurrencyOf(em)
+    const withCurrency = rows.map(row => ({ ...row, currency: currencyOfBranch(row.branchId) }))
     return {
-      period, branchId, rows,
-      totals: { employees: rows.length, insuredSalary: cutReportMoney(cents(row => row.insuredSalary)), employeeShare: cutReportMoney(employeeCents),
-        employerShare: cutReportMoney(employerCents), total: cutReportMoney(employeeCents + employerCents) },
+      period, branchId, rows: withCurrency,
+      totals: totalsOf(rows),
+      byCurrency: totalsByCurrency(withCurrency, row => row.currency, totalsOf),
       settings: context.settings, reviewedAt: context.reviewedAt,
     }
   }

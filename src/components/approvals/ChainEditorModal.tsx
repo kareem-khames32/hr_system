@@ -15,6 +15,7 @@ import {
   type ApiEmployee,
 } from '../../lib/api'
 import { branchScopeOfUser, canSeeBranch, type BranchScope } from '../../lib/branch-scope'
+import { useMixedCurrencies } from '../../lib/currency'
 import { EmployeePicker } from '../EmployeePicker'
 import {
   branchesWithoutVersionOf,
@@ -82,6 +83,8 @@ function ChainEditorDialog({
   scope: scopeProp,
 }: ChainEditorModalProps & { target: ChainEditorTarget }) {
   const [scope] = useState<BranchScope>(() => (scopeProp !== undefined ? scopeProp : branchScopeOfUser(getCurrentUser())))
+  // B1.1: شركة فيها فروع بعملتين ← شرط المبلغ في سلسلة لكل الفروع بيتقري بعملة فرع صاحب الطلب
+  const mixedCurrencies = useMixedCurrencies()
   // الفروع اللي الحساب يشوفها (حساب الشركة: كلها)
   const branches = allBranches.filter((b) => canSeeBranch(scope, b.id))
   const targetChain = target.kind === 'create' ? null : chains.find((c) => c.id === target.chainId) ?? null
@@ -578,6 +581,9 @@ function ChainEditorDialog({
                         مثال: amount &gt;= 1000 — الخطوة تُطبَّق فقط إذا تحقق الشرط على
                         بيانات الطلب
                       </p>
+                      {mixedCurrencies && formData.branchId === 'all' && (
+                        <p className="text-xs text-amber-700 mt-1" data-chain-currency-note>السلسلة لكل الفروع: قيمة المبلغ رقم واحد لكل الفروع وبيتقري بعملة فرع الموظف، من غير تحويل بين العملات.</p>
+                      )}
                     </div>
                   </div>
                 ))}

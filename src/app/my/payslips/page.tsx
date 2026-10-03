@@ -9,7 +9,7 @@ import {
   type ApiPayrollItem,
   type ApiPayrollRun,
 } from '@/lib/api'
-import { useCurrency } from '@/lib/currency'
+import { useOwnCurrency } from '@/lib/currency'
 import type { PayslipReversalInfo } from '@/lib/payroll-corrections-api'
 // FE-06 (B5): المنسّق الواحد ونظام الأرقام الواحد، والخصومات من أعمدة البند نفسها كجدول المسير (ومنها نقص الساعات)
 import { formatMoney } from '@/lib/money'
@@ -43,7 +43,8 @@ interface PayslipRow {
 }
 
 export default function MyPayslipsPage() {
-  const currency = useCurrency()
+  // B1.1: بيانات الحساب نفسه بعملة فرعه هو، حتى لو معاه صلاحيات إدارة (مش عملة الشاشة العامة)
+  const currency = useOwnCurrency()
   const [rows, setRows] = useState<PayslipRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')

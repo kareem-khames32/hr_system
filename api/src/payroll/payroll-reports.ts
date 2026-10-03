@@ -9,6 +9,8 @@ import { payrollEmploymentCoverage } from './payroll-employment'
 import { readLoanInstallmentPositions, type LoanInstallmentPosition } from './payroll-installment-balances'
 import { PAYROLL_REVERSAL_LINES_TABLE, payrollLineNotReversedSql } from './payroll-reversal-sql'
 import { orgFilterIsEmpty, orgFilterMatches, type OrgFilter } from '../org/org-filter-params'
+import { readBranchCurrencyOf } from '../org/branch-currency-db'
+import { totalsByCurrency } from '../org/currency-totals'
 
 // تقارير الرواتب (الخطوة 30 / RP-07, RP-08, RP-10, RP-12, PR-07): قراءة فقط، بلا أي كتابة.
 // النطاق: null = كل الشركة، مصفوفة = فروع المستخدم (فرع أو أكتر — branchScopeOf)، والمصفوفة الفاضية = نطاق فارغ.
@@ -243,6 +245,11 @@ export async function payrollRunsReport(em: EntityManager, scope: PayrollReportS
   const reversedKeys = postedReversalKeys(reversalLines)
   const linesByReversalRun = groupBy(reversalLines, row => Number(row.reversalRunId))
   const runById = new Map(runs.map(run => [Number(run.id), run]))
+  // B1.1: البند بعملة فرعه في لقطة مسيره (مسير فيه فرعين بعملتين صافيه بيتقال لكل عملة لوحدها، ومجاميع الشهر كمان)
+  const currencyOfBranch = await readBranchCurrencyOf(em)
+  const itemCurrency = (run: RunRow, employeeId: number) => currencyOfBranch(effectiveBranch(run, memberByKey.get(memberKey(Number(run.id), employeeId))))
+  const netByCurrency = <T>(rows: readonly T[], currencyOf: (row: T) => string, netOf: (rows: readonly T[]) => string) =>
+    totalsByCurrency(rows, currencyOf, list => netOf(list)).map(group => ({ currency: group.currency, totalNet: group.totals }))
 
   const resultRuns = []
   const activeItems: Array<{ run: RunRow; item: ItemRow }> = []
@@ -269,6 +276,7 @@ export async function payrollRunsReport(em: EntityManager, scope: PayrollReportS
       })
       if (narrowed && !visibleLines.length) continue
       resultRuns.push({ ...base, employees: visibleLines.length, excluded: 0, totalNet: reportMoney(-sumCents(visibleLines.map(line => line.netPay))),
+        netByCurrency: parent ? netByCurrency(visibleLines, line => itemCurrency(parent, Number(line.employeeId)), list => reportMoney(-sumCents(list.map(line => line.netPay)))) : [],
         reversedEmployees: 0, reversedNet: '0.00', partial: narrowed && visibleLines.length < runLines.length })
       continue
     }
@@ -293,31 +301,38 @@ export async function payrollRunsReport(em: EntityManager, scope: PayrollReportS
       employees: visibleItems.length,
       excluded: visibleMembers.filter(member => member.membershipStatus === 'EXCLUDED').length,
       totalNet: reportMoney(sumCents(visibleItems.map(item => item.netPay))),
+      netByCurrency: netByCurrency(visibleItems, item => itemCurrency(run, Number(item.employeeId)), list => reportMoney(sumCents(list.map(item => item.netPay)))),
       // بنود هذا المسير التي نُفّذ عكس صرفها (يقابلها سطر سالب في مسير العكس المربوط)
       reversedEmployees: reversedItems.length, reversedNet: reportMoney(sumCents(reversedItems.map(item => item.netPay))),
       partial: narrowed && visibleItems.length < runItems.length,
     })
   }
 
-  const methods = new Map<string, { count: number; total: bigint }>()
-  for (const { item } of activeItems) {
-    const row = methods.get(item.payMethod) ?? { count: 0, total: 0n }
-    row.count++; row.total += reportCents(item.netPay)
-    methods.set(item.payMethod, row)
-  }
-  const periods = new Map<string, { employees: number } & Record<ItemMoneyColumn, bigint>>()
+  // طرق الصرف ومجاميع الشهر لكل عملة لوحدها: عملة واحدة = نفس الصفوف القديمة بالحرف ومعاها currency
+  const methods = new Map<string, { payMethod: string; currency: string; count: number; total: bigint }>()
   for (const { run, item } of activeItems) {
-    const row = periods.get(run.period) ?? Object.assign({ employees: 0 }, Object.fromEntries(ITEM_MONEY_COLUMNS.map(column => [column, 0n])) as Record<ItemMoneyColumn, bigint>)
+    const currency = itemCurrency(run, Number(item.employeeId))
+    const key = `${item.payMethod}:${currency}`
+    const row = methods.get(key) ?? { payMethod: item.payMethod, currency, count: 0, total: 0n }
+    row.count++; row.total += reportCents(item.netPay)
+    methods.set(key, row)
+  }
+  const periods = new Map<string, { period: string; currency: string; employees: number } & Record<ItemMoneyColumn, bigint>>()
+  for (const { run, item } of activeItems) {
+    const currency = itemCurrency(run, Number(item.employeeId))
+    const key = `${run.period}:${currency}`
+    const row = periods.get(key) ?? Object.assign({ period: run.period, currency, employees: 0 },
+      Object.fromEntries(ITEM_MONEY_COLUMNS.map(column => [column, 0n])) as Record<ItemMoneyColumn, bigint>)
     row.employees++
     for (const column of ITEM_MONEY_COLUMNS) row[column] += reportCents(item[column])
-    periods.set(run.period, row)
+    periods.set(key, row)
   }
   return {
     includeDraft,
     runs: resultRuns,
-    byMethod: [...methods.entries()].map(([payMethod, row]) => ({ payMethod, count: row.count, total: reportMoney(row.total) })),
-    deductions: [...periods.entries()].sort((a, b) => b[0].localeCompare(a[0])).map(([period, row]) => ({
-      period, employees: row.employees,
+    byMethod: [...methods.values()].map(row => ({ payMethod: row.payMethod, currency: row.currency, count: row.count, total: reportMoney(row.total) })),
+    deductions: [...periods.values()].sort((a, b) => b.period.localeCompare(a.period) || a.currency.localeCompare(b.currency)).map(row => ({
+      period: row.period, currency: row.currency, employees: row.employees,
       basic: reportMoney(row.basicSalary), allowances: reportMoney(row.allowances), overtime: reportMoney(row.overtimeAmount),
       otherAdditions: reportMoney(row.otherAdditions), lateness: reportMoney(row.latenessDeduction), shortfall: reportMoney(row.shortfallDeduction),
       absence: reportMoney(row.absenceDeduction), unpaidLeave: reportMoney(row.unpaidLeaveDeduction), loans: reportMoney(row.loanInstallments),

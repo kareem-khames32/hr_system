@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import { MinusCircle } from 'lucide-react'
-import { useCurrency } from '@/lib/currency'
+import { useOwnCurrency } from '@/lib/currency'
 import { DEDUCTION_STATUS_META, fetchMyDeductions, formatDeductionMoney, objectDeduction, type MyDeductionView } from '@/lib/deductions-api'
 import { TypedDeductionsWorkspace } from '@/components/payroll/TypedDeductionsWorkspace'
 
@@ -11,7 +11,8 @@ import { TypedDeductionsWorkspace } from '@/components/payroll/TypedDeductionsWo
 // ويعترض خلال المهلة (الاعتراض يلزم المعتمِد بالرد قبل الاعتماد) ويرى الرد.
 // المدير الهيكلي يجد تحتها مساحة إنشاء خصومات فريقه ومتابعة ما ينتظر اعتماده.
 export default function MyDeductionsPage() {
-  const currency = useCurrency()
+  // B1.1: بيانات الحساب نفسه بعملة فرعه هو، حتى لو معاه صلاحيات إدارة (مش عملة الشاشة العامة)
+  const currency = useOwnCurrency()
   const [rows, setRows] = useState<MyDeductionView[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')

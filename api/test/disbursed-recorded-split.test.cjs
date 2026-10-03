@@ -49,7 +49,7 @@ function bankSheetController({ status, marks }) {
   const repositories = new Map([[PayrollItemDisbursement, marks]])
   return new PayrollBankSheetController(
     { async detail() { return { id: 1, name: 'سبتمبر', period: '2026-09', status, startDate: '2026-08-23', endDate: '2026-09-22', items: [item], members: [member] } } },
-    { getRepository(entity) { const rows = repositories.get(entity) ?? [liveTransfer]; return { async find() { return rows } } } })
+    { getRepository(entity) { const rows = repositories.get(entity) ?? [liveTransfer]; return { async find() { return rows } } }, manager: { async query() { return [] } } })
 }
 
 test('REC-01: قاعدة الصرف المسجل — علامة «تم الصرف» ثم «لم يتم» ثم مسير مصروف بلا علامات ثم مسير لسه ما اتصرفش', () => {
@@ -79,7 +79,8 @@ test('REC-02: كشف البنوك بعد تغيير طريقة الصرف — ا
   // مسير لسه ما اتصرفش ولا علامة: ملف الموظف الحالي زي ما هو (السلوك القديم بالحرف)
   const open = await bankSheetController({ status: 'APPROVED', marks: [] }).bankSheet({ role: 'super_admin', sub: 1 }, 1)
   assert.deepEqual([open.totals.bank, open.totals.cash, open.rows[0].payMethod], [1000, 0, 'transfer'])
-  assert.deepEqual(open.banks, [{ bankName: 'بنك الاختبار', employees: 1, total: 1000 }])
+  // B1.1: البنك بعملة صفوفه (هنا عملة النظام الافتراضية — مصدر البيانات الوهمي من غير فروع)
+  assert.deepEqual(open.banks, [{ bankName: 'بنك الاختبار', employees: 1, total: 1000, currency: 'SAR' }])
   // علامة «لم يتم» (اتقفل الصرف بسبب مكتوب): البند لسه مستحق بطريقة الملف الحالية
   const unpaid = await bankSheetController({ status: 'PAID', marks: [{ ...paidCashMark, status: 'UNPAID', bankAmount: '0.00', cashAmount: '0.00', payMethod: null }] })
     .bankSheet({ role: 'super_admin', sub: 1 }, 1)

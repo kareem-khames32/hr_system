@@ -3,6 +3,8 @@ import { DataSource, EntityManager, In } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
+import { readBranchCurrencyOf } from '../org/branch-currency-db'
+import { totalsByCurrency } from '../org/currency-totals'
 import { PayrollItem, PayrollRun, PayrollRunMember } from './payroll.entities'
 import { PayrollRunEvent } from './payroll-membership.entities'
 import { PayrollItemDisbursement } from './payroll-disbursement.entities'
@@ -96,9 +98,13 @@ export class PayrollDisbursementService {
       return [...seen].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, 'ar'))
     }
     const changeable = (paid: boolean) => shown.filter(row => row.tickable && (paid ? row.state === 'UNPAID' : row.state === 'PAID')).length
+    // B1.1: الصف بعملة فرعه في لقطة المسير، والإجماليات لكل عملة لوحدها (مسير فيه فرعين بعملتين)
+    const currencyOfBranch = await readBranchCurrencyOf(em)
+    const ofRow = (row: PayrollDisbursementRow) => currencyOfBranch(row.branchId)
     return {
       run: this.runView(run, mode, names),
       totals: summarizePayrollDisbursement(rows), filteredTotals: summarizePayrollDisbursement(shown),
+      byCurrency: totalsByCurrency(rows, ofRow, summarizePayrollDisbursement), filteredByCurrency: totalsByCurrency(shown, ofRow, summarizePayrollDisbursement),
       counts: { all: rows.length, shown: shown.length },
       // كام صف هيتغير لو اتعلّم المفلتر كله — بيرجع مع طلب التعليم الجماعي عشان الخادم يرفض لو الشاشة قديمة
       bulk: { markPaid: changeable(true), markUnpaid: changeable(false) },
@@ -107,7 +113,7 @@ export class PayrollDisbursementService {
         teams: facet(rows.map(row => [row.teamId, row.teamName])),
         payMethods: facet(rows.filter(row => row.state !== 'SETTLEMENT').map(row => [row.payMethod, PAY_METHOD_LABELS[row.payMethod] ?? row.payMethod])),
       },
-      rows: shown.map(row => ({ ...row, markedBy: row.markedByUserId == null ? null : { id: row.markedByUserId, name: names.get(row.markedByUserId) ?? null } })),
+      rows: shown.map(row => ({ ...row, currency: ofRow(row), markedBy: row.markedByUserId == null ? null : { id: row.markedByUserId, name: names.get(row.markedByUserId) ?? null } })),
     }
   }
 
@@ -190,14 +196,19 @@ export class PayrollDisbursementService {
     const runs = []
     const totalRows: PayrollDisbursementRow[] = []
     const closers = await this.userNames(em, visible.map(run => run.paidBy))
+    const currencyOfBranch = await readBranchCurrencyOf(em)
+    const ofRow = (row: PayrollDisbursementRow) => currencyOfBranch(row.branchId)
     for (const light of visible.sort((a, b) => a.period.localeCompare(b.period) || a.id - b.id)) {
       const run = await em.getRepository(PayrollRun).findOneByOrFail({ id: light.id })
       const { rows, mode } = await this.rowsOf(em, user, run)
       totalRows.push(...rows)
       const closeEvent = run.status === 'PAID' ? await em.getRepository(PayrollRunEvent).findOne({ where: { runId: run.id, eventType: 'PAID' }, order: { id: 'DESC' } }) : null
       const close = (closeEvent?.payload as { disbursement?: { unpaidReason?: string | null } } | null)?.disbursement ?? null
-      runs.push({ ...this.runView(run, mode, closers), unpaidReason: close?.unpaidReason ?? null, ...summarizePayrollDisbursement(rows) })
+      runs.push({ ...this.runView(run, mode, closers), unpaidReason: close?.unpaidReason ?? null, ...summarizePayrollDisbursement(rows),
+        byCurrency: totalsByCurrency(rows, ofRow, summarizePayrollDisbursement) })
     }
-    return { period: query.period ?? runs[0]?.period ?? null, runId: query.runId ?? null, runs, totals: summarizePayrollDisbursement(totalRows) }
+    // B1.1: إجمالي الشهر لكل عملة لوحده (فروع مصر بالجنيه والسعودية بالريال)، والإجمالي العام زي ما هو
+    return { period: query.period ?? runs[0]?.period ?? null, runId: query.runId ?? null, runs, totals: summarizePayrollDisbursement(totalRows),
+      byCurrency: totalsByCurrency(totalRows, ofRow, summarizePayrollDisbursement) }
   }
 }

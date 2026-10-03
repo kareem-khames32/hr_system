@@ -6,7 +6,8 @@ import { MainLayout } from '@/components/layout'
 import { AlertTriangle, ArrowRight, ChevronDown, ChevronLeft, Download, Info, Landmark, RefreshCw } from 'lucide-react'
 import { PayrollPeriodSelect, usePayrollMonthContext } from '@/components/DayRangeFilter'
 import { useOrgFilter } from '@/components/OrgFilter'
-import { useCurrency } from '@/lib/currency'
+import { currencyLabel, useCurrency } from '@/lib/currency'
+import { currencyTotalRows, moneyByCurrency } from '@/lib/currency-totals'
 import { formatMoney } from '@/lib/money'
 import {
   exportCostCenterReportCsv,
@@ -34,6 +35,12 @@ export default function CostCenterReportPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [open, setOpen] = useState<string | null>(null)
+  // B1.1: مراكز على فروع بعملتين ← عمود العملة وسطر إجمالي لكل عملة
+  const perCurrency = report ? currencyTotalRows(report.byCurrency) : []
+  const footers = !report ? [] : perCurrency.length ? perCurrency.map((group) => ({ key: group.currency, label: `الإجمالي ${group.label}`, totals: group.totals }))
+    : [{ key: 'all', label: 'الإجمالي', totals: report.totals }]
+  const statMoney = (pick: (t: CostCenterReport['totals']) => string | null) => !report || pick(report.totals) === null ? '—'
+    : moneyByCurrency(report.byCurrency, (t) => pick(t) ?? '0.00', pick(report.totals) ?? '0.00', currency, formatMoney)
 
   const load = () => {
     if (!/^\d{4}-\d{2}$/.test(period)) return
@@ -123,13 +130,10 @@ export default function CostCenterReportPage() {
             <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
               {[
                 { label: 'الموظفين', value: String(report.totals.headcount) },
-                { label: 'إجمالي الرواتب', value: `${money(report.totals.gross)} ${currency}` },
-                { label: 'إجمالي الخصومات', value: `${money(report.totals.deductions)} ${currency}` },
-                { label: 'صافي الرواتب', value: `${money(report.totals.net)} ${currency}` },
-                {
-                  label: 'حصة صاحب العمل في التأمينات',
-                  value: report.totals.employerInsurance === null ? '—' : `${money(report.totals.employerInsurance)} ${currency}`,
-                },
+                { label: 'إجمالي الرواتب', value: statMoney((t) => t.gross) },
+                { label: 'إجمالي الخصومات', value: statMoney((t) => t.deductions) },
+                { label: 'صافي الرواتب', value: statMoney((t) => t.net) },
+                { label: 'حصة صاحب العمل في التأمينات', value: statMoney((t) => t.employerInsurance) },
               ].map((stat) => (
                 <div key={stat.label} className="card">
                   <p className="text-sm text-gray-500">{stat.label}</p>
@@ -149,6 +153,7 @@ export default function CostCenterReportPage() {
                   <thead className="bg-gray-50 text-gray-600">
                     <tr>
                       <th className="text-right p-3 font-medium">مركز التكلفة</th>
+                      {perCurrency.length > 0 && <th className="text-right p-3 font-medium">العملة</th>}
                       <th className="text-right p-3 font-medium">الموظفين</th>
                       <th className="text-right p-3 font-medium">الإجمالي</th>
                       <th className="text-right p-3 font-medium">الخصومات</th>
@@ -177,6 +182,7 @@ export default function CostCenterReportPage() {
                                 )}
                               </span>
                             </td>
+                            {perCurrency.length > 0 && <td className="p-3">{center.currency ? currencyLabel(center.currency) : 'عملتين'}</td>}
                             <td className="p-3">{center.headcount}</td>
                             <td className="p-3">{money(center.gross)}</td>
                             <td className="p-3 text-danger-600">{money(center.deductions)}</td>
@@ -185,7 +191,7 @@ export default function CostCenterReportPage() {
                           </tr>
                           {expanded && (
                             <tr className="bg-gray-50/60">
-                              <td colSpan={6} className="p-3">
+                              <td colSpan={perCurrency.length ? 7 : 6} className="p-3">
                                 <table className="w-full text-xs">
                                   <thead className="text-gray-500">
                                     <tr>
@@ -211,7 +217,7 @@ export default function CostCenterReportPage() {
                                             </span>
                                           )}
                                         </td>
-                                        <td className="p-2">{employee.branchName ?? '—'}</td>
+                                        <td className="p-2">{employee.branchName ?? '—'}{perCurrency.length > 0 && <span className="text-gray-400 mr-1">({currencyLabel(employee.currency)})</span>}</td>
                                         <td className="p-2">
                                           {employee.runName || `مسير #${employee.runId}`}
                                           <span className="text-gray-400 mr-1">
@@ -234,14 +240,16 @@ export default function CostCenterReportPage() {
                     })}
                   </tbody>
                   <tfoot className="bg-gray-50 font-bold text-gray-800">
-                    <tr className="border-t border-gray-200">
-                      <td className="p-3">الإجمالي</td>
-                      <td className="p-3">{report.totals.headcount}</td>
-                      <td className="p-3">{money(report.totals.gross)}</td>
-                      <td className="p-3">{money(report.totals.deductions)}</td>
-                      <td className="p-3">{money(report.totals.net)}</td>
-                      <td className="p-3">{money(report.totals.employerInsurance)}</td>
-                    </tr>
+                    {footers.map(({ key, label, totals: t }) => (
+                      <tr key={key} className="border-t border-gray-200" data-currency-total={key}>
+                        <td className="p-3" colSpan={perCurrency.length ? 2 : 1}>{label}</td>
+                        <td className="p-3">{t.headcount}</td>
+                        <td className="p-3">{money(t.gross)}</td>
+                        <td className="p-3">{money(t.deductions)}</td>
+                        <td className="p-3">{money(t.net)}</td>
+                        <td className="p-3">{money(t.employerInsurance)}</td>
+                      </tr>
+                    ))}
                   </tfoot>
                 </table>
               </div>

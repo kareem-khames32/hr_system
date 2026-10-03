@@ -4,7 +4,7 @@ import { Fragment, useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import { AlertTriangle, ChevronDown, ChevronUp, Plus, Wallet, X } from 'lucide-react'
 import { createRequest } from '@/lib/api'
-import { useCurrency } from '@/lib/currency'
+import { useOwnCurrency } from '@/lib/currency'
 import {
   fetchLoanCapPreview, fetchMyLoans, formatLoanMoney, loanKindLabel, loanMoneyInputValid, REGULAR_LOAN_SINGLE_DEDUCTION_NOTE,
   type LoanCapEvaluation, type LoanInstallmentStatus, type LoanLedger,
@@ -27,7 +27,8 @@ type CapPreview = LoanCapEvaluation & { requestWindow?: { fromDay: number; toDay
 const loanKind = (loan: LoanLedger) => loanKindLabel(loan.isExceptional, loan.installmentMonths ?? loan.installments.filter(row => row.parentInstallmentId === null).length)
 
 export default function MyLoansPage() {
-  const currency = useCurrency()
+  // B1.1: بيانات الحساب نفسه بعملة فرعه هو، حتى لو معاه صلاحيات إدارة (مش عملة الشاشة العامة)
+  const currency = useOwnCurrency()
   const [loans, setLoans] = useState<LoanLedger[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')

@@ -19,6 +19,7 @@ import {
 import { ApiError, can } from '@/lib/api'
 import { useModuleEnabled, useRouteFilter } from '@/lib/modules'
 import { fetchHeadcountReportFor, fetchLeavesReportFor, fetchPayrollReportFor, fetchRequestsReportFor } from '@/lib/reports-org-api'
+import { currencyLabel } from '@/lib/currency'
 import { useOrgFilter } from '@/components/OrgFilter'
 import { fetchAttendanceReportRange, fetchOvertimeReportRange } from '@/lib/attendance-range-api'
 import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
@@ -62,16 +63,22 @@ interface PayrollReport {
     branchName: string | null
     scopeLabel: string
     employees: number
+    // B1.1: صافي المسير لكل عملة (مسير فيه فرعين بعملتين ليه سطرين)
+    netByCurrency?: Array<{ currency: string; totalNet: number | string }>
   }>
-  byMethod: Array<{ payMethod: string; count: number; total: number }>
+  byMethod: Array<{ payMethod: string; count: number; total: number; currency?: string }>
   deductions: Array<{
     period: string
+    currency?: string
     lateness: number
     unpaidLeave: number
     loans: number
     overtime: number
   }>
 }
+
+// B1.1: لون خط كل عملة في رسم المسيرات
+const PAYROLL_SERIES_COLORS = ['rgb(59, 130, 246)', 'rgb(16, 185, 129)']
 
 interface OvertimeRow {
   employeeId: number
@@ -209,9 +216,23 @@ export default function ReportsPage() {
     headcount?.byDepartment.reduce((sum, d) => sum + Number(d.total), 0) ?? 0
 
   // ===== مشتقات الرواتب =====
-  const payrollTotal =
-    payroll?.runs.reduce((sum, r) => sum + Number(r.totalNet), 0) ?? 0
-  const maxRunNet = Math.max(1, ...(payroll?.runs.map((r) => Number(r.totalNet)) ?? [1]))
+  // B1.1: صافي كل عملة لوحده (فرع مصري بالجنيه وسعودي بالريال) — مفيش رقم بيجمع جنيه على ريال
+  const runParts = (r: PayrollReport['runs'][number]) => r.netByCurrency ?? [{ currency: '', totalNet: r.totalNet }]
+  const payrollCurrencies = [...new Set((payroll?.runs ?? []).flatMap((r) => runParts(r).map((p) => p.currency)))].sort()
+  const payrollMulti = payrollCurrencies.length > 1
+  const payrollTotals = payrollCurrencies.map((code) => ({
+    code, total: (payroll?.runs ?? []).reduce((sum, r) => sum + Number(runParts(r).find((p) => p.currency === code)?.totalNet ?? 0), 0),
+  }))
+  // في الرسم خط لكل عملة بمقياسه، ونقطه من المسيرات اللي فيها العملة دي بس
+  const payrollSeries = payrollCurrencies.map((code) => {
+    const values = (payroll?.runs ?? []).map((r) => {
+      const part = runParts(r).find((p) => p.currency === code)
+      return part ? Number(part.totalNet) : null
+    })
+    return { code, values, max: Math.max(1, ...values.map((v) => v ?? 0)) }
+  })
+  const runNetText = (r: PayrollReport['runs'][number]) =>
+    runParts(r).map((p) => `${Number(p.totalNet).toLocaleString('en-US')}${payrollMulti && p.currency ? ` ${currencyLabel(p.currency)}` : ''}`).join(' + ')
 
   // ===== مشتقات الحضور =====
   const maxAttendanceDays = Math.max(
@@ -319,8 +340,10 @@ export default function ReportsPage() {
           ['الرقم الوظيفي', 'الموظف', 'أيام الحضور', 'أيام التأخير', 'أيام الغياب', 'انصراف مبكر', 'دقائق التأخير', 'دقائق العمل'],
           attendance.map((a) => [a.employeeCode, a.fullName, a.presentDays, a.lateDays, a.absentDays, a.earlyLeaveDays, a.totalLateMinutes, a.totalWorkMinutes]))
       case 'payroll':
-        return downloadCsv(`payroll-runs-${stamp}.csv`, ['رقم المسير', 'الاسم', 'الفترة', 'النطاق', 'الحالة', 'الموظفون', 'الصافي'],
-          (payroll?.runs ?? []).map((r) => [r.id, r.name ?? '', r.period, r.branchName ?? r.scopeLabel, r.status, r.employees, r.totalNet]))
+        return downloadCsv(`payroll-runs-${stamp}.csv`, ['رقم المسير', 'الاسم', 'الفترة', 'النطاق', 'الحالة', 'الموظفون',
+          ...(payrollMulti ? payrollCurrencies.map((code) => `الصافي ${currencyLabel(code)}`) : ['الصافي'])],
+          (payroll?.runs ?? []).map((r) => [r.id, r.name ?? '', r.period, r.branchName ?? r.scopeLabel, r.status, r.employees,
+            ...(payrollMulti ? payrollCurrencies.map((code) => runParts(r).find((p) => p.currency === code)?.totalNet ?? 0) : [r.totalNet])]))
       case 'leaves':
         return downloadCsv(`leaves-${currentYear}-${stamp}.csv`, ['نوع الإجازة', 'عدد الطلبات', 'إجمالي الأيام'],
           (leaves?.byType ?? []).map((t) => [leaveTypeLabels[t.leaveType] ?? t.leaveType, t.requests, t.totalDays]))
@@ -434,8 +457,10 @@ export default function ReportsPage() {
                   </div>
                 </div>
                 <p className="text-sm text-gray-500">إجمالي صافي الرواتب</p>
-                <p className="text-3xl font-bold text-gray-800">
-                  {payrollTotal.toLocaleString('en-US')}
+                <p className={`${payrollMulti ? 'text-xl' : 'text-3xl'} font-bold text-gray-800`}>
+                  {payrollMulti
+                    ? payrollTotals.map((t) => <span key={t.code} className="block" dir="ltr">{t.total.toLocaleString('en-US')} {currencyLabel(t.code)}</span>)
+                    : (payrollTotals[0]?.total ?? 0).toLocaleString('en-US')}
                 </p>
               </div>}
             </div>
@@ -647,32 +672,33 @@ export default function ReportsPage() {
                           />
                         </linearGradient>
                       </defs>
-                      {(() => {
+                      {payrollSeries.map((series, index) => {
                         const runs = payroll?.runs ?? []
-                        const points = runs.map((r, i) => ({
+                        const color = PAYROLL_SERIES_COLORS[index % PAYROLL_SERIES_COLORS.length]
+                        const points = series.values.flatMap((value, i) => value === null ? [] : [{
                           x:
                             runs.length > 1
                               ? (i / (runs.length - 1)) * 600
                               : 300,
-                          y: 200 - (Number(r.totalNet) / maxRunNet) * 180,
-                        }))
+                          y: 200 - (value / series.max) * 180,
+                        }])
                         return (
-                          <>
+                          <g key={series.code}>
                             {points.length > 1 && (
                               <>
-                                <path
+                                {!payrollMulti && <path
                                   d={`M ${points[0].x} ${points[0].y} ${points
                                     .slice(1)
                                     .map((p) => `L ${p.x} ${p.y}`)
                                     .join(' ')} L 600 200 L 0 200 Z`}
                                   fill="url(#gradient)"
-                                />
+                                />}
                                 <path
                                   d={`M ${points
                                     .map((p) => `${p.x} ${p.y}`)
                                     .join(' L ')}`}
                                   fill="none"
-                                  stroke="rgb(59, 130, 246)"
+                                  stroke={color}
                                   strokeWidth="3"
                                 />
                               </>
@@ -684,13 +710,13 @@ export default function ReportsPage() {
                                 cy={p.y}
                                 r="6"
                                 fill="white"
-                                stroke="rgb(59, 130, 246)"
+                                stroke={color}
                                 strokeWidth="3"
                               />
                             ))}
-                          </>
+                          </g>
                         )
-                      })()}
+                      })}
                     </svg>
                   ) : (
                     <p className="text-center text-sm text-gray-400 pt-16">
@@ -701,14 +727,24 @@ export default function ReportsPage() {
                 <div className="flex justify-between text-xs text-gray-500 mt-2">
                   {payroll?.runs.map((r) => (
                     <span key={r.id}>
-                      {r.period} — {r.branchName ?? r.scopeLabel} ({Number(r.totalNet).toLocaleString('en-US')})
+                      {r.period} — {r.branchName ?? r.scopeLabel} ({runNetText(r)})
                     </span>
                   ))}
                 </div>
+                {payrollMulti && (
+                  <div className="flex items-center justify-center gap-4 mt-2 text-xs text-gray-500">
+                    {payrollSeries.map((series, index) => (
+                      <span key={series.code} className="flex items-center gap-1">
+                        <span className="w-3 h-3 rounded inline-block" style={{ background: PAYROLL_SERIES_COLORS[index % PAYROLL_SERIES_COLORS.length] }} />
+                        {currencyLabel(series.code)} (كل عملة بمقياسها)
+                      </span>
+                    ))}
+                  </div>
+                )}
                 <div className="mt-4 pt-4 border-t border-gray-100 space-y-2">
                   {payroll?.byMethod.map((m) => (
                     <div
-                      key={m.payMethod}
+                      key={`${m.payMethod}:${m.currency ?? ''}`}
                       className="flex items-center justify-between text-sm"
                     >
                       <span className="flex items-center gap-2 text-gray-600">
@@ -716,18 +752,18 @@ export default function ReportsPage() {
                         {payMethodLabels[m.payMethod] ?? m.payMethod}
                       </span>
                       <span className="font-medium text-gray-800">
-                        {m.count} موظف — {Number(m.total).toLocaleString('en-US')}
+                        {m.count} موظف — {Number(m.total).toLocaleString('en-US')}{payrollMulti && m.currency ? ` ${currencyLabel(m.currency)}` : ''}
                       </span>
                     </div>
                   ))}
                   {payroll?.deductions.map((d) => (
                     <div
-                      key={d.period}
+                      key={`${d.period}:${d.currency ?? ''}`}
                       className="flex items-center justify-between text-sm"
                     >
                       <span className="flex items-center gap-2 text-gray-600">
                         <div className="w-3 h-3 bg-red-400 rounded" />
-                        خصومات {d.period}
+                        خصومات {d.period}{payrollMulti && d.currency ? ` (${currencyLabel(d.currency)})` : ''}
                       </span>
                       <span className="font-medium text-gray-800">
                         تأخير {Number(d.lateness).toLocaleString('en-US')} • بدون راتب{' '}

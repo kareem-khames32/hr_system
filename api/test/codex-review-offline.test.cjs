@@ -171,7 +171,7 @@ test('CR-N02: bank export for a paid run must agree with its frozen payment reco
   const fixture = paymentFixture()
   const controller = new PayrollBankSheetController({ async detail() {
     return { id: 1, status: 'PAID', items: fixture.items, members: fixture.members }
-  } }, { getRepository() { return { async find() { return fixture.employees } } } })
+  } }, { getRepository() { return { async find() { return fixture.employees } } }, manager: { async query() { return [] } } })
   const exportView = await controller.bankSheet({ role: 'super_admin', sub: 1 }, 1)
   const paid = summarizePayrollDisbursement(buildPayrollDisbursementRows(fixture).rows).paid
   const financial = computeFinancialRow({ runId: 1, runStatus: 'PAID', employeeId: 1, basicSalary: 1000,

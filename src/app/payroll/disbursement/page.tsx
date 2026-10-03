@@ -7,6 +7,8 @@ import { can } from '@/lib/api'
 import { downloadCsv } from '@/lib/csv'
 import { formatDateTime } from '@/lib/dates'
 import { formatMoney } from '@/lib/money'
+import { currencyLabel } from '@/lib/currency'
+import { moneyByCurrency } from '@/lib/currency-totals'
 import { dayRangeLabel } from '@/lib/payroll-month-range'
 import { defaultPayRecord, payRecordReady, type PayRecordDraft } from '@/components/payroll/PayrollPayRecordForm'
 import { PayrollDisbursementSummaryTable, PayrollDisbursementTable, PayrollDisbursementTotalsCards } from '@/components/payroll/PayrollDisbursementBoard'
@@ -144,7 +146,11 @@ export default function PayrollDisbursementPage() {
   const leftover = view ? view.totals.unpaid.count : 0
   const needsReason = !!view && view.run.mode === 'PER_EMPLOYEE' && leftover > 0
   const exportCsv = () => view && downloadCsv(`صرف-الرواتب-${view.run.period}-${view.run.id}.csv`, DISBURSEMENT_CSV_HEADER,
-    [...disbursementCsvRows(view.rows), ...disbursementCsvTotals(view.filteredTotals)])
+    [...disbursementCsvRows(view.rows), ...disbursementCsvTotals(view.filteredTotals, view.filteredByCurrency)])
+  // B1.1: إجماليات المفلتر لكل عملة لوحدها لو المفلتر فيه فرعين بعملتين
+  const filteredGroups = !view ? [] : view.filteredByCurrency && view.filteredByCurrency.length > 1
+    ? view.filteredByCurrency.map(group => ({ key: group.currency, label: currencyLabel(group.currency), totals: group.totals }))
+    : [{ key: 'all', label: '', totals: view.filteredTotals }]
 
   return (
     <MainLayout>
@@ -181,7 +187,7 @@ export default function PayrollDisbursementPage() {
 
         {view && (
           <>
-            <PayrollDisbursementTotalsCards totals={view.totals} />
+            <PayrollDisbursementTotalsCards totals={view.totals} byCurrency={view.byCurrency} />
 
             {view.run.marking === 'CLOSED' && <p className="rounded-xl bg-gray-50 border border-gray-200 text-sm text-gray-700 p-3 flex items-center gap-2"><Lock size={16} />
               {view.run.mode === 'RUN_LEVEL' ? 'المسير ده اتصرف كله مرة واحدة واتقفل — كل موظفيه مصروف لهم، ومفيش علامات تتغير.' : 'الصرف مقفول على المسير ده.'}</p>}
@@ -229,8 +235,11 @@ export default function PayrollDisbursementPage() {
                 </label>
               </div>
               {filterCount > 0 && <p className="text-xs text-gray-600" data-disbursement-filtered-totals>
-                المفلتر: تم <b dir="ltr">{formatMoney(view.filteredTotals.paid.total)}</b> ({view.filteredTotals.paid.count}) • لم يتم <b dir="ltr">{formatMoney(view.filteredTotals.unpaid.total)}</b> ({view.filteredTotals.unpaid.count})
-                {' '}• بنك <b dir="ltr">{formatMoney(view.filteredTotals.payable.bank)}</b> • نقدي <b dir="ltr">{formatMoney(view.filteredTotals.payable.cash)}</b>
+                المفلتر: {filteredGroups.map(({ key, label, totals }, index) => <span key={key} data-currency-total={key}>
+                  {index > 0 && ' | '}{label && <b>{label}: </b>}
+                  تم <b dir="ltr">{formatMoney(totals.paid.total)}</b> ({totals.paid.count}) • لم يتم <b dir="ltr">{formatMoney(totals.unpaid.total)}</b> ({totals.unpaid.count})
+                  {' '}• بنك <b dir="ltr">{formatMoney(totals.payable.bank)}</b> • نقدي <b dir="ltr">{formatMoney(totals.payable.cash)}</b>
+                </span>)}
               </p>}
               {canMark && view.run.marking !== 'CLOSED' && (
                 <div className="flex flex-wrap items-end gap-2 border-t border-gray-100 pt-3" data-disbursement-bulk>
@@ -261,7 +270,7 @@ export default function PayrollDisbursementPage() {
                 <p className="text-sm text-gray-600">
                   الإقفال بيخلّي المسير «مصروف» وبيقفل الإضافي ويرحّل أقساط السلف وقيود الدفتر — مرة واحدة ومالوش رجوع.
                   {view.run.mode === 'NOT_STARTED' ? ' لسه ماحدش اتعلّم: الإقفال دلوقتي معناه إن المسير كله اتصرف مرة واحدة.'
-                    : leftover > 0 ? ` فاضل ${leftover} موظف متعلّمش «تم الصرف» بإجمالي ${formatMoney(view.totals.unpaid.total)} — لازم سبب مكتوب، وهيفضلوا ظاهرين «لم يتم» لحد ما يتصرفلهم.`
+                    : leftover > 0 ? ` فاضل ${leftover} موظف متعلّمش «تم الصرف» بإجمالي ${moneyByCurrency(view.byCurrency, t => t.unpaid.total, view.totals.unpaid.total, '', formatMoney)} — لازم سبب مكتوب، وهيفضلوا ظاهرين «لم يتم» لحد ما يتصرفلهم.`
                     : ' كل المستحقين اتعلّم لهم «تم الصرف».'}
                 </p>
                 <div className="flex flex-wrap items-end gap-2">
