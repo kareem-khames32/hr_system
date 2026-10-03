@@ -94,8 +94,8 @@ import { assertLoanRequestClientPayload, EARLY_SETTLEMENT_FIELDS, isEarlySettlem
   LOAN_REQUEST_SERVER_FIELDS, readEarlySettlementPayload, reviewLoanRequestApproval, stageLoanRequestSubmission } from '../loans/loan-request-caps'
 import { PERSONAL_DATA_FIELDS, personalDataField } from '../employees/employee-personal-data'
 import { assertPersonalDataKeys, PERSONAL_DATA_HANDLER, validatePersonalDataRequest } from './personal-data-requests'
-// CR36-B01: مرجع المسير في إضافي تفاصيل الطلب بقاعدة رؤية المسير
-import { scopeRunRefRows } from '../payroll/payroll-run-visibility'
+// CR36-B01 وCR37-B01: مرجع المسير في إضافي تفاصيل الطلب ونص أحداثه بقاعدة رؤية المسير
+import { payloadRunIds, payrollRunRefVisibility, scopeRunRefRows, scrubEventReferences } from '../payroll/payroll-run-visibility'
 
 export interface ActDto {
   action: 'APPROVE' | 'REJECT' | 'RETURN'
@@ -2080,6 +2080,11 @@ export class RequestsService {
       : [])
     const saved = entry.calculationSnapshot
     const approved = saved?.approval
+    // CR37-B01: حدث فيه مرجع مسير (عكس الصرف: originalRunId وreversalRunId) مخفي للحساب لموظف السجل — نصه من غير «#رقم» (الحمولة مابترجعش أصلًا)
+    const eventRefs = events.map(event => payloadRunIds(event.payload ?? null))
+    const eventShown = eventRefs.some(ids => ids.length) ? await payrollRunRefVisibility(this.ds.manager, branchScopeOf(user), eventRefs.flat(), [entry.employeeId], user.employeeId ?? null) : null
+    const eventReason = (index: number) => eventShown && eventRefs[index].some(runId => !eventShown(runId, entry.employeeId))
+      ? scrubEventReferences(events[index].reason) : events[index].reason
     // نوافذ الإضافي في الدليل على قد نطاق القارئ: فترة فرع تاني مايظهرش اسمها (مراجعة Codex الجولة 17، CR17-B02)
     const windowView = await overtimeWindowRedactor(this.ds.manager, branchScopeOf(user), [saved?.submission, saved?.review])
     // الخطوة 13: جاهزية راتب شهر يوم العمل قبل الاعتماد النهائي، حتى لا يُفاجأ المعتمد الأخير بـOT_SALARY_MONTH_EVIDENCE_REQUIRED.
@@ -2104,9 +2109,9 @@ export class RequestsService {
           amount: approved.amount, dayKind: approved.dayKind, approvedAt: approved.approvedAt, approverId: approved.approverId,
           // اعتماد تلقائي بفترة «اعتماد تلقائي» (قرار النظام) — علامة بس من غير معرّفات الفترات
           autoApproved: approved.autoApproval != null } : null } : null,
-      events: events.map(event => ({ id: event.id, eventType: event.eventType, actorUserId: event.actorUserId,
+      events: events.map((event, index) => ({ id: event.id, eventType: event.eventType, actorUserId: event.actorUserId,
         actorName: event.actorUserId ? actorNames.get(event.actorUserId) || null : null,
-        stepOrder: event.stepOrder, reason: event.reason, createdAt: event.createdAt,
+        stepOrder: event.stepOrder, reason: eventReason(index), createdAt: event.createdAt,
         beforeMinutes: event.payload?.beforeMinutes ?? null, approvedMinutes: event.payload?.approvedMinutes ?? null })),
     }], row => row.employeeId)
     const { employeeId: _employee, ...view } = overtime

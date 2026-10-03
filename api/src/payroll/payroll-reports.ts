@@ -9,6 +9,8 @@ import { payrollEmploymentCoverage } from './payroll-employment'
 import { readLoanInstallmentPositions, type LoanInstallmentPosition } from './payroll-installment-balances'
 import { PAYROLL_REVERSAL_LINES_TABLE, payrollLineNotReversedSql } from './payroll-reversal-sql'
 import { orgFilterIsEmpty, orgFilterMatches, type OrgFilter } from '../org/org-filter-params'
+// CR37-B02: مرجع المسير لموظف معيّن بقاعدة رؤية المسير
+import { payrollRunRefVisibility } from './payroll-run-visibility'
 
 // تقارير الرواتب (الخطوة 30 / RP-07, RP-08, RP-10, RP-12, PR-07): قراءة فقط، بلا أي كتابة.
 // النطاق: null = كل الشركة، مصفوفة = فروع المستخدم (فرع أو أكتر — branchScopeOf)، والمصفوفة الفاضية = نطاق فارغ.
@@ -351,13 +353,18 @@ function employeeWhere(scope: PayrollReportScope, filters: PayrollReportEmployee
   return { sql: where.length ? `WHERE ${where.join(' AND ')}` : '', params }
 }
 
-const runRef = (run: RunRow, scope: PayrollReportScope) => {
+// CR37-B02: مرجع مسير لموظف معيّن (forEmployee = حكم payroll-run-visibility لموظفه) بيخفي بس، وعمره ما بيكشف أكتر من القاعدة دي:
+// مسير برّه نطاق الحساب ومرجعه مخفي لموظفه من غير رقمه واسمه وحالته وفترته. من غير موظف (قايمة مسيرات التقرير، المفلترة أصلًا) زي الأول.
+const runRef = (run: RunRow, scope: PayrollReportScope, forEmployee?: boolean) => {
   // مسير خارج فرع المستخدم لا يُكشف اسمه ولا رقمه (نفس سياسة visibleConflicts).
   const ids = run.scopeIds ? parseIds(run.scopeIds) : run.branchId ? [Number(run.branchId)] : []
   const own = scope === null || (run.scopeType === 'BRANCH' && ids.length > 0 && ids.every(id => inReportScope(scope, id)))
+  if (!own && forEmployee === false) return { id: null, name: 'مسير خارج نطاق صلاحيتك', period: null, status: null, startDate: null, endDate: null }
   return { id: own ? Number(run.id) : null, name: own ? run.name : 'مسير خارج نطاق صلاحيتك', period: run.period, status: run.status,
     startDate: run.startDate, endDate: run.endDate }
 }
+/** CR37-B02: نطاق التقرير بشكل نطاق الفروع (null = الشركة) */
+const reportBranchScope = (scope: PayrollReportScope): number[] | null => scope === null ? null : Array.isArray(scope) ? scope : [scope]
 
 const rangesOverlap = (a: { startDate: string; endDate: string }, b: { startDate: string; endDate: string }) =>
   a.startDate <= b.endDate && b.startDate <= a.endDate
@@ -442,6 +449,10 @@ export async function payrollUnassignedReport(em: EntityManager, scope: PayrollR
     .map((row: any) => [Number(row.employeeId), Number(row.count)]))
 
   const activeRuns = runs.filter(run => run.status !== 'CANCELLED')
+  // CR37-B02: مرجع المسير في صف الموظف (المكرر، والأسباب، وآخر مسير) بقاعدة رؤية المسير لموظفه
+  const runShown = scope === null ? null : await payrollRunRefVisibility(em, reportBranchScope(scope), [...runIds, ...[...lastRuns.values()].map(row => Number(row.runId))],
+    employees.map(row => Number(row.id)))
+  const refFor = (run: RunRow, employeeId: number) => runRef(run, scope, runShown ? runShown(Number(run.id), employeeId) : true)
   const summary = { ...emptySummary }
   const rows: any[] = []
   const duplicates: any[] = []
@@ -482,14 +493,14 @@ export async function payrollUnassignedReport(em: EntityManager, scope: PayrollR
       const overlapping = includedActive.filter(run => includedActive.some(other => other.id !== run.id && rangesOverlap(run, other)))
       if (overlapping.length) {
         summary.duplicates++
-        duplicates.push({ employeeId, employeeCode: emp.employeeCode, fullName: emp.fullName, runs: overlapping.map(run => runRef(run, scope)) })
+        duplicates.push({ employeeId, employeeCode: emp.employeeCode, fullName: emp.fullName, runs: overlapping.map(run => refFor(run, employeeId)) })
       }
       continue
     }
 
     const reasons: Array<{ code: UnassignedReasonCode; label: string; detail: string | null; run: ReturnType<typeof runRef> | null }> = []
     const reason = (code: UnassignedReasonCode, detail: string | null = null, run: RunRow | null = null) =>
-      reasons.push({ code, label: UNASSIGNED_REASON_LABELS[code], detail, run: run ? runRef(run, scope) : null })
+      reasons.push({ code, label: UNASSIGNED_REASON_LABELS[code], detail, run: run ? refFor(run, employeeId) : null })
     if (dataIssue) reason('DATA_ISSUE', dataIssue)
     if (suspended) reason('SUSPENDED', payrollSuspensionNote(suspensionsByEmployee.get(employeeId) ?? [], from, to))
     for (const member of employeeMembers.filter(row => row.membershipStatus === 'EXCLUDED')) {
@@ -540,7 +551,7 @@ export async function payrollUnassignedReport(em: EntityManager, scope: PayrollR
       hireDate: emp.actualStartDate || emp.joinDate || null, leaveDate: coverage?.leaveDate ?? null,
       coverFrom: coverage?.coverFrom ?? null, coverTo: coverage?.coverTo ?? null, coverDays: coverage?.coverDays ?? null,
       reason: primary.code, reasonLabel: primary.label, detail: primary.detail, reasons,
-      lastRun: last ? runRef({ ...last, id: Number(last.runId) } as RunRow, scope) : null,
+      lastRun: last ? refFor({ ...last, id: Number(last.runId) } as RunRow, employeeId) : null,
       pending: { installments: Number(pending?.count ?? 0), installmentsAmount: reportMoney(reportCents(pending?.amount ?? '0')),
         approvedOvertime: approvedOvertime.get(employeeId) ?? 0, obligations: pendingObligations.get(employeeId) ?? 0 },
     })
@@ -694,8 +705,13 @@ export async function payrollOvertimeReport(em: EntityManager, scope: PayrollRep
           issue: issue ?? `بند مسير قديم يجمع ${item.ids.length} سجلات بقيمة ${reportMoney(item.cents)} دون تفصيل؛ تعذر توزيعها لنقص الساعات المستحقة` })
     }
   }
-  const extraRunIds = [...new Set(entries.map(entry => entry.payrollRunId).filter(id => id && !runRows.has(Number(id))))]
+  // CR37-B02: ومسير التأجيل كمان، عشان رقمه يتعرض بنفس قاعدة رأس المسير
+  const extraRunIds = [...new Set(entries.flatMap(entry => [entry.payrollRunId, entry.deferredFromRunId]).filter(id => id && !runRows.has(Number(id))))]
   if (extraRunIds.length) for (const run of await em.query(`SELECT ${RUN_COLUMNS} FROM [payroll_runs] r WHERE r.[id] IN (${extraRunIds.map(Number).join(', ')})`)) runRows.set(Number(run.id), run)
+  // CR37-B02: مسير صرف السجل ومرجع تأجيله بقاعدة رؤية المسير لموظف السجل (مسير فرع تاني بعد نقله مايتقالش رقمه ولا حالته ولا فترته)
+  const overtimeRunShown = scope === null ? null : await payrollRunRefVisibility(em, reportBranchScope(scope),
+    [...[...traces.values()].map(trace => trace.runId), ...entries.map(entry => entry.payrollRunId), ...entries.map(entry => entry.deferredFromRunId)],
+    entries.map(entry => entry.employeeId))
 
   const byStatus: Record<string, { count: number; minutes: number; amount: bigint }> = {}
   let approvedAmount = 0n, estimatedAmount = 0n, paidInRuns = 0n, allocatedAmount = 0n, detectedMinutesTotal = 0, approvedMinutesTotal = 0, rejected = 0, unresolved = 0, withIssues = 0
@@ -749,6 +765,7 @@ export async function payrollOvertimeReport(em: EntityManager, scope: PayrollRep
     if (issue) withIssues++
     const runId = trace?.runId ?? entry.payrollRunId ?? null
     const run = runId ? runRows.get(Number(runId)) : undefined
+    const deferredRun = entry.deferredFromRunId != null ? runRows.get(Number(entry.deferredFromRunId)) : undefined
     return {
       id: entry.id, employeeId: entry.employeeId, employeeCode: emp?.employeeCode ?? null, fullName: emp?.fullName ?? null,
       departmentName: emp?.departmentId ? names.departments.get(Number(emp.departmentId)) ?? null : null,
@@ -760,7 +777,10 @@ export async function payrollOvertimeReport(em: EntityManager, scope: PayrollRep
       approverId: approval?.approverId ?? null, approvedAt: approval?.approvedAt ?? null,
       // اعتماد تلقائي بقرار النظام في فترة إضافي عليها «اعتماد تلقائي» (approverId = 0)
       autoApproved: approval?.autoApproval != null,
-      run: run ? runRef(run, scope) : null, deferredFromRunId: entry.deferredFromRunId ?? null,
+      run: run ? runRef(run, scope, overtimeRunShown ? overtimeRunShown(Number(run.id), entry.employeeId) : true) : null,
+      // رقم مسير التأجيل بنفس قاعدة رقم رأس المسير (الشركة بتشوفه زي ما هو)
+      deferredFromRunId: entry.deferredFromRunId == null ? null : scope === null ? entry.deferredFromRunId
+        : deferredRun ? runRef(deferredRun, scope, overtimeRunShown ? overtimeRunShown(Number(deferredRun.id), entry.employeeId) : true).id : null,
     }
   })
   // عمود الإضافي في بنود المسيرات غير الملغاة المتداخلة مع الفترة (مطابقة RP-T2).

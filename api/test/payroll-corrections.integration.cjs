@@ -893,3 +893,43 @@ test('CR35-B01 / CR35-N01: موانع عكس الصرف بقاعدة رؤية ا
   assert.deepEqual(await financialState([emp.id]), state)
   assert.equal((await repo('PayrollRun').findOneByOrFail({ id: reversal.id })).status, 'CALCULATED')
 })
+
+test('CR37-B02: تقرير الإضافي وتقرير «بلا مسير» — مسير صرف إضافي موظف اتنقل لفرع تاني ومرجع تأجيله وآخر مسير ليه من غير رقمهم ولا اسمهم ولا حالتهم ولا فترتهم لقارئ الفرع الجديد، والشركة بتشوفهم', { timeout: 900000 }, async () => {
+  const policy = await publishPolicy('مجموعة فرع التصحيح — تقارير CR37')
+  const emp = await employee(9000)
+  const overtime = await approvedOvertime(emp, '2026-08-04', 90)
+  let august = expectStatus(await request(users.desk, 'POST', '/payroll/runs', { name: 'مسير أغسطس لتقارير CR37', policyVersionId: policy.versionId, period,
+    filters: { employeeIds: [emp.id] } }), 201)
+  august = await calculate(august, users.desk)
+  await acknowledge(august, users.approver)
+  expectStatus(await request(users.approver, 'POST', `/payroll/runs/${august.id}/approve`), 201)
+  expectStatus(await request(users.approver, 'POST', `/payroll/runs/${august.id}/pay`, { channel: 'BANK_TRANSFER', reference: 'TRX-CR37-AUG' }), 201)
+  assert.equal((await repo('OvertimeEntry').findOneByOrFail({ id: overtime.id })).payrollRunId, august.id)
+  // مرجع تأجيل للمسير نفسه (السجل اتأجل منه) — نفس عمود التأجيل الحقيقي
+  await repo('OvertimeEntry').update({ id: overtime.id }, { deferredFromRunId: august.id })
+  // الموظف اتنقل للفرع التاني، وقارئ تقارير الرواتب هناك
+  await repo('Employee').update(emp.id, { branchId: org.other.id })
+  const reader = await repo('User').save({ email: 'reports-other-cr37@payroll-corrections-test.invalid', displayName: 'reports-other', passwordHash: 'test-only', role: 'hr_manager',
+    branchId: org.other.id, permissions: JSON.stringify(['reports.view', 'payroll.view']) })
+  expectStatus(await request(reader, 'GET', `/payroll/runs/${august.id}`), 403)
+  const hidden = { id: null, name: 'مسير خارج نطاق صلاحيتك', period: null, status: null, startDate: null, endDate: null }
+  const leaks = body => [`"run":{"id":${august.id},`, 'مسير أغسطس لتقارير CR37', `"deferredFromRunId":${august.id}`].filter(text => JSON.stringify(body).includes(text))
+
+  // تقرير الإضافي
+  const report = expectStatus(await request(reader, 'GET', '/reports/payroll/overtime?from=2026-07-23&to=2026-08-22'), 200)
+  const row = report.rows.find(item => item.id === overtime.id)
+  assert.ok(row, 'السجل ظاهر لقارئ الفرع الجديد')
+  assert.deepEqual([row.run, row.deferredFromRunId], [hidden, null])
+  assert.ok(Number(row.amount) > 0, 'المبلغ زي ما هو')
+  assert.deepEqual(leaks(report.rows), [])
+  const company = expectStatus(await request(users.admin, 'GET', '/reports/payroll/overtime?from=2026-07-23&to=2026-08-22'), 200).rows.find(item => item.id === overtime.id)
+  assert.deepEqual([company.run.id, company.run.status, company.run.period, company.deferredFromRunId, company.amount], [august.id, 'PAID', period, august.id, row.amount])
+
+  // «بلا مسير» لسبتمبر: آخر مسير للموظف (أغسطس في الفرع الأول) من غير مرجعه
+  const unassigned = expectStatus(await request(reader, 'GET', '/reports/payroll/unassigned?period=2026-09'), 200)
+  const mine = unassigned.rows.find(item => item.employeeId === emp.id)
+  assert.ok(mine, JSON.stringify(unassigned.rows.map(item => item.employeeId)))
+  assert.deepEqual(mine.lastRun, hidden)
+  const companyUnassigned = expectStatus(await request(users.admin, 'GET', '/reports/payroll/unassigned?period=2026-09'), 200).rows.find(item => item.employeeId === emp.id)
+  assert.deepEqual([companyUnassigned.lastRun.id, companyUnassigned.lastRun.status], [august.id, 'PAID'])
+})
