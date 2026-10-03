@@ -802,6 +802,15 @@ export class AttendanceService {
     if (reason) throw new ForbiddenException(reason)
   }
 
+  // B1.4 (متابعة مراجعة Codex الجولتين 28 و29): نقل الموظف بياخد قفل الدوام والقفل المالي للموظف لآخر معاملته، فصلاحية الكتابة على
+  // حضوره (بفرعه) بتتراجع بعد القفل ده — الفحص اللي قبله ممكن يكون قبل نقل اتحفظ. المستخدم الغايب = نداء داخلي موثوق
+  private async assertCanWriteLocked(user: JwtPayload | undefined, employeeId: number, selfMessage: string) {
+    if (!user) return
+    const emp = await this.employees.findOne({ where: { id: employeeId } })
+    if (!emp) throw new NotFoundException('الموظف غير موجود')
+    this.assertCanWrite(user, emp, selfMessage)
+  }
+
   // ===== استقبال بصمات ZKTeco (دفعة) — مفتاح الجهاز أو JWT =====
   // مصدر الجهاز (مفتاح، أو مزامنة داخلية fromDevice) يُبلّغ عن العنصر المرفوض
   // ويكمل الباقي؛ الإدخال اليدوي صارم: عنصر غير صالح/مستقبلي/خارج النطاق يرفض الدفعة
@@ -936,7 +945,17 @@ export class AttendanceService {
       }
     }
     // SQL Server بيقبل 2100 باراميتر في الطلب الواحد: البصمة ~10 أعمدة، فالحفظ على دفعات 150 (سحب الأجهزة بيجيب مئات مرة واحدة)
-    if (rows.length > 0) await this.punches.save(rows, { chunk: 150 })
+    if (rows.length > 0 && !fromDevice && user) {
+      // B1.4: البصمة اليدوية بتتحفظ تحت قفل الموظفين المالي (النقل بياخده) بعد ما صلاحية المُدخِل على فرعهم تتراجع
+      const ids = [...new Set(rows.map(row => row.employeeId).filter((id): id is number => !!id))]
+      await this.days.manager.transaction(async em => {
+        await lockPayrollEmployees(em, ids)
+        const current = ids.length ? await em.getRepository(Employee).find({ where: { id: In(ids) } }) : []
+        if (current.length !== ids.length) throw new NotFoundException('الموظف غير موجود')
+        for (const emp of current) this.assertCanWrite(user, emp, 'لا يمكنك إدخال بصمات يدوية لنفسك — يُدخلها مسؤول آخر')
+        await em.getRepository(AttendancePunch).save(rows, { chunk: 150 })
+      })
+    } else if (rows.length > 0) await this.punches.save(rows, { chunk: 150 })
 
     // Resolve after saving: the morning punch can belong to last night's shift.
     // Resolving calendar dates alone leaves the previous workday incomplete.
@@ -1078,7 +1097,16 @@ export class AttendanceService {
     const t = new Date(p.punchTime)
     // يوم العمل الذي تُنسب له (صباحٌ يُكمل وردية ليلية من الأمس يتبعها) — قبل الحذف
     const workDate = emp ? await this.workDateOf(emp.id, t, new Map()) : localDateOf(t)
-    await this.punches.delete({ id })
+    if (emp) {
+      // B1.4: الحذف تحت قفل الموظف المالي (النقل بياخده) بعد ما الصلاحية على فرعه تتراجع
+      await this.days.manager.transaction(async em => {
+        await lockPayrollEmployees(em, [emp.id])
+        const current = await em.getRepository(Employee).findOne({ where: { id: emp.id } })
+        if (!current) throw new NotFoundException('الموظف غير موجود')
+        this.assertCanWrite(user, current, 'لا يمكنك حذف بصمة يدوية لنفسك — يحذفها مسؤول آخر')
+        await em.getRepository(AttendancePunch).delete({ id })
+      })
+    } else await this.punches.delete({ id })
     this.logger.log(
       `حُذفت بصمة يدوية #${id} (${p.employeeCode} ${localDateOf(t)} ${hhmmOf(t)}) بواسطة المستخدم #${user.sub}`
     )
@@ -1739,6 +1767,7 @@ export class AttendanceService {
     }
     // وردية اليوم قبل التعديل — تحدّد الأيام المجاورة المتأثرة (الليلية تمتدّ للغد)
     await lockAttendanceRuleMutation(this.days.manager, [emp.id])
+    await this.assertCanWriteLocked(user, emp.id, 'لا يمكنك تعديل وردية يومك بنفسك')
     await assertAttendanceRulePeriodOpen(this.days.manager, [emp.id], dto.date, dto.date)
     const before = await this.shiftFor(emp.id, dto.date)
     const previous = await this.shiftFor(emp.id, dateAfter(dto.date, -1))
@@ -2028,7 +2057,8 @@ export class AttendanceService {
     // فترة خدمة كل موظف: الأسبوع يتكتب «وردية أسبوع» لو كل أيامه جوه خدمته، وإلا أيام خدمته منه بس تبقى أيام خاصة؛
     // واللي خدمته مابتلمسش المدة خالص بيتعدّى بسبب واضح — من غير ما يوقف الباقيين
     const employment = await employmentWindowsOf(this.days.manager, emps.filter(e => employeeIds.includes(e.id)))
-    const plans = new Map<number, { dates: string[]; weeks: string[]; dayDates: string[]; weekShift: typeof weekShift; dayShift: typeof dayShift; keep: boolean }>()
+    const plans = new Map<number, { dates: string[]; weeks: string[]; dayDates: string[]; weekShift: typeof weekShift; dayShift: typeof dayShift; keep: boolean
+      user?: JwtPayload; shiftBranch: number | null; shiftName: string }>()
     let partial = 0
     employeeIds = employeeIds.filter(id => {
       const window = employment.get(id)
@@ -2042,7 +2072,7 @@ export class AttendanceService {
       const ownWeekDays = new Set(ownWeeks.flatMap(weekOf))
       if (own.length < dates.length) partial++
       plans.set(id, { dates: own, weeks: ownWeeks, dayDates: own.filter(date => !ownWeekDays.has(date)), weekShift, dayShift,
-        keep: !!dto.keepDayOverrides })
+        keep: !!dto.keepDayOverrides, user, shiftBranch, shiftName: shiftRow?.name ?? '' })
       return true
     })
     const failed: Array<{ employeeId: number; error: string }> = []
@@ -2074,9 +2104,16 @@ export class AttendanceService {
     dates: string[]; weeks: string[]; dayDates: string[]; keep: boolean
     weekShift: Map<string, { shiftId: number | null; shiftName: string; startTime: string; endTime: string }>
     dayShift: Map<string, { shiftId: number | null; shiftName: string; startTime: string; endTime: string }>
+    user?: JwtPayload; shiftBranch?: number | null; shiftName?: string
   }) {
     const { dates, weeks, dayDates, weekShift, dayShift, keep } = plan
     await lockAttendanceRuleMutation(this.days.manager, [employeeId])
+    await this.assertCanWriteLocked(plan.user, employeeId, 'لا يمكنك تعديل ورديتك بنفسك')
+    // وردية خاصة بفرع: فرع الموظف من جديد تحت القفل (اتنقل قبله = مايتسندلوش)
+    if (plan.shiftBranch != null) {
+      const owner = await this.employees.findOne({ where: { id: employeeId }, select: { id: true, branchId: true } })
+      if (Number(owner?.branchId) !== Number(plan.shiftBranch)) throw new BadRequestException(`الوردية «${plan.shiftName}» خاصة بفرع تاني`)
+    }
     const first = dates[0], last = dates[dates.length - 1]
     await assertAttendanceRulePeriodOpen(this.days.manager, [employeeId], first, last)
     // الجيران برا المدة: ليلة اليوم اللي قبلها حدّها بداية أول يوم، وليلة آخر يوم
@@ -3206,6 +3243,18 @@ export class AttendanceService {
     }
     const saved: ScheduleEntry[] = []
     await lockAttendanceRuleMutation(this.days.manager, [...new Set(entries.map(e => Number(e.employeeId)))])
+    // B1.4: الصلاحية على فرع كل موظف من جديد تحت القفل — اللي اتنقل قبله بيتعدّى زي الفحص الأول
+    if (user && entries.length) {
+      const current = await this.employees.find({ where: { id: In([...new Set(entries.map(e => Number(e.employeeId)))]) } })
+      const byId = new Map(current.map(e => [e.id, e]))
+      entries = entries.filter(e => {
+        const emp = byId.get(Number(e.employeeId))
+        const reason = emp ? this.writeBlock(user, emp, 'لا يمكنك تعديل ورديتك بنفسك') : 'الموظف غير موجود'
+        if (reason) skipped.push({ employeeId: Number(e.employeeId), reason })
+        return !reason
+      })
+      if (!entries.length) throw new ForbiddenException([...new Set(skipped.map(s => s.reason))].join('، '))
+    }
     for (const entry of entries) {
       const weekStart = weekKeyOf(attendanceRuleDate(entry.weekStart))
       await assertAttendanceRulePeriodOpen(this.days.manager, [entry.employeeId], dateAfter(weekStart, -1), dateAfter(weekStart, 7))
@@ -3576,6 +3625,7 @@ export class AttendanceService {
     this.assertCanWrite(user, emp, 'لا يمكنك تعديل ورديتك بنفسك')
     const weekStart = weekKeyOf(week)
     await lockAttendanceRuleMutation(this.days.manager, [employeeId])
+    await this.assertCanWriteLocked(user, employeeId, 'لا يمكنك تعديل ورديتك بنفسك')
     await assertAttendanceRulePeriodOpen(this.days.manager, [employeeId], dateAfter(weekStart, -1), dateAfter(weekStart, 7))
     const result = await this.schedule.delete({ weekStart, employeeId })
     const failed: string[] = []
