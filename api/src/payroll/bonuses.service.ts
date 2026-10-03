@@ -430,7 +430,10 @@ export class BonusesService {
       }
       if (ctx.facts.employeeId !== employee.id && !this.scopedBases(user, ctx, employee).length) throw this.outOfScope()
       await lockPayrollEmployees(em, [employee.id])
-      const evaluation = await this.evaluate(em, user, ctx, employee)
+      // CR28-B01: النطاق من جديد على ملف الموظف بعد قفله المالي — النقل بياخد نفس القفل، فاللي فوق ممكن يكون قبل نقل اتحفظ
+      const current = await em.getRepository(Employee).findOneBy({ id: employee.id })
+      if (!current || (ctx.facts.employeeId !== current.id && !this.scopedBases(user, ctx, current).length)) throw this.outOfScope()
+      const evaluation = await this.evaluate(em, user, ctx, current)
       if (!evaluation.ok) throw this.exception(evaluation)
       const saved = await this.persist(em, user, ctx, evaluation, null)
       if (hasHrOverride(user)) await this.approveInstantly(em, user, saved, ctx, evaluation)
@@ -471,9 +474,18 @@ export class BonusesService {
         : mode === 'DEPARTMENT' ? await repo.find({ where: { departmentId: In([...this.org.descendants(ctx.facts.departmentRows, new Set(ids))]), isActive: true }, order })
           : await repo.find({ where: { branchId: In(ids), isActive: true }, order })
     // من خارج نطاق المُقترِح لهذا النوع لا يُعرض ولا يُعد ولا يُقفل؛ نفسه يبقى ليُرفض بسبب «نفسك»
-    const employees = loaded.filter(row => row.id === ctx.facts.employeeId || this.scopedBases(user, ctx, row).length > 0)
+    let employees = loaded.filter(row => row.id === ctx.facts.employeeId || this.scopedBases(user, ctx, row).length > 0)
     if (employees.length > ctx.settings.bulkMaxEmployees) bad('BONUS_BULK_LIMIT', `الاختيار يضم ${employees.length} موظفًا في نطاقك والحد ${ctx.settings.bulkMaxEmployees} في الدفعة الواحدة`)
-    if (lock) await lockPayrollEmployees(em, employees.filter(row => !excluded.has(row.id)).map(row => row.id))
+    if (lock) {
+      await lockPayrollEmployees(em, employees.filter(row => !excluded.has(row.id)).map(row => row.id))
+      // CR28-B01: الملفات من جديد بعد القفل المالي (النقل بياخده) — اللي اتنقل برا النطاق قبله بيطلع من الدفعة، فالبصمة بتختلف
+      // والإرسال بيترفض كمعاينة قديمة من غير ما يتنشئ له طلب
+      const current = new Map((await repo.find({ where: { id: In(employees.map(row => row.id)) } })).map(row => [row.id, row]))
+      employees = employees.flatMap(row => {
+        const fresh = current.get(row.id)
+        return fresh && (fresh.id === ctx.facts.employeeId || this.scopedBases(user, ctx, fresh).length > 0) ? [fresh] : []
+      })
+    }
     const names = await this.orgNames(em)
     const evaluations: ReadyEvaluation[] = []
     const outcomes: Array<{ employee: Employee | null; employeeId: number; status: string; message: string | null; evaluation: ReadyEvaluation | null }> = []
@@ -682,12 +694,30 @@ export class BonusesService {
   }
 
   async detail(user: JwtPayload, id: number) {
-    const row = await this.requests.findOneBy({ id })
-    if (!row) throw this.notFound()
-    const [view] = await this.views(this.manager, user, [row], 'all')
+    const view = await this.detailIn(this.manager, user, id)
     if (!view) throw this.notFound()
-    const events = await this.manager.getRepository(BonusRequestEvent).find({ where: { requestId: id }, order: { id: 'ASC' } })
+    return view
+  }
+
+  // null = الطلب مش موجود أو صاحب الإجراء مايشوفوش
+  private async detailIn(em: EntityManager, user: JwtPayload, id: number) {
+    const row = await em.getRepository(BonusRequest).findOneBy({ id })
+    if (!row) return null
+    const [view] = await this.views(em, user, [row], 'all')
+    if (!view) return null
+    const events = await em.getRepository(BonusRequestEvent).find({ where: { requestId: id }, order: { id: 'ASC' } })
     return { ...view, events: events.map(event => ({ ...event, payload: json(event.payload, null) })) }
+  }
+
+  // CR28-B01: الإجراء ورده في معاملة واحدة — الرد بيتبني والقفل المالي لسه ماسك، فمفيش نقل يدخل بين الحفظ والرد والرد هو اللي
+  // اتحفظ (قبل كده كان بيتقرا بعد المعاملة بنطاق ممكن يكون اتغيّر). لو صاحب الإجراء مابقاش يشوف الطلب بإجرائه نفسه (معتمد تنفيذي
+  // خلّص آخر خطوة) الإجراء بيتحفظ والرد زي الأول بعد المعاملة
+  private async act<T>(user: JwtPayload, id: number, work: (em: EntityManager) => Promise<T>) {
+    const { result, view } = await this.manager.transaction(async em => {
+      const result = await work(em)
+      return { result, view: await this.detailIn(em, user, id) }
+    })
+    return { result, view: view ?? await this.detail(user, id) }
   }
 
   // الموظف يرى مكافآته من لحظة الاقتراح بحالتها وشهرها ومصير صرفها، دون ملاحظات المعتمدين الداخلية
@@ -722,6 +752,17 @@ export class BonusesService {
     return row
   }
 
+  // CR28-B01 (مراجعة Codex الجولة 28): نقل الموظف لفرع تاني (تعديل الملف أو تنفيذ طلب النقل) بياخد قفله المالي لآخر معاملته،
+  // ففرع الموظف اللي صلاحية الإجراء متعلقة بيه بيتقرا بعد القفل ده ويفضل ثابت لحد ما الإجراء يتحفظ. قبل كده كان بيتقرا قبل القفل،
+  // فنقل بيتحفظ في النص والإجراء بيكمل بصلاحية الفرع القديم (إلغاء القيد المالي، ورد «غير موجود» بعده). صفة صاحب الإجراء على
+  // المكافأة بتتراجع على الفرع الحالي: مابقاش له صفة = نفس رد الطلب الغايب، من غير ما الطلب ولا قيده يتغيروا
+  private async employeeUnderFinanceLock(em: EntityManager, row: BonusRequest, actor: JwtPayload) {
+    await lockPayrollEmployees(em, [row.employeeId])
+    const employee = await em.getRepository(Employee).findOneBy({ id: row.employeeId })
+    if (!this.knows(actor, row, employee)) throw this.notFound()
+    return employee
+  }
+
   private async creatorStillInScope(em: EntityManager, row: BonusRequest, employee: Employee) {
     if (!row.creatorEmployeeId) return false
     const creator = { sub: row.creatorUserId, employeeId: row.creatorEmployeeId, role: 'employee', permissions: [] } as unknown as JwtPayload
@@ -730,7 +771,7 @@ export class BonusesService {
   }
 
   async approve(user: JwtPayload, id: number, dto: BonusDecisionDto) {
-    const notice = await this.manager.transaction(async em => {
+    const { result: notice, view } = await this.act(user, id, async em => {
       const row = await this.lockedRequest(em, id, dto.expectedRevision, user)
       await lockPayrollEmployees(em, [row.employeeId])
       if (row.status !== 'IN_APPROVAL') throw new ConflictException({ code: 'BONUS_STATE', message: `لا يمكن اعتماد مكافأة حالتها «${BONUS_LABELS.statuses[row.status] ?? row.status}»` })
@@ -786,7 +827,7 @@ export class BonusesService {
       await em.getRepository(BonusRequest).save(row)
       return null
     })
-    return { ...(await this.detail(user, id)), notice }
+    return { ...view, notice }
   }
 
   // اعتماد خطوة واحدة بالمبلغ المسعّر، وعند آخر خطوة: القيد الموجب والحالة «معتمد» — دالة واحدة للاعتماد اليدوي (approve)
@@ -832,20 +873,19 @@ export class BonusesService {
   async reject(user: JwtPayload, id: number, dto: BonusDecisionDto) {
     const reason = dto.reason?.trim() ?? ''
     if (reason.length < 5) bad('BONUS_REASON_REQUIRED', 'سبب الرفض مطلوب (5 أحرف على الأقل)')
-    await this.manager.transaction(async em => {
+    return (await this.act(user, id, async em => {
       const row = await this.lockedRequest(em, id, dto.expectedRevision, user)
       if (row.status !== 'IN_APPROVAL') throw new ConflictException({ code: 'BONUS_STATE', message: `لا يمكن رفض مكافأة حالتها «${BONUS_LABELS.statuses[row.status] ?? row.status}»` })
       const steps = parseDeductionSteps(row.steps), step = currentDeductionStep(steps)
       if (!step) throw new ConflictException({ code: 'BONUS_CHAIN_INVALID', message: 'لا توجد خطوة اعتماد معلقة' })
-      const employee = await em.getRepository(Employee).findOneBy({ id: row.employeeId })
+      const employee = await this.employeeUnderFinanceLock(em, row, user)
       const problem = this.actorProblem(user, row, step, employee)
       if (problem) throw new ForbiddenException({ code: 'BONUS_NOT_CURRENT_APPROVER', message: problem })
       step.status = 'REJECTED'; step.actedByUserId = user.sub; step.actedAt = new Date().toISOString(); step.reason = reason
       Object.assign(row, { status: 'REJECTED', steps: JSON.stringify(steps), decisionReason: reason, decidedByUserId: user.sub, decidedAt: new Date(), revision: row.revision + 1, updatedAt: new Date() })
       await em.getRepository(BonusRequest).save(row)
       await this.event(em, row.id, 'REJECTED', user.sub, 'IN_APPROVAL', 'REJECTED', step.order, reason, { role: step.role })
-    })
-    return this.detail(user, id)
+    })).view
   }
 
   async withdraw(user: JwtPayload, id: number, dto: BonusDecisionDto) {
@@ -864,15 +904,14 @@ export class BonusesService {
   // الإلغاء بسبب موثق قبل الصرف؛ المحجوز في مسير معتمد يحتاج إعادة فتح المسير أولًا، والمصروف يُعكس بقيد استرداد
   async cancel(user: JwtPayload, id: number, dto: BonusDecisionDto) {
     if (!userHasPerm(user, MANAGE)) throw new ForbiddenException({ code: 'BONUS_CANCEL_FORBIDDEN', message: 'إلغاء المكافأة يتطلب صلاحية إدارة المكافآت' })
-    await this.manager.transaction(async em => {
+    return (await this.act(user, id, async em => {
       const settings = await this.settings(em)
       const reason = dto.reason?.trim() ?? ''
       if (reason.length < settings.reasonMinLength) bad('BONUS_REASON_TOO_SHORT', `سبب الإلغاء لا يقل عن ${settings.reasonMinLength} حرفًا`, { minLength: settings.reasonMinLength })
       const row = await this.lockedRequest(em, id, dto.expectedRevision, user)
-      const employee = await em.getRepository(Employee).findOneBy({ id: row.employeeId })
+      const employee = await this.employeeUnderFinanceLock(em, row, user)
       if (!this.inBranchScope(user, employee)) throw new ForbiddenException({ code: 'BONUS_FORBIDDEN', message: 'طلب المكافأة خارج نطاق فرعك' })
       if (!['IN_APPROVAL', 'APPROVED'].includes(row.status)) throw new ConflictException({ code: 'BONUS_STATE', message: `لا يمكن إلغاء مكافأة حالتها «${BONUS_LABELS.statuses[row.status] ?? row.status}»` })
-      await lockPayrollEmployees(em, [row.employeeId])
       let cancelledObligationIds: number[] = []
       if (row.status === 'APPROVED') {
         const credits = (await em.getRepository(EmployeeObligation).findBy({ bonusRequestId: row.id })).filter(item => item.type === 'CREDIT')
@@ -889,22 +928,20 @@ export class BonusesService {
       Object.assign(row, { status: 'CANCELLED', decisionReason: reason, decidedByUserId: user.sub, decidedAt: new Date(), revision: row.revision + 1, updatedAt: new Date() })
       await em.getRepository(BonusRequest).save(row)
       await this.event(em, row.id, 'CANCELLED', user.sub, fromStatus, 'CANCELLED', null, reason, { cancelledObligationIds })
-    })
-    return this.detail(user, id)
+    })).view
   }
 
   // نفس قواعد DD-12: عكس المصروف (كلي أو جزئي) بقيد استرداد مدين في أول شهر مفتوح؛ المسير المصروف لا يتغير
   async reverse(user: JwtPayload, id: number, dto: BonusReverseDto) {
     if (!userHasPerm(user, MANAGE)) throw new ForbiddenException({ code: 'BONUS_REVERSE_FORBIDDEN', message: 'عكس المكافأة يتطلب صلاحية إدارة المكافآت' })
-    await this.manager.transaction(async em => {
+    return (await this.act(user, id, async em => {
       const settings = await this.settings(em)
       const reason = dto.reason?.trim() ?? ''
       if (reason.length < settings.reasonMinLength) bad('BONUS_REASON_TOO_SHORT', `سبب العكس لا يقل عن ${settings.reasonMinLength} حرفًا`, { minLength: settings.reasonMinLength })
       const row = await this.lockedRequest(em, id, dto.expectedRevision, user)
-      const employee = await em.getRepository(Employee).findOneBy({ id: row.employeeId })
+      const employee = await this.employeeUnderFinanceLock(em, row, user)
       if (!this.inBranchScope(user, employee)) throw new ForbiddenException({ code: 'BONUS_FORBIDDEN', message: 'طلب المكافأة خارج نطاق فرعك' })
       if (row.status !== 'APPROVED') throw new ConflictException({ code: 'BONUS_STATE', message: 'العكس متاح لمكافأة معتمدة صُرفت في مسير مصروف' })
-      await lockPayrollEmployees(em, [row.employeeId])
       const { obligations, runs } = await this.ledger(em, [row.id])
       const payout = this.payout(row, obligations, runs)
       if (payout.state !== 'PAID') throw new ConflictException({ code: 'BONUS_NOT_PAID', message: 'المكافأة لم تُصرف بعد؛ ألغها بدل عكسها' })
@@ -924,7 +961,6 @@ export class BonusesService {
       await em.getRepository(BonusRequest).save(row)
       await this.event(em, row.id, 'REVERSED', user.sub, row.status, row.status, null, reason,
         { amount: money(amount), obligationId: saved.id, paid: payout.paidAmount, reversedBefore: payout.reversedAmount, targetPeriod: period })
-    })
-    return this.detail(user, id)
+    })).view
   }
 }

@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, Logger } from '@nestjs/common'
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger } from '@nestjs/common'
 import { overtimeFinancialValue } from '../payroll/overtime-financial'
 import { payrollPeriodOfDate } from '../payroll/payroll-period'
 import { salaryPayrollPeriodBounds } from '../payroll/payroll-period-salary'
@@ -464,6 +464,14 @@ export class DestinationsService {
 
   private async loanRequestActor(em: EntityManager, req: Request): Promise<number | null> {
     if (!em.queryRunner?.isTransactionActive || req.status !== 'APPROVED') throw new BadRequestException('تنفيذ حركة السلفة يتطلب طلبًا معتمدًا داخل معاملته')
+    // CR28-B01 (مراجعة Codex الجولة 28): حركة السلفة (إنشاء وتأجيل قسط وسداد مبكر) بتتنفذ على فرع الموظف وقت تقديم الطلب بس —
+    // الطلب بيمشي في سلسلة فرعه ومعتمدينه، فلو الموظف اتنقل بعده بيتقدم من جديد من فرعه الحالي (نفس حارس طلب الأجر). الفرع
+    // بيتقرا تحت قفل الموظف المالي (النقل بياخد نفس القفل) فمايتغيرش لحد ما الحركة تتحفظ
+    await lockPayrollEmployees(em, [req.requesterId])
+    const [employee] = await em.query('SELECT [branchId] FROM dbo.employees WHERE [id]=@0', [req.requesterId])
+    if (req.branchId != null && (!employee || Number(employee.branchId) !== Number(req.branchId))) {
+      throw new ForbiddenException('تغير فرع الموظف منذ إنشاء الطلب؛ أعد تقديمه من الفرع الحالي')
+    }
     // المعتمد من سجل القرار الحقيقي؛ حمولة الطلب لا تحدد هوية المعتمد أو صلاحياته.
     const decision = await em.getRepository(RequestApproval).findOne({ where: { requestId: req.id, action: 'APPROVED' }, order: { id: 'DESC' } })
     return decision?.approverId ?? null

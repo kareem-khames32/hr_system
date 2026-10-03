@@ -7,6 +7,7 @@ import { PayrollDecimal } from '../payroll/payroll-decimal'
 import { readLoanInstallmentPositions } from '../payroll/payroll-installment-balances'
 import { repayLoanEarly } from '../payroll/payroll-installment-ledger'
 import { loanScheduleAmounts } from '../requests/loan-installment-requests'
+import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
 import { addDays, LoanCapPolicyValues, loanMoney, normalizeLoanCapPolicyInput } from './loan-caps'
 import { evaluateEmployeeLoanCap, isLoanCapRequestType, LOAN_CAP_POLICY_COLUMNS, loanRequestDayWindow, localDate, parseLoanCapPolicyRow, REGULAR_LOAN_SINGLE_DEDUCTION } from './loan-request-caps'
 import { collectLoanRecovery, LOAN_RECOVERY_COLUMNS, openRecoveryAmount, writeOffLoanRecovery } from './loan-recovery'
@@ -27,6 +28,15 @@ export class LoansService {
     // صف SQL خام: الفرع رقم أو null — والمقارنة بفروع النطاق (فرع أو أكتر)
     if (!employee || !inBranchScope(branchScopeOf(user), employee.branchId == null ? null : Number(employee.branchId))) throw new NotFoundException(notFound)
     return employee
+  }
+
+  // CR28-B01 (مراجعة Codex الجولة 28): نقل الموظف لفرع تاني بياخد قفله المالي لآخر معاملته، ففرعه بيتقرا تاني بعد القفل ده
+  // قبل أي حركة مالية (سداد مبكر، تحصيل أو إعدام رصيد متبقي) — قبله ممكن يكون نقل اتحفظ والحركة تتسجل بصلاحية الفرع القديم.
+  // الفحص الأول قبل القفل عشان اللي مالوش نطاق ياخد «غير موجود» من غير ما يستنى قفل حد
+  private async employeeInScopeLocked(em: EntityManager, user: JwtPayload, employeeId: number, notFound: string) {
+    await this.employeeInScope(em, user, employeeId, notFound)
+    await lockPayrollEmployees(em, [employeeId])
+    return this.employeeInScope(em, user, employeeId, notFound)
   }
 
   // ===== AD-01: سياسات السقوف المؤرخة =====
@@ -205,7 +215,7 @@ export class LoansService {
     return this.ds.transaction(async em => {
       const [loan] = await em.query('SELECT [id],[employeeId] FROM [loans] WHERE [id]=@0', [loanId])
       if (!loan) throw new NotFoundException('السلفة غير موجودة')
-      await this.employeeInScope(em, user, loan.employeeId, 'السلفة غير موجودة')
+      await this.employeeInScopeLocked(em, user, loan.employeeId, 'السلفة غير موجودة')
       const amount = blank(dto.amount) ? null : loanMoney(dto.amount, 'مبلغ السداد')
       return repayLoanEarly(em, { employeeId: loan.employeeId, loanId, amount, reference: dto.reference, method: dto.method, mode: dto.mode,
         reason: dto.reason ?? null, requestId: null, actorId: user.sub })
@@ -237,7 +247,7 @@ export class LoansService {
   private async recoveryInScope(em: EntityManager, user: JwtPayload, id: number) {
     const [row] = await em.query('SELECT [employeeId] FROM [loan_recovery_balances] WHERE [id]=@0', [id])
     if (!row) throw new NotFoundException('رصيد السلفة المتبقي غير موجود')
-    await this.employeeInScope(em, user, row.employeeId, 'رصيد السلفة المتبقي غير موجود')
+    await this.employeeInScopeLocked(em, user, row.employeeId, 'رصيد السلفة المتبقي غير موجود')
   }
 
   async collectRecovery(user: JwtPayload, id: number, dto: { amount: unknown; reference: string; reason?: string }) {

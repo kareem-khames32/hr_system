@@ -321,3 +321,86 @@ test('AD-13: a settlement that cannot cover the loan records PENDING_RECOVERY; w
   assert.deepEqual(events.map(row => row.action), ['CREATED', 'COLLECTED', 'WRITTEN_OFF'])
   assert.deepEqual([events[2].actorId, events[1].reference], [f.writer.id, 'RCV-1'])
 })
+
+// ===== CR28-B01 (مراجعة Codex الجولة 28) في السلف: فرع الموظف بيتقرا بعد قفله المالي قبل أي حركة مالية =====
+// حاجز: اتصال تاني ماسك القفل المالي للموظف زي النقل بالظبط؛ الحركة لازم تكون واقفة عليه، وبعدين النقل بيتحفظ جوه نفس المعاملة
+async function whileTransferHoldsFinance(emp, branch, action) {
+  const barrier = ds.createQueryRunner()
+  let pending, committed = false
+  try {
+    await barrier.connect(); await barrier.startTransaction()
+    const spid = (await barrier.query('SELECT @@SPID AS spid'))[0].spid
+    const locked = await barrier.query("DECLARE @result int; EXEC @result=sys.sp_getapplock @Resource=@0,@LockMode='Exclusive',@LockOwner='Transaction',@LockTimeout=5000; SELECT @result AS result",
+      [`hr:employee-finance:${emp.id}`])
+    assert.ok(locked[0].result >= 0)
+    pending = action()
+    const deadline = Date.now() + 8000
+    let waiting = false
+    while (!waiting && Date.now() < deadline) {
+      waiting = (await master.request().input('spid', sql.Int, spid).input('database', sql.NVarChar, database)
+        .query("SELECT session_id FROM sys.dm_exec_requests WHERE database_id=DB_ID(@database) AND blocking_session_id=@spid AND wait_type LIKE 'LCK%'")).recordset.length > 0
+      if (!waiting) await new Promise(done => setTimeout(done, 25))
+    }
+    assert.equal(waiting, true, 'الحركة لازم تستنى القفل المالي للموظف قبل ما تقرا فرعه')
+    await barrier.query('UPDATE employees SET branchId=@0 WHERE id=@1', [branch.id, emp.id])
+    await barrier.commitTransaction(); committed = true
+    return await pending
+  } finally {
+    if (!committed && barrier.isTransactionActive) await barrier.rollbackTransaction()
+    if (pending) await Promise.allSettled([pending])
+    await barrier.release()
+  }
+}
+
+test('CR28-B01: السداد المبكر وتحصيل وإعدام الرصيد المتبقي وتنفيذ طلب السلفة بيقروا فرع الموظف بعد قفله المالي — نقل اتحفظ قبلهم بيرفضهم من غير أي حركة', { timeout: 300000 }, async () => {
+  const otherBranch = await repo('Branch').save({ code: 'C6B2', name: 'فرع السلف التاني' })
+  const person = code => repo('Employee').save({ employeeCode: code, fullName: `موظف ${code}`, branchId: f.branch.id, departmentId: null, joinDate: '2020-01-01',
+    basicSalary: 8000, housingAllowance: 2000, transportAllowance: 0, phoneAllowance: 0, workNatureAllowance: 0, otherAllowance: 0, status: 'active', isActive: true,
+    payMethod: 'cash', annualLeaveEntitled: false, managerEmployeeId: f.managerEmployee.id })
+  // السداد المبكر من الموارد البشرية
+  const payer = await person('C6R1')
+  const loanId = await insertLoan(payer.id, '900.00', 3, addMonths(localDate().slice(0, 7), 1))
+  const repaid = await whileTransferHoldsFinance(payer, otherBranch, () => http(f.hr, 'POST', `/loans/${loanId}/repayments`,
+    { amount: '300.00', reference: 'R28-RACE-1', method: 'CASH', mode: 'SHORTEN_TERM', reason: 'سداد وقت النقل' }))
+  assert.equal(repaid.status, 404, JSON.stringify(repaid.body))
+  assert.equal((await raw('SELECT COUNT(*) AS n FROM loan_repayments WHERE loanId=@0', [loanId]))[0].n, 0)
+  assert.deepEqual((await installmentsOf(loanId)).map(row => row.financialStatus), ['DUE', 'DUE', 'DUE'])
+  // الرصيد المتبقي بعد التصفية: تحصيل وإعدام
+  for (const action of ['collect', 'write-off']) {
+    const leaver = await person(`C6R-${action}`)
+    const kase = await repo('OffboardingCase').save({ employeeId: leaver.id, lastWorkingDay: shiftDays(-5), status: 'SETTLED', terminationReason: 'termination' })
+    const [recovery] = await raw(`INSERT INTO loan_recovery_balances (employeeId,caseId,loanBalance,coveredAmount,amount,recoveredAmount,writtenOffAmount,status,sourceSnapshot,createdByUserId)
+      OUTPUT INSERTED.id VALUES(@0,@1,CAST('500.00' AS decimal(18,2)),CAST('0.00' AS decimal(18,2)),CAST('500.00' AS decimal(18,2)),CAST('0.00' AS decimal(18,2)),
+      CAST('0.00' AS decimal(18,2)),N'PENDING_RECOVERY',N'{}',@2)`, [leaver.id, kase.id, f.admin.id])
+    const [actor, body] = action === 'collect' ? [f.hr, { amount: '100.00', reference: 'R28-COLLECT', reason: 'تحصيل وقت النقل' }]
+      : [f.writer, { reason: 'إعدام وقت النقل بعد المطالبة الرسمية' }]
+    const result = await whileTransferHoldsFinance(leaver, otherBranch, () => http(actor, 'POST', `/loans/recoveries/${recovery.id}/${action}`, body))
+    assert.equal(result.status, 404, JSON.stringify(result.body))
+    const [stored] = await raw(`SELECT status, CONVERT(varchar(40),recoveredAmount) AS recoveredAmount, CONVERT(varchar(40),writtenOffAmount) AS writtenOffAmount
+      FROM loan_recovery_balances WHERE id=@0`, [recovery.id])
+    assert.deepEqual([stored.status, stored.recoveredAmount, stored.writtenOffAmount], ['PENDING_RECOVERY', '0.00', '0.00'])
+    assert.equal((await raw('SELECT COUNT(*) AS n FROM loan_recovery_events WHERE recoveryId=@0', [recovery.id]))[0].n, 0)
+  }
+  // طلب سلفة نيابة عن الموظف (اعتماد فوري من الموارد البشرية): النقل اتحفظ قبل قفل التنفيذ
+  const onBehalf = await person('C6R-OB')
+  const filed = await whileTransferHoldsFinance(onBehalf, otherBranch, () => http(f.hr, 'POST', '/requests',
+    { typeCode: 'LOAN', submit: true, onBehalfEmployeeId: onBehalf.id, payload: { amount: '300.00', months: 1 } }))
+  assert.equal(filed.status, 403, JSON.stringify(filed.body))
+  assert.match(filed.body.message, /تغير فرع الموظف منذ إنشاء الطلب/)
+  assert.equal((await raw('SELECT COUNT(*) AS n FROM loans WHERE employeeId=@0', [onBehalf.id]))[0].n, 0)
+  assert.equal((await raw("SELECT COUNT(*) AS n FROM requests WHERE requesterId=@0 AND status IN ('APPROVED','IN_EXECUTION','COMPLETED')", [onBehalf.id]))[0].n, 0)
+  // طلب الموظف نفسه: المدير اعتمد، والموظف اتنقل قبل اعتماد الموارد البشرية — مايتنفذش على الفرع الجديد بصلاحية القديم
+  const mover = await person('C6R-SELF')
+  const moverUser = await repo('User').save({ employeeId: mover.id, branchId: f.branch.id, email: 'c6-r28-self@test.invalid', displayName: 'r28-self', role: 'employee',
+    passwordHash: 'isolated-token-only', permissions: '[]' })
+  const own = expect(await http(moverUser, 'POST', '/requests', { typeCode: 'LOAN', submit: true, payload: { amount: '300.00', months: 1 } }), 201)
+  expect(await act(f.manager, own.id), 201)
+  const waiting = await requestRow(own.id)
+  await raw('UPDATE employees SET branchId=@0 WHERE id=@1', [otherBranch.id, mover.id])
+  const refused = await act(f.hr, own.id)
+  assert.equal(refused.status, 403, JSON.stringify(refused.body))
+  assert.match(refused.body.message, /تغير فرع الموظف منذ إنشاء الطلب/)
+  assert.equal((await raw('SELECT COUNT(*) AS n FROM loans WHERE requestId=@0', [own.id]))[0].n, 0)
+  const after = await requestRow(own.id)
+  assert.deepEqual([after.status, after.currentStep], [waiting.status, waiting.currentStep])
+})
