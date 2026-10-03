@@ -14,6 +14,7 @@ import {
   type PayrollChainProgress, type PayrollChainStep, type ResolvedPayrollChain,
 } from './payroll-approval-chain'
 import { PAYROLL_CALCULATION_EVENT_TYPES, PAYROLL_SELF_APPROVAL_KEY, payrollSelfApprovalAllowed, payrollSelfApprovalIssue } from './payroll-run-approval'
+import { claimPayrollApproval } from './payroll-approval-lock'
 import { payrollRunSeriesName } from './payroll-run-membership-moves'
 import { payrollRunTypeOf } from './payroll-corrections'
 import { lockPayrollRunForCorrection } from './payroll-reversal-ledger'
@@ -369,8 +370,10 @@ export class PayrollApprovalChainService {
 
   // ===== القرار على الخطوة =====
   private async act(user: JwtPayload, runId: number, decide: (em: EntityManager, context: { run: PayrollRun; chain: ResolvedPayrollChain; progress: PayrollChainProgress;
-    step: PayrollChainProgress['steps'][number]; calculatedBy: number | null; licence: boolean }) => Promise<void>) {
+    step: PayrollChainProgress['steps'][number]; calculatedBy: number | null; licence: boolean }) => Promise<void>, approval = false) {
     await this.manager.transaction(async em => {
+      // B1.6 (R15): «اعتمد خطوتي» تاني لنفس المسير وهو شغال (الخطوة الأخيرة = الاعتماد النهائي) بيترفض على طول
+      if (approval) await claimPayrollApproval(em, runId)
       await lockPayrollRunForCorrection(em, runId)
       const loaded = await this.load(em, runId)
       const stranger = () => new ForbiddenException({ code: 'PAYRUN-CHAIN-NOT-YOUR-TURN', message: NOT_YOUR_TURN })
@@ -422,7 +425,7 @@ export class PayrollApprovalChainService {
       if (isFinal) {
         await this.payroll.approveLocked(em, user, run, { chainId: chain.chainId, chainScope: chain.scope, chainHash: chain.hash, steps: chain.steps.length })
       }
-    })
+    }, true)
   }
 
   /** «ارفض بسبب»: القرارات السارية تتلغى، والنسخة ترجع لمسؤول الرواتب بسبب ظاهر؛ المسير يفضل CALCULATED. */

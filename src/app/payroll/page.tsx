@@ -345,7 +345,8 @@ export default function PayrollPage() {
   const runBlocked = runDetail?.blocking === true || runConflicts.some(conflict => conflict.blocking)
   // الخطوة 22 (B5): حقول شاشة المسير (المنفذون، فصل المهام، قيد الصرف)؛ فصل المهام والصافي السالب يمنعان الاعتماد
   const screen = runDetail as (ApiPayrollRun & PayrollRunScreenFields) | null
-  const negativeNetCount = (runDetail?.items ?? []).filter(item => n(item.netPay) < 0).length
+  // B1.6: قايمة الخادم (صافي المؤثرات بالاسم والسبب) لو موجودة، وإلا العدّ من البنود زي ما كان
+  const negativeNetCount = runDetail?.negativeNet ? runDetail.negativeNet.length : (runDetail?.items ?? []).filter(item => n(item.netPay) < 0).length
   const selfApprovalBlocked = !!screen?.approvalGuard?.blocked
   // مسير محسوب قبل حفظ لقطة معادلات الرواتب (مسيرات قديمة): الخادم يرفض اعتماده، و«إعادة حساب المسير» تحدّثه. مسير العكس لا لقطة له أصلًا.
   const snapshotMissing = runDetail?.status === 'CALCULATED' && runDetail.runType !== 'REVERSAL' && !(runDetail as { policySnapshotHash?: string | null }).policySnapshotHash
@@ -1003,8 +1004,17 @@ export default function PayrollPage() {
             {snapshotMissing && can('payroll.approve') && <p role="alert" className="p-3 mb-3 bg-amber-50 text-amber-900 rounded-xl text-sm">{SNAPSHOT_MISSING_MESSAGE}</p>}
             {runDetail.status === 'CALCULATED' && selfApprovalBlocked && can('payroll.approve') && !chainGoverned && <p role="alert" className="p-3 mb-3 bg-amber-50 text-amber-900 rounded-xl text-sm">
               {SELF_APPROVAL_MESSAGE}</p>}
-            {negativeNetCount > 0 && ['CALCULATED', 'APPROVED'].includes(runDetail.status) && <p role="alert" className="p-3 mb-3 bg-red-50 text-red-700 rounded-xl text-sm">
-              صافي {negativeNetCount} موظف سالب (مظلل في الجدول)؛ الاعتماد والصرف ممنوعان حتى معالجة الإجازة بلا أجر أو الاستحقاق ثم إعادة الحساب.</p>}
+            {negativeNetCount > 0 && ['CALCULATED', 'APPROVED'].includes(runDetail.status) && <div role="alert" className="p-3 mb-3 bg-red-50 text-red-700 rounded-xl text-sm space-y-2">
+              <p>صافي {negativeNetCount} موظف سالب (مظلل في الجدول)؛ الاعتماد والصرف ممنوعان حتى معالجة الإجازة بلا أجر أو الاستحقاق ثم إعادة الحساب.</p>
+              {/* B1.6: مين وليه — كل بند بمبلغه والسبب الأكبر */}
+              {!!runDetail.negativeNet?.length && <ul className="space-y-2">{runDetail.negativeNet.map(row => (
+                <li key={row.employeeId} className="border-t border-red-100 pt-2">
+                  <p className="font-semibold">{row.fullName ?? `#${row.employeeId}`}{row.employeeCode ? ` (${row.employeeCode})` : ''} — الصافي <span dir="ltr">{formatMoney(row.net)}</span></p>
+                  <p className="text-xs text-red-600">{row.lines.map(line => `${line.label} ${formatMoney(line.amount)}`).join(' · ')}</p>
+                  <p className="text-xs">{row.hint}</p>
+                </li>
+              ))}</ul>}
+            </div>}
             {((runDetail.status === 'APPROVED' && can('payroll.reopen')) ||
               ((runDetail.status === 'CALCULATED' || runDetail.status === 'DRAFT') && can('payroll.cancel'))) && (
               <div className="space-y-2 my-4 p-4 rounded-xl border border-gray-200 bg-gray-50">

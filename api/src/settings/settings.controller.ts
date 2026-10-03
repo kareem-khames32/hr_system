@@ -649,6 +649,8 @@ export class SettingsController {
     'leave.accrual_mode': ['monthly', 'yearly', 'daily'],
     'payroll.exempt_overtime_eligible': ['true', 'false'],
     'payroll.exempt_unpaid_leave_deductible': ['true', 'false'],
+    // B1.6 حارس الفترة
+    'payroll.period_deduction_guard.enabled': ['true', 'false'],
     'attendance.flex.count_early_work_toward_required': ['true', 'false'],
     'attendance.flex.prorate_window_on_partial_leave': ['true', 'false'],
     'attendance.flex.window_supersedes_grace': ['true', 'false'],

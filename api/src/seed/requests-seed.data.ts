@@ -379,6 +379,8 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'payroll.exempt_overtime_eligible', value: 'false' },
   // أ7 (16 سبتمبر): المستثنى من البصمة بلا خصومات إطلاقًا — الإجازة بلا أجر لا تُخصم له إلا بتفعيل صريح.
   { key: 'payroll.exempt_unpaid_leave_deductible', value: 'false' },
+  // B1.6 حارس الفترة (R02): الإجازة بدون راتب والإيقاف والمرضية ماتعديش راتب الفترة — مقفول = زي ما كان
+  { key: 'payroll.period_deduction_guard.enabled', value: 'false' },
   { key: 'payroll.exemption_reason_min_length', value: '20' },
   // C2 / الخطوة 25 (DD-03/05): الخصومات المصنفة — أقل طول للسبب، نافذة كشف التكرار بالساعات،
   // إنشاء المدير الهيكلي (مباشر/فريق/قسم/فرع) بحسب نطاق النوع، وحد الإنشاء الجماعي في الدفعة.

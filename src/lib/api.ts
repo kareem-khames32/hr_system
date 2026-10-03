@@ -607,6 +607,9 @@ export interface ApiPayrollRun {
   // الخطوة 14: فجوة أو تداخل مع فترة الشهر السابق/التالي لنفس الموظفين
   periodContinuity?: Array<{ kind: 'GAP' | 'OVERLAP'; previousPeriod: string; nextPeriod: string; from: string; to: string; days: number
     otherRunId: number | null; otherRunName: string | null; otherStatus: string; employeeIds: number[] }>
+  // B1.6: الصافي السالب بالاسم والصافي وكل بند بمبلغه والسبب الأكبر (لقارئ الرواتب)
+  negativeNet?: Array<{ employeeId: number; employeeCode: string | null; fullName: string | null; net: number
+    lines: Array<{ code: string; label: string; amount: number }>; cause: 'UNPAID_LEAVE' | 'SOCIAL_INSURANCE' | 'DEDUCTIONS'; hint: string }>
   blocking?: boolean
   // C8 / الخطوة 31: مسير عكس صرف أو تكميلي مربوط بمسير مصروف (null = أصلي)، وسبب التصحيح المكتوب
   runType?: 'REGULAR' | 'REVERSAL' | 'SUPPLEMENTARY' | null

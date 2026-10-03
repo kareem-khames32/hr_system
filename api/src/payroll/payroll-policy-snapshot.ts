@@ -33,6 +33,8 @@ export interface PayrollRunPolicyValues {
   minNetGuarantee: string | null
   netFloorPct: string | null
   maxDeductionPctOfGross: string | null
+  /** B1.6: حارس الفترة — موجود في اللقطة لما يكون مفعّل بس، فاللقطة من غيره بنفس محتواها وبصمتها قبل B1.6 */
+  periodDeductionGuard?: true
 }
 export type PayrollRunPolicyValueKey = keyof PayrollRunPolicyValues
 export interface PayrollRunPolicyValueSource { kind: 'POLICY_VERSION' | 'CONFIG' | 'DEFAULT'; key: string }
@@ -54,7 +56,7 @@ export interface PayrollRunPolicySnapshot {
 export interface PayrollPolicySnapshotDifference { key: string; label: string; stored: string; current: string }
 
 // المفتاح وقيمته الافتراضية في الكود (نفس ما كان يقرؤه calculateDefined قبل اللقطة).
-const CONFIG: Record<PayrollRunPolicyValueKey, { key: string; fallback: string | null }> = {
+const CONFIG: Record<Exclude<PayrollRunPolicyValueKey, 'periodDeductionGuard'>, { key: string; fallback: string | null }> = {
   monthlyDays: { key: 'payroll.monthly_days', fallback: '30' },
   dailyHours: { key: 'payroll.daily_hours', fallback: '8' },
   lateDeductionEnabled: { key: 'payroll.late_deduction_enabled', fallback: 'true' },
@@ -80,8 +82,11 @@ export const PAYROLL_RUN_POLICY_VALUE_LABELS: Record<PayrollRunPolicyValueKey, s
   absencePenaltyDays: 'معامل عقوبة الغياب بلا إذن (أيام)', exemptOvertimeEligible: 'استحقاق المستثنى من الحضور للإضافي',
   exemptUnpaidLeaveDeductible: 'خصم الإجازة بلا أجر للمستثنى', currency: 'العملة', minNetGuarantee: 'الحد الأدنى المضمون للصافي',
   netFloorPct: 'أرضية الصافي (% من الإجمالي)', maxDeductionPctOfGross: 'سقف الخصومات (% من الإجمالي)',
+  periodDeductionGuard: 'حارس الفترة (الإجازة بدون راتب ماتعديش راتب الفترة)',
 }
-const KEYS = Object.keys(CONFIG) as PayrollRunPolicyValueKey[]
+// B1.6: مفتاح حارس الفترة — برّه CONFIG عن قصد: مصدره وقيمته بيدخلوا اللقطة لما يكون مفعّل بس
+export const PAYROLL_PERIOD_DEDUCTION_GUARD_KEY = 'payroll.period_deduction_guard.enabled'
+const KEYS = Object.keys(CONFIG) as Array<Exclude<PayrollRunPolicyValueKey, 'periodDeductionGuard'>>
 const fail = (message: string): never => { throw new BadRequestException({ code: 'PAYRUN-POLICY-SETTINGS-INVALID', message }) }
 
 function stable(value: unknown): string {
@@ -109,10 +114,10 @@ const nonNegative = (field: string, text: string) => {
 
 /** تلتقط اللقطة من نسخة السياسة المرتبطة والإعدادات الحالية ومجموعة شرائح شهر المسير؛ قراءة فقط. */
 export async function capturePayrollRunPolicySnapshot(em: EntityManager, run: { period: string; policyVersionId: number | null }, capturedBy: number): Promise<PayrollRunPolicySnapshot> {
-  const rows = await em.getRepository(RequestsConfig).findBy({ key: In(KEYS.map(field => CONFIG[field].key)) })
+  const rows = await em.getRepository(RequestsConfig).findBy({ key: In([...KEYS.map(field => CONFIG[field].key), PAYROLL_PERIOD_DEDUCTION_GUARD_KEY]) })
   const stored = new Map(rows.map(row => [row.key, row.value]))
   const sources = {} as Record<PayrollRunPolicyValueKey, PayrollRunPolicyValueSource>
-  const text = (field: PayrollRunPolicyValueKey) => {
+  const text = (field: Exclude<PayrollRunPolicyValueKey, 'periodDeductionGuard'>) => {
     const { key, fallback } = CONFIG[field]
     sources[field] = { kind: stored.has(key) ? 'CONFIG' : 'DEFAULT', key }
     return stored.get(key) ?? fallback
@@ -141,6 +146,11 @@ export async function capturePayrollRunPolicySnapshot(em: EntityManager, run: { 
     const raw = text(field)
     const parsed = raw === null ? null : parsePayrollPolicyConfigValue(field, raw)
     values[field] = parsed === null ? null : String(parsed)
+  }
+  // B1.6: حارس الفترة — المفعّل بس بيدخل اللقطة (قيمة ومصدر)، والمقفول أو التالف = زي ما كان
+  if (stored.get(PAYROLL_PERIOD_DEDUCTION_GUARD_KEY) === 'true') {
+    values.periodDeductionGuard = true
+    sources.periodDeductionGuard = { kind: 'CONFIG', key: PAYROLL_PERIOD_DEDUCTION_GUARD_KEY }
   }
 
   let policy: PayrollRunPolicySnapshot['policy'] = null
@@ -250,6 +260,9 @@ export function diffPayrollRunPolicySnapshots(stored: PayrollRunPolicySnapshot |
     // نفس القيمة من مصدر آخر (مثلًا قيمة افتراضية صارت إعدادًا مكتوبًا) تغيّر البصمة فتظهر فرقًا
     else if (stored) push(`sources.${key}`, `مصدر «${PAYROLL_RUN_POLICY_VALUE_LABELS[key]}»`, deep(stored.sources?.[key]), deep(current.sources?.[key]))
   }
+  // B1.6: حارس الفترة (غيابه في اللقطة = مقفول)
+  const guardText = (snapshot: PayrollRunPolicySnapshot | null) => !snapshot ? '—' : snapshot.values.periodDeductionGuard === true ? 'نعم' : 'لا'
+  push('values.periodDeductionGuard', PAYROLL_RUN_POLICY_VALUE_LABELS.periodDeductionGuard, guardText(stored), guardText(current))
   push('latenessTiers', 'شرائح التأخير', stored ? tiersText(stored.latenessTiers) : '—', tiersText(current.latenessTiers))
   if (stored) {
     const integrity = (set: PayrollLatenessTierSetSnapshot) => `${set?.source ?? '—'} • بصمة ${set?.contentHash?.slice(0, 12) ?? '—'}`

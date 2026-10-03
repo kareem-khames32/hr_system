@@ -139,8 +139,14 @@ export function payrollLeaveDeductionLines(total: number, unpaidOnly: number, un
   const sickCents = Math.max(0, cents(total) - unpaidCents)
   const fitted = sickLines.map(line => ({ ...line }))
   if (fitted.length) {
-    const residual = sickCents - fitted.reduce((sum, line) => sum + cents(line.amount), 0)
-    fitted[fitted.length - 1].amount = (cents(fitted[fitted.length - 1].amount) + residual) / 100
+    let residual = sickCents - fitted.reduce((sum, line) => sum + cents(line.amount), 0)
+    // الزيادة (قرش التقريب) على آخر سطر زي ما كانت. النقص (حارس الفترة B1.6) من آخر سطر لأوله، ومفيش سطر بيبقى سالب
+    if (residual >= 0) fitted[fitted.length - 1].amount = (cents(fitted[fitted.length - 1].amount) + residual) / 100
+    else for (let index = fitted.length - 1; index >= 0 && residual < 0; index--) {
+      const take = Math.min(cents(fitted[index].amount), -residual)
+      fitted[index].amount = (cents(fitted[index].amount) - take) / 100
+      residual += take
+    }
   }
   const lines: PayrollLeaveDeductionLine[] = [
     ...(unpaidDays > 0 || unpaidCents > 0 ? [{ code: 'UNPAID_LEAVE', label: 'إجازة بدون راتب', days: unpaidDays, payPercent: 0, amount: unpaidCents / 100 }] : []),

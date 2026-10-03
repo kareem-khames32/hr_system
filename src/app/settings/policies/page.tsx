@@ -208,6 +208,8 @@ const GROUPS: PolicyGroup[] = [
         { value: 'MONTHLY_HISTORY_OR_CURRENT_FILE', label: 'انتقالي — من لا يملك سجلًا شهريًا يُحسب براتب الملف الحالي ويُوسم «غير موثق»' },
       ] },
       { key: 'payroll.monthly_days', label: 'أيام الشهر للمسير', type: 'number', unit: 'يوم', min: 30, max: 30, readOnly: true, hint: 'ثابتة على 30 يومًا.' },
+      // B1.6: حارس الفترة (مقفول افتراضيًا)
+      { key: 'payroll.period_deduction_guard.enabled', label: 'حارس الفترة: الإجازة بدون راتب ماتعديش راتب الفترة', type: 'bool', hint: 'مفعّل: خصم الإجازة بدون راتب والإيقاف والمرضية في المسير ماينفعش يعدّي راتب الفترة، فشهر 31 يوم كله بدون راتب = صافي صفر مش سالب. مقفول = زي ما كان. بيسري على المسير لما «لقطة السياسة» بتاعته تتحدث.' },
       { key: 'payroll.daily_hours', label: 'ساعات العمل اليومية', type: 'number', unit: 'ساعة', min: 1, max: 24, hint: 'أساس سعر الساعة والدقيقة.' },
       { key: 'payroll.hourly_rate_basis', label: 'أساس سعر الساعة', type: 'select', options: [{ value: 'DAILY_HOURS', label: 'سعر اليوم ÷ ساعات العمل اليومية' }], readOnly: true },
       { key: 'payroll.day_rate_basis', label: 'أساس سعر اليوم للغياب ونهاية الخدمة', type: 'select', options: [{ value: 'MONTHLY_FIXED_COMPONENTS_30', label: 'الأجر الشهري للمكونات الستة ÷ 30' }], readOnly: true },

@@ -113,6 +113,9 @@ import { cancelPayrollReversalLines, carryReversedRunExemptions, describePayroll
 import { assertPayrollRunHasNoChain, voidPayrollRunApprovals } from './payroll-approval-chain'
 import { assertPayrollRunNotDisbursed, closePayrollRunDisbursement } from './payroll-disbursement'
 import { PayrollItemDisbursement } from './payroll-disbursement.entities'
+// B1.6: قايمة الصافي السالب بالاسم والسبب، واعتماد واحد بس شغال للمسير في نفس اللحظة
+import { explainPayrollNegativeNet, payrollNegativeNetMessage, type PayrollNegativeNetRow } from './payroll-negative-net'
+import { claimPayrollApproval } from './payroll-approval-lock'
 
 // B1.5: مكان «بدل السكن» في مكونات الراتب الشهرية (أساس التأمينات السعودي «الأساسي + السكن» لما الإعداد مفتوح)
 const HOUSING_COMPONENT = MONTHLY_SALARY_COMPONENTS.findIndex(component => component.code === 'HOUSING')
@@ -691,6 +694,8 @@ export class PayrollService {
       // الخطوة 21: شرائح التأخير من المجموعة المؤرخة المحفوظة في اللقطة + معامل الغياب بلا إذن (يوم × المعامل)
       const tiers = policySnapshot.latenessTiers.tiers
       const absencePenalty = policyValues.absencePenaltyDays
+      // B1.6: حارس الفترة من اللقطة (غيابه = مقفول = زي ما كان)
+      const periodDeductionGuard = policyValues.periodDeductionGuard === true
       // الخطوة 20 / D13: وضع المحرك للمسير (الجديد SHADOW)؛ POLICY يصرف نتيجة المحرك بشرط تكافؤ مفسر.
       const engineMode: PayrollEngineMode = run.engineMode && PAYROLL_ENGINE_MODES.includes(run.engineMode) ? run.engineMode : PAYROLL_DEFAULT_ENGINE_MODE
       const explainedKeys = new Set(run.id ? (await em.getRepository(PayrollRunParityExplanation).find({ where: { runId: run.id }, select: { differenceKey: true } })).map(row => row.differenceKey) : [])
@@ -963,9 +968,13 @@ export class PayrollService {
       suspension.days = waived.has('SUSPENSION') ? 0 : payrollSuspensionDaysWithinCap(suspension.days, fullCoverage ? monthlyDays : Math.min(coverDays, monthlyDays), unpaidDays, sick.equivalentDays)
       unpaidDays += suspension.days
       const unpaidOnlyDeduction = round2(unpaidDays * dayRate)
-      const unpaidDeduction = sick.equivalentDays === '0' ? unpaidOnlyDeduction
+      const unpaidRequested = sick.equivalentDays === '0' ? unpaidOnlyDeduction
         : Number(PayrollDecimal.from(String(unpaidDays)).add(PayrollDecimal.from(sick.equivalentDays))
           .multiply(new PayrollDecimal(BigInt(grossCents), BigInt(100 * monthlyDays))).format(2, 'DOWN'))
+      // B1.6 حارس الفترة (R02): الإجازة بدون راتب والإيقاف والمرضية ماتعديش راتب الفترة المستحق — شهر 31 يوم كله بدون راتب = خصم الراتب
+      // وصافي صفر مش سالب. سقف بس: شهر 28 يوم = 28 × سعر اليوم زي ما هو (Q-013). الأيام بتتسجل كاملة، والمبلغ بس اللي بيتقص
+      const unpaidDeduction = periodDeductionGuard && unpaidRequested > grossEarned ? grossEarned : unpaidRequested
+      const periodGuardCut = round2(unpaidRequested - unpaidDeduction)
 
       // 5) دفتر المديونيات: بنود PENDING سرت فترتها (effectiveDate ضمن الفترة أو فارغة، والشهر
       // المستهدف لا يتجاوز شهر المسير — DD-07) وغير محجوزة لمسير معتمد آخر (DD-09) — DEBIT خصم،
@@ -1155,6 +1164,8 @@ export class PayrollService {
             dailyHours,
             gross,
             grossEarned: paid.grossEarned,
+            // B1.6: حارس الفترة قص الإجازة بدون راتب (المطلوب والمخصوم والفرق)
+            ...(periodGuardCut > 0 ? { periodDeductionGuard: { requested: unpaidRequested, applied: unpaidDeduction, cut: periodGuardCut } } : {}),
             monthlyBasicSalary: basic,
             monthlyAllowances: allowances,
             monthlyComponents,
@@ -1313,6 +1324,20 @@ export class PayrollService {
    * صافي المؤثرات = صافي البند من غير بدل ضغط العمل المستحق — البدل بيتصرف كامل فوق الصافي ومايغطيش سالبه.
    * بند من غير بدل (أو تفصيل تالف يرفضه فحص تاني) = صافيه زي ما هو، فالفحص القديم بالحرف.
    */
+  // B1.6 (R03): الصافي السالب بالاسم (من لقطة العضوية) والصافي وكل بند بمبلغه والسبب الأكبر — نفس صافي المؤثرات اللي الاعتماد بيفحصه
+  private negativeNetRows(items: PayrollItem[], members: PayrollRunMember[]): PayrollNegativeNetRow[] {
+    const identity = new Map(members.map(member => [member.employeeId, { employeeCode: member.snapshot?.employeeCode ?? null, fullName: member.snapshot?.fullName ?? null }]))
+    return items.map(item => explainPayrollNegativeNet(item, identity.get(item.employeeId))).filter((row): row is PayrollNegativeNetRow => row !== null)
+  }
+
+  // رفض الاعتماد أو الصرف: قارئ الرواتب بياخد الأسماء والأسباب، وصلاحية الاعتماد أو الصرف لوحدها = الرسالة العامة بأرقام الموظفين زي ما كانت
+  private async negativeNetConflict(em: EntityManager, user: JwtPayload, runId: number, items: PayrollItem[], employeeIds: number[], action: 'اعتماد' | 'صرف', plain: string) {
+    if (!userHasPerm(user, 'payroll.view')) return new ConflictException({ code: 'PAYRUN-NET-NEGATIVE', message: plain, employeeIds })
+    const wanted = new Set(employeeIds)
+    const rows = this.negativeNetRows(items.filter(item => wanted.has(item.employeeId)), await em.getRepository(PayrollRunMember).find({ where: { runId } }))
+    return new ConflictException({ code: 'PAYRUN-NET-NEGATIVE', message: rows.length ? payrollNegativeNetMessage(rows, action) : plain, employeeIds, negativeNet: rows })
+  }
+
   private effectNet(item: PayrollItem): number {
     let breakdown: unknown
     try { breakdown = item.breakdown ? JSON.parse(item.breakdown) : {} } catch { return Number(item.netPay) }
@@ -1363,6 +1388,8 @@ export class PayrollService {
   // كل معتمد بيعتمد خطوته (payroll-approval-chain.service) وآخر خطوة بتنادي approveLocked نفسها.
   async approve(user: JwtPayload, runId: number) {
     return this.runs.manager.transaction(async em => {
+      // B1.6 (R15): طلب اعتماد تاني لنفس المسير وهو شغال بيترفض على طول
+      await claimPayrollApproval(em, runId)
       await this.lockRun(em, runId)
       const runs = em.getRepository(PayrollRun)
       const run = await runs.findOne({ where: { id: runId } })
@@ -1425,7 +1452,8 @@ export class PayrollService {
       // DD-11: الرصيد السالب (المحمي يتجاوز الاستحقاق) يمنع القبول المالي — على صافي المؤثرات (من غير بدل ضغط العمل):
       // البدل مابيغطيش إجازة بلا أجر أو تأمينات زادت عن الراتب، فالمشكلة تفضل ظاهرة زي ما كانت
       const negativeNet = items.filter(item => this.effectNet(item) < 0).map(item => item.employeeId)
-      if (negativeNet.length) throw new ConflictException({ code: 'PAYRUN-NET-NEGATIVE', message: 'صافي بعض الموظفين سالب؛ عالج الإجازة بلا أجر أو الاستحقاق ثم أعد الحساب قبل الاعتماد', employeeIds: negativeNet })
+      if (negativeNet.length) throw await this.negativeNetConflict(em, user, run.id, items, negativeNet, 'اعتماد',
+        'صافي بعض الموظفين سالب؛ عالج الإجازة بلا أجر أو الاستحقاق ثم أعد الحساب قبل الاعتماد')
       await claimPayrollPeriod(em, run, employeeIds)
       for (const item of items) {
         const plan = await this.installmentPlanForItem(em, run, item)
@@ -1532,7 +1560,8 @@ export class PayrollService {
       await this.assertSettlementBoundary(em, items, userHasPerm(user, 'payroll.view'))
       // DD-11 (C2): الصافي السالب المحفوظ يمنع الصرف أيضًا، لا الاعتماد وحده (صافي المؤثرات من غير بدل ضغط العمل)
       const negativeNetAtPay = items.filter(item => this.effectNet(item) < 0).map(item => item.employeeId)
-      if (negativeNetAtPay.length) throw new ConflictException({ code: 'PAYRUN-NET-NEGATIVE', message: 'صافي بعض الموظفين سالب؛ أعد فتح المسير وعالج الإجازة بلا أجر أو الاستحقاق ثم أعد الحساب قبل الصرف', employeeIds: negativeNetAtPay })
+      if (negativeNetAtPay.length) throw await this.negativeNetConflict(em, user, run.id, items, negativeNetAtPay, 'صرف',
+        'صافي بعض الموظفين سالب؛ أعد فتح المسير وعالج الإجازة بلا أجر أو الاستحقاق ثم أعد الحساب قبل الصرف')
       // إقفال الصرف موظف بموظف قبل أي أثر مالي: سبب مكتوب لمن لم يتعلّم «تم الصرف» (مسير بلا علامات = لا شرط)
       const disbursement = await closePayrollRunDisbursement(em, run, items, user.sub, dto.unpaidReason, userHasPerm(user, 'payroll.view'))
       // تثبيت اللي اتصرف فعلًا على كل بند اتصرف (ترحيل 067 — العيب N02 المتبقّي، مراجعة مستقلة 24 سبتمبر):
@@ -1690,8 +1719,10 @@ export class PayrollService {
     }
     // C8 / الخطوة 31: نوع المسير والمسير المرتبط والمسيرات التابعة وسطور العكس أو البنود المعكوسة
     const correction = await describePayrollRunCorrection(em, run)
+    // B1.6: الصافي السالب بالاسم والسبب قبل الاعتماد (المسير الملغي مالوش)
+    const negativeNet = run.status === 'CANCELLED' ? [] : this.negativeNetRows(items, members)
     return { ...this.lightRun(run), items, members: await this.visibleMembers(user, members, em), conflicts, pendingOvertime, periodContinuity, selection, policyVersion, engine,
-      actors, approvalGuard, payRecord, collection, correction }
+      actors, approvalGuard, payRecord, collection, correction, negativeNet }
     })
   }
 
