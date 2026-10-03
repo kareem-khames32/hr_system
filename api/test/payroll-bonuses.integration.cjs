@@ -670,3 +670,62 @@ test('CR29-B01: قيد الدفتر المباشر وصرف البدل وقاع�
     { period: '2027-03', kind: 'LATENESS', targetLevel: 'employees', branchId: org.branchA.id, employeeIds: [waived.id], reason: 'شيل خصم وقت النقل' })), 400)
   assert.equal(await repo('PayrollDeductionWaiver').countBy({ reason: 'شيل خصم وقت النقل' }), 0)
 })
+
+// CR33-B01 (مراجعة Codex الجولة 33) والصنف كله: موظف كان في فرع ب ومكافأته وخصمه اتحجزوا في مسير ب معتمد، وبعدين اتنقل لفرع أ.
+// رقم مسير ب مايظهرش لموارد فرع أ: لا في عرض الطلب (سطور القيود وحالة الصرف)، ولا في رسالة رفض الإلغاء، ولا في رسالة «الشهر مقفول»
+// لما يقترح للموظف نفسه على نفس الشهر. حساب الشركة بيشوف الرقم، ومسير فرع أ بيفضل رقمه ظاهر لموارد أ
+test('CR33-B01: رقم مسير فرع تاني مايظهرش لموارد الفرع في عرض المكافأة والخصم ولا في رسايل رفض الإلغاء و«الشهر مقفول»، ومسير الفرع نفسه بيظهر', { timeout: 240000 }, async () => {
+  // شهر فات: النقل النهارده مابيتداخلش مع مسيره المعتمد
+  const period = '2026-07'
+  const emp = await employee('BN_R33_MOVED', { branchId: org.branchB.id, departmentId: null })
+  await exempt(emp)
+  const bonusRow = expectStatus(await request(users.admin, 'POST', '/bonuses', { ...bonus({ reason: `${REASON} — قبل النقل` }), employeeId: emp.id, targetPeriod: period, confirmNotDuplicate: true }), 201)
+  const deductionRow = expectStatus(await request(users.admin, 'POST', '/deductions', { deductionTypeId: types.commitment.id, inputValue: '0.5', incidentDate,
+    reason: `${DREASON} — قبل النقل`, targetPeriod: period, employeeId: emp.id, confirmNotDuplicate: true }), 201)
+  assert.deepEqual([bonusRow.status, deductionRow.status], ['APPROVED', 'APPROVED'])
+  const privateRun = await calc(period, [emp])
+  assert.equal((await repo('PayrollRunMember').findOneByOrFail({ runId: privateRun.id, employeeId: emp.id })).snapshot.branchId, org.branchB.id)
+  await approveRun(privateRun)
+  assert.ok((await ledgerOf('bonus', bonusRow.id)).some(item => item.reservedPayrollRunId === privateRun.id), 'المكافأة محجوزة في مسير ب')
+  expectStatus(await transferTo(emp, org.branchA), 200)
+  assert.equal((await request(users.hr, 'GET', `/payroll/runs/${privateRun.id}`)).status, 403)
+  const leaks = body => JSON.stringify(body).includes(`#${privateRun.id}`) || JSON.stringify(body).includes(`"reservedPayrollRunId":${privateRun.id}`) ||
+    JSON.stringify(body).includes(`"runId":${privateRun.id}`) || JSON.stringify(body).includes(`"appliedPayrollRunId":${privateRun.id}`)
+
+  for (const kind of ['bonus', 'deduction']) {
+    const prefix = kind === 'bonus' ? 'bonuses' : 'deductions', row = kind === 'bonus' ? bonusRow : deductionRow
+    // العرض: موارد أ تشوف الطلب (الموظف بقى عندها) من غير رقم مسير ب، والشركة بتشوفه
+    const shown = expectStatus(await request(users.hr, 'GET', `/${prefix}/${row.id}`), 200)
+    assert.ok(shown.obligations.length > 0)
+    assert.ok(!leaks(shown), `عرض ${kind} كشف مسير ب: ${JSON.stringify(shown.obligations)}`)
+    assert.ok(expectStatus(await request(users.admin, 'GET', `/${prefix}/${row.id}`), 200).obligations.some(item => item.reservedPayrollRunId === privateRun.id))
+    // رفض الإلغاء: نفس الرفض والقيد زي ما هو، من غير الرقم لموارد أ، وبالرقم للشركة
+    const refused = await request(users.hr, 'POST', `/${prefix}/${row.id}/cancel`, { expectedRevision: shown.revision, reason: `${RACE_REASON} — بعد الحجز` })
+    assert.equal(refused.status, 409, JSON.stringify(refused.body)); assert.equal(refused.body.code, kind === 'bonus' ? 'BONUS_RESERVED' : 'DEDUCTION_RESERVED')
+    assert.ok(!leaks(refused.body), `رسالة رفض ${kind} كشفت مسير ب: ${refused.body.message}`)
+    const companyRefused = await request(users.admin, 'POST', `/${prefix}/${row.id}/cancel`, { expectedRevision: shown.revision, reason: `${RACE_REASON} — الشركة` })
+    assert.equal(companyRefused.status, 409); assert.ok(companyRefused.body.message.includes(`(#${privateRun.id})`), companyRefused.body.message)
+    // «الشهر مقفول» لاقتراح جديد للموظف على نفس الشهر
+    const closed = await request(users.hr, 'POST', `/${prefix}`, kind === 'bonus'
+      ? { ...bonus({ reason: `${REASON} — بعد النقل` }), employeeId: emp.id, targetPeriod: period, confirmNotDuplicate: true }
+      : { deductionTypeId: types.commitment.id, inputValue: '0.5', incidentDate, reason: `${DREASON} — بعد النقل`, targetPeriod: period, employeeId: emp.id, confirmNotDuplicate: true })
+    assert.equal(closed.status, 400, JSON.stringify(closed.body)); assert.equal(closed.body.code, kind === 'bonus' ? 'BONUS_PERIOD_CLOSED' : 'DEDUCTION_PERIOD_CLOSED')
+    assert.ok(!leaks(closed.body), `رسالة «الشهر مقفول» كشفت مسير ب: ${JSON.stringify(closed.body)}`)
+  }
+  assert.ok((await ledgerOf('bonus', bonusRow.id)).every(item => item.status === 'PENDING'), 'الرفض ماغيّرش القيد')
+  // تقرير مطابقة الخصومات: البند بلقطة عضويته في المسير (ب)، مش فرع الموظف النهارده (أ)
+  const reportsA = await repo('User').save({ email: 'hr-a-reports@payroll-bonuses.invalid', displayName: 'تقارير فرع أ', passwordHash: 'test-only', role: 'hr_manager',
+    branchId: org.branchA.id, employeeId: null, permissions: JSON.stringify(['deductions.view', 'deductions.manage', 'payroll.view', 'reports.view']) })
+  const reconciliation = expectStatus(await request(reportsA, 'GET', `/deductions/reports?fromPeriod=${period}&toPeriod=${period}`), 200).reconciliation
+  assert.ok(!reconciliation.some(row => row.runId === privateRun.id), `المطابقة كشفت مسير ب: ${JSON.stringify(reconciliation)}`)
+  assert.ok(expectStatus(await request(users.admin, 'GET', `/deductions/reports?fromPeriod=${period}&toPeriod=${period}`), 200).reconciliation.some(row => row.runId === privateRun.id))
+
+  // الضابط: موظف في أ ومسير أ معتمد لنفس الشهر = الرقم ظاهر لموارد أ
+  const stays = await employee('BN_R33_STAYS', { departmentId: null })
+  await exempt(stays)
+  const ownRun = await calc(period, [stays])
+  await approveRun(ownRun)
+  const own = await request(users.hr, 'POST', '/bonuses', { ...bonus({ reason: `${REASON} — مسير الفرع` }), employeeId: stays.id, targetPeriod: period, confirmNotDuplicate: true })
+  assert.equal(own.status, 400, JSON.stringify(own.body)); assert.equal(own.body.code, 'BONUS_PERIOD_CLOSED')
+  assert.ok(own.body.message.includes(`(#${ownRun.id})`), own.body.message); assert.equal(own.body.runId, ownRun.id)
+})

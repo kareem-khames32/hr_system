@@ -13,7 +13,7 @@ import {
 import { PayrollAllowanceGrant, PayrollAllowanceGrantLine, PayrollAllowanceType } from './allowances-grants.entities'
 import { salaryPayrollPeriodBounds } from './payroll-period-salary'
 import { lockPayrollEmployees } from './payroll-settlement-boundary'
-import { PayrollRunMember } from './payroll.entities'
+import { payrollRunRefVisibility } from './payroll-run-visibility'
 
 // «تابة البدلات» في شاشة المسير: أنواع البدلات، وصرف بدل لشهر على استهداف (سطر لكل موظف + إضافة في دفتر المديونيات)،
 // والقائمة بالحالة والمسير والإجماليات، والإلغاء قبل اعتماد المسير. عزل الفروع: حساب الفرع يشوف ويعدّل فرعه بس،
@@ -172,29 +172,8 @@ export class PayrollAllowancesService {
   // CR32-B01 (مراجعة Codex الجولة 32): مرجع المسير (رقمه واسمه وحالته) في ردود البدل وقايمته بيظهر لحساب الفرع بس لو الموظف المعني عضو فيه
   // بلقطة فرع من نطاقه — أو مسير قديم من غير أعضاء على فرع من نطاقه. فالمسير اللي اتعمل في فرع تاني بعد نقل الموظف (حتى لو شايل قيد بدل
   // مختوم بفرع الحساب) مابيظهرش، زي قايمة المسيرات وقراءته. حساب الشركة بيشوف الكل
-  private async runRefVisibility(scope: BranchScope, runIds: number[], employeeIds: number[], em: EntityManager = this.em): Promise<(runId: number, employeeId: number) => boolean> {
-    if (scope === null) return () => true
-    const visible = new Set<string>(), withMembers = new Set<number>(), runBranch = new Map<number, number | null>()
-    const people = uniqueIds(employeeIds)
-    for (const chunk of chunks(uniqueIds(runIds))) {
-      const runs: Array<{ id: number; branchId: number | null; hasMembers: number }> = await em.query(`SELECT r.[id], r.[branchId],
-          CASE WHEN EXISTS (SELECT 1 FROM [payroll_run_members] m WHERE m.[runId] = r.[id]) THEN 1 ELSE 0 END AS [hasMembers]
-        FROM [payroll_runs] r WHERE r.[id] IN (${idList(chunk)})`, chunk)
-      for (const run of runs) {
-        if (Number(run.hasMembers)) withMembers.add(Number(run.id))
-        runBranch.set(Number(run.id), run.branchId == null ? null : Number(run.branchId))
-      }
-      for (const peopleChunk of chunks(people)) {
-        const members = await em.getRepository(PayrollRunMember).find({ where: { runId: In(chunk), employeeId: In(peopleChunk) },
-          select: { id: true, runId: true, employeeId: true, snapshot: true } })
-        for (const member of members) {
-          const branchId = member.snapshot?.branchId
-          if (branchId != null && inBranchScope(scope, Number(branchId))) visible.add(`${member.runId}:${member.employeeId}`)
-        }
-      }
-    }
-    return (runId, employeeId) => visible.has(`${runId}:${employeeId}`) ||
-      (!withMembers.has(runId) && runBranch.get(runId) != null && inBranchScope(scope, runBranch.get(runId)!))
+  private runRefVisibility(scope: BranchScope, runIds: Array<number | null | undefined>, employeeIds: number[], em: EntityManager = this.em) {
+    return payrollRunRefVisibility(em, scope, runIds, employeeIds)
   }
 
   // المسيرات غير الملغاة لشهر فيها واحد على الأقل من الموظفين (عضو أو بند): المفتوح يتعاد حسابه، والمعتمد/المصروف ما بيتغيرش
@@ -428,10 +407,14 @@ export class PayrollAllowancesService {
   }
 
   // ===== الإلغاء قبل اعتماد المسير =====
-  private cancelConflict(obligation: EmployeeObligation | null): string | null {
+  // CR33-B01 (مراجعة Codex الجولة 33): رقم المسير في رسالة الرفض بيظهر بس لو المسير مرئي للحساب (shown) — زي القايمة اللي بتخفيه
+  private cancelConflict(obligation: EmployeeObligation | null, shown: (runId: number | null | undefined) => boolean = () => true): string | null {
     if (!obligation) return null
-    if (obligation.status === 'APPLIED') return `البدل ده اتصرف في مسير #${obligation.appliedPayrollRunId} — مينفعش يتلغي`
-    if (obligation.status === 'PENDING' && obligation.reservedPayrollRunId != null) return `البدل ده في مسير معتمد (#${obligation.reservedPayrollRunId}) — افتح المسير الأول وبعدين الغيه`
+    if (obligation.status === 'APPLIED') return shown(obligation.appliedPayrollRunId) ? `البدل ده اتصرف في مسير #${obligation.appliedPayrollRunId} — مينفعش يتلغي`
+      : 'البدل ده اتصرف في مسير برّه نطاق صلاحيتك — مينفعش يتلغي'
+    if (obligation.status === 'PENDING' && obligation.reservedPayrollRunId != null) return shown(obligation.reservedPayrollRunId)
+      ? `البدل ده في مسير معتمد (#${obligation.reservedPayrollRunId}) — افتح المسير الأول وبعدين الغيه`
+      : 'البدل ده في مسير معتمد برّه نطاق صلاحيتك — محتاج حساب يشوف المسير يفتحه الأول'
     return null
   }
 
@@ -458,7 +441,8 @@ export class PayrollAllowancesService {
       const current = await em.getRepository(PayrollAllowanceGrantLine).findOneByOrFail({ id })
       if (current.status !== 'ACTIVE') return { id: current.id, status: current.status, recalculateRuns: [] }
       const obligation = current.obligationId ? await em.getRepository(EmployeeObligation).findOneBy({ id: current.obligationId }) : null
-      const conflict = this.cancelConflict(obligation)
+      const conflictShown = obligation ? await this.runRefVisibility(scope, [obligation.appliedPayrollRunId, obligation.reservedPayrollRunId], [current.employeeId], em) : () => false
+      const conflict = this.cancelConflict(obligation, runId => conflictShown(runId, current.employeeId))
       if (conflict) throw new ConflictException(conflict)
       if (obligation?.status === 'PENDING') {
         const updated = await em.query(`UPDATE [employee_obligations] SET [status] = 'CANCELLED' OUTPUT INSERTED.[id]

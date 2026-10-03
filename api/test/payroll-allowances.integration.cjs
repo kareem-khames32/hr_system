@@ -288,3 +288,36 @@ test('CR32-B01: مسير فرع تاني للموظف بعد نقله مايظه
   assert.deepEqual(visible.recalculateRuns.map(run => [run.id, run.name]), [[own.id, own.name]])
   assert.equal(expectStatus(await request(hrA, 'GET', `/payroll/allowances/grants?period=${period}`), 200).rows.find(r => r.employeeId === stays.id).runId, own.id)
 })
+
+// CR33-B01 (مراجعة Codex الجولة 33): سطر بدل مختوم بأ في مسير فرع ب معتمد أو مصروف (الموظف اتنقل). رفض إلغائه بيفضل 409 والقيد زي ما هو،
+// بس الرسالة لحساب أ من غير رقم المسير (زي القايمة اللي بتخفيه)، والشركة بتاخد الرسالة بالرقم
+test('CR33-B01: رفض إلغاء سطر بدل في مسير فرع تاني معتمد أو مصروف من غير رقم المسير لحساب الفرع، وبالرقم للشركة', async () => {
+  const hrA = await repo('User').save({ email: 'branch-a-cr33@allowances.invalid', displayName: 'مسؤول فرع أ (CR33)', passwordHash: 'test-only', role: 'hr',
+    branchId: branchA.id, permissions: '["payroll.view","payroll.calculate"]' })
+  for (const [index, state] of ['approve', 'pay'].entries()) {
+    const period = `2027-0${index + 1}`
+    const emp = await employee()
+    expectStatus(await request(hrA, 'POST', '/payroll/allowances/grants', { period, allowanceTypeId: transport.id, amount: '150.25',
+      targetLevel: 'employees', branchId: branchA.id, employeeIds: [emp.id], reason: `بدل قبل النقل (${state})` }), 201)
+    await repo('Employee').update({ id: emp.id }, { branchId: branchB.id, departmentId: null, teamId: null })
+    const run = expectStatus(await request(admin, 'POST', '/payroll/runs/calculate-defined', { period, scopeType: 'CUSTOM', employeeIds: [emp.id],
+      name: `CR33 مسير ب ${state} ${crypto.randomUUID().slice(0, 8)}` }), 201)
+    const report = expectStatus(await request(approver, 'GET', `/payroll/runs/${run.id}/unassigned`), 200)
+    expectStatus(await request(approver, 'POST', `/payroll/runs/${run.id}/unassigned-ack`, { reportHash: report.reportHash }), 201)
+    expectStatus(await request(approver, 'POST', `/payroll/runs/${run.id}/approve`), 201)
+    if (state === 'pay') expectStatus(await request(admin, 'POST', `/payroll/runs/${run.id}/pay`, { channel: 'BANK_TRANSFER', reference: `CR33-${run.id}` }), 201)
+    const line = expectStatus(await request(hrA, 'GET', `/payroll/allowances/grants?period=${period}`), 200).rows.find(r => r.employeeId === emp.id)
+    assert.deepEqual([line.runId, line.canCancel], [null, false])
+    const obligationBefore = await repo('EmployeeObligation').findOneByOrFail({ id: (await repo('PayrollAllowanceGrantLine').findOneByOrFail({ id: line.id })).obligationId })
+    const refused = await request(hrA, 'POST', `/payroll/allowances/lines/${line.id}/cancel`)
+    assert.equal(refused.status, 409, JSON.stringify(refused.body))
+    assert.ok(!JSON.stringify(refused.body).includes(`#${run.id}`), `رسالة الرفض كشفت مسير ب: ${refused.body.message}`)
+    assert.match(refused.body.message, /برّه نطاق صلاحيتك/)
+    const company = await request(admin, 'POST', `/payroll/allowances/lines/${line.id}/cancel`)
+    assert.equal(company.status, 409); assert.ok(company.body.message.includes(`#${run.id}`), company.body.message)
+    const obligationAfter = await repo('EmployeeObligation').findOneByOrFail({ id: obligationBefore.id })
+    assert.deepEqual([obligationAfter.status, obligationAfter.reservedPayrollRunId, obligationAfter.appliedPayrollRunId],
+      [obligationBefore.status, obligationBefore.reservedPayrollRunId, obligationBefore.appliedPayrollRunId])
+    assert.equal((await repo('PayrollAllowanceGrantLine').findOneByOrFail({ id: line.id })).status, 'ACTIVE')
+  }
+})

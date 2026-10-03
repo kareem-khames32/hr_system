@@ -61,7 +61,8 @@ async function validateRows(em: EntityManager, employeeId: number, runId: number
   for (const row of rows) {
     if (row.status !== 'PENDING') throw conflict('PAYRUN-OBLIGATION-CHANGED', `قيد الدفتر #${row.id} استُهلك أو أُلغي بعد الحساب؛ أعد حساب المسودة`)
     if (row.reservedPayrollRunId != null && row.reservedPayrollRunId !== runId) {
-      throw conflict('PAYRUN-OBLIGATION-RESERVED', `قيد الدفتر #${row.id} محجوز لمسير آخر معتمد (#${row.reservedPayrollRunId})؛ أعد حساب المسودة`)
+      // CR33-B01: رقم المسير التاني ممكن يكون برّه نطاق اللي بيعتمد — الرسالة من غيره
+      throw conflict('PAYRUN-OBLIGATION-RESERVED', `قيد الدفتر #${row.id} محجوز لمسير آخر معتمد؛ أعد حساب المسودة`)
     }
     const line = lines?.get(row.id)
     if (lines && (!line || cents(line.amount) !== cents(row.amount) || cents(line.collected) <= 0)) {

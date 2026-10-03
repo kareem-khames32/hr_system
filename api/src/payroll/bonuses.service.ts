@@ -25,6 +25,7 @@ import { payrollPeriodOfDate } from './payroll-period'
 import { salaryPayrollPeriodBounds } from './payroll-period-salary'
 import { PAYROLL_SALARY_EVIDENCE_MODE_KEY, parsePayrollSalaryEvidenceMode, type PayrollSalaryEvidenceMode, selectPayrollRunSalary } from './payroll-run-salary'
 import { lockPayrollEmployees } from './payroll-settlement-boundary'
+import { payrollRunRefVisibility } from './payroll-run-visibility'
 import { PayrollRun } from './payroll.entities'
 import {
   addPayrollMonths,
@@ -289,7 +290,11 @@ export class BonusesService {
     if (ctx.facts.superiors.has(employee.id)) return failed(403, 'BONUS_SUPERIOR', 'لا يمكن اقتراح مكافأة لمن يعلوك في التسلسل الإداري')
     if (!employee.isActive) return failed(400, 'BONUS_EMPLOYEE_INACTIVE', 'الموظف غير نشط')
     const closedRunId = await this.closedRun(em, employee.id, ctx.input.targetPeriod)
-    if (closedRunId) return failed(400, 'BONUS_PERIOD_CLOSED', `مسير ${ctx.input.targetPeriod} للموظف معتمد أو مصروف (#${closedRunId})؛ اختر شهرًا مفتوحًا`, { runId: closedRunId })
+    // CR33-B01: رقم المسير بيظهر بس لو المسير مرئي للحساب (payroll-run-visibility)
+    if (closedRunId) {
+      const shown = (await this.runShown(em, user, [closedRunId], [employee.id]))(closedRunId, employee.id)
+      return failed(400, 'BONUS_PERIOD_CLOSED', `مسير ${ctx.input.targetPeriod} للموظف معتمد أو مصروف${shown ? ` (#${closedRunId})` : ''}؛ اختر شهرًا مفتوحًا`, shown ? { runId: closedRunId } : undefined)
+    }
     let trace: BonusAmountTrace
     try {
       const salary = await this.salaryBasis(em, employee, ctx.input.targetPeriod, ctx.settings)
@@ -584,10 +589,12 @@ export class BonusesService {
     return { visible, steps, people }
   }
 
-  private obligationView(item: EmployeeObligation, runs: Map<number, string>) {
+  private obligationView(item: EmployeeObligation, runs: Map<number, string>, shown: (runId: number | null | undefined, employeeId: number) => boolean = () => true) {
     return { id: item.id, type: item.type, category: item.category, label: item.label, amount: money(item.amount), status: item.status,
       statusLabel: BONUS_LABELS.obligationStatuses[item.status] ?? item.status, targetPeriod: item.targetPeriod, effectiveDate: item.effectiveDate,
-      reservedPayrollRunId: item.reservedPayrollRunId, appliedPayrollRunId: item.appliedPayrollRunId,
+      // CR33-B01: رقم المسير للحساب اللي يشوفه بس (الشهر بيفضل)
+      reservedPayrollRunId: shown(item.reservedPayrollRunId, item.employeeId) ? item.reservedPayrollRunId : null,
+      appliedPayrollRunId: shown(item.appliedPayrollRunId, item.employeeId) ? item.appliedPayrollRunId : null,
       appliedPeriod: item.appliedPayrollRunId ? runs.get(item.appliedPayrollRunId) ?? null : null, appliedAmount: money(item.appliedAmount),
       reversal: item.category === BONUS_REVERSAL_OBLIGATION_CATEGORY }
   }
@@ -600,7 +607,7 @@ export class BonusesService {
   }
 
   /** حالة المكافأة للعرض: «معتمد — بانتظار الصرف» حتى يستهلك مسير مصروف قيدها، ثم «مصروف في مسير الشهر». */
-  private payout(row: BonusRequest, obligations: EmployeeObligation[], runs: Map<number, string>) {
+  private payout(row: BonusRequest, obligations: EmployeeObligation[], runs: Map<number, string>, shown: (runId: number | null | undefined, employeeId: number) => boolean = () => true) {
     // C8 / الخطوة 31: قيد المكافأة الذي عُكس صرفه بمسير عكس لا يُعد مصروفًا؛ قيد إعادته (PENDING) هو الساري حتى يُصرف
     const credits = obligations.filter(item => item.bonusRequestId === row.id && item.type === 'CREDIT' && item.category === BONUS_OBLIGATION_CATEGORY)
     const liveCredits = credits.filter(item => item.payrollReversalRunId == null)
@@ -610,22 +617,24 @@ export class BonusesService {
     const state: BonusPayoutState | null = row.status === 'APPROVED' ? bonusPayoutState(credit) : null
     const period = credit?.appliedPayrollRunId ? runs.get(credit.appliedPayrollRunId) ?? null : null
     const statusLabel = row.status !== 'APPROVED' ? BONUS_LABELS.statuses[row.status] ?? row.status
-      : state === 'PAID' ? `مصروف في مسير ${period ?? `#${credit?.appliedPayrollRunId}`}`
+      : state === 'PAID' ? (period ? `مصروف في مسير ${period}` : shown(credit?.appliedPayrollRunId, row.employeeId) ? `مصروف في مسير #${credit?.appliedPayrollRunId}` : 'مصروف')
         : state === 'RESERVED' ? BONUS_LABELS.payout.RESERVED : BONUS_LABELS.statuses.APPROVED
     const paidAmount = credit?.status === 'APPLIED' ? money(credit.appliedAmount ?? credit.amount)! : '0.00'
     return { credit, state, statusLabel, paidAmount, reversedAmount: sumMoney(reversals.map(item => item.amount)),
-      view: state ? { state, label: BONUS_LABELS.payout[state], runId: credit?.appliedPayrollRunId ?? credit?.reservedPayrollRunId ?? null, period } : null }
+      view: state ? { state, label: BONUS_LABELS.payout[state], runId: shown(credit?.appliedPayrollRunId ?? credit?.reservedPayrollRunId, row.employeeId)
+        ? credit?.appliedPayrollRunId ?? credit?.reservedPayrollRunId ?? null : null, period } : null }
   }
 
   private async views(em: EntityManager, user: JwtPayload, rows: BonusRequest[], view: string) {
     const { visible, steps, people } = await this.visibleRows(em, user, rows, view)
     if (!visible.length) return []
     const { obligations, runs } = await this.ledger(em, visible.map(row => row.id))
+    const shown = await this.runShown(em, user, obligations.flatMap(item => [item.appliedPayrollRunId, item.reservedPayrollRunId]), obligations.map(item => item.employeeId))
     return visible.map(row => {
       const chain = steps.get(row.id)!, employee = people.get(row.employeeId), step = currentDeductionStep(chain)
       const snapshot = json<Record<string, any>>(row.typeSnapshot, {})
       const canManage = userHasPerm(user, MANAGE) && this.inBranchScope(user, employee)
-      const payout = this.payout(row, obligations, runs)
+      const payout = this.payout(row, obligations, runs, shown)
       const actorOk = row.status === 'IN_APPROVAL' && !!step && !this.actorProblem(user, row, step, employee)
       return {
         id: row.id, batchId: row.batchId, status: row.status, statusLabel: payout.statusLabel, revision: row.revision,
@@ -640,7 +649,7 @@ export class BonusesService {
           fallbackFromLabel: item.fallbackFrom ? BONUS_LABELS.roles[item.fallbackFrom] : null,
           approverName: item.approverEmployeeId ? people.get(item.approverEmployeeId)?.fullName ?? null : null })),
         currentStepOrder: step?.order ?? null, escalated: row.escalated, capExceeded: row.capExceeded, outOfScope: row.outOfScope, overrides: json(row.overrides, null),
-        obligations: obligations.filter(item => item.bonusRequestId === row.id).map(item => this.obligationView(item, runs)),
+        obligations: obligations.filter(item => item.bonusRequestId === row.id).map(item => this.obligationView(item, runs, shown)),
         payout: payout.view, paidAmount: payout.paidAmount, reversedAmount: payout.reversedAmount,
         decisionReason: row.decisionReason, decidedByUserId: row.decidedByUserId, decidedAt: row.decidedAt, createdAt: row.createdAt, updatedAt: row.updatedAt,
         capabilities: {
@@ -706,7 +715,20 @@ export class BonusesService {
     const [view] = await this.views(em, user, [row], 'all')
     if (!view) return null
     const events = await em.getRepository(BonusRequestEvent).find({ where: { requestId: id }, order: { id: 'ASC' } })
-    return { ...view, events: events.map(event => ({ ...event, payload: json(event.payload, null) })) }
+    // CR33-B01: رقم المسير المقفول في حدث الاعتماد (deferredPastClosedRunId) بيظهر بس لو المسير مرئي للحساب
+    const payloads = events.map(event => json<Record<string, unknown> | null>(event.payload, null))
+    const deferred = payloads.map(payload => payload?.deferredPastClosedRunId).filter((value): value is number => typeof value === 'number')
+    const shown = deferred.length ? await this.runShown(em, user, deferred, [row.employeeId]) : () => true
+    return { ...view, events: events.map((event, index) => {
+      const payload = payloads[index]
+      if (payload && typeof payload.deferredPastClosedRunId === 'number' && !shown(payload.deferredPastClosedRunId, row.employeeId)) payload.deferredPastClosedRunId = null
+      return { ...event, payload }
+    }) }
+  }
+
+  // CR33-B01: مرجع المسير للحساب ده (لقطة عضوية الموظف المعني، والموظف نفسه بيشوف مسيراته، والشركة بتشوف الكل)
+  private runShown(em: EntityManager, user: JwtPayload, runIds: Array<number | null | undefined>, employeeIds: number[]) {
+    return payrollRunRefVisibility(em, branchScopeOf(user), runIds, employeeIds, user.employeeId ?? null)
   }
 
   // CR28-B01: الإجراء ورده في معاملة واحدة — الرد بيتبني والقفل المالي لسه ماسك، فمفيش نقل يدخل بين الحفظ والرد والرد هو اللي
@@ -917,7 +939,11 @@ export class BonusesService {
         const credits = (await em.getRepository(EmployeeObligation).findBy({ bonusRequestId: row.id })).filter(item => item.type === 'CREDIT')
         if (credits.some(item => item.status === 'APPLIED' && item.payrollReversalRunId == null)) throw new ConflictException({ code: 'BONUS_CONSUMED', message: 'المكافأة صُرفت في مسير مصروف؛ استخدم «عكس المكافأة» بقيد استرداد في المسير التالي' })
         const reserved = credits.find(item => item.status === 'PENDING' && item.reservedPayrollRunId != null)
-        if (reserved) throw new ConflictException({ code: 'BONUS_RESERVED', message: `قيد المكافأة محجوز في مسير معتمد (#${reserved.reservedPayrollRunId})؛ أعد فتح المسير أولًا` })
+        // CR33-B01: رقم المسير بيظهر بس لو المسير مرئي للحساب (payroll-run-visibility)
+        if (reserved) {
+          const shown = (await this.runShown(em, user, [reserved.reservedPayrollRunId], [row.employeeId]))(reserved.reservedPayrollRunId, row.employeeId)
+          throw new ConflictException({ code: 'BONUS_RESERVED', message: `قيد المكافأة محجوز في مسير معتمد${shown ? ` (#${reserved.reservedPayrollRunId})` : ' برّه نطاق صلاحيتك'}؛ أعد فتح المسير أولًا` })
+        }
         const pending = credits.filter(item => item.status === 'PENDING')
         const updated = await em.query(`UPDATE [employee_obligations] SET [status]='CANCELLED' OUTPUT INSERTED.[id]
           WHERE [bonusRequestId]=@0 AND [type]='CREDIT' AND [status]='PENDING' AND [reservedPayrollRunId] IS NULL`, [row.id])
