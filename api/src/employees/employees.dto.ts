@@ -453,6 +453,12 @@ export class CreateEmployeeDto {
   @Min(0, { message: 'المبلغ لا يكون سالباً' })
   gosiBaseSalary?: number
 
+  // B1.5: «تاريخ أول تسجيل في التأمينات» — السعودي من 3 يوليو 2024 = مسار GOSI الجديد. فاضي = المسار القديم (زي ما كان)
+  @IsOptional()
+  @IsString()
+  @Matches(/^(\d{4}-\d{2}-\d{2})?$/, { message: 'تاريخ أول تسجيل في التأمينات بصيغة YYYY-MM-DD' })
+  gosiFirstRegisteredAt?: string | null
+
   // الرصيد الافتتاحي المُرحّل (لموظف قائم انتقل للنظام) — يُطبَّق على رصيد
   // السنوي عند التعيين كطبقة opening، ليس عموداً على الموظف
   @IsOptional()
@@ -831,6 +837,12 @@ export class UpdateEmployeeDto {
   @IsNumber({}, { message: 'الراتب الخاضع للتأمينات رقم' })
   @Min(0, { message: 'المبلغ لا يكون سالباً' })
   gosiBaseSalary?: number
+
+  // B1.5: «تاريخ أول تسجيل في التأمينات» — السعودي من 3 يوليو 2024 = مسار GOSI الجديد. فاضي = المسار القديم (زي ما كان)
+  @IsOptional()
+  @IsString()
+  @Matches(/^(\d{4}-\d{2}-\d{2})?$/, { message: 'تاريخ أول تسجيل في التأمينات بصيغة YYYY-MM-DD' })
+  gosiFirstRegisteredAt?: string | null
 
   // الرصيد الافتتاحي المُرحّل — يُطبَّق على رصيد السنوي (تعديل لموظف قائم)
   @IsOptional()

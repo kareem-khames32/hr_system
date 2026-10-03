@@ -41,7 +41,7 @@ export const EMPLOYEE_FIELD_LABELS: Record<string, string> = {
   managerEmployeeId: 'المدير المباشر', jobTitle: 'المسمى الوظيفي', title: 'المسمى الوظيفي',
   gradeId: 'الدرجة الوظيفية', costCenterId: 'مركز التكلفة', workType: 'نوع التوظيف',
   iban: 'الحساب البنكي (IBAN)', bankName: 'اسم البنك', bankBranch: 'فرع البنك', payMethod: 'طريقة الصرف',
-  salaryCycle: 'دورة الراتب', currency: 'العملة', gosiBaseSalary: 'الراتب الخاضع للتأمينات',
+  salaryCycle: 'دورة الراتب', currency: 'العملة', gosiBaseSalary: 'الراتب الخاضع للتأمينات', gosiFirstRegisteredAt: 'تاريخ أول تسجيل في التأمينات',
   basicSalary: 'الراتب الأساسي', salary: 'الراتب', housingAllowance: 'بدل السكن', transportAllowance: 'بدل المواصلات',
   phoneAllowance: 'بدل الهاتف', workNatureAllowance: 'بدل طبيعة العمل', otherAllowance: 'بدلات أخرى', workPressureAllowance: 'بدل ضغط العمل',
   contractType: 'نوع العقد', contractStart: 'تاريخ بداية العقد', contractEnd: 'تاريخ نهاية العقد',

@@ -129,7 +129,8 @@ test('real financial-step SSR keeps seven exact text fields (six + work pressure
  const html=financialStep()
  assert.match(html,/موعد تطبيق تعديل الراتب/);assert.match(html,/يسري من راتب شهر/);assert.match(html,/value="10000.29"/)
  assert.equal((html.match(/inputMode="decimal"/g)??[]).length,7) // الست + بدل ضغط العمل
- assert.equal((html.match(/type="month"/g)??[]).length,2);assert.doesNotMatch(html,/type="date"/)
+ // الأجر بشهر راتب مش بيوم: التاريخ اليومي الوحيد في الخطوة «تاريخ أول تسجيل في التأمينات» (B1.5) — مش تاريخ أجر
+ assert.equal((html.match(/type="month"/g)??[]).length,2);assert.deepEqual((html.match(/<input[^>]*type="date"[^>]*>/g)??[]).map(input=>/id="gosiFirstRegisteredAt"/.test(input)),[true])
  for(const input of html.match(/<input[^>]*type="month"[^>]*>/g)??[])assert.match(input,/value=""/)
  assert.match(html,/max="2026-09"/)
  assert.match(html,/يسري على شهر المسير كاملًا بلا تقسيم داخله/);assert.match(html,/راتب شهر 2026-09 = من 2026-08-23 إلى 2026-09-22/)

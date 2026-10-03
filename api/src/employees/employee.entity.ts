@@ -252,6 +252,11 @@ export class Employee {
   @Column({ type: 'decimal', precision: 18, scale: 2, nullable: true })
   gosiBaseSalary: number
 
+  // B1.5 (ترحيل 080): «تاريخ أول تسجيل في التأمينات» — السعودي من 3 يوليو 2024 = مسار GOSI الجديد، والفاضي = القديم (زي ما كان).
+  // برّه الكيان في القراءة والإنشاء والحفظ: بيتقرا ويتكتب بـSQL صريح بس (employee-gosi-registration.ts)، فالكود قبل الترحيل شغال
+  @Column({ type: 'date', nullable: true, select: false, insert: false, update: false })
+  gosiFirstRegisteredAt: string | null
+
   @Column({ default: true })
   isActive: boolean
 

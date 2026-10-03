@@ -33,6 +33,7 @@ import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
 import { EmployeeStatusHistory } from '../requests/entities/employment.entities'
 import { recordEmployeeChange } from './employee-change-log'
+import { normalizeGosiFirstRegistered, readGosiFirstRegistered, saveGosiFirstRegistered } from './employee-gosi-registration'
 import { generateEmployeeCode } from './employee-code'
 import { employeePayMethodIssue } from '../payroll/pay-split'
 import { assertArchiveReason, identityKeySql, nextOpeningBalance } from './employee-input-rules'
@@ -219,6 +220,8 @@ export class EmployeesService {
     const resolved = await resolveAttendanceRule(this.employees.manager, 'EMPLOYEE', employee.id,
       attendanceRuleToday(), employeeAttendanceFallback(employee))
     const history = await readEmployeeSuspensions(this.employees.manager, employee.id, undefined, { includeCancelled: true })
+    // B1.5: «تاريخ أول تسجيل في التأمينات» برّه الكيان (ترحيل 080) — قبل الترحيل = فاضي
+    employee.gosiFirstRegisteredAt = (await readGosiFirstRegistered(this.employees.manager, [employee.id])).get(employee.id) ?? null
     return this.withSuspension(this.withAttendanceRule(employee, resolved), history.filter(row => row.status !== 'CANCELLED'), history)
   }
 
@@ -438,6 +441,9 @@ export class EmployeesService {
     delete (dto as { employeeCode?: unknown }).employeeCode
     // أنواع مرفقات الملف من كتالوج أنواع المستندات (لا نص حر) — قبل أي حفظ
     await assertDocTypes(this.docs.manager, (dto.documentRefs ?? []).map((r) => r?.docType))
+    // B1.5: تاريخ أول تسجيل في التأمينات بيتكتب بـSQL صريح بعد الحفظ (العمود برّه الكيان)
+    const gosiFirstRegisteredAt = normalizeGosiFirstRegistered(dto.gosiFirstRegisteredAt, localDateOf(new Date()))
+    delete (dto as { gosiFirstRegisteredAt?: unknown }).gosiFirstRegisteredAt
     // الرصيد الافتتاحي حقلا حمولة فقط (ليسا عمودَي موظف) — يُطبَّقان على الرصيد
     // openingBalance* و contractFileRef و documentRefs حقول حمولة فقط (ليست أعمدة موظف)
     const {
@@ -479,6 +485,7 @@ export class EmployeesService {
         dto.photoFileId ? `file:${dto.photoFileId}` : undefined], actorId)
       await this.saveContractDocument(result.id, { contractFileRef, contractNumber: dto.contractNumber, contractStart: dto.contractStart, contractEnd: dto.contractEnd }, em)
       await this.saveDocuments(result.id, documentRefs, em)
+      if (gosiFirstRegisteredAt) await saveGosiFirstRegistered(em, result.id, gosiFirstRegisteredAt)
       // الخطوة 13: أجر التعيين يُوثَّق «يسري من راتب شهر» في المعاملة نفسها؛ بدونه يُستبعد الموظف الجديد من أول مسير
       // (NO_SALARY_DEFINED) حتى توثيق منفصل. فشل التوثيق (عملة غير مدعومة، شهر خارج المدى) يرجّع الإنشاء كله.
       await documentInitialEmployeeSalary(em, { employeeId: result.id, actorUserId: actorId, hireDate: result.actualStartDate || result.joinDate || null,
@@ -743,7 +750,9 @@ export class EmployeesService {
       openingBalanceExpiry?: string | null
     }
     const prevCodes = emp.fingerprintCode ?? ''
-    const { flexOverrideMode, attendanceEffectiveFrom, attendanceChangeReason, salaryChange, calendarChange, ...employeeFields } = empDto
+    const { flexOverrideMode, attendanceEffectiveFrom, attendanceChangeReason, salaryChange, calendarChange, gosiFirstRegisteredAt: gosiDateSent, ...employeeFields } = empDto
+    // B1.5: undefined = ماتتغيرش؛ بيتكتب بـSQL صريح جوه المعاملة (العمود برّه الكيان) ولو اتغير بس
+    const gosiFirstRegisteredAt = normalizeGosiFirstRegistered(gosiDateSent, localDateOf(new Date()))
     const legacySalaryKeys = [...SALARY_HISTORY_MONEY_KEYS, 'currency'] as const
     const legacySalary = Object.fromEntries(legacySalaryKeys.filter(key => employeeFields[key] !== undefined)
       .map(key => [key, employeeFields[key]]))
@@ -833,6 +842,11 @@ export class EmployeesService {
           await recordEmployeeChange(em, { employeeId: id, fieldName: 'currency', oldValue: stored.currency, newValue: branchCurrencyChange,
             changedByUserId: actorId, reason: `${audit?.reason ?? 'تعديل من ملف الموظف'} — عملة الفرع الجديد (تسمية بس من غير تحويل مبالغ)` })
         }
+      }
+      if (gosiFirstRegisteredAt !== undefined) {
+        const gosi = await saveGosiFirstRegistered(em, id, gosiFirstRegisteredAt)
+        if (gosi.changed) await recordEmployeeChange(em, { employeeId: id, fieldName: 'gosiFirstRegisteredAt', oldValue: gosi.before, newValue: gosiFirstRegisteredAt,
+          changedByUserId: actorId, reason: audit?.reason ?? 'تعديل من ملف الموظف' })
       }
       const result = await em.findOneByOrFail(Employee, { id })
       await linkEmployeeFiles(em, id, [contractFileRef, ...(documentRefs ?? []).map(r => r.fileRef),

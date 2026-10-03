@@ -5,22 +5,36 @@ import { totalsByCurrency } from '../../api/src/org/currency-totals'
 export type InsuranceSystem = 'NONE' | 'SAUDI' | 'EGYPTIAN'
 export const INSURANCE_SYSTEM_LABELS: Record<InsuranceSystem, string> = { NONE: 'بدون تأمينات', SAUDI: 'التأمينات السعودية', EGYPTIAN: 'التأمينات المصرية' }
 export const INSURANCE_CATEGORY_LABELS: Record<string, string> = { SAUDI: 'سعودي', NON_SAUDI: 'غير سعودي', EGYPTIAN: 'مصري' }
+// B1.5: مسار التأمينات السعودي للسعودي (أول تسجيل من 3 يوليو 2024 = الجديد)
+export const INSURANCE_TRACK_LABELS: Record<string, string> = { OLD: 'المسار القديم', NEW: 'المسار الجديد' }
+// B1.5: أسماء القيم المؤرخة (جدول القيم القانونية)
+export const STATUTORY_KEY_LABELS: Record<string, string> = { 'sa.gosi.new_track': 'التأمينات السعودية — المسار الجديد', 'eg.insurance.wage_limits': 'التأمينات المصرية — حدود الأجر' }
+export const STATUTORY_CODE_LABELS: Record<string, string> = { employee_pct: 'الموظف %', employer_pct: 'صاحب العمل %', min_salary: 'الحد الأدنى', max_salary: 'الحد الأقصى' }
 
 export interface SocialInsuranceSettings {
   saudiEmployeePct: number; saudiEmployerPct: number; nonSaudiEmployeePct: number; nonSaudiEmployerPct: number
   saudiMinSalary: number; saudiMaxSalary: number
   egyptianEmployeePct: number; egyptianEmployerPct: number; egyptianMinSalary: number; egyptianMaxSalary: number
 }
+export interface StatutoryEntry { country: string; key: string; effectiveFrom: string; verified: boolean; source: string | null; values: Record<string, string> }
 export interface SocialInsuranceSettingsView {
   settings: SocialInsuranceSettings
   defaults: SocialInsuranceSettings
   reviewedAt: string | null
   canEdit: boolean
   branches: Array<{ id: number; name: string; insuranceSystem: InsuranceSystem }>
+  // B1.5: أساس السعودي «الأساسي + السكن»، ومصدر حدود الأجر المصري النهارده (null = الشاشة)، والمسار الجديد، والقيم المؤرخة
+  baseIncludesHousing?: boolean
+  egyptianLimitsFrom?: { effectiveFrom: string; verified: boolean } | null
+  saudiNewTrackFrom?: string
+  saudiNewTrackToday?: { employeePct: number; employerPct: number; minSalary: number; maxSalary: number; effectiveFrom: string; verified: boolean } | null
+  statutory?: StatutoryEntry[]
 }
 export interface SocialInsuranceReportRow {
   employeeId: number; employeeCode: string; fullName: string; branchId: number; branchName: string | null
-  nationality: string | null; gosiNumber: string | null; system: InsuranceSystem; category: string | null; salarySource: 'DECLARED' | 'BASIC' | null
+  nationality: string | null; gosiNumber: string | null; system: InsuranceSystem; category: string | null; salarySource: 'DECLARED' | 'BASIC' | 'BASIC_HOUSING' | null
+  // B1.5: المسار (OLD/NEW للسعودي) و«ساري من» للقيم المؤرخة اللي اتطبقت (null = إعدادات الشاشة)
+  track?: 'OLD' | 'NEW' | null; ratesEffectiveFrom?: string | null; ratesVerified?: boolean | null
   insuredSalary: number; employeePct: number; employerPct: number; employeeShare: number; employerShare: number; source: 'PAYROLL' | 'ESTIMATE'
   // B1.1: عملة فرع الموظف (التأمينات السعودية بالريال والمصرية بالجنيه)
   currency?: string
@@ -33,7 +47,7 @@ export interface SocialInsuranceReport {
 }
 
 export const fetchSocialInsuranceSettings = () => apiFetch<SocialInsuranceSettingsView>('/social-insurance/settings')
-export const saveSocialInsuranceSettings = (settings: SocialInsuranceSettings) =>
+export const saveSocialInsuranceSettings = (settings: SocialInsuranceSettings & { baseIncludesHousing?: boolean }) =>
   apiFetch<SocialInsuranceSettingsView>('/social-insurance/settings', { method: 'PUT', body: JSON.stringify(settings) })
 export const fetchSocialInsuranceReport = (period: string, branchId?: number | null) =>
   apiFetch<SocialInsuranceReport>(`/social-insurance/report?period=${encodeURIComponent(period)}${branchId ? `&branchId=${branchId}` : ''}`)

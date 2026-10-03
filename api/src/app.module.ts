@@ -26,6 +26,7 @@ import { CostCenterReportService } from './reports/cost-center-report.service'
 import { FinancialReportModule } from './reports/financial-report.module'
 import { ModulesRegistryModule } from './modules-registry/modules-registry.module'
 import { ScheduledJobsModule } from './scheduler/scheduled-jobs.module'
+import { StatutoryModule } from './statutory/statutory.module'
 import { validateEnv } from './auth/jwt-secret'
 import { dbPacketSize } from './common/sql-packet-size'
 
@@ -76,6 +77,9 @@ import { dbPacketSize } from './common/sql-packet-size'
 
     // B1.4: كل مواعيد المهام المجدولة، وتشغيلها مرة واحدة بقفل وسجل، وشاشتها
     ScheduledJobsModule,
+
+    // B1.5: القيم القانونية المؤرخة (مسار GOSI الجديد وحدود الأجر المصري) بشكل «حزمة الدولة»
+    StatutoryModule,
 
     // تشغيل وقفل الموديولات: حارس عام بيرجّع 404 لمسارات الموديول المقفول (@RequireModule)، وGET /api/modules/enabled
     ModulesRegistryModule,

@@ -168,6 +168,7 @@ interface EmployeeVM {
   gosiNumber: string
   isGosiRegistered: string
   gosiBaseSalary: string
+  gosiFirstRegisteredAt: string
   leaveBalance: { annual: { total: number; used: number; remaining: number } }
   // الفريق ومركز التكلفة وجدول العمل واستحقاق السنوي (كانت لا تظهر في الملف)
   team: string
@@ -641,6 +642,7 @@ export default function EmployeeProfilePage() {
             e.gosiBaseSalary == null
               ? '—'
               : formatMoney(e.gosiBaseSalary),
+          gosiFirstRegisteredAt: e.gosiFirstRegisteredAt ? String(e.gosiFirstRegisteredAt).slice(0, 10) : '—',
           team: teamById.get(e.teamId ?? 0) ?? '—',
           costCenter: costCenters.find(c => c.id === e.costCenterId)?.name ?? '—',
           workSchedule: effectiveSchedule ? effectiveSchedule.name + (schedule ? '' : ' (افتراضي)') : 'بلا جدول',
@@ -1703,6 +1705,10 @@ export default function EmployeeProfilePage() {
                         ? '—'
                         : `${employee.gosiBaseSalary} ${currency}`}
                     </span>
+                  </div>
+                  <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                    <span className="text-gray-500">أول تسجيل في التأمينات</span>
+                    <span className="font-medium text-gray-800" dir="ltr">{employee.gosiFirstRegisteredAt}</span>
                   </div>
                 </div>
               </div>

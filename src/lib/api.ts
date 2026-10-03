@@ -390,6 +390,8 @@ export interface ApiEmployee {
   recruitmentSource?: string; gradeId?: number; workLocation?: string
   currency?: string; salaryCycle?: string; bankBranch?: string
   gosiNumber?: string; isGosiRegistered?: boolean; gosiBaseSalary?: number
+  // B1.5: تاريخ أول تسجيل في التأمينات (السعودي من 3 يوليو 2024 = المسار الجديد)
+  gosiFirstRegisteredAt?: string | null
   // ===== إصلاحات ذهاب/عودة — أعمدة مستقلة =====
   fingerprintCode?: string; personalEmail?: string
   phoneAllowance?: number; workNatureAllowance?: number

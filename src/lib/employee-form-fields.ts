@@ -188,7 +188,7 @@ export const EMPLOYEE_CLEARABLE_FIELDS: Array<[keyof EmployeeFormState, keyof Ap
   ['actualStartDate', 'actualStartDate'], ['probationEndDate', 'probationEndDate'],
   ['salaryEntitlementStart', 'salaryEntitlementStart'],
   ['recruitmentSource', 'recruitmentSource'], ['workLocation', 'workLocation'],
-  ['bankBranch', 'bankBranch'], ['gosiNumber', 'gosiNumber'], ['gosiBaseSalary', 'gosiBaseSalary'],
+  ['bankBranch', 'bankBranch'], ['gosiNumber', 'gosiNumber'], ['gosiBaseSalary', 'gosiBaseSalary'], ['gosiFirstRegisteredAt', 'gosiFirstRegisteredAt'],
   ['housingAllowance', 'housingAllowance'], ['transportAllowance', 'transportAllowance'],
   ['phoneAllowance', 'phoneAllowance'], ['workNatureAllowance', 'workNatureAllowance'], ['otherAllowance', 'otherAllowance'],
   ['jobTitle', 'jobTitle'], ['workType', 'workType'], ['isGosiRegistered', 'isGosiRegistered'],

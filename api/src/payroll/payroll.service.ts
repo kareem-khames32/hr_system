@@ -55,6 +55,7 @@ import { Request } from '../requests/entities/request.entity'
 import { attendanceDeductionDay, AttendanceDeductionPolicy, splitLatenessPermission } from './attendance-deductions'
 import { computeSocialInsurance } from './social-insurance'
 import { readSocialInsuranceContext } from './social-insurance.service'
+import { readGosiFirstRegistered } from '../employees/employee-gosi-registration'
 import { readPayrollShadowAttendance } from './payroll-shadow-attendance'
 import { roundPayrollMoney as round2 } from './payroll-money'
 import { payrollPaySplit } from './pay-split'
@@ -112,6 +113,9 @@ import { cancelPayrollReversalLines, carryReversedRunExemptions, describePayroll
 import { assertPayrollRunHasNoChain, voidPayrollRunApprovals } from './payroll-approval-chain'
 import { assertPayrollRunNotDisbursed, closePayrollRunDisbursement } from './payroll-disbursement'
 import { PayrollItemDisbursement } from './payroll-disbursement.entities'
+
+// B1.5: مكان «بدل السكن» في مكونات الراتب الشهرية (أساس التأمينات السعودي «الأساسي + السكن» لما الإعداد مفتوح)
+const HOUSING_COMPONENT = MONTHLY_SALARY_COMPONENTS.findIndex(component => component.code === 'HOUSING')
 
 // الخطوة 16: مدخلات تعريف المسير من الشاشة (تُتحقق هنا ضد القاعدة؛ الـDTO يتحقق من الشكل فقط).
 export interface PayrollRunDefinitionInput {
@@ -751,6 +755,9 @@ export class PayrollService {
     let totalNet = 0
     // التأمينات الاجتماعية: نسب وحدود النظامين ونظام كل فرع، تُقرأ مرة للمسير
     const socialInsuranceContext = await readSocialInsuranceContext(em)
+    // B1.5: القيم المؤرخة السارية في آخر يوم في الفترة (بتتجمّد مع النتيجة في breakdown.socialInsurance)، وتاريخ أول تسجيل لكل موظف
+    const socialInsuranceRates = socialInsuranceContext.ratesAt(endDate)
+    const gosiFirstRegistered = await readGosiFirstRegistered(em, covered.map(({ emp }) => emp.id))
     // الإجازة المرضية بأجر متدرج (قرار المالك 16 سبتمبر): شرائح كل نوع من فئة SICK، تُقرأ مرة للمسير
     const sickTiersByCode = new Map<string, SickPayTier[]>((await em.getRepository(LeaveType).find({ where: { category: 'SICK' } }))
       .map(type => [type.code, parseSickPayTiers(type.sickPayTiers)]))
@@ -1020,7 +1027,8 @@ export class PayrollService {
       const socialInsurance = computeSocialInsurance({
         system: socialInsuranceContext.systemOf((member.snapshot as { branchId?: number | null } | null)?.branchId ?? emp.branchId),
         registered: emp.isGosiRegistered, declaredSalary: emp.gosiBaseSalary, fallbackSalary: basic, nationality: emp.nationality,
-      }, socialInsuranceContext.settings)
+        firstRegisteredAt: gosiFirstRegistered.get(emp.id) ?? null, housingSalary: monthlyCents[HOUSING_COMPONENT] / 100,
+      }, socialInsuranceContext.settings, socialInsuranceRates)
       // «شيل خصم» التأمينات للشهر: حصة الموظف صفر في المسير ده
       const socialInsuranceDeduction = waived.has('SOCIAL_INSURANCE') ? 0 : socialInsurance.employeeShare
       const previousBreakdown = previousItems.find(row => row.employeeId === emp.id)?.breakdown

@@ -180,6 +180,7 @@ export default function EditEmployeePage() {
           isGosiRegistered:
             emp.isGosiRegistered == null ? '' : emp.isGosiRegistered ? 'true' : 'false',
           gosiBaseSalary: emp.gosiBaseSalary != null ? String(Number(emp.gosiBaseSalary)) : '',
+          gosiFirstRegisteredAt: emp.gosiFirstRegisteredAt ? String(emp.gosiFirstRegisteredAt).slice(0, 10) : '',
           photoFileId: emp.photoFileId,
         })
       })

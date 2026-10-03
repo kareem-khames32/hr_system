@@ -144,6 +144,8 @@ export interface EmployeeFormState {
   gosiNumber: string
   isGosiRegistered: string // 'true' | 'false' | '' → boolean في الحمولة
   gosiBaseSalary: string
+  // B1.5: تاريخ أول تسجيل في التأمينات (YYYY-MM-DD أو فاضي)
+  gosiFirstRegisteredAt: string
   photoFileId?: number
   workScheduleId?: number // جدول العمل المعيّن (للتعبئة المسبقة في التعديل)
   flexOverrideMode?: 'INHERIT' | 'ENABLED' | 'DISABLED'
@@ -372,6 +374,7 @@ const makeInitialState = (initial?: Partial<EmployeeFormState>): EmployeeFormSta
   gosiNumber: '',
   isGosiRegistered: '',
   gosiBaseSalary: '',
+  gosiFirstRegisteredAt: '',
   photoFileId: undefined,
   flexOverrideMode: 'INHERIT',
   attendanceEffectiveFrom: '',
@@ -921,6 +924,8 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     if (form.gosiNumber.trim()) payload.gosiNumber = form.gosiNumber.trim()
     if (form.isGosiRegistered) payload.isGosiRegistered = form.isGosiRegistered === 'true'
     if (form.gosiBaseSalary !== '') payload.gosiBaseSalary = Number(form.gosiBaseSalary)
+    // المسح في التعديل من clearedEmployeeFields (القيمة اللي اتفضّت = null)
+    if (form.gosiFirstRegisteredAt) payload.gosiFirstRegisteredAt = form.gosiFirstRegisteredAt
     // ===== إصلاحات ذهاب/عودة — حقول مستقلة (بجانب سلوك الـfallback الحالي) =====
     if (form.fingerprintCode.trim()) payload.fingerprintCode = form.fingerprintCode.trim()
     // التعديل: الخانة اللي اتفضّت = مسح فعلي (زي بريد العمل)، مش تجاهل — وإلا القيمة القديمة تفضل محبوسة
@@ -2118,6 +2123,11 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 <div>
                   <label className="label">الراتب الخاضع للتأمينات</label>
                   <input type="number" className="input" placeholder="12500" dir="ltr" value={form.gosiBaseSalary} onChange={(e) => setField('gosiBaseSalary', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label" htmlFor="gosiFirstRegisteredAt">تاريخ أول تسجيل في التأمينات</label>
+                  <input id="gosiFirstRegisteredAt" type="date" className="input" dir="ltr" max={localToday()} value={form.gosiFirstRegisteredAt} onChange={(e) => setField('gosiFirstRegisteredAt', e.target.value)} />
+                  <p className="text-xs text-gray-400 mt-1">السعودي من 3 يوليو 2024 أو بعده على المسار الجديد للتأمينات. فاضي = المسار القديم.</p>
                 </div>
               </div>
             </div>

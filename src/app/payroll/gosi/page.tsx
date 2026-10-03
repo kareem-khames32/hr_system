@@ -10,7 +10,8 @@ import { currencyTotalRows, moneyByCurrency } from '@/lib/currency-totals'
 import { PayrollPeriodSelect, usePayrollMonthContext } from '@/components/DayRangeFilter'
 import { useOrgFilter } from '@/components/OrgFilter'
 import {
-  fetchSocialInsuranceReport, fetchSocialInsuranceSettings, filterSocialInsuranceReport, INSURANCE_CATEGORY_LABELS, INSURANCE_SYSTEM_LABELS, saveSocialInsuranceSettings,
+  fetchSocialInsuranceReport, fetchSocialInsuranceSettings, filterSocialInsuranceReport, INSURANCE_CATEGORY_LABELS, INSURANCE_SYSTEM_LABELS, INSURANCE_TRACK_LABELS,
+  saveSocialInsuranceSettings, STATUTORY_CODE_LABELS, STATUTORY_KEY_LABELS,
   type SocialInsuranceReport, type SocialInsuranceSettings, type SocialInsuranceSettingsView,
 } from '@/lib/social-insurance-api'
 
@@ -37,8 +38,9 @@ const Th =({ children, center }: { children: React.ReactNode; center?: boolean }
   <th className={`px-4 py-3 ${center ? 'text-center' : 'text-right'} text-sm font-medium text-gray-600 whitespace-nowrap`}>{children}</th>
 
 function reportTable(report: SocialInsuranceReport) {
-  const header = ['كود الموظف', 'الموظف', 'الفرع', 'النظام', 'الفئة', 'رقم التأمينات', 'العملة', 'الأجر التأميني', 'نسبة الموظف %', 'حصة الموظف', 'نسبة صاحب العمل %', 'حصة صاحب العمل', 'الإجمالي', 'المصدر']
+  const header = ['كود الموظف', 'الموظف', 'الفرع', 'النظام', 'الفئة', 'المسار', 'رقم التأمينات', 'العملة', 'الأجر التأميني', 'نسبة الموظف %', 'حصة الموظف', 'نسبة صاحب العمل %', 'حصة صاحب العمل', 'الإجمالي', 'المصدر']
   const rows = report.rows.map(row => [row.employeeCode, row.fullName, row.branchName ?? '', INSURANCE_SYSTEM_LABELS[row.system], INSURANCE_CATEGORY_LABELS[row.category ?? ''] ?? '',
+    INSURANCE_TRACK_LABELS[row.track ?? ''] ?? '',
     row.gosiNumber ?? '', currencyLabel(row.currency), row.insuredSalary.toFixed(2), row.employeePct, row.employeeShare.toFixed(2), row.employerPct, row.employerShare.toFixed(2),
     ((Math.round(row.employeeShare * 100) + Math.round(row.employerShare * 100)) / 100).toFixed(2), row.source === 'PAYROLL' ? 'من المسير' : 'تقديري من الملف'])
   // B1.1: إجمالي لكل عملة لوحده لو فيه فروع بعملتين
@@ -46,7 +48,7 @@ function reportTable(report: SocialInsuranceReport) {
   const totals = perCurrency.length ? perCurrency.map(group => ({ label: `الإجمالي ${group.label}`, currency: group.label, totals: group.totals }))
     : [{ label: 'الإجمالي', currency: currencyLabel(report.byCurrency?.[0]?.currency), totals: report.totals }]
   for (const line of totals) {
-    rows.push(['', line.label, '', '', '', '', line.currency, line.totals.insuredSalary, '', line.totals.employeeShare, '', line.totals.employerShare, line.totals.total, ''])
+    rows.push(['', line.label, '', '', '', '', '', line.currency, line.totals.insuredSalary, '', line.totals.employeeShare, '', line.totals.employerShare, line.totals.total, ''])
   }
   return { header, rows }
 }
@@ -65,6 +67,8 @@ function downloadExcel(filename: string, header: string[], rows: unknown[][]) {
 
 function SettingsCard({ view, onSaved }: { view: SocialInsuranceSettingsView; onSaved: (view: SocialInsuranceSettingsView) => void }) {
   const [draft, setDraft] = useState<Record<Field, string>>(() => Object.fromEntries(Object.entries(view.settings).map(([key, value]) => [key, String(value)])) as Record<Field, string>)
+  // B1.5: أساس السعودي من غير أجر تأمين مسجل = الأساسي + السكن (مقفول = الأساسي بس زي ما كان)
+  const [withHousing, setWithHousing] = useState(view.baseIncludesHousing === true)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
   const save = async () => {
@@ -72,7 +76,7 @@ function SettingsCard({ view, onSaved }: { view: SocialInsuranceSettingsView; on
     try {
       const payload = Object.fromEntries(Object.entries(draft).map(([key, value]) => [key, Number(value)])) as unknown as SocialInsuranceSettings
       if (Object.values(payload).some(value => !Number.isFinite(value))) throw new Error('كل النسب والحدود لازم تكون أرقام')
-      onSaved(await saveSocialInsuranceSettings(payload))
+      onSaved(await saveSocialInsuranceSettings({ ...payload, baseIncludesHousing: withHousing }))
       setMessage({ ok: true, text: 'اتحفظت الإعدادات — هتسري على المسيرات اللي تتحسب من دلوقتي' })
     } catch (error) {
       setMessage({ ok: false, text: error instanceof Error ? error.message : 'تعذر حفظ الإعدادات' })
@@ -113,12 +117,52 @@ function SettingsCard({ view, onSaved }: { view: SocialInsuranceSettingsView; on
           <h3 className="font-medium text-gray-700">التأمينات السعودية (GOSI)</h3>
           <p className="text-xs text-gray-400">الفروع: {branchesOf('SAUDI').join('، ') || 'لا يوجد'}</p>
           <div className="grid grid-cols-2 gap-3">{SAUDI_FIELDS.map(input)}</div>
+          {/* B1.5: النسب اللي فوق للمسار القديم وغير السعوديين؛ المسار الجديد بالقيم المؤرخة تحت */}
+          <p className="text-xs text-gray-500">
+            نسب السعودي فوق للمسار القديم. السعودي اللي أول تسجيل له في التأمينات من {view.saudiNewTrackFrom ?? '2024-07-03'} (من خانة «تاريخ أول تسجيل في التأمينات» في ملفه) على المسار الجديد
+            {view.saudiNewTrackToday ? ` — النهارده ${view.saudiNewTrackToday.employeePct}% الموظف و${view.saudiNewTrackToday.employerPct}% صاحب العمل` : ''}، بالقيم المؤرخة تحت.
+          </p>
+          <label className="flex items-start gap-2 text-sm text-gray-700">
+            <input type="checkbox" className="mt-1" checked={withHousing} disabled={!view.canEdit} onChange={(event) => setWithHousing(event.target.checked)} />
+            <span>الأجر التأميني = الأساسي + السكن لما الموظف مالوش أجر تأمين مسجل<span className="block text-xs text-gray-400">مقفول = على الأساسي بس (زي ما كان)</span></span>
+          </label>
         </div>
         <div className="space-y-3">
           <h3 className="font-medium text-gray-700">التأمينات المصرية</h3>
           <p className="text-xs text-gray-400">الفروع: {branchesOf('EGYPTIAN').join('، ') || 'لا يوجد'}</p>
           <div className="grid grid-cols-2 gap-3">{EGYPTIAN_FIELDS.map(input)}</div>
+          {view.egyptianLimitsFrom && (
+            <p className="text-xs text-gray-500">
+              حدود الأجر الظاهرة من القيم المؤرخة (ساري من {view.egyptianLimitsFrom.effectiveFrom}{view.egyptianLimitsFrom.verified ? '' : '، محتاج تحقق'}). لو غيّرتها وحفظت، قيمتك بتسري من النهارده.
+            </p>
+          )}
         </div>
+      </div>
+      {!!view.statutory?.length && <StatutoryTable entries={view.statutory} />}
+    </div>
+  )
+}
+
+// B1.5: القيم القانونية المؤرخة — المسير بياخد القيمة السارية في آخر يوم في فترته. «محتاج تحقق» = من مصادر ثانوية لحد ما محاسب يأكدها
+function StatutoryTable({ entries }: { entries: NonNullable<SocialInsuranceSettingsView['statutory']> }) {
+  return (
+    <div className="space-y-2">
+      <h3 className="font-medium text-gray-700">القيم المؤرخة</h3>
+      <p className="text-xs text-gray-400">كل مسير بياخد القيمة السارية في آخر يوم في فترته، وبتتحفظ معاه.</p>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50"><tr><Th>البند</Th><Th center>ساري من</Th><Th>القيم</Th><Th center>الحالة</Th></tr></thead>
+          <tbody className="divide-y divide-gray-100">
+            {entries.map(entry => (
+              <tr key={`${entry.key}:${entry.effectiveFrom}`}>
+                <td className="px-4 py-2 text-gray-700">{STATUTORY_KEY_LABELS[entry.key] ?? entry.key}</td>
+                <td className="px-4 py-2 text-center" dir="ltr">{entry.effectiveFrom}</td>
+                <td className="px-4 py-2 text-gray-600">{Object.entries(entry.values).map(([code, value]) => `${STATUTORY_CODE_LABELS[code] ?? code}: ${Number(value)}`).join(' · ')}</td>
+                <td className="px-4 py-2 text-center"><span className={`badge ${entry.verified ? 'badge-success' : 'badge-warning'}`} title={entry.source ?? undefined}>{entry.verified ? 'متأكد منها' : 'محتاج تحقق'}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   )
@@ -211,11 +255,12 @@ export default function PayrollGosiPage() {
                     <tr key={row.employeeId} className="hover:bg-gray-50">
                       <td className="px-4 py-3">
                         <Link href={`/employees/${row.employeeId}`} className="font-medium text-gray-800 hover:text-primary-600">{row.fullName}</Link>
-                        <p className="text-xs text-gray-400">{row.employeeCode} — {INSURANCE_CATEGORY_LABELS[row.category ?? ''] ?? ''}</p>
+                        <p className="text-xs text-gray-400">{row.employeeCode} — {INSURANCE_CATEGORY_LABELS[row.category ?? ''] ?? ''}{row.track ? ` · ${INSURANCE_TRACK_LABELS[row.track]}` : ''}</p>
                       </td>
                       <td className="px-4 py-3 text-gray-600">{row.branchName ?? '—'}<p className="text-xs text-gray-400">{INSURANCE_SYSTEM_LABELS[row.system]}{perCurrency.length > 0 && row.currency ? ` · ${currencyLabel(row.currency)}` : ''}</p></td>
                       <td className="px-4 py-3 text-gray-600" dir="ltr">{row.gosiNumber || '—'}</td>
-                      <td className="px-4 py-3 text-center">{formatMoney(row.insuredSalary)}{row.salarySource === 'BASIC' && <p className="text-xs text-gray-400">على الأساسي</p>}</td>
+                      <td className="px-4 py-3 text-center">{formatMoney(row.insuredSalary)}{row.salarySource === 'BASIC' && <p className="text-xs text-gray-400">على الأساسي</p>}
+                        {row.salarySource === 'BASIC_HOUSING' && <p className="text-xs text-gray-400">على الأساسي + السكن</p>}</td>
                       <td className="px-4 py-3 text-center">{formatMoney(row.employeeShare)}<p className="text-xs text-gray-400">{row.employeePct}%</p></td>
                       <td className="px-4 py-3 text-center">{formatMoney(row.employerShare)}<p className="text-xs text-gray-400">{row.employerPct}%</p></td>
                       <td className="px-4 py-3 text-center">
