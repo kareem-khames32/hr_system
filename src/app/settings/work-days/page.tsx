@@ -519,14 +519,13 @@ export default function WorkDaysSettingsPage() {
                 تعديلات أيام العمل لم تُحفظ
               </span>
             )}
-            <button
-              disabled
-              className="btn-primary flex items-center gap-2 opacity-50 cursor-not-allowed"
-              title="تعديلات أيام العمل لم تُحفظ — الحفظ في مرحلة لاحقة"
-            >
-              <Save size={18} />
-              حفظ الإعدادات
-            </button>
+            {/* بيظهر لما فيه تعديل على أيام العمل بس، وبيحفظها (نفس «حفظ أيام العمل» تحت) */}
+            {daysDirty && (
+              <button type="button" disabled={scheduleBusy} onClick={saveWorkDays} className="btn-primary flex items-center gap-2" data-save-work-days-top>
+                <Save size={18} />
+                {scheduleBusy ? 'جارٍ الحفظ…' : 'حفظ أيام العمل'}
+              </button>
+            )}
           </div>
         </div>
 

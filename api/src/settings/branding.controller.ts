@@ -10,7 +10,8 @@ import { withoutDataPlaceholder } from '../common/data-placeholders'
 import { RequireModule } from '../modules-registry/module.guard'
 
 // اسم المنتج ثابت (طلب المالك 26 سبتمبر): «بواسطة Logic Leap HR» في الدخول وآخر القائمة وعنوان التبويب
-export const PRODUCT_NAME = 'Logic Leap HR'
+export { PRODUCT_NAME } from './product-name'
+import { PRODUCT_NAME } from './product-name'
 
 const NAME_KEY = 'company.name'
 const LOGO_KEY = 'company.logo_file_id'

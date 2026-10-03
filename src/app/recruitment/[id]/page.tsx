@@ -12,8 +12,6 @@ import {
   DollarSign,
   Users,
   Calendar,
-  Edit2,
-  Trash2,
   Eye,
   FileText,
   CheckCircle2,
@@ -114,14 +112,7 @@ export default function JobDetailsPage() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            {/* «مشاركة» أُزيل: الوظيفة ببيانات عرض بلا رابط عام قابل للمشاركة */}
-            <button className="btn-secondary flex items-center gap-2">
-              <Edit2 size={18} />
-              تعديل
-            </button>
-            <button className="p-2 bg-red-50 text-red-600 rounded-xl hover:bg-red-100">
-              <Trash2 size={20} />
-            </button>
+            {/* «مشاركة» و«تعديل» و«حذف» أُزيلوا: الوظيفة ببيانات عرض، والأزرار ماكانش ليها أي فعل */}
           </div>
         </div>
 
@@ -284,11 +275,12 @@ export default function JobDetailsPage() {
                     >
                       {statusLabels[applicant.status as keyof typeof statusLabels]}
                     </span>
+                    {/* صفحة متقدم لوحده مش موجودة: الملفات في «المتقدمين» */}
                     <Link
-                      href={`/recruitment/applicants/${applicant.id}`}
+                      href="/recruitment/applicants"
                       className="btn-secondary text-sm py-2"
                     >
-                      عرض الملف
+                      صفحة المتقدمين
                     </Link>
                   </div>
                 </div>

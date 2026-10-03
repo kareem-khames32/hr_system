@@ -1,6 +1,7 @@
 // قراءة وكتابة ملف التحديث الجماعي على الخادم: CSV بلا أي مكتبة، وExcel (.xlsx) بمكتبة exceljs
 // اللي بتتحمل وقت الحاجة بس — لو مش متسطبة، CSV يفضل شغال.
 import { BadRequestException } from '@nestjs/common'
+import { PRODUCT_NAME } from '../settings/product-name'
 import { inflateRawSync } from 'zlib'
 import type { Workbook, CellValue } from 'exceljs'
 import { BULK_UPDATE_MAX_FILE_BYTES, BULK_UPDATE_MAX_ROWS, parseCsv, type BulkCell } from './employee-bulk-update.fields'
@@ -129,7 +130,7 @@ export async function writeBulkWorkbook(input: {
 }): Promise<Buffer> {
   const ExcelJS = loadExcel()
   const workbook: Workbook = new ExcelJS.Workbook()
-  workbook.creator = 'HR System'
+  workbook.creator = PRODUCT_NAME
   const sheet = workbook.addWorksheet(DATA_SHEET, { views: [{ rightToLeft: true, state: 'frozen', ySplit: 1 }] })
   sheet.columns = input.columns.map(column => ({ header: column.header, width: column.width,
     style: column.text ? { numFmt: '@' } : column.money ? { numFmt: '0.00' } : {} }))

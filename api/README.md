@@ -21,7 +21,7 @@ notepad .env   # حط نفس MSSQL_SA_PASSWORD في DB_PASSWORD
 
 # 3) البذر — ينشئ القاعدة والجداول تلقائياً + حساب الأدمن
 npm run seed
-#    admin@company.com / Admin@123
+#    حساب الدخول الأول: admin@company.com — كلمة سره بتتسلّم وقت التركيب (ماتتكتبش في الملف ده)، وغيّرها أول ما تدخل
 
 # 4) تشغيل الـ API
 npm run start:dev

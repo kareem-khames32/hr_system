@@ -246,3 +246,20 @@ export async function resolveEmployeeCalendarDay(em: EntityManager, employeeId: 
     return applyDay(out, context.global, context.branch, override.override, context.globalLegacy, override.exceptions, member)
   } catch (error) { return failed(out, error, strict) }
 }
+
+/**
+ * B1.2 (D13، عرض بس): اسم العطلة الرسمية اللي خلت اليوم ده عطلة للموظف — نفس تقويمه المؤرخ و«تسري على» بالحرف.
+ * null = اليوم مش عطلة رسمية (راحة أسبوعية أو يوم عمل)، undefined = التقويم مش مقروء (الشاشة بتقول «عطلة» زي الأول).
+ */
+export async function employeeHolidayName(em: EntityManager, employeeId: number, date: string, options: Options = {}): Promise<string | null | undefined> {
+  const day = await resolveEmployeeCalendarDay(em, employeeId, date, options)
+  if (day.state !== 'AVAILABLE' || day.dayKind === null || day.branchId === null) return undefined
+  if (day.dayKind !== 'HOLIDAY') return null
+  // نفس قراءات resolveEmployeeCalendarDay (من الذاكرة لو فيه cache): عطلات التقويم العام ودولة الفرع وعضوية «تسري على»
+  const employee = await memo(em, options.cache, `EMPLOYEE_ROW:${employeeId}`, () => em.findOneBy(Employee, { id: employeeId }))
+  if (!employee) return undefined
+  const context = await branchContext(em, day.branchId, date, false, result(date), options.cache)
+  if (!context) return undefined
+  const member = await audienceMember(em, employee, day.branchId, date, context.global.holidays, context.branch.country, options.cache)
+  return context.global.holidays.find(holiday => holidayCoversDay(holiday, date, context.branch.country) && holidayAudienceMatches(holiday.audience, member))?.name ?? null
+}

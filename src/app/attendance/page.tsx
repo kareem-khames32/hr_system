@@ -27,6 +27,7 @@ import {
   fetchEmployees,
   fetchDepartments,
   fetchBranches,
+  fetchCatalog,
   recomputeAttendanceDay,
   can,
   type ApiAttendanceDay,
@@ -94,7 +95,8 @@ const shiftDate = (dateStr: string, delta: number): string => {
   return localDateStr(d)
 }
 
-const getStatusBadge = (status: AttendanceRecord['status']) => {
+// holidayName (السجل اليومي): اسم العطلة الرسمية، null = راحة أسبوعية، undefined = مش معروف («عطلة» زي الأول)
+const getStatusBadge = (status: AttendanceRecord['status'], holidayName?: string | null) => {
   switch (status) {
     case 'present':
       return (
@@ -133,9 +135,9 @@ const getStatusBadge = (status: AttendanceRecord['status']) => {
       )
     case 'holiday':
       return (
-        <span className="badge bg-blue-50 text-blue-600 flex items-center gap-1">
+        <span className="badge bg-blue-50 text-blue-600 flex items-center gap-1" data-holiday-reason>
           <Calendar size={12} />
-          عطلة
+          {holidayName ? `عطلة رسمية: ${holidayName}` : holidayName === null ? 'راحة أسبوعية' : 'عطلة'}
         </span>
       )
     case 'partial_leave':
@@ -193,6 +195,8 @@ export default function AttendancePage() {
   const [departments, setDepartments] = useState<ApiDepartment[]>([])
   const [branches, setBranches] = useState<ApiBranch[]>([])
   const [refsLoaded, setRefsLoaded] = useState(false)
+  // B1.2: العطلات الرسمية (القايمة المفتوحة لأي حساب) — يوم عطلة مفيهوش سجلات بيقول اسمها بدل «لا توجد سجلات»
+  const [holidays, setHolidays] = useState<Array<{ name: string; date: string; endDate: string | null }>>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -213,6 +217,8 @@ export default function AttendancePage() {
         setRefsLoaded(true)
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل البيانات'))
+    // عرض بس: لو القايمة ماتقرتش الشاشة بتفضل زي الأول
+    fetchCatalog<{ name: string; date: string; endDate: string | null }>('holidays').then(setHolidays).catch(() => setHolidays([]))
   }, [])
 
   // سجل اليوم المحدد — من السيرفر (الحالة والتأخير محسوبان هناك)
@@ -248,6 +254,8 @@ export default function AttendancePage() {
     }
   }
 
+  // أسماء العطلات الرسمية اللي بتغطي اليوم المختار (لرسالة اليوم الفاضي)
+  const holidayNames = [...new Set(holidays.filter((h) => String(h.date).slice(0, 10) <= selectedDate && String(h.endDate ?? h.date).slice(0, 10) >= selectedDate).map((h) => h.name))]
   const records: AttendanceRecord[] = useMemo(() => {
     const empById = new Map(employees.map((e) => [e.id, e]))
     const depById = new Map(departments.map((d) => [d.id, d]))
@@ -537,8 +545,8 @@ export default function AttendancePage() {
                 <tbody>
                   {filteredRecords.length === 0 && (
                     <tr>
-                      <td colSpan={9} className="text-center py-10 text-gray-400">
-                        لا توجد سجلات حضور لهذا اليوم
+                      <td colSpan={9} className="text-center py-10 text-gray-400" data-empty-day>
+                        {holidayNames.length ? `اليوم ده عطلة رسمية: ${holidayNames.join('، ')} — مفيش سجلات حضور` : 'لا توجد سجلات حضور لهذا اليوم'}
                       </td>
                     </tr>
                   )}
@@ -614,7 +622,7 @@ export default function AttendancePage() {
                       </td>
                       <td className="table-cell text-center">
                         <div className="flex items-center justify-center gap-1.5 flex-wrap">
-                          {getStatusBadge(record.status)}
+                          {getStatusBadge(record.status, record.flexDay.holidayName)}
                           {record.attendanceExempt && record.status !== 'exempt' && <span className="badge bg-gray-100 text-gray-600">مستثنى من الحضور</span>}
                           {record.leaveConflict && (
                             <ModuleLink

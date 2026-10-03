@@ -144,11 +144,11 @@ export default function Header({ onMenuClick, menuOpen = false, menuButtonRef }:
       ? can('dashboard.view_all')
         ? 'لوحة التحكم'
         : 'لوحتي'
-      : pageTitleFor(pathname) ?? 'نظام الموارد البشرية'
+      : pageTitleFor(pathname) ?? PRODUCT_NAME
 
   // عنوان تبويب المتصفح = عنوان الشاشة | اسم المنتج (يُعاد تطبيقه لو كتبت Next عنوان الـmetadata العام بعده)
   useEffect(() => {
-    const wanted = pageTitle === 'نظام الموارد البشرية' ? PRODUCT_NAME : `${pageTitle} | ${PRODUCT_NAME}`
+    const wanted = pageTitle === PRODUCT_NAME ? PRODUCT_NAME : `${pageTitle} | ${PRODUCT_NAME}`
     const apply = () => {
       if (document.title !== wanted) document.title = wanted
     }

@@ -14,6 +14,7 @@ import { User } from './user.entity'
 // بـ node api/scripts/two-factor-off.cjs من غير ما التطبيق يشتغل (مفتاح الطوارئ).
 export { TWO_FACTOR_CONFIG_KEY } from './two-factor-gate'
 import { TWO_FACTOR_CONFIG_KEY } from './two-factor-gate'
+import { PRODUCT_NAME } from '../settings/product-name'
 
 /** ثوابت الرمز في مكان واحد — مش مفاتيح إعدادات (المالك رفض تضخيم لوحة الإعدادات). */
 export const OTP = {
@@ -145,7 +146,7 @@ export class TwoFactorService {
     try {
       result = await this.mail.send({
         to,
-        subject: 'رمز الدخول لنظام الموارد البشرية',
+        subject: `رمز الدخول لـ${PRODUCT_NAME}`,
         text:
           `رمز الدخول: ${code}\n\n` +
           `الرمز صالح ${Math.round(OTP.ttlSeconds / 60)} دقائق ولمرة واحدة.\n` +
@@ -366,7 +367,7 @@ export class TwoFactorService {
     try {
       const result = await this.mail.send({
         to: row.sentTo,
-        subject: 'رمز الدخول لنظام الموارد البشرية',
+        subject: `رمز الدخول لـ${PRODUCT_NAME}`,
         text:
           `رمز الدخول الجديد: ${code}\n\n` +
           `الرمز صالح ${Math.round(OTP.ttlSeconds / 60)} دقائق ولمرة واحدة، والرمز القديم بطل.\n` +

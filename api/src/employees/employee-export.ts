@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common'
+import { PRODUCT_NAME } from '../settings/product-name'
 import type { Workbook } from 'exceljs'
 import { PAID_SALARY_COMPONENTS } from './compensation'
 import { CONTRACT_TYPE_OPTIONS, GENDER_OPTIONS, PAY_METHOD_OPTIONS } from './employee-bulk-update.fields'
@@ -158,7 +159,7 @@ export async function writeEmployeesWorkbook(columns: ReadonlyArray<EmployeeExpo
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const ExcelJS: typeof import('exceljs') = require('exceljs')
   const workbook: Workbook = new ExcelJS.Workbook()
-  workbook.creator = 'HR System'
+  workbook.creator = PRODUCT_NAME
   const sheet = workbook.addWorksheet('الموظفين', { views: [{ rightToLeft: true, state: 'frozen', ySplit: 1 }] })
   sheet.columns = columns.map(item => ({ header: item.header, width: item.width,
     style: item.kind === 'text' ? { numFmt: '@' } : item.kind === 'money' ? { numFmt: '#,##0.00' } : {} }))

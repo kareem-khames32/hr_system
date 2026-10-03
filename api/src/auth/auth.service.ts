@@ -19,6 +19,7 @@ import { effectivePermissions, ROLE_PRESETS } from './permissions'
 import { Role, UserPermissionOverride } from './role.entity'
 import { OTP, TWO_FACTOR_CONFIG_KEY, TwoFactorChallengeView, TwoFactorError, TwoFactorService } from './two-factor.service'
 import { User } from './user.entity'
+import { PRODUCT_NAME } from '../settings/product-name'
 
 // حمولة التوكن — الدور والفرع هما أساس عزل البيانات
 export interface JwtPayload {
@@ -56,6 +57,9 @@ export interface SessionResponse {
     scopeAllBranches: boolean
     // فروع النطاق للواجهة (نفس اللي في التوكن) — مابتتبعتش لحساب «كل الفروع»
     branchIds?: number[]
+    // B1.2: حساب مربوط بالمجال (AD) — كلمة سره في الويندوز مش عندنا، فالواجهة ماتعرضش له «تغيير كلمة المرور».
+    // بيتبعت للحساب المربوط بس (الحساب العادي رده زي ما هو بالحرف)
+    domainAccount?: true
   }
 }
 
@@ -351,6 +355,7 @@ export class AuthService {
         mustChangePassword,
         scopeAllBranches,
         ...(branchIds !== null ? { branchIds } : {}),
+        ...(user.domainObjectGuid ? { domainAccount: true as const } : {}),
       },
     }
   }
@@ -388,7 +393,7 @@ export class AuthService {
     try {
       const result = await this.mail.send({
         to: address,
-        subject: 'فحص إرسال رمز الدخول — نظام الموارد البشرية',
+        subject: `فحص إرسال رمز الدخول — ${PRODUCT_NAME}`,
         text:
           `ده فحص إعداد البريد. رمز تجريبي: ${code}\n\n` +
           'وصلت الرسالة دي يعني إعداد SMTP سليم وينفع تفتح التحقق بخطوتين.',

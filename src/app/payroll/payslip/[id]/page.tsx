@@ -20,6 +20,7 @@ import {
   type ApiBranch,
 } from '@/lib/api'
 import { useCurrency } from '@/lib/currency'
+import { useBranding } from '@/lib/branding'
 import { PayrollAttendanceBreakdown } from '@/components/PayrollAttendanceBreakdown'
 import { PayrollOvertimeBreakdown } from '@/components/PayrollOvertimeBreakdown'
 import { PayrollInstallmentBreakdown } from '@/components/PayrollInstallmentBreakdown'
@@ -107,6 +108,8 @@ function numberToArabicWords(num: number, currency: string): string {
 
 export default function PayslipPage() {
   const params = useParams<{ id: string }>()
+  // عنوان القسيمة من غير فرع: اسم الشركة من «بيانات الشركة» (useBranding بيرجع اسم المنتج لو مش متظبط)
+  const brand = useBranding()
   const [item, setItem] = useState<ApiPayrollItem | null>(null)
   const [run, setRun] = useState<ApiPayrollRun | null>(null)
   const [employee, setEmployee] = useState<ApiEmployee | null>(null)
@@ -222,7 +225,7 @@ export default function PayslipPage() {
             {/* تبسيط الرواتب (2026-09-15): مربع الشعار بحرفي «HR» اللاتينيين أُخفي؛ اسم الفرع يبقى عنوانًا للقسيمة */}
             <div className="flex items-center gap-4">
               <div>
-                <h1 className="text-xl font-bold text-gray-800">{branch?.name ?? 'نظام الموارد البشرية'}</h1>
+                <h1 className="text-xl font-bold text-gray-800">{branch?.name ?? brand.companyName}</h1>
                 <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
                   {branch?.city && (
                     <span className="flex items-center gap-1">

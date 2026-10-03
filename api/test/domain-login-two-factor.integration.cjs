@@ -250,6 +250,8 @@ test('A2 — والتحقق مقفول: مسار حساب الشركة كمان 
   assert.equal(mailbox.length, 0)
   const created = await userRow(body.user.id)
   assert.equal(created.domainObjectGuid, account.objectGuid)
+  // B1.2: الحساب المربوط بالمجال بيتقال للواجهة (مالوش «تغيير كلمة المرور» عندنا)
+  assert.equal(body.user.domainAccount, true)
   assert.equal(created.employeeId, employees.jit.id)
   // البريد من AD (مش نسختنا @maharah.local)
   assert.equal(created.email, 'sami@maharah.pro')
@@ -328,6 +330,7 @@ test('B3 — ومسار حساب الشركة كمان: مفيش جلسة قبل
   const session = expect(await verify(pending.challengeToken, lastCode()), 200)
   assert.ok(session.accessToken)
   assert.equal(session.user.email, 'sami@maharah.pro')
+  assert.equal(session.user.domainAccount, true, 'بعد رمز البريد كمان')
 })
 
 // ============================================================================

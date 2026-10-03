@@ -28,6 +28,7 @@ import {
   Settings,
   ChevronDown,
   X,
+  KeyRound,
   LogOut,
   Bell,
   ClipboardList,
@@ -578,6 +579,13 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
               {roleLabels[currentUser?.role ?? ''] ?? currentUser?.role ?? ''}
             </p>
           </div>
+          {/* B1.2: «تغيير كلمة المرور» — مش لحساب الدخول بحساب الشركة (كلمة سره في الويندوز) */}
+          {currentUser && !currentUser.domainAccount && (
+            <Link href="/login/change-password" title="تغيير كلمة المرور" aria-label="تغيير كلمة المرور"
+              className="p-2 hover:bg-gray-200 rounded-lg transition-colors" data-change-password-link>
+              <KeyRound size={18} className="text-gray-400" />
+            </Link>
+          )}
           <button
             onClick={() => {
               clearSession()

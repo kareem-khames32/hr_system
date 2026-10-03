@@ -68,7 +68,7 @@ import type { OvertimeEvidence, OvertimeEvidencePolicy, OvertimeBlocker } from '
 import { appendOvertimeEvent, assertOvertimeDayAvailable, claimOvertimeDay, describeOvertimeSubmission, findActiveOvertimeEntries, releaseOvertimeDayClaim } from '../requests/overtime-day-claims'
 import { queueOvertimeDispatch } from '../requests/overtime-dispatch'
 import { holidayWorkCoversDay } from './holiday-work'
-import { createCalendarResolverCache, resolveBranchCalendarDay, resolveEmployeeCalendarDay, resolveGlobalCalendarDay } from './attendance-calendar-resolver'
+import { createCalendarResolverCache, employeeHolidayName, resolveBranchCalendarDay, resolveEmployeeCalendarDay, resolveGlobalCalendarDay } from './attendance-calendar-resolver'
 import { employmentOverlaps, employmentWindowOf, employmentWindowsOf, inEmploymentWindow, lastWorkingDaysOf, schedulableOn } from './attendance-employment'
 import type { EmploymentWindow } from './attendance-employment'
 import type { CalendarResolverCache, ResolvedCalendarDay } from './attendance-calendar-resolver'
@@ -3692,15 +3692,29 @@ export class AttendanceService {
       .filter(emp => (emp.isActive || !!emp.archivedAt) && this.attendanceEmploymentDate(emp, date, employment.get(emp.id)))
     const projected = await this.projectExemptionDays(stored, candidates, date, date, employment)
     // + مصدر وقتي كل يوم (جهاز/يدوي/تصحيح) لعمود «التحقق»
-    const rows = await this.withPunchSource(
+    const rows = await this.withHolidayNames(await this.withPunchSource(
       await this.withDerivedSource(projected),
       date
-    )
+    ), date)
     // اليوم الجاري: غيابه لم يُجسَّد بعد (المهمة الليلية تجسّده) — يُحسب لحظياً
     // حتى يظهر في السجل وكارت «غائب» (صفوف عرض فقط live:true، لا تُخزَّن)
     if (date !== localDateOf(new Date())) return rows
     const live = await this.liveAbsences(date, scope)
     return [...rows, ...live].sort((a, b) => a.employeeId - b.employeeId)
+  }
+
+  // B1.2 (D13، عرض بس): سبب «عطلة» في السجل اليومي — اسم العطلة الرسمية من تقويم الموظف نفسه، وnull = راحة أسبوعية.
+  // التقويم اللي مش مقروء مابيضيفش حاجة (الشاشة بتقول «عطلة» زي الأول). صفوف العطلة قليلة (اللي بصم يوم عطلة بس).
+  private async withHolidayNames<T extends { employeeId: number; status: string }>(rows: T[], date: string): Promise<Array<T & { holidayName?: string | null }>> {
+    if (!rows.some(row => row.status === 'holiday')) return rows
+    const cache = createCalendarResolverCache(this.days.manager)
+    const out: Array<T & { holidayName?: string | null }> = []
+    for (const row of rows) {
+      if (row.status !== 'holiday') { out.push(row); continue }
+      const name = await employeeHolidayName(this.days.manager, row.employeeId, date, { cache }).catch(() => undefined)
+      out.push(name === undefined ? row : { ...row, holidayName: name })
+    }
+    return out
   }
 
   // غياب اليوم الجاري لحظياً (بلا تخزين) — نفس قواعد التجسيد: موظف نشط في

@@ -27,6 +27,8 @@ export interface CurrentUser {
   mustChangePassword?: boolean
   // «نطاقه: كل الفروع» — مدير النظام فتحه للحساب ده (الخادم هو اللي بيفرضه؛ هنا لإظهار الأزرار بس)
   scopeAllBranches?: boolean
+  // B1.2: حساب مربوط بالمجال (AD): كلمة سره في الويندوز، فمالوش «تغيير كلمة المرور» عندنا
+  domainAccount?: boolean
   // فروع نطاق الحساب لما مايكونش «كل الفروع»: المختارة بعلامات صح أو فرعه الأصلي (نفس اللي في التوكن).
   // الجلسة الأقدم من الخاصية دي = فرعه بس — branchScopeOfUser في branch-scope.ts بيقرأها
   branchIds?: number[]
@@ -499,6 +501,8 @@ export interface ApiAttendanceDay {
   // mission/remote = مأمورية/عمل عن بُعد معتمد — يوم معذور بلا تأخير ولا غياب
   // missing_punch = يوم منقضٍ ببصمة طرف واحد — لا يُعدّ حضوراً، ينتظر تصحيح بصمة
   status: AttendanceStatus
+  // B1.2: سبب «عطلة» (السجل اليومي): اسم العطلة الرسمية، null = راحة أسبوعية، ومن غير الحقل = مش معروف
+  holidayName?: string | null
   attendanceExempt?: boolean
   exemption?: { id: number; effectiveFrom: string; effectiveTo: string | null; terminatedFrom: string | null; requiresCheckinForPresence: boolean } | null
   lateMinutes: number; earlyLeaveMinutes: number; workMinutes: number
