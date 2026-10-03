@@ -113,7 +113,7 @@ import { assertPayrollRunHasNoChain, voidPayrollRunApprovals } from './payroll-a
 import { assertPayrollRunNotDisbursed, closePayrollRunDisbursement } from './payroll-disbursement'
 import { PayrollItemDisbursement } from './payroll-disbursement.entities'
 // CR35-B01: مرجع مسير في موانع عكس الصرف بقاعدة رؤية المسير للحساب
-import { hiddenRunPeriodsByEmployee, hiddenRunPeriodsUnion, scopePayrollRunRefBlockers, scrubRunPeriods, scrubRunPeriodsDeep } from './payroll-run-visibility'
+import { hiddenRunPeriodsByEmployee, scopePayrollRunRefBlockers, scrubRunPeriods, scrubRunPeriodsDeep } from './payroll-run-visibility'
 
 // الخطوة 16: مدخلات تعريف المسير من الشاشة (تُتحقق هنا ضد القاعدة؛ الـDTO يتحقق من الشكل فقط).
 export interface PayrollRunDefinitionInput {
@@ -1725,9 +1725,10 @@ export class PayrollService {
     }
     // C8 / الخطوة 31: نوع المسير والمسير المرتبط والمسيرات التابعة وسطور العكس أو البنود المعكوسة
     const correction = await this.scopedRunCorrection(user, em, await describePayrollRunCorrection(em, run))
-    // CR40 (مسح الصنف): نص تفصيل البنود المحفوظ (اسم القيد جوه سطور الإعفاء المالي) من غير فترة أي مسير مخفي للحساب لموظفي المسير
-    const hidden = await hiddenRunPeriodsUnion(em, user, items.map(item => item.employeeId))
-    const shownItems = hidden.size ? items.map(item => ({ ...item, breakdown: scrubRunPeriods(item.breakdown, hidden) })) : items
+    // CR40 (مسح الصنف): نص تفصيل البنود المحفوظ (اسم القيد جوه سطور الإعفاء المالي) من غير فترة أي مسير مخفي للحساب — كل بند بفترات موظفه (CR41)
+    const scope = branchScopeOf(user)
+    const hidden = scope === null ? new Map<number, Set<string>>() : await hiddenRunPeriodsByEmployee(em, scope, items.map(item => item.employeeId), user.employeeId ?? null)
+    const shownItems = hidden.size ? items.map(item => hidden.has(item.employeeId) ? { ...item, breakdown: scrubRunPeriods(item.breakdown, hidden.get(item.employeeId)) } : item) : items
     return { ...this.lightRun(run), items: shownItems, members: await this.visibleMembers(user, members, em), conflicts, pendingOvertime, periodContinuity, selection, policyVersion, engine,
       actors, approvalGuard, payRecord, collection, correction }
     })

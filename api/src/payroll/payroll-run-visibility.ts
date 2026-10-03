@@ -104,15 +104,6 @@ export async function hiddenRunPeriodsByEmployee(em: EntityManager, scope: Branc
   return result
 }
 
-/**
- * CR40-B02: اتحاد الفترات المخفية للحساب لكل الموظفين — للرد اللي فيه صفوف كتير وأعمدة مشتركة (جدول المسير، سطور الشهر، مراجعة الاعتماد،
- * بنود المسير): المفتاح الواحد بيتحجب بنفس الشكل في كل الصفوف والأعمدة (الأأمن). viewer = null (داخلي) أو الشركة = فاضي
- */
-export async function hiddenRunPeriodsUnion(em: EntityManager, viewer: JwtPayload | null, employeeIds: Iterable<number | null | undefined>): Promise<Set<string>> {
-  if (!viewer) return new Set()
-  const byEmployee = await hiddenRunPeriodsByEmployee(em, branchScopeOf(viewer), employeeIds, viewer.employeeId ?? null)
-  return new Set([...byEmployee.values()].flatMap(periods => [...periods]))
-}
 
 // CR32-B01 وCR33-B01 (مراجعة Codex الجولتين 32 و33): مرجع مسير (رقمه أو اسمه أو حالته) في رد أو رسالة رفض أو عرض لحساب فرع بيظهر بس لو
 // الموظف المعني عضو في المسير بلقطة فرع من نطاق الحساب — أو مسير قديم من غير أعضاء خالص على فرع من نطاقه. فالمسير اللي اتعمل في فرع

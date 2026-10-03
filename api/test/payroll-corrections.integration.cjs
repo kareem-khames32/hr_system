@@ -1076,3 +1076,77 @@ test('CR40-B01/B02: موظف اتعكس صرفه واتنقل — بنود مس�
   assert.deepEqual(own.lines, expectStatus(await request(users.admin, 'GET', routes.payslip), 200).lines)
   assert.ok(leaks(own.lines).length > 0)
 })
+
+test('CR41: كل موظف بفترات مسيراته هو — مسير مختلط اتعكس لموظفين، واحد منهم اتنقل: نص زميله المرئي بيفضل كامل لقارئ الفرع، ورقم موظف في رابط القسيمة مابيغيرش ردها', { timeout: 900000 }, async () => {
+  const admin5 = await repo('User').save({ email: 'admin5@payroll-corrections-test.invalid', displayName: 'admin5', passwordHash: 'test-only', role: 'super_admin',
+    branchId: null, permissions: '[]' })
+  const approveAndPay = async (run, reference) => {
+    expectStatus(await request(admin5, 'POST', `/payroll/runs/${run.id}/approve`), 201)
+    expectStatus(await request(admin5, 'POST', `/payroll/runs/${run.id}/pay`, { channel: 'BANK_TRANSFER', reference }), 201)
+  }
+  const createdPolicy = expectStatus(await request(users.admin, 'POST', '/payroll/policies', { name: 'مجموعة الشركة — CR41', effectiveFrom: policyStart, settings: { ...cycle23 } }), 201)
+  const published = expectStatus(await request(users.admin, 'POST', `/payroll/policies/${createdPolicy.policy.id}/versions/${createdPolicy.versions[0].id}/publish`,
+    { expectedRevision: createdPolicy.versions[0].revision, reason: 'نشر مجموعة الشركة لاختبار الجولة 41' }), 200)
+  const versionId = published.version.id
+  // E في الفرع الأول (هيتنقل)، وF في الفرع التاني من الأول — الاتنين في مسير أغسطس واحد مختلط
+  const mover = await employee(8000), stayer = await employee(7000, org.other)
+  const credits = {}
+  for (const emp of [mover, stayer]) {
+    credits[emp.id] = expectStatus(await request(users.admin, 'POST', '/obligations', { employeeId: emp.id, type: 'CREDIT', amount: 55.55, label: `بدل CR41 ${emp.employeeCode}`,
+      category: 'allowance', effectiveDate: '2026-08-01' }), 201)
+  }
+  let august = expectStatus(await request(users.admin, 'POST', '/payroll/runs', { name: 'مسير أغسطس المختلط CR41', policyVersionId: versionId, period,
+    filters: { employeeIds: [mover.id, stayer.id] } }), 201)
+  august = await calculate(august, users.admin)
+  await acknowledge(august, admin5)
+  await approveAndPay(august, 'TRX-CR41-AUG')
+  const preview = expectStatus(await request(users.admin, 'POST', `/payroll/runs/${august.id}/reversal-preview`, { employeeIds: [mover.id, stayer.id] }), 201)
+  const reversal = expectStatus(await request(users.admin, 'POST', `/payroll/runs/${august.id}/reversals`, { employeeIds: [mover.id, stayer.id], reason: REASON,
+    previewHash: preview.previewHash }), 201)
+  await approveAndPay(reversal, 'REFUND-CR41-AUG')
+  const restored = {}
+  for (const emp of [mover, stayer]) {
+    restored[emp.id] = await repo('EmployeeObligation').findOneByOrFail({ payrollReversalOfObligationId: credits[emp.id].id })
+    assert.ok(restored[emp.id].label.includes(`مسير ${period}`))
+  }
+  // E اتنقل للفرع التاني، وحضور سبتمبر للاتنين هناك
+  await repo('Employee').update(mover.id, { branchId: org.other.id })
+  const days = []
+  for (const emp of [mover, stayer]) for (let time = Date.parse('2026-08-23T12:00:00Z'); time <= Date.parse('2026-09-22T12:00:00Z'); time += 86400000) {
+    days.push({ employeeId: emp.id, branchId: org.other.id, date: new Date(time).toISOString().slice(0, 10), status: 'present', checkIn: '08:00', checkOut: '16:00',
+      shiftName: 'وردية اختبار التصحيح', shiftStart: '08:00', shiftEnd: '16:00', scheduleSource: 'override', workMinutes: 480, lateMinutes: 0, deductibleMinutes: 0, earlyLeaveMinutes: 0 })
+  }
+  await repo('AttendanceDay').save(days, { chunk: 100 })
+  let september = expectStatus(await request(users.otherBranch, 'POST', '/payroll/runs', { name: 'مسير سبتمبر CR41', policyVersionId: versionId, period: '2026-09',
+    filters: { employeeIds: [mover.id, stayer.id] } }), 201)
+  september = await calculate(september, users.otherBranch)
+  const reader = await repo('User').save({ email: 'lines-other-cr41@payroll-corrections-test.invalid', displayName: 'lines-other-cr41', passwordHash: 'test-only', role: 'hr_manager',
+    branchId: org.other.id, permissions: JSON.stringify(['payroll.view', 'reports.view']) })
+  expectStatus(await request(reader, 'GET', `/payroll/runs/${august.id}`), 403)
+  const visibleText = `بعد عكس صرف مسير ${period}: بدل CR41 ${stayer.employeeCode}`, hiddenText = `بعد عكس صرف مسير ${period}: بدل CR41 ${mover.employeeCode}`
+  const namesOf = (lines, emp) => JSON.stringify(lines.find(row => row.employeeId === emp.id))
+  // جدول المسير وسطور الشهر ومراجعة الاعتماد والقسيمة: سطر F بفترته (مسيره في نطاق القارئ)، وسطر E من غير فترته
+  const runLines = expectStatus(await request(reader, 'GET', `/payroll/runs/${september.id}/lines`), 200)
+  const overview = expectStatus(await request(reader, 'GET', '/payroll/overview/lines?period=2026-09'), 200)
+  const review = expectStatus(await request(reader, 'GET', `/payroll/approval-chain/runs/${september.id}/review`), 200)
+  for (const [name, rows] of [['runLines', runLines.rows], ['overview', overview.rows], ['review', review.rows]]) {
+    assert.ok(namesOf(rows, stayer).includes(visibleText), `${name}: نص F كامل`)
+    assert.equal(namesOf(rows, mover).includes(hiddenText), false, `${name}: نص E من غير فترته`)
+    assert.ok(namesOf(rows, mover).includes('مسير خارج نطاق صلاحيتك'), name)
+  }
+  assert.ok(JSON.stringify(runLines.columns).includes(visibleText), 'عمود F بفترته')
+  const stayerItem = itemOf(september, stayer)
+  const slip = expectStatus(await request(reader, 'GET', `/payroll/items/${stayerItem.id}`), 200)
+  assert.ok(JSON.stringify(slip.lines).includes(visibleText))
+
+  // صاحب القسيمة: رقم موظف تاني في الرابط مايغيرش الرد (الرد مايتأثرش بمسيرات موظف مايخصّوش)
+  await acknowledge(september, admin5)
+  await approveAndPay(september, 'TRX-CR41-SEP')
+  const self = await repo('User').save({ email: 'self-cr41@payroll-corrections-test.invalid', displayName: 'self-cr41', passwordHash: 'test-only', role: 'employee',
+    branchId: org.other.id, employeeId: stayer.id, permissions: '[]' })
+  const own = expectStatus(await request(self, 'GET', `/payroll/items/${stayerItem.id}`), 200)
+  assert.ok(JSON.stringify(own.lines).includes(visibleText))
+  for (const query of [`?employeeId=${mover.id}`, `?employeeId=${mover.id}&employeeIds=${mover.id}`]) {
+    assert.deepEqual(expectStatus(await request(self, 'GET', `/payroll/items/${stayerItem.id}${query}`), 200), own, query)
+  }
+})

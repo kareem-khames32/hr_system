@@ -81,20 +81,28 @@ test('CR40: قايمة فترات بعد «مسير» — كل فترة مخفي
   assert.equal(scrubRunPeriods('عكس خصم #3 — مسير 2026-07، 2026-08: سبب', ['2026-09']), 'عكس خصم #3 — مسير 2026-07، 2026-08: سبب')
 })
 
-test('CR40 (شبكة الأمان): موظفي الرد من employeeId ومن employee.id، والحجب في كل نص ومفتاح واسم خاصية — والأرقام والتواريخ زي ما هي', () => {
+test('CR40/CR41 (شبكة الأمان): موظفي الرد من الرد نفسه بس، وكل نص بفترات موظفه هو (مش اتحاد الرد) — والأرقام والتواريخ زي ما هي', () => {
   const { responseEmployeeIds, scrubResponseRunPeriods } = require('../src/payroll/hidden-run-periods.interceptor')
-  const original = 'ALLOWANCE:إعادة قيد #1 بعد عكس صرف مسير 2026-07: بدل'
-  const body = { run: { id: 9, period: '2026-11' }, employee: { id: 4, fullName: 'موظف' }, rows: [{ employeeId: 7, amount: 67.89, items: [{ breakdown: `{"label":"مؤجَّل من مسير 2026-07"}` }] }],
-    columns: [{ key: original, name: original.slice(10) }], totalsByKey: { [original]: 67.89 } }
-  assert.deepEqual([...responseEmployeeIds(body)].sort(), [4, 7])
-  assert.deepEqual([...responseEmployeeIds({ rows: [] }, new Set([3]))], [3])
-  const out = scrubResponseRunPeriods(body, new Set(['2026-07']))
-  assert.equal(JSON.stringify(out).includes('2026-07'), false)
-  assert.equal(out.rows[0].items[0].breakdown, `{"label":"مؤجَّل من ${HIDDEN_RUN_TEXT}"}`)
   const { scrubRunLineKey } = require('../src/payroll/payroll-run-visibility')
-  assert.equal(out.columns[0].key, scrubRunLineKey(original, new Set(['2026-07'])))
-  assert.deepEqual(Object.keys(out.totalsByKey), [out.columns[0].key], 'اسم الخاصية نفس المفتاح المحجوب')
+  const original = 'ALLOWANCE:إعادة قيد #1 بعد عكس صرف مسير 2026-07: بدل'
+  const body = { run: { id: 9, period: '2026-11' }, employee: { id: 4, fullName: 'موظف' }, note: 'مسير 2026-07',
+    rows: [
+      { employeeId: 7, amount: 67.89, items: [{ breakdown: `{"label":"مؤجَّل من مسير 2026-07"}` }], lines: [{ key: original, name: original.slice(10) }], totalsByKey: { [original]: 67.89 } },
+      { employeeId: 8, label: 'مؤجَّل من مسير 2026-07', lines: [{ key: original, name: original.slice(10) }] },
+    ] }
+  assert.deepEqual([...responseEmployeeIds(body)].sort(), [4, 7, 8])
+  const hidden = new Set(['2026-07'])
+  const out = scrubResponseRunPeriods(body, new Map([[7, hidden]]))
+  // موظف 7 محجوب، وموظف 8 (مسيراته مرئية) زي ما هو حتى في نفس الرد، والنص برّه الصفوف تبع employee.id = 4 زي ما هو
+  assert.equal(out.rows[0].items[0].breakdown, `{"label":"مؤجَّل من ${HIDDEN_RUN_TEXT}"}`)
+  assert.equal(out.rows[0].lines[0].key, scrubRunLineKey(original, hidden))
+  assert.deepEqual(Object.keys(out.rows[0].totalsByKey), [out.rows[0].lines[0].key], 'اسم الخاصية نفس المفتاح المحجوب')
+  assert.deepEqual(out.rows[1], body.rows[1])
+  assert.equal(out.note, 'مسير 2026-07')
+  assert.equal(JSON.stringify(out.rows[0]).includes('2026-07'), false)
   assert.deepEqual([out.run, out.rows[0].amount, out.employee.id], [{ id: 9, period: '2026-11' }, 67.89, 4])
+  // مفيش موظف بفترات مخفية = نفس القيمة
+  assert.deepEqual(scrubResponseRunPeriods(body, new Map()), body)
 })
 
 test('CR39-B02: تسمية نطاق المسير لقارئ فرع — وحدات نطاقه بس، والباقي «وغيرها خارج نطاق صلاحيتك»، والشركة كاملة، والقايمة المخصّصة من غير عدد', () => {
