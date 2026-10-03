@@ -288,8 +288,9 @@ test('S28: الليلة لا تُقفل ولا يثبت غيابها عند من
 
 test('S28: توقيت مهمة الغياب الفعلية (01:00) لليلة 20:00 ← 01:00 يُثبت بعد إقفال النافذة دون انتظار لحاق الليلة التالية', () => {
   require('../node_modules/reflect-metadata')
-  const { AttendanceScheduler } = require('../src/attendance/attendance-scheduler.service')
-  const cron = Reflect.getMetadata('SCHEDULE_CRON_OPTIONS', AttendanceScheduler.prototype.materializeYesterday)
+  // B1.4: مواعيد المهام كلها في ScheduledJobsRunner — نفس الموعد الحقيقي من الـdecorator
+  const { ScheduledJobsRunner } = require('../src/scheduler/scheduled-jobs.runner')
+  const cron = Reflect.getMetadata('SCHEDULE_CRON_OPTIONS', ScheduledJobsRunner.prototype.materializeAbsences)
   assert.equal(cron?.cronTime, '0 1 * * *', 'المهمة اليومية لتجسيد غياب الأمس')
   const [minuteField, hourField] = cron.cronTime.split(' ').map(Number)
   // المهمة تكتب صف غياب ليلة 12 بعد لحظة تشغيلها صباح 13 (هنا +5 ثوانٍ زمن التشغيل)

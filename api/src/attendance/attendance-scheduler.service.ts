@@ -1,5 +1,4 @@
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common'
-import { Cron } from '@nestjs/schedule'
 import { ModulesService } from '../modules-registry/modules.service'
 import { AttendanceService } from './attendance.service'
 
@@ -22,30 +21,34 @@ export class AttendanceScheduler implements OnApplicationBootstrap {
   }
 
   // كل يوم 01:00 — جسّد الغياب من آخر يوم مُنجز حتى أمس (idempotent): ليلة فاتت
-  // (السيرفر مقفول) تُلحق في أول تشغيل بعدها، وأول أمس يُعاد دائماً لتأخّر التصحيحات
-  @Cron('0 1 * * *')
+  // (السيرفر مقفول) تُلحق في أول تشغيل بعدها، وأول أمس يُعاد دائماً لتأخّر التصحيحات.
+  // الموعد نفسه في ScheduledJobsRunner (B1.4) — الدالة دي للنداء المباشر
   async materializeYesterday() {
     await this.runCatchUp(false)
   }
 
   // شبكة أمان كل ساعة (02:30 → 23:30): سيرفر مقفول الساعة 01:00 كل ليلة (جهاز
   // مكتب يُطفأ ليلاً) كان لا يلحق أبداً — يلحق فقط لو آخر يوم مُنجز قبل أمس
-  // (أو لم يُنجز شيء بعد)، وإلا لا يفعل شيئاً
-  @Cron('30 2-23 * * *')
+  // (أو لم يُنجز شيء بعد)، وإلا لا يفعل شيئاً. الموعد في ScheduledJobsRunner (B1.4)
   async catchUpIfBehind() {
     await this.runCatchUp(true)
   }
 
   private async runCatchUp(onlyIfBehind: boolean) {
     try {
-      // موديول الحضور مقفول = مفيش تجسيد غياب (الفتح بعدين بيلحق من آخر يوم مُنجز)
-      if (!(await this.modules.jobEnabled('attendance.materialize-absences'))) return
-      const res = await this.attendance.materializeAbsencesCatchUp({ onlyIfBehind })
-      if (res && res.created > 0) {
-        this.logger.log(`تم تجسيد ${res.created} يوم غياب (${res.from} → ${res.to})`)
-      }
+      await this.catchUp(onlyIfBehind)
     } catch (e) {
       this.logger.error(`تعذر لحاق تجسيد الغياب: ${(e as Error).message}`)
+    }
+  }
+
+  /** الشغل نفسه — بيرمي الخطأ (المهمة المجدولة بتسجله «فشلت») */
+  async catchUp(onlyIfBehind: boolean) {
+    // موديول الحضور مقفول = مفيش تجسيد غياب (الفتح بعدين بيلحق من آخر يوم مُنجز)
+    if (!(await this.modules.jobEnabled('attendance.materialize-absences'))) return
+    const res = await this.attendance.materializeAbsencesCatchUp({ onlyIfBehind })
+    if (res && res.created > 0) {
+      this.logger.log(`تم تجسيد ${res.created} يوم غياب (${res.from} → ${res.to})`)
     }
   }
 }

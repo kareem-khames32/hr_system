@@ -204,23 +204,31 @@ test('RG-05: كل مهمة مجدولة بتسأل عن موديولها باس�
     if (entry.isDirectory()) walk(full); else if (entry.name.endsWith('.ts')) files.push(full)
   } }
   walk(path.join(apiRoot, 'src'))
+  // B1.4: المواعيد كلها في ScheduledJobsRunner (@Scheduled) وبتعدي على tick اللي بيسأل عن الموديول من قايمة المهام؛
+  // ودوال الشغل نفسها لسه بتسأل عن موديولها (النداء المباشر واللحاق وقت الإقلاع) — الاتنين لازم يطابقوا سجل الموديولات
+  const jobs = require('../src/scheduler/scheduled-jobs')
+  const scheduled = new Set(jobs.SCHEDULED_JOB_IDS.map(id => jobs.SCHEDULED_JOBS[id].module).filter(Boolean))
+  const runner = fs.readFileSync(path.join(apiRoot, 'src/scheduler/scheduled-jobs.runner.ts'), 'utf8')
   const used = new Set()
-  let crons = 0
+  const crons = (runner.match(/^\s*@Scheduled\(/gm) || []).length
+  const workFiles = ['attendance/attendance-scheduler.service.ts', 'attendance/device-sync.service.ts', 'offboarding/offboarding.service.ts',
+    'payroll/payroll-daily-accrual.scheduler.ts', 'payroll/typed-deductions-scheduler.service.ts', 'requests/leave-attachment-deadline.job.ts',
+    'requests/requests-scheduler.service.ts', 'requests/requests.service.ts'].map(file => path.join(apiRoot, 'src', file))
   for (const file of files) {
     const source = fs.readFileSync(file, 'utf8')
-    const count = (source.match(/^\s*@Cron\(/gm) || []).length
-    if (!count) continue
-    crons += count
+    assert.doesNotMatch(source, /^\s*@Cron\(/m, `${path.relative(apiRoot, file)}: الموعد بيعدي على @Scheduled`)
+    if (!workFiles.includes(file)) continue
     // moduleGate = نفس الخدمة في محرك الطلبات (بغطاء للاختبارات اللي بتبنيه من غير حقن)
     const names = [...source.matchAll(/this\.(?:modules|moduleGate)\.jobEnabled\('([a-z.-]+)'\)/g)].map(match => match[1])
-    assert.ok(names.length > 0, `${path.relative(apiRoot, file)}: فيه @Cron ومن غير فحص الموديول`)
+    assert.ok(names.length > 0, `${path.relative(apiRoot, file)}: دالة شغل مهمة مجدولة من غير فحص الموديول`)
     for (const name of names) {
       assert.ok(registry.moduleOfJob(name), `${path.relative(apiRoot, file)}: المهمة «${name}» مش متسجّلة في سجل الموديولات`)
       used.add(name)
     }
   }
-  // عدد المهام مثبّت: مهمة جديدة لازم تتسجّل في السجل وتتغطى في modules-enforcement (ME-05)
-  assert.equal(crons, 11)
+  // عدد المواعيد مثبّت (11 + مسح سجل المهام): مهمة جديدة لازم تتسجّل في السجل وتتغطى في modules-enforcement (ME-05)
+  assert.equal(crons, 12)
   const registered = registry.MODULE_KEYS.flatMap(key => registry.MODULES[key].jobs)
   assert.deepEqual([...used].sort(), [...registered].sort())
+  assert.deepEqual([...scheduled].sort(), [...registered].sort())
 })

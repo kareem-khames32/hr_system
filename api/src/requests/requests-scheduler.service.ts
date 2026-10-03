@@ -1,5 +1,4 @@
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common'
-import { Cron } from '@nestjs/schedule'
 import { ModulesService } from '../modules-registry/modules.service'
 import { LeaveBalancesService } from './leave-balances.service'
 import { RequestsService } from './requests.service'
@@ -33,8 +32,7 @@ export class RequestsScheduler implements OnApplicationBootstrap {
     }
   }
 
-  // كل يوم 00:15 — النقل المجدول
-  @Cron('15 0 * * *')
+  // كل يوم 00:15 — النقل المجدول (الموعد في ScheduledJobsRunner — B1.4)
   async transfers() {
     if (!(await this.modules.jobEnabled('requests.scheduled-transfers'))) return
     const { executed, employmentExecuted, cancelled } = await this.requests.runScheduledTransfers()
@@ -42,8 +40,7 @@ export class RequestsScheduler implements OnApplicationBootstrap {
     if (cancelled) this.logger.warn(`أُلغي ${cancelled} نقل مجدول مكرر (يُنفَّذ الأول فقط) — السبب مسجل على كل طلب`)
   }
 
-  // كل ساعة — التصعيد
-  @Cron('0 * * * *')
+  // كل ساعة — التصعيد (الموعد في ScheduledJobsRunner — B1.4)
   async escalations() {
     if (!(await this.modules.jobEnabled('requests.escalations'))) return
     const { escalated } = await this.requests.runEscalations()
@@ -52,11 +49,20 @@ export class RequestsScheduler implements OnApplicationBootstrap {
 
   // لحاق الترحيل عند الإقلاع وكل يوم 00:05؛ علامة الإتمام تمنع تكراره داخل السنة.
   // تعطل الخادم يوم 1 يناير لا يسقط الرصيد المرحل، والفشل لا يسجل إتماماً.
-  // وبعده تجديد سنوات الرصيد بذكرى التعيين (يومي، مستقل عن نجاح الترحيل السنوي)
-  @Cron('5 0 * * *')
+  // وبعده تجديد سنوات الرصيد بذكرى التعيين (يومي، مستقل عن نجاح الترحيل السنوي). الموعد في ScheduledJobsRunner (B1.4)
   async yearStart() {
+    try {
+      await this.yearStartWork()
+    } catch {
+      // كل جزء سجّل خطأه بنفسه
+    }
+  }
+
+  /** الشغل نفسه: الجزءين بيتجربوا الاتنين، وأي فشل بيترمي بعدهم (المهمة المجدولة بتسجله «فشلت») */
+  async yearStartWork() {
     // موديول الإجازات مقفول = مفيش ترحيل ولا تجديد أرصدة (الفتح بعدين بيلحق: علامة الإتمام بالسنة)
     if (!(await this.modules.jobEnabled('leave.year-start'))) return
+    let failure: unknown = null
     try {
       const r = await this.balances.catchUpRollover()
       if (r) {
@@ -66,6 +72,7 @@ export class RequestsScheduler implements OnApplicationBootstrap {
       }
     } catch (e) {
       this.logger.error('تعذّر الترحيل السنوي للإجازات', (e as Error)?.stack)
+      failure = e
     }
     try {
       const r = await this.balances.renewBalancePeriods()
@@ -74,6 +81,8 @@ export class RequestsScheduler implements OnApplicationBootstrap {
       }
     } catch (e) {
       this.logger.error('تعذّر تجديد سنوات أرصدة الإجازات', (e as Error)?.stack)
+      failure ??= e
     }
+    if (failure) throw failure
   }
 }

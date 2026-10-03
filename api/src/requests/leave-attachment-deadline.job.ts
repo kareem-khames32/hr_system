@@ -1,5 +1,4 @@
 import { Injectable, Logger, OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common'
-import { Cron } from '@nestjs/schedule'
 import { DataSource, In } from 'typeorm'
 import { localDateOf } from '../attendance/attendance.service'
 import { branchScopeOf, branchScopeQb, userHasPerm } from '../auth/guards'
@@ -43,19 +42,23 @@ export class LeaveAttachmentDeadlineJob implements OnApplicationBootstrap, OnMod
     if (this.catchUpTimer) clearTimeout(this.catchUpTimer)
   }
 
-  // كل يوم 00:20
-  @Cron('20 0 * * *')
+  // كل يوم 00:20 — الموعد في ScheduledJobsRunner (B1.4)، والدالة دي للحاق وقت الإقلاع والنداء المباشر
   async daily() {
-    if (!this.ds.isInitialized) return
     try {
-      // موديول الإجازات مقفول = مفيش تحويل لبدون راتب (run() نفسها من غير الشرط ده: الاختبار والتشغيل اليدوي)
-      if (!(await this.modules.jobEnabled('leave.attachment-deadline'))) return
-      const { reminders, missed } = await this.run()
-      if (reminders.length || missed.length) {
-        this.logger.log(`مرفقات الإجازات بعد الرجوع: ${reminders.length} تذكير، ${missed.length} تحوّلت بدون راتب لانقضاء المهلة`)
-      }
+      await this.dailyWork()
     } catch (e) {
       this.logger.error('تعذّر تشغيل مهمة مهلة مرفقات الإجازات', (e as Error)?.stack)
+    }
+  }
+
+  /** الشغل نفسه — بيرمي الخطأ (المهمة المجدولة بتسجله «فشلت») */
+  async dailyWork() {
+    if (!this.ds.isInitialized) return
+    // موديول الإجازات مقفول = مفيش تحويل لبدون راتب (run() نفسها من غير الشرط ده: الاختبار والتشغيل اليدوي)
+    if (!(await this.modules.jobEnabled('leave.attachment-deadline'))) return
+    const { reminders, missed } = await this.run()
+    if (reminders.length || missed.length) {
+      this.logger.log(`مرفقات الإجازات بعد الرجوع: ${reminders.length} تذكير، ${missed.length} تحوّلت بدون راتب لانقضاء المهلة`)
     }
   }
 

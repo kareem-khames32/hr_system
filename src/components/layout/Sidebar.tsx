@@ -220,6 +220,7 @@ const adminMenuDefs: MenuItem[] = [
       { label: 'أيام العمل', href: '/settings/work-days', perm: 'settings.manage' },
       { label: 'أنواع الأذونات', href: '/settings/permission-types', perm: 'settings.manage' },
       { label: 'سياسات النظام', href: '/settings/policies', perm: 'settings.manage' },
+      { label: 'المهام المجدولة', href: '/settings/scheduled-jobs', perm: 'settings.manage' },
       { label: 'الاعتمادات والموافقات', href: '/settings/approvals', perm: 'approval_chains.manage' },
       { label: 'بانِي الطلبات', href: '/settings/request-types', perm: 'request_types.manage' },
       { label: 'سجل الأصول', href: '/settings/asset-types', perm: 'custody.assign' },

@@ -1,4 +1,6 @@
 import 'reflect-metadata'
+// B1.4: .env (وTZ توقيت الشركة) قبل أي كود تاني
+import './load-env'
 import { NestFactory } from '@nestjs/core'
 import { ValidationPipe } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'

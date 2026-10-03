@@ -9,7 +9,6 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common'
-import { Cron } from '@nestjs/schedule'
 import { LetterTemplatesService } from '../letters/letter-templates.service'
 import { assertLetterIssuable } from '../letters/letter-issuance'
 import { InjectRepository } from '@nestjs/typeorm'
@@ -2173,7 +2172,7 @@ export class RequestsService {
 
   // الكشف يُوجّه للمراجعة؛ لا يحوّل إعداد التنفيذ الفوري إلى اعتماد مالي. الاستثناء الوحيد قرار المالك 28 سبتمبر: يوم خلص
   // جوه فترة مفتوحة عليها «اعتماد تلقائي» بيتعتمد لوحده بنفس الاعتماد النهائي (routeDetectedOvertime).
-  @Cron('45 */3 * * * *')
+  // كل 3 دقائق — الموعد في ScheduledJobsRunner (B1.4)
   async reconcileAutoOvertime() {
     if (!(await this.moduleGate.jobEnabled('overtime.reconcile-auto'))) return { routed: 0, autoApproved: 0 }
     return this.routeDetectedOvertime()

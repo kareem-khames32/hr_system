@@ -7,7 +7,6 @@ import {
   NotFoundException,
   OnApplicationBootstrap,
 } from '@nestjs/common'
-import { Cron } from '@nestjs/schedule'
 import { InjectRepository } from '@nestjs/typeorm'
 import { EntityManager, In, Not, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
@@ -1251,8 +1250,7 @@ export class OffboardingService implements OnApplicationBootstrap {
     return result
   }
 
-  // يومياً 00:30: الحالات المعتمدة اللي حل آخر يوم عمل فيها
-  @Cron('30 0 * * *')
+  // يومياً 00:30: الحالات المعتمدة اللي حل آخر يوم عمل فيها — الموعد في ScheduledJobsRunner (B1.4)
   async finalizeDue() {
     // موديول إنهاء الخدمة مقفول = مفيش إتمام آلي (الفتح بعدين بيلحق عند الإقلاع أو في أول دورة)
     if (!(await this.modules.jobEnabled('offboarding.finalize-due'))) return { finalized: 0 }

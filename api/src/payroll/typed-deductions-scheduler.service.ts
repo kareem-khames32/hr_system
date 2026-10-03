@@ -1,5 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common'
-import { Cron } from '@nestjs/schedule'
 import { ModulesService } from '../modules-registry/modules.service'
 import { TypedDeductionsService } from './typed-deductions.service'
 
@@ -12,20 +11,25 @@ export class TypedDeductionsScheduler {
 
   constructor(private readonly deductions: TypedDeductionsService, private readonly modules: ModulesService) {}
 
-  @Cron('*/15 * * * *')
+  // الموعد (كل 15 دقيقة) في ScheduledJobsRunner (B1.4) — الدالة دي للنداء المباشر
   async processStepSla() {
     if (this.running) return
     this.running = true
     try {
-      if (!(await this.modules.jobEnabled('payroll.deductions-sla'))) return
-      const result = await this.deductions.processSla()
-      if (result.escalated || result.rejected || result.breached) {
-        this.logger.log(`مهلة اعتماد الخصومات: صُعِّد ${result.escalated}، رُفض آليًا ${result.rejected}، سُجّل تجاوز ${result.breached}`)
-      }
+      await this.processStepSlaWork()
     } catch (error) {
       this.logger.error(`تعذر فحص مهلة اعتماد الخصومات: ${error instanceof Error ? error.message : String(error)}`)
     } finally {
       this.running = false
+    }
+  }
+
+  /** الشغل نفسه — بيرمي الخطأ (المهمة المجدولة بتسجله «فشلت»، وقفلها بيمنع التداخل بين النسخ) */
+  async processStepSlaWork() {
+    if (!(await this.modules.jobEnabled('payroll.deductions-sla'))) return
+    const result = await this.deductions.processSla()
+    if (result.escalated || result.rejected || result.breached) {
+      this.logger.log(`مهلة اعتماد الخصومات: صُعِّد ${result.escalated}، رُفض آليًا ${result.rejected}، سُجّل تجاوز ${result.breached}`)
     }
   }
 }

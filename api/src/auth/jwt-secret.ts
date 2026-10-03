@@ -1,3 +1,5 @@
+import { timeZoneIssue } from '../scheduler/schedule-time-zone'
+
 // ===== سر توقيع الـJWT =====
 // لا قيمة افتراضية إطلاقاً: كان يرجع بصمت لـ'dev-secret' لو JWT_SECRET ناقص،
 // فأي حد يقدر يزوّر توكن super_admin. الآن الإقلاع نفسه يفشل لو السر غير سليم.
@@ -38,6 +40,9 @@ export function validateEnv(
   config: Record<string, unknown>
 ): Record<string, unknown> {
   jwtLifetimeSeconds(config.JWT_EXPIRES_IN ?? '8h')
+  // B1.4: TZ الغلط بيخلّي Node يرجع لـUTC من غير ما حد يحس (مواعيد المهام والتواريخ كلها تبوظ) — الإقلاع بيقف
+  const zoneIssue = timeZoneIssue(config.TZ)
+  if (zoneIssue) throw new Error(zoneIssue)
   if (String(config.DB_SYNCHRONIZE ?? '').trim().toLowerCase() === 'true') {
     if (config.NODE_ENV === 'production') {
       throw new Error('DB_SYNCHRONIZE=true ممنوع في الإنتاج — طبّق ترقية المخطط المعتمدة على نسخة احتياطية أولاً')

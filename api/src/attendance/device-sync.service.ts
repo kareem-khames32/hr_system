@@ -1,5 +1,4 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common'
-import { Cron } from '@nestjs/schedule'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Between, Repository } from 'typeorm'
 import { ZkTcpAdapter, ZkTcpError } from './zk-tcp-adapter'
@@ -280,8 +279,7 @@ export class DeviceSyncService {
     return [...byCode.values()].sort((a, b) => b.count - a.count)
   }
 
-  // ===== الجدولة: كل 5 دقائق نفحص هل حان موعد السحب (الفاصل من الإعدادات) =====
-  @Cron('*/5 * * * *')
+  // ===== الجدولة: كل 5 دقائق نفحص هل حان موعد السحب (الفاصل من الإعدادات) — الموعد في ScheduledJobsRunner (B1.4) =====
   async scheduledSync() {
     if (!(await this.modules.jobEnabled('attendance.device-sync'))) return
     const cfg = await this.config.findOne({

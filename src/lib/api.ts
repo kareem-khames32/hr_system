@@ -1196,6 +1196,17 @@ export const fetchLoginEvents = (filters: { from?: string; to?: string; outcome?
   const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => value !== undefined && value !== '').map(([key, value]) => [key, String(value)])).toString()
   return get<{ available: boolean; rows: ApiLoginEvent[] }>(`/users/login-events${query ? `?${query}` : ''}`)
 }
+// B1.4: المهام المجدولة — كل مهمة بموعدها وآخر تشغيل وآخر فشل وآخر 20 تشغيل (available = false قبل ترحيل 079)
+export interface ApiScheduledJobRun {
+  id: number; status: 'RUNNING' | 'SUCCEEDED' | 'FAILED'; slot: string; startedAt: string; finishedAt: string | null
+  durationMs: number | null; error: string | null; host: string | null; abandoned: boolean
+}
+export interface ApiScheduledJob {
+  id: string; label: string; schedule: string; cron: string; module: string | null; enabled: boolean; nextRunAt: string | null
+  lastRun: ApiScheduledJobRun | null; lastSuccessAt: string | null; lastFailure: ApiScheduledJobRun | null; last24h: { runs: number; failed: number }
+  recent: ApiScheduledJobRun[]
+}
+export const fetchScheduledJobs = () => get<{ timeZone: string; available: boolean; host: string; jobs: ApiScheduledJob[] }>('/scheduled-jobs')
 export const createUser = (u: { email: string; password: string; displayName: string; role: string; branchId?: number; employeeId?: number; permissions?: string[]; scopeAllBranches?: boolean; scopeBranchIds?: number[] }) =>
   post<ApiUser>('/users', u)
 // scopeBranchIds: فروع النطاق بعلامات صح؛ null أو [] = يرجع لفرعه الأصلي بس
