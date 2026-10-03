@@ -44,6 +44,8 @@ import { PAYROLL_LIVE_SOURCE_VERSION, payrollLiveSourceContent, payrollLiveSourc
 import { readPayrollLiveEmployment } from './payroll-live-employment-provider'
 import { readPayrollLiveOvertime } from './payroll-live-overtime-provider'
 import { readPayrollLiveLedger } from './payroll-live-ledger-provider'
+// B1.8 / R09: سلف «لازم تتصرف الأول» وصرفها لسه ماتسجلش
+import { undisbursedLoanIds } from '../loans/loan-disbursement'
 import { readPayrollLiveCompensation } from './payroll-live-compensation-provider'
 import { readPayrollLiveSchedule } from './payroll-live-schedule-provider'
 import { readPayrollLiveAttendance } from './payroll-live-attendance-provider'
@@ -323,7 +325,8 @@ export class PayrollPolicyService {
       const view = await this.definitionView(em, version)
       const employment = await readPayrollLiveEmployment(em, employee.id, period.startDate, period.endDate)
       const overtime = await readPayrollLiveOvertime(em, employee.id, period.startDate, period.endDate)
-      const ledger = await readPayrollLiveLedger(em, employee.id, period.startDate, period.endDate)
+      // B1.8 / R09: أقساط سلف «لازم تتصرف الأول» وصرفها لسه ماتسجلش مش مؤهلة — زي خطة المسير
+      const ledger = await readPayrollLiveLedger(em, employee.id, period.startDate, period.endDate, { undisbursedLoanIds: await undisbursedLoanIds(em, employee.id) })
       const compensation = await readPayrollLiveCompensation(em, employee.id, period.startDate, period.endDate, employment.employment, employment.compensation, version.currency)
       const schedule = await readPayrollLiveSchedule(em, employee.id, period.startDate, period.endDate)
       const attendance = await readPayrollLiveAttendance(em, employee.id, period.startDate, period.endDate, schedule, employment.employment)

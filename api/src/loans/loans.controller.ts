@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Param, ParseIntPipe, Post, Query, UseGuards } from '@nestjs/common'
 import type { JwtPayload } from '../auth/auth.service'
 import { assertCompanyWideWrite, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
-import { DeactivateLoanCapPolicyDto, LoanCapPolicyDto, LoanCapPreviewQueryDto, LoanRecoveryCollectDto, LoanRecoveryWriteOffDto, LoanRepaymentDto } from './loans.dto'
+import { DeactivateLoanCapPolicyDto, LoanCapPolicyDto, LoanCapPreviewQueryDto, LoanDisbursementDto, LoanRecoveryCollectDto, LoanRecoveryWriteOffDto, LoanRepaymentDto } from './loans.dto'
 import { LoansService } from './loans.service'
 import { RequireModule } from '../modules-registry/module.guard'
 
@@ -71,6 +71,11 @@ export class LoansController {
   // صاحب السلفة أو payroll.view في النطاق
   @Get(':id/ledger')
   ledger(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number) { return this.loans.loanLedger(user, id) }
+
+  // B1.8 (R09): «تم صرف السلفة» — التاريخ والطريقة والمرجع ومين
+  @Perm('loans.disburse')
+  @Post(':id/disbursement')
+  disburse(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: LoanDisbursementDto) { return this.loans.disburse(user, id, dto) }
 
   @Perm('loans.repay')
   @Post(':id/repayments')

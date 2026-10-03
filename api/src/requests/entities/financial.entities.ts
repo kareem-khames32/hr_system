@@ -57,6 +57,20 @@ export class Loan {
 
   @Column({ type: 'int', nullable: true })
   createdByUserId: number | null
+
+  // B1.8 (ترحيل 082): «لازم تتصرف الأول» وبيانات تسجيل الصرف — برّه الكيان في القراءة والإنشاء والحفظ (الكود قبل الترحيل)،
+  // بتتقرا وتتكتب بـSQL صريح في loan-disbursement.ts بعد التأكد من وجودها
+  @Column({ type: 'bit', nullable: true, select: false, insert: false, update: false })
+  requiresDisbursement: boolean | null
+
+  @Column({ type: 'int', nullable: true, select: false, insert: false, update: false })
+  disbursedByUserId: number | null
+
+  @Column({ type: 'nvarchar', length: 20, nullable: true, select: false, insert: false, update: false })
+  disbursementMethod: string | null
+
+  @Column({ type: 'nvarchar', length: 100, nullable: true, select: false, insert: false, update: false })
+  disbursementReference: string | null
 }
 
 // REVERSED (C8 / الخطوة 31): قسط ترحيل أنشأه صرف مسير ثم عُكس الصرف فعاد أصله مستحقًا — مُلغى بلا رصيد، ويُعاد تفعيله لو رُحّل الأصل مجددًا

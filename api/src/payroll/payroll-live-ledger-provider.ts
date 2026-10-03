@@ -64,7 +64,9 @@ function state(reads: Read[], issues: PayrollLiveSourceIssue[], unsupported = fa
 }
 
 /** Read-only inspection inside the caller's transaction. Eligibility is source/date availability, never approval or collection. */
-export async function readPayrollLiveLedger(em: EntityManager, employeeId: number, periodStart: string, periodEnd: string): Promise<{
+// options.undisbursedLoanIds (B1.8 / R09): سلف «لازم تتصرف الأول» وصرفها لسه ماتسجلش — المنادي بيقراها (القارئ هنا قراءاته محددة)
+export async function readPayrollLiveLedger(em: EntityManager, employeeId: number, periodStart: string, periodEnd: string,
+  options: { undisbursedLoanIds?: ReadonlySet<number> } = {}): Promise<{
   installments: PayrollLiveSourceSection; credits: PayrollLiveSourceSection; otherDebits: PayrollLiveSourceSection
 }> {
   if (!em.queryRunner?.isTransactionActive) fail('LIVE_LEDGER_TRANSACTION_REQUIRED', 'قراءة الدفتر تتطلب معاملة القراءة الخاصة بالمصادر')
@@ -72,6 +74,8 @@ export async function readPayrollLiveLedger(em: EntityManager, employeeId: numbe
   payrollLiveSourcePeriod(periodStart, periodEnd)
   const loans = await capture('loans', () => rows(em, `SELECT TOP (5001) [id],[employeeId],[requestId],[status],CAST([amount] AS nvarchar(40)) AS [amount],
     CONVERT(varchar(33),[disbursedAt],126) AS [disbursedAt] FROM [loans] WHERE [employeeId]=@0 ORDER BY [id]`, [employeeId], 'loans'))
+  // B1.8 / R09: سلف «لازم تتصرف الأول» وصرفها لسه ماتسجلش — أقساطها مش مؤهلة (نفس خطة المسير القائمة)
+  const undisbursed = options.undisbursedLoanIds ?? new Set<number>()
   let rawPositions: Row[] = []
   const positions = await capture('loan_installments', async () => {
     // The existing exact balance/continuation validator is reused; only its SELECT is bounded here.
@@ -200,6 +204,7 @@ export async function readPayrollLiveLedger(em: EntityManager, employeeId: numbe
     if (position.financialStatus !== 'DUE') reasons.push(`POSITION_${position.financialStatus}`)
     if (position.remainingAmount === '0.00') reasons.push('NO_OPEN_BALANCE')
     if (position.dueDate > periodEnd) reasons.push('FUTURE_DUE')
+    if (undisbursed.has(Number(position.loanId))) reasons.push('LOAN_NOT_DISBURSED')
     for (const claim of claims) reasons.push(`CLAIM_${claim.kind}_${claim.status}`)
     if (installmentState !== 'AVAILABLE') reasons.push('SOURCE_UNVERIFIED')
     return { ...position, sourceRef: `loan_installments:${position.id}`, claimRefs: unique(claims.map(claim => claim.sourceRef)), exclusionReasons: unique(reasons) }

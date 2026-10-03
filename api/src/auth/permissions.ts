@@ -62,6 +62,8 @@ export const PERMISSIONS: Record<string, string> = {
   'loans.exceptional': 'إنشاء سلفة استثنائية لموظف فوق السقف بسبب موثق وشهر أول قسط',
   'loans.cap_override': 'اعتماد سلفة تجاوزت السقف باستثناء موثق',
   'loans.repay': 'تسجيل السداد المبكر وتحصيل أرصدة السلف بعد الإنهاء',
+  // B1.8 (R09): تسجيل صرف السلفة للموظف (التاريخ والطريقة والمرجع)
+  'loans.disburse': 'تسجيل صرف السلفة للموظف',
   'loans.write_off': 'شطب رصيد سلفة متبقٍ بعد انتهاء الخدمة بسبب موثق',
   // C2 / الخطوة 25: الخصومات المصنفة — الإنشاء للمدير الهيكلي بحسب نطاق النوع دون صلاحية نظام
   'deductions.view': 'عرض الخصومات المصنفة في نطاق الفرع',
@@ -127,7 +129,7 @@ export const PERMISSION_MODULES: Array<{ key: string; labelAr: string; permissio
       'payroll.policy.manage', 'payroll.chain_manage', 'payroll.self_approval_licence',
     ],
   },
-  { key: 'loans', labelAr: 'السلف', permissions: ['loans.policies', 'loans.exceptional', 'loans.cap_override', 'loans.repay', 'loans.write_off'] },
+  { key: 'loans', labelAr: 'السلف', permissions: ['loans.policies', 'loans.exceptional', 'loans.cap_override', 'loans.repay', 'loans.disburse', 'loans.write_off'] },
   {
     key: 'adjustments', labelAr: 'الخصومات والمكافآت والإعفاءات',
     permissions: [
@@ -188,6 +190,7 @@ export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   'loans.exceptional': 'ينشئ سلفة استثنائية فوق السقف لموظف بسبب مكتوب',
   'loans.cap_override': 'يعتمد سلفة عدّت السقف باستثناء مكتوب — لا يمنحها إلا مدير النظام',
   'loans.repay': 'يسجّل السداد المبكر ويحصّل رصيد السلفة بعد انتهاء الخدمة',
+  'loans.disburse': 'يسجّل إن السلفة اتصرفت للموظف (إمتى وإزاي والمرجع) — ولو «لازم تتصرف الأول» مفتوح، أقساطها مابتنزلش المسير قبلها',
   'loans.write_off': 'يشطب رصيد سلفة متبقي بعد انتهاء الخدمة (خسارة على الشركة) — لا يمنحها إلا مدير النظام',
   'deductions.view': 'يشوف الخصومات المصنفة على موظفي نطاقه — قراءة بس',
   'deductions.approve': 'يعتمد أو يرفض خطوة الموارد البشرية في الخصومات',

@@ -13,6 +13,8 @@ import { planEarlyRepayment } from '../loans/loan-caps'
 import { LoanRepayment, type LoanRepaymentMethod, type LoanRepaymentMode } from '../loans/loans.entities'
 import { parsePayrollLoanCatchUpLimit, PAYROLL_DECISION_KEYS, PAYROLL_LOAN_CATCH_UP_LIMIT_MAX } from './payroll-decision-settings'
 import { payrollLineNotReversedSql } from './payroll-reversal-sql'
+// B1.8 / R09: سلف «لازم تتصرف الأول» وصرفها لسه ماتسجلش
+import { undisbursedLoanIds } from '../loans/loan-disbursement'
 
 export const PAYROLL_INSTALLMENT_PLAN_VERSION = 'LOAN_ALLOCATION_V1_20260913' as const
 const MODE_KEY = 'loan.insufficient_net_behavior'
@@ -29,6 +31,9 @@ export interface PayrollInstallmentPlan {
   catchUpDeferredIds?: number[]
   // «شيل خصم» أقساط السلف لشهر المسير: أقساط الشهر والمتأخرة تفضل مستحقة بلا حجز ولا خصم وتدخل مسيرًا لاحقًا.
   waivedDeferredIds?: number[]
+  // B1.8 / R09: أقساط سلفة «لازم تتصرف الأول» وصرفها لسه ماتسجلش — تفضل مستحقة بلا حجز ولا خصم وتدخل أول مسير بعد الصرف.
+  // الخطط من غيرها مابتحملش الحقل (حسابها كما كان)
+  undisbursedDeferredIds?: number[]
   // الخطوة 26 (EX-02 قاعدة 4): نطاق الإعفاء المالي على الأقساط، والأقساط المستحقة في هذا المسير التي يؤجلها (لا تُخصم ولا تُسقط)؛
   // تُؤجل عند الصرف بقسط جديد للشهر التالي بمرجع الإعفاء. الخطط بلا إعفاء لا تحمل الحقلين (حسابها كما كان).
   exemptions?: { allExemptionId: number | null; entries: Array<{ installmentId: number; exemptionId: number }> }
@@ -61,6 +66,9 @@ export function isPayrollInstallmentPlan(value: unknown): value is PayrollInstal
     if (limit !== undefined && (!Number.isInteger(limit) || limit < 0 || limit > PAYROLL_LOAN_CATCH_UP_LIMIT_MAX || !Array.isArray(deferred) ||
         deferred.some(id => !Number.isInteger(id) || id < 1) || new Set(deferred).size !== deferred.length ||
         deferred.some(id => plan.sources.some(row => row.id === id)))) return false
+    const undisbursedIds = plan.undisbursedDeferredIds
+    if (undisbursedIds !== undefined && (!Array.isArray(undisbursedIds) || !undisbursedIds.length || undisbursedIds.some(id => !Number.isInteger(id) || id < 1) ||
+        new Set(undisbursedIds).size !== undisbursedIds.length || undisbursedIds.some(id => plan.sources.some(row => row.id === id)))) return false
     const waivedIds = plan.waivedDeferredIds
     if (waivedIds !== undefined && (!Array.isArray(waivedIds) || waivedIds.some(id => !Number.isInteger(id) || id < 1) ||
         waivedIds.some(id => plan.sources.some(row => row.id === id)))) return false
@@ -136,6 +144,13 @@ export async function buildPayrollInstallmentPlan(em: EntityManager, employeeId:
   const excludedClaimedIds = all.filter(row => row.dueDate <= context.endDate && claimed.has(row.id)).map(row => row.id).sort((a, b) => a - b)
   const nextPeriod = nextMonth(context.period), mappedPeriod = (date: string) => date > context.endDate && date.slice(0, 7) < nextPeriod ? nextPeriod : date.slice(0, 7)
   let sources = all.filter(row => !excludedClaimedIds.includes(row.id)).map(snapshot)
+  // B1.8 / R09: سلفة «لازم تتصرف الأول» وصرفها لسه ماتسجلش — كل أقساطها برّه الخطة (تفضل مستحقة) قبل أي حد أو إعفاء
+  const undisbursed = await undisbursedLoanIds(em, employeeId)
+  let undisbursedDeferredIds: number[] | undefined
+  if (undisbursed.size) {
+    const held = sources.filter(source => undisbursed.has(source.loanId)).map(source => source.id).sort((a, b) => a - b)
+    if (held.length) { undisbursedDeferredIds = held; sources = sources.filter(source => !undisbursed.has(source.loanId)) }
+  }
   // D10 / LOT-05: أقساط الشهر الحالي كلها + أقدم N قسط متأخر فقط؛ الباقي يبقى مستحقًا بلا حجز ولا ترحيل ويُلحق في المسيرات التالية.
   let catchUpDeferredIds: number[] | undefined
   if (policy.catchUpMaxOverdue !== undefined) {
@@ -176,6 +191,7 @@ export async function buildPayrollInstallmentPlan(em: EntityManager, employeeId:
   return { version: PAYROLL_INSTALLMENT_PLAN_VERSION, policy, context: plain(context), sources, excludedClaimedIds,
     ...(catchUpDeferredIds === undefined ? {} : { catchUpDeferredIds }),
     ...(waivedDeferredIds === undefined ? {} : { waivedDeferredIds }),
+    ...(undisbursedDeferredIds === undefined ? {} : { undisbursedDeferredIds }),
     ...(exemptionScope === undefined ? {} : { exemptions: exemptionScope, exemptionDeferred: exemptionDeferred ?? [] }), budget, allocation }
   } catch (error) {
     if (error instanceof PayrollInstallmentAllocationError || error instanceof PayrollInstallmentBudgetError) {

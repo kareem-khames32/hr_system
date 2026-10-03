@@ -180,7 +180,7 @@ export const MODULES = {
   loans: moduleDef({
     nameAr: 'السلف والالتزامات', group: 'money', dependsOn: ['payroll'],
     description: 'طلبات السلف وسقوفها وأقساطها والسداد المبكر والاسترداد بعد الإنهاء',
-    permissions: ['loans.policies', 'loans.exceptional', 'loans.cap_override', 'loans.repay', 'loans.write_off'],
+    permissions: ['loans.policies', 'loans.exceptional', 'loans.cap_override', 'loans.repay', 'loans.disburse', 'loans.write_off'],
     routes: ['/payroll/loans', '/my/loans', '/reports/loans'],
     requestHandlers: ['loans_installments', 'loan_installment_defer', 'loan_early_settlement'],
   }),

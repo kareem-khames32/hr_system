@@ -23,6 +23,8 @@ import { useCurrency } from '@/lib/currency'
 import { fetchLoanCapPreview, loanKindLabel, loanMoneyInputValid, REGULAR_LOAN_SINGLE_DEDUCTION_NOTE, type LoanCapEvaluation } from '@/lib/loans-api'
 import { LoanCapSummary } from '@/components/payroll/LoanCapSummary'
 import { LoanExceptionalModal } from '@/components/payroll/LoanExceptionalModal'
+// B1.8 (R09): تسجيل صرف السلفة
+import { LoanDisbursementPanel } from '@/components/payroll/LoanDisbursementPanel'
 import { EmployeePicker } from '@/components/EmployeePicker'
 import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
 import { useOrgFilter } from '@/components/OrgFilter'
@@ -510,6 +512,7 @@ export default function LoansPage() {
                   {expandedId === loan.id && (
                     <tr key={`inst-${loan.id}`}>
                       <td colSpan={8} className="bg-gray-50 px-6 py-4">
+                        <LoanDisbursementPanel loanId={loan.id} onChanged={loadLoans} />
                         <p className="font-medium text-gray-700 mb-3">جدول الأقساط</p>
                         <div className="overflow-x-auto">
                           <table className="w-full">

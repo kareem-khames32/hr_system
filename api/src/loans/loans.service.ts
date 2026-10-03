@@ -10,6 +10,9 @@ import { loanScheduleAmounts } from '../requests/loan-installment-requests'
 import { addDays, LoanCapPolicyValues, loanMoney, normalizeLoanCapPolicyInput } from './loan-caps'
 import { evaluateEmployeeLoanCap, isLoanCapRequestType, LOAN_CAP_POLICY_COLUMNS, loanRequestDayWindow, localDate, parseLoanCapPolicyRow, REGULAR_LOAN_SINGLE_DEDUCTION } from './loan-request-caps'
 import { collectLoanRecovery, LOAN_RECOVERY_COLUMNS, openRecoveryAmount, writeOffLoanRecovery } from './loan-recovery'
+// B1.8 / R09: تسجيل صرف السلفة
+import { loanDisbursementDetails, readLoanDisbursementInput, recordLoanDisbursement } from './loan-disbursement'
+import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
 import type { LoanCapPolicyDto, LoanRepaymentDto } from './loans.dto'
 
 const blank = (value: unknown) => value === undefined || value === null || (typeof value === 'string' && value.trim() === '')
@@ -186,6 +189,8 @@ export class LoansService {
       FROM [loan_repayments] WHERE [employeeId]=@0 ORDER BY [id]`, [employeeId])
     const events = await em.query(`SELECT [id],[loanId],[installmentId],[action],[reason],[requestId],[payrollRunId],[createdAt]${full ? ',[actorId]' : ''}
       FROM [loan_installment_events] WHERE [employeeId]=@0 ${full ? '' : `AND [action] IN (${EMPLOYEE_EVENT_ACTIONS.map(a => `'${a}'`).join(',')})`} ORDER BY [id]`, [employeeId])
+    // B1.8: بيانات تسجيل الصرف (ترحيل 082) — قبله فاضية
+    const disbursement = await loanDisbursementDetails(em, loans.map((loan: any) => Number(loan.id)))
     return loans.map((loan: any) => {
       const installments = positions.filter(row => row.loanId === loan.id).sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.id - b.id)
         .map(({ employeeId: _employee, ...row }) => row)
@@ -193,10 +198,28 @@ export class LoansService {
       const remainingAmount = installments.filter(row => row.financialStatus === 'DUE').reduce((sum, row) => sum.add(PayrollDecimal.from(row.remainingAmount)), PayrollDecimal.from('0'))
       return {
         ...loan, isExceptional: loan.isExceptional === true || loan.isExceptional === 1, installments,
+        requiresDisbursement: disbursement.get(Number(loan.id))?.requiresDisbursement ?? false,
+        disbursementMethod: disbursement.get(Number(loan.id))?.disbursementMethod ?? null,
+        ...(full ? { disbursedByUserId: disbursement.get(Number(loan.id))?.disbursedByUserId ?? null, disbursementReference: disbursement.get(Number(loan.id))?.disbursementReference ?? null } : {}),
         paidCount: installments.filter(row => ['PAID', 'SETTLED'].includes(row.financialStatus)).length,
         paidAmount: paidAmount.format(2, 'DOWN'), remainingAmount: remainingAmount.format(2, 'DOWN'),
         repayments: repayments.filter((row: any) => row.loanId === loan.id), events: events.filter((row: any) => row.loanId === loan.id),
       }
+    })
+  }
+
+  // ===== B1.8 (R09): تسجيل صرف السلفة — مرة واحدة، بالقفل المالي للموظف (النقل بياخده) وفرعه بيتقرا بعده =====
+  async disburse(user: JwtPayload, loanId: number, dto: { date?: unknown; method?: unknown; reference?: unknown }) {
+    const input = readLoanDisbursementInput(dto, localDate())
+    return this.ds.transaction(async em => {
+      const [loan] = await em.query('SELECT [id],[employeeId] FROM [loans] WHERE [id]=@0', [loanId])
+      if (!loan) throw new NotFoundException('السلفة غير موجودة')
+      await this.employeeInScope(em, user, loan.employeeId, 'السلفة غير موجودة')
+      await lockPayrollEmployees(em, [Number(loan.employeeId)])
+      await this.employeeInScope(em, user, loan.employeeId, 'السلفة غير موجودة')
+      await recordLoanDisbursement(em, { loanId, ...input, actorId: user.sub })
+      const [row] = await this.ledgerFor(em, Number(loan.employeeId), loanId, true)
+      return row
     })
   }
 

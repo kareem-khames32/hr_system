@@ -21,11 +21,14 @@ export function PayrollInstallmentBreakdown({ item, currency, compact = false }:
   }
   const rows = (plan.allocation.lines as Line[]).filter(row => row.eligible)
   const excluded = Array.isArray(plan.excludedClaimedIds) ? plan.excludedClaimedIds.length : 0
-  if (!rows.length && !excluded) return null
+  // B1.8 (R09): أقساط سلفة «لازم تتصرف الأول» وصرفها لسه ماتسجلش — مستحقة ومتأجلة لحد تسجيل الصرف
+  const undisbursed = Array.isArray(plan.undisbursedDeferredIds) ? plan.undisbursedDeferredIds.length : 0
+  if (!rows.length && !excluded && !undisbursed) return null
   const content = <>
     <p className="text-xs text-gray-600 mb-3">المتاح للسلف بعد الخصومات السابقة وحماية الصافي: {money(plan.budget.availableBudget)} {currency}.
       {' '}{plan.policy?.mode === 'SKIP_AND_EXTEND' ? 'عند النقص: تأجيل القسط كاملًا ومد الجدول.' : 'عند النقص: يُخصم المتاح ويُؤجَّل الباقي للشهر التالي.'}</p>
     {excluded > 0 && <p className="text-xs text-amber-700 mb-3">استُبعد {excluded} قسطًا لوجود حجز سابق في مسير معتمد أو تصفية.</p>}
+    {undisbursed > 0 && <p className="text-xs text-amber-700 mb-3">{undisbursed} قسط سلفة ماتخصمش لأن صرف السلفة لسه ماتسجلش؛ بيتخصم في أول مسير بعد تسجيل الصرف.</p>}
     {rows.length > 0 && <div className="overflow-x-auto"><table className="w-full text-sm text-right">
       <thead><tr className="bg-gray-50 text-gray-600"><th className="p-2">القسط</th><th className="p-2">أصل الاستحقاق</th>
         <th className="p-2">المستحق</th><th className="p-2">خصم المسير</th><th className="p-2">يُخصم الشهر القادم</th><th className="p-2">الإجراء</th></tr></thead>

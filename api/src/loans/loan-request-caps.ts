@@ -45,6 +45,26 @@ async function intConfig(em: EntityManager, key: string, fallback: number, min: 
   return value
 }
 export async function loanReasonMinLength(em: EntityManager) { return intConfig(em, 'loan.exceptional_reason_min_length', 10, 1, 500) }
+
+// B1.8 / D10 (إعداد مقفول): أول قسط في فترة المسير اللي بعد فترة الاعتماد. المقفول = أول الشهر الميلادي التالي (زي النهارده)
+export const LOAN_FIRST_AFTER_APPROVAL_PERIOD_KEY = 'loan.first_installment_after_approval_period'
+async function loanPayrollPeriodOf(em: EntityManager, date: string) {
+  return loanCapWindow('PAYROLL_PERIOD', date, await intConfig(em, 'payroll.cycle_start_day', 23, 1, 31)).period
+}
+/** الشهر الافتراضي لأول قسط وقت التقديم */
+export async function loanDefaultFirstInstallmentPeriod(em: EntityManager, today: string): Promise<string> {
+  return (await boolConfig(em, LOAN_FIRST_AFTER_APPROVAL_PERIOD_KEY, false)) ? addMonths(await loanPayrollPeriodOf(em, today), 1) : addMonths(today.slice(0, 7), 1)
+}
+/**
+ * وقت التنفيذ (الاعتماد الأخير): لو الإعداد مفتوح والشهر المختوم افتراضي (مش اختيار الموارد البشرية ولا سلفة استثنائية) ووقع في فترة
+ * الاعتماد أو قبلها (الاعتماد اتأخر) — بيتزق لفترة المسير اللي بعد فترة الاعتماد. غير كده الشهر زي ما هو
+ */
+export async function loanExecutionFirstInstallmentPeriod(em: EntityManager, payload: Record<string, unknown>, stamped: string | null, today: string): Promise<string | null> {
+  if (!stamped || payload.exceptional === true || !blank(payload.firstInstallmentPeriodBy)) return stamped
+  if (!(await boolConfig(em, LOAN_FIRST_AFTER_APPROVAL_PERIOD_KEY, false))) return stamped
+  const approval = await loanPayrollPeriodOf(em, today)
+  return stamped <= approval ? addMonths(approval, 1) : stamped
+}
 async function boolConfig(em: EntityManager, key: string, fallback: boolean) {
   const raw = (await configValue(em, key, fallback ? 'true' : 'false')).trim()
   return raw === 'true' ? true : raw === 'false' ? false : fallback
@@ -189,8 +209,8 @@ export async function stageLoanRequestSubmission(em: EntityManager, input: { req
     if (firstInstallmentPeriod) Object.assign(staged, { firstInstallmentPeriod, firstInstallmentPeriodBy: carriedChoice ?? input.actor.sub })
   }
   // شهر أول قسط يُختم مرة واحدة عند التقديم فيراه الموظف والمعتمد قبل الاعتماد (القرار د)؛
-  // الافتراضي هو افتراضي المعالج نفسه: أول الشهر التالي.
-  if (!firstInstallmentPeriod) staged.firstInstallmentPeriod = addMonths(today.slice(0, 7), 1)
+  // الافتراضي هو افتراضي المعالج نفسه: أول الشهر التالي — أو (B1.8 / D10، إعداد مقفول) فترة المسير اللي بعد فترة التقديم.
+  if (!firstInstallmentPeriod) staged.firstInstallmentPeriod = await loanDefaultFirstInstallmentPeriod(em, today)
   staged.capCheck = { stage: 'SUBMIT', checkedAt: new Date().toISOString(), actorUserId: input.actor.sub, evaluation }
   return staged
 }

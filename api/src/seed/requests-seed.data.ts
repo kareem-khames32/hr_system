@@ -386,6 +386,9 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'payroll.bank_change.secure_path_always', value: 'false' },
   { key: 'overtime.auto_approve.exclude_manual', value: 'false' },
   { key: 'employees.transfer_checks.enabled', value: 'false' },
+  // B1.8 (D10، R09) — مقفولين = الأقساط زي النهارده
+  { key: 'loan.first_installment_after_approval_period', value: 'false' },
+  { key: 'loans.require_disbursement_before_deduction', value: 'false' },
   { key: 'payroll.exemption_reason_min_length', value: '20' },
   // C2 / الخطوة 25 (DD-03/05): الخصومات المصنفة — أقل طول للسبب، نافذة كشف التكرار بالساعات،
   // إنشاء المدير الهيكلي (مباشر/فريق/قسم/فرع) بحسب نطاق النوع، وحد الإنشاء الجماعي في الدفعة.

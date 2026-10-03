@@ -656,6 +656,9 @@ export class SettingsController {
     'payroll.bank_change.secure_path_always': ['true', 'false'],
     'overtime.auto_approve.exclude_manual': ['true', 'false'],
     'employees.transfer_checks.enabled': ['true', 'false'],
+    // B1.8 السلف
+    'loan.first_installment_after_approval_period': ['true', 'false'],
+    'loans.require_disbursement_before_deduction': ['true', 'false'],
     'attendance.flex.count_early_work_toward_required': ['true', 'false'],
     'attendance.flex.prorate_window_on_partial_leave': ['true', 'false'],
     'attendance.flex.window_supersedes_grace': ['true', 'false'],

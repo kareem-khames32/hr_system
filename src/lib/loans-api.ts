@@ -51,8 +51,13 @@ export interface LoanLedgerRepayment {
   requestId: number | null; balanceBefore: string; balanceAfter: string; createdAt: string
 }
 export interface LoanLedgerEvent { id: number; loanId: number; installmentId: number; action: string; reason: string | null; requestId: number | null; payrollRunId: number | null; createdAt: string }
+// B1.8 (R09): طريقة صرف السلفة
+export type LoanDisbursementMethod = 'CASH' | 'BANK_TRANSFER' | 'CHEQUE'
+export const LOAN_DISBURSEMENT_METHOD_LABELS: Record<LoanDisbursementMethod, string> = { CASH: 'نقدي', BANK_TRANSFER: 'تحويل بنكي', CHEQUE: 'شيك' }
 export interface LoanLedger {
   id: number; requestId: number | null; employeeId: number; amount: string; requestedAmount: string | null; status: string; disbursedAt: string | null
+  // B1.8: «لازم تتصرف الأول» وطريقة الصرف (والمرجع ومين لقارئ الرواتب) — قبل ترحيل 082: false/null
+  requiresDisbursement?: boolean; disbursementMethod?: string | null; disbursementReference?: string | null; disbursedByUserId?: number | null
   isExceptional: boolean; exceptionalCategory: string | null; exceptionalReason: string | null; firstInstallmentPeriod: string | null; installmentMonths: number | null
   installments: LoanLedgerInstallment[]; paidCount: number; paidAmount: string; remainingAmount: string
   repayments: LoanLedgerRepayment[]; events: LoanLedgerEvent[]
@@ -123,6 +128,9 @@ export const approveLoanRequest = (requestId: number, input: { comment?: string;
   apiFetch<{ id: number; status: string }>(`/requests/${requestId}/act`, json({ action: 'APPROVE', ...input }))
 export const fetchMyLoans = () => apiFetch<LoanLedger[]>('/loans/mine')
 export const fetchLoanLedger = (loanId: number) => apiFetch<LoanLedger>(`/loans/${loanId}/ledger`)
+/** B1.8 (R09): تسجيل صرف السلفة مرة واحدة — التاريخ والطريقة والمرجع (مطلوب للتحويل والشيك) */
+export const recordLoanDisbursement = (loanId: number, input: { date: string; method: LoanDisbursementMethod; reference?: string }) =>
+  apiFetch<LoanLedger>(`/loans/${loanId}/disbursement`, json(input))
 export const recordLoanRepayment = (loanId: number, input: { amount?: string | null; reference: string; method: LoanRepaymentMethod; mode: LoanRepaymentMode; reason?: string }) =>
   apiFetch<LoanRepaymentResult>(`/loans/${loanId}/repayments`, json(input))
 export const fetchLoanRecoveries = () => apiFetch<LoanRecovery[]>('/loans/recoveries')

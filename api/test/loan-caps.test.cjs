@@ -35,7 +35,9 @@ test('D: the first-installment month is stamped once at submission — no server
   assert.ok(!requestCaps.LOAN_REQUEST_SERVER_FIELDS.includes('firstInstallmentByHr'))
   const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'loans', 'loan-request-caps.ts'), 'utf8')
   assert.ok(!source.includes('firstInstallmentByHr'), 'no server-only flag rides on the loan payload')
-  assert.ok(source.includes('if (!firstInstallmentPeriod) staged.firstInstallmentPeriod = addMonths(today.slice(0, 7), 1)'), 'stamped once at submission')
+  // B1.8 (D10): الختم مرة واحدة عند التقديم من دالة الافتراضي؛ والإعداد المقفول = أول الشهر الميلادي التالي زي الأول
+  assert.ok(source.includes('if (!firstInstallmentPeriod) staged.firstInstallmentPeriod = await loanDefaultFirstInstallmentPeriod(em, today)'), 'stamped once at submission')
+  assert.ok(source.includes(': addMonths(today.slice(0, 7), 1)'), 'setting off = next calendar month as before')
   assert.ok(!/next\.firstInstallmentPeriod/.test(source), 'the approval review does not re-stamp the month')
   // حمولة العميل ما زالت مرفوضة لحقول الخادم الباقية
   assert.throws(() => requestCaps.assertLoanRequestClientPayload({ capCheck: {} }), error => error instanceof BadRequestException)

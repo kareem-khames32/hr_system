@@ -1,4 +1,4 @@
-import { ArrayMaxSize, IsArray, IsIn, IsInt, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator'
+import { Allow, ArrayMaxSize, IsArray, IsIn, IsInt, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator'
 
 // المبالغ والنسب تُرسل نصوصًا دقيقة؛ التحقق الكامل في loan-caps.ts حتى تبقى رسالة واحدة للواجهة والخادم.
 export class LoanCapPolicyDto {
@@ -36,6 +36,13 @@ export class LoanRepaymentDto {
   @IsIn(['CASH', 'BANK_TRANSFER', 'OTHER']) method: 'CASH' | 'BANK_TRANSFER' | 'OTHER'
   @IsIn(['FULL', 'SHORTEN_TERM', 'REDUCE_INSTALLMENT']) mode: 'FULL' | 'SHORTEN_TERM' | 'REDUCE_INSTALLMENT'
   @IsOptional() @IsString() @MaxLength(500) reason?: string
+}
+
+// B1.8: تسجيل صرف السلفة — الفحص برسائل عربية في الخدمة (readLoanDisbursementInput)
+export class LoanDisbursementDto {
+  @Allow() date?: unknown
+  @Allow() method?: unknown
+  @Allow() reference?: unknown
 }
 
 export class LoanRecoveryCollectDto {

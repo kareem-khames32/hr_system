@@ -3,7 +3,9 @@ import { overtimeFinancialValue } from '../payroll/overtime-financial'
 import { payrollPeriodOfDate } from '../payroll/payroll-period'
 import { salaryPayrollPeriodBounds } from '../payroll/payroll-period-salary'
 import { deferLoanInstallment, repayLoanEarly } from '../payroll/payroll-installment-ledger'
-import { readApprovedLoanRequest, readEarlySettlementPayload } from '../loans/loan-request-caps'
+import { loanExecutionFirstInstallmentPeriod, readApprovedLoanRequest, readEarlySettlementPayload } from '../loans/loan-request-caps'
+// B1.8 / R09: وسم «لازم تتصرف الأول» للسلفة الجديدة (إعداد مقفول)
+import { markNewLoanDisbursementRequirement } from '../loans/loan-disbursement'
 import { readLoanInstallmentPositions } from '../payroll/payroll-installment-balances'
 import { LOAN_DEFERRAL_HANDLER, LOAN_DEFERRAL_TYPE, assertLoanReferenceId, loanScheduleAmounts, readStoredLoanDeferralPayload } from './loan-installment-requests'
 import { claimOvertimeDay } from './overtime-day-claims'
@@ -499,6 +501,8 @@ export class DestinationsService {
     const open = (await readLoanInstallmentPositions(em, req.requesterId)).filter(row => row.financialStatus === 'DUE' && row.remainingAmount !== '0.00')
     if (open.length + schedule.months > 1000) throw new BadRequestException('إجمالي الأقساط المفتوحة بعد السلفة يتجاوز الحد التقني1000؛ قلل المدة أو أغلق الأقساط القائمة أولًا')
     const start = new Date()
+    // B1.8 / D10 (إعداد مقفول): الشهر الافتراضي المختوم بيتزق لفترة بعد فترة الاعتماد لو الاعتماد اتأخر لحد فترته
+    schedule.firstInstallmentPeriod = await loanExecutionFirstInstallmentPeriod(em, payload, schedule.firstInstallmentPeriod, localDateOf(start))
     // الافتراضي كما كان: أول قسط في الشهر التالي للاعتماد؛ الموارد البشرية تحدد شهرًا آخر.
     const [firstYear, firstMonth] = schedule.firstInstallmentPeriod
       ? [Number(schedule.firstInstallmentPeriod.slice(0, 4)), Number(schedule.firstInstallmentPeriod.slice(5, 7)) - 1]
@@ -528,6 +532,8 @@ export class DestinationsService {
       })
       await em.query(`INSERT INTO [loan_installments] ([loanId], [dueDate], [amount], [paid], [paidAmount], [financialStatus], [financialRevision], [parentInstallmentId], [originalDueDate], [paidAt]) VALUES ${values.join(', ')}`, parameters)
     }
+    // B1.8 / R09 (إعداد مقفول، ترحيل 082): السلفة الجديدة بتتعلّم «لازم تتصرف الأول» — أقساطها مابتدخلش المسير لحد ما صرفها يتسجل
+    await markNewLoanDisbursementRequirement(em, loanId)
     return { ref: refOf('LN', loanId), completed: true }
   }
 
