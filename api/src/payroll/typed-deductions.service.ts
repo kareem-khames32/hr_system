@@ -26,6 +26,7 @@ import { PayrollDecimal } from './payroll-decimal'
 import { salaryPayrollPeriodBounds } from './payroll-period-salary'
 import { PAYROLL_SALARY_EVIDENCE_MODE_KEY, parsePayrollSalaryEvidenceMode, PayrollSalaryEvidenceMode, selectPayrollRunSalary } from './payroll-run-salary'
 import { lockPayrollEmployees } from './payroll-settlement-boundary'
+import { appliedBySettlement, SETTLEMENT_APPLIED_LABEL } from '../offboarding/settlement-obligations'
 import { hiddenRunPeriodsByEmployee, maskPayloadRunRefs, payloadRunIds, payrollRunPeriods, payrollRunRefVisibility, scrubEventReferences, scrubRunPeriods } from './payroll-run-visibility'
 // C8 / الخطوة 31: بند مسير عُكس صرفه بسطر منفذ لا يُغلق شهر الموظف ولا يُعد آخر مسير له
 import { payrollLineNotReversedSql } from './payroll-reversal-sql'
@@ -810,7 +811,8 @@ export class TypedDeductionsService {
   private obligationView(item: EmployeeObligation, shown: (runId: number | null | undefined, employeeId: number) => boolean = () => true, hiddenPeriods?: ReadonlySet<string>) {
     // CR38-B02: اسم القيد من غير فترة مسير مخفي («مرحّل من قيد … (مسير 2026-07)»، «مؤجَّل من مسير …»)
     return { id: item.id, type: item.type, category: item.category, label: scrubRunPeriods(item.label, hiddenPeriods ?? []) ?? item.label, amount: money(item.amount), status: item.status,
-      statusLabel: DEDUCTION_LABELS.obligationStatuses[item.status] ?? item.status, targetPeriod: item.targetPeriod, effectiveDate: item.effectiveDate,
+      // B1.8b: القيد اللي اتسوّى في التصفية (APPLIED من غير مسير) بيقول كده — من المخزن نفسه، مش من رقم المسير بعد الحجب
+      statusLabel: appliedBySettlement(item) ? SETTLEMENT_APPLIED_LABEL : DEDUCTION_LABELS.obligationStatuses[item.status] ?? item.status, targetPeriod: item.targetPeriod, effectiveDate: item.effectiveDate,
       // CR33-B01: رقم المسير للحساب اللي يشوفه بس
       reservedPayrollRunId: shown(item.reservedPayrollRunId, item.employeeId) ? item.reservedPayrollRunId : null,
       appliedPayrollRunId: shown(item.appliedPayrollRunId, item.employeeId) ? item.appliedPayrollRunId : null, appliedAmount: money(item.appliedAmount),
@@ -988,7 +990,7 @@ export class TypedDeductionsService {
         incidentDate: row.incidentDate, reason: row.reason, targetPeriod: row.targetPeriod, installments: row.installments,
         issuer: { basisLabel: (DEDUCTION_LABELS.roles as Record<string, string>)[row.scopeBasis] ?? row.scopeBasis, name: row.creatorEmployeeId ? people.get(row.creatorEmployeeId)?.fullName ?? null : null },
         obligations: mineObligations.map(item => ({ type: item.type, reversal: item.category === DEDUCTION_REVERSAL_OBLIGATION_CATEGORY, targetPeriod: item.targetPeriod, amount: money(item.amount),
-          status: item.status, statusLabel: DEDUCTION_LABELS.obligationStatuses[item.status] ?? item.status,
+          status: item.status, statusLabel: appliedBySettlement(item) ? SETTLEMENT_APPLIED_LABEL : DEDUCTION_LABELS.obligationStatuses[item.status] ?? item.status,
           appliedPayrollRunId: item.appliedPayrollRunId, appliedPeriod: item.appliedPayrollRunId ? runs.get(item.appliedPayrollRunId) ?? null : null, appliedAmount: money(item.appliedAmount) })),
         objections, canObject: ['IN_APPROVAL', 'APPROVED'].includes(row.status) && !open && windowMinutes > 0 && age <= windowMinutes,
         objectionMinutesLeft: windowMinutes > 0 ? Math.max(0, windowMinutes - age) : 0,

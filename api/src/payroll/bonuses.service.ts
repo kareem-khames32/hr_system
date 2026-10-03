@@ -25,6 +25,7 @@ import { payrollPeriodOfDate } from './payroll-period'
 import { salaryPayrollPeriodBounds } from './payroll-period-salary'
 import { PAYROLL_SALARY_EVIDENCE_MODE_KEY, parsePayrollSalaryEvidenceMode, type PayrollSalaryEvidenceMode, selectPayrollRunSalary } from './payroll-run-salary'
 import { lockPayrollEmployees } from './payroll-settlement-boundary'
+import { appliedBySettlement, SETTLEMENT_APPLIED_LABEL } from '../offboarding/settlement-obligations'
 import { hiddenRunPeriodsByEmployee, maskPayloadRunRefs, payloadRunIds, payrollRunPeriods, payrollRunRefVisibility, scrubEventReferences, scrubRunPeriods } from './payroll-run-visibility'
 import { PayrollRun } from './payroll.entities'
 import {
@@ -620,12 +621,15 @@ export class BonusesService {
     const state: BonusPayoutState | null = row.status === 'APPROVED' ? bonusPayoutState(credit) : null
     // CR38-B02: «مصروف في مسير 2026-07» بس لو المسير مرئي للحساب لموظف المكافأة (الداخلي والموظف نفسه بيشوفوه دايمًا)
     const period = credit?.appliedPayrollRunId && shown(credit.appliedPayrollRunId, row.employeeId) ? runs.get(credit.appliedPayrollRunId) ?? null : null
+    // B1.8b: المكافأة اللي اتصرفت في التصفية (من غير مسير) بتقول كده
+    const settled = state === 'PAID' && appliedBySettlement(credit)
     const statusLabel = row.status !== 'APPROVED' ? BONUS_LABELS.statuses[row.status] ?? row.status
+      : settled ? SETTLEMENT_APPLIED_LABEL
       : state === 'PAID' ? (period ? `مصروف في مسير ${period}` : shown(credit?.appliedPayrollRunId, row.employeeId) ? `مصروف في مسير #${credit?.appliedPayrollRunId}` : 'مصروف')
         : state === 'RESERVED' ? BONUS_LABELS.payout.RESERVED : BONUS_LABELS.statuses.APPROVED
     const paidAmount = credit?.status === 'APPLIED' ? money(credit.appliedAmount ?? credit.amount)! : '0.00'
     return { credit, state, statusLabel, paidAmount, reversedAmount: sumMoney(reversals.map(item => item.amount)),
-      view: state ? { state, label: BONUS_LABELS.payout[state], runId: shown(credit?.appliedPayrollRunId ?? credit?.reservedPayrollRunId, row.employeeId)
+      view: state ? { state, label: settled ? SETTLEMENT_APPLIED_LABEL : BONUS_LABELS.payout[state], runId: shown(credit?.appliedPayrollRunId ?? credit?.reservedPayrollRunId, row.employeeId)
         ? credit?.appliedPayrollRunId ?? credit?.reservedPayrollRunId ?? null : null, period } : null }
   }
 

@@ -13,6 +13,11 @@ export const SETTLEMENT_OBLIGATION_CREDIT_PREFIX = 'قيود دفتر معلّق
 
 export interface SettlementObligation { id: number; type: 'DEBIT' | 'CREDIT'; amount: number }
 
+/** قيد اتسوّى في التصفية (B1.8b): APPLIED من غير مسير — الاعتماد هو المسار الوحيد اللي بيعلّم كده */
+export const SETTLEMENT_APPLIED_LABEL = 'اتسوّى في تصفية نهاية الخدمة'
+export const appliedBySettlement = (item: { status: string; appliedPayrollRunId?: number | null } | null | undefined) =>
+  !!item && item.status === 'APPLIED' && item.appliedPayrollRunId == null
+
 const cents = (value: unknown) => Math.round(Number(value) * 100)
 
 /**
