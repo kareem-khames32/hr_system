@@ -6,9 +6,12 @@ import { ValidationPipe } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { AppModule } from './app.module'
 import { applySecurityHeaders } from './security-headers'
+import { fileErrorLoggerFromEnv } from './common/file-error-logger'
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule)
+  // B1.13: الأخطاء والتحذيرات في ملف يومي بتدوير (api/logs، أو LOG_DIR؛ LOG_DIR=off بيقفله)
+  const fileLogger = fileErrorLoggerFromEnv()
+  const app = await NestFactory.create(AppModule, fileLogger ? { logger: fileLogger } : {})
   const config = app.get(ConfigService)
 
   // B1.3: رؤوس حماية المتصفح وشيل X-Powered-By (و«trust proxy» لو TRUST_PROXY مضبوط)

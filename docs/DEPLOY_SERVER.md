@@ -170,8 +170,9 @@ curl http://10.23.0.222:4000/api/health
 
 ## 9) النسخ الاحتياطي على السيرفر
 
-- قاعدة البيانات: `BACKUP DATABASE [hr_system] TO DISK = N'/var/opt/mssql/backup/hr_system_<تاريخ>.bak' WITH COPY_ONLY, CHECKSUM` يوميًا.
-- فولدر `uploads` مع نفس النسخة.
+- **الخطوات كلها** (الإعداد، والجدولة، والتجربة الأسبوعية، والاسترجاع): `docs/ops/backup-restore.md`.
+- **التحديث والرجوع لنسخة قبلها:** `docs/ops/deploy.md`.
+- قاعدة البيانات: نسخة كاملة يومية متحقق منها بـ`node api/scripts/ops-backup.cjs`، ومعاها فولدر `uploads` لمكان برّه السيرفر.
 - التعديلات على المخطط بعد كده بالمُرحّل بس: `node api/scripts/db-migrate.cjs plan --company` ثم `apply --company` (والـAPI واقف).
 
 ---
