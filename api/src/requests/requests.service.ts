@@ -95,7 +95,7 @@ import { assertLoanRequestClientPayload, EARLY_SETTLEMENT_FIELDS, isEarlySettlem
 import { PERSONAL_DATA_FIELDS, personalDataField } from '../employees/employee-personal-data'
 import { assertPersonalDataKeys, PERSONAL_DATA_HANDLER, validatePersonalDataRequest } from './personal-data-requests'
 // CR36-B01 وCR37-B01: مرجع المسير في إضافي تفاصيل الطلب ونص أحداثه بقاعدة رؤية المسير
-import { payloadRunIds, payrollRunRefVisibility, scopeRunRefRows, scrubEventReferences } from '../payroll/payroll-run-visibility'
+import { payloadRunIds, payrollRunPeriods, payrollRunRefVisibility, scopeRunRefRows, scrubEventReferences } from '../payroll/payroll-run-visibility'
 
 export interface ActDto {
   action: 'APPROVE' | 'REJECT' | 'RETURN'
@@ -2083,8 +2083,11 @@ export class RequestsService {
     // CR37-B01: حدث فيه مرجع مسير (عكس الصرف: originalRunId وreversalRunId) مخفي للحساب لموظف السجل — نصه من غير «#رقم» (الحمولة مابترجعش أصلًا)
     const eventRefs = events.map(event => payloadRunIds(event.payload ?? null))
     const eventShown = eventRefs.some(ids => ids.length) ? await payrollRunRefVisibility(this.ds.manager, branchScopeOf(user), eventRefs.flat(), [entry.employeeId], user.employeeId ?? null) : null
-    const eventReason = (index: number) => eventShown && eventRefs[index].some(runId => !eventShown(runId, entry.employeeId))
-      ? scrubEventReferences(events[index].reason) : events[index].reason
+    // CR38-B02: وفترة المسير المخفي كمان («عكس صرف مسير 2026-08» ← «عكس صرف مسير خارج نطاق صلاحيتك»)، وتاريخ العمل زي ما هو
+    const eventHidden = (index: number) => eventShown ? eventRefs[index].filter(runId => !eventShown(runId, entry.employeeId)) : []
+    const eventPeriods = eventShown ? await payrollRunPeriods(this.ds.manager, events.flatMap((_, index) => eventHidden(index))) : new Map<number, string>()
+    const eventReason = (index: number) => eventHidden(index).length
+      ? scrubEventReferences(events[index].reason, eventHidden(index).map(runId => eventPeriods.get(runId))) : events[index].reason
     // نوافذ الإضافي في الدليل على قد نطاق القارئ: فترة فرع تاني مايظهرش اسمها (مراجعة Codex الجولة 17، CR17-B02)
     const windowView = await overtimeWindowRedactor(this.ds.manager, branchScopeOf(user), [saved?.submission, saved?.review])
     // الخطوة 13: جاهزية راتب شهر يوم العمل قبل الاعتماد النهائي، حتى لا يُفاجأ المعتمد الأخير بـOT_SALARY_MONTH_EVIDENCE_REQUIRED.

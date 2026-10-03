@@ -1,0 +1,17 @@
+'use strict'
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict')
+const source=fs.readFileSync(path.join(__dirname,'codex-review-round37-overtime.integration.cjs'),'utf8')
+const head=source.slice(0,source.indexOf("test('CR37 real paid/deferred"))
+let event=source.slice(source.indexOf("test('CR37 overtime request reversal"),source.indexOf("test('CR37 payroll overtime report"))
+assert.ok(head.length>1000&&event.includes('storedHistoryUnchanged:true'))
+event=event.replace("test('CR37 overtime request reversal event must not expose foreign original and reversal payroll numbers'","test('CR38 overtime event must hide the foreign payment period as well as its numbers'")
+event=event.replace(" for(const id of [f.later.run.id,reversal.id])assert.equal", " assert.equal(f.original.run.period,'2026-07');assert.equal(f.later.run.period,'2026-08')\n assert.ok(companyEvent.reason.includes(f.later.run.period));assert.ok(selfEvent.reason.includes(f.later.run.period))\n assert.equal(event.reason.includes(f.later.run.period),false,'The old request party must not learn the foreign payment period, different from the July work date')\n for(const id of [f.later.run.id,reversal.id])assert.equal")
+const output=(head+event).replaceAll('CR37','CR38').replaceAll('R37','R38').replaceAll('r37','r38')
+fs.writeFileSync(path.join(__dirname,'codex-review-round38-event-period.integration.cjs'),output)
+console.log('Created round38 period assertion from the unchanged real overtime fixture.')
+let related=fs.readFileSync(path.join(__dirname,'codex-review-round35-independent.integration.cjs'),'utf8').replaceAll('round35','round38').replaceAll('CR35','CR38').replaceAll('r35','r38')
+const previous=" for(const c of checks){assert.deepEqual(c.actual,c.expected,c.route);if(foreign)assert.doesNotMatch(c.reason??'',/#\\d+/);else assert.equal(c.reason,c.companyReason)}"
+assert.ok(related.includes(previous))
+related=related.replace(previous,previous+"\n if(foreign)assert.deepEqual(checks.filter(c=>(c.reason??'').includes(run.period)).map(c=>c.route),[],'Foreign payroll period must not survive event reference masking in bonus, deduction or loan views')")
+fs.writeFileSync(path.join(__dirname,'codex-review-round38-related-periods.integration.cjs'),related)
+console.log('Created related event-period assertions with a real in-scope control.')

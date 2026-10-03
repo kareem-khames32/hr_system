@@ -113,7 +113,7 @@ import { assertPayrollRunHasNoChain, voidPayrollRunApprovals } from './payroll-a
 import { assertPayrollRunNotDisbursed, closePayrollRunDisbursement } from './payroll-disbursement'
 import { PayrollItemDisbursement } from './payroll-disbursement.entities'
 // CR35-B01: مرجع مسير في موانع عكس الصرف بقاعدة رؤية المسير للحساب
-import { scopePayrollRunRefBlockers } from './payroll-run-visibility'
+import { hiddenRunPeriodsByEmployee, scopePayrollRunRefBlockers, scrubRunPeriodsDeep } from './payroll-run-visibility'
 
 // الخطوة 16: مدخلات تعريف المسير من الشاشة (تُتحقق هنا ضد القاعدة؛ الـDTO يتحقق من الشكل فقط).
 export interface PayrollRunDefinitionInput {
@@ -1944,7 +1944,12 @@ export class PayrollService {
     // قارئ الرواتب اللي المسير كله في نطاقه بياخد بيانات المسير زي ما هي. صاحب القسيمة من غير الصلاحية، وقارئ فرع والمسير فيه فروع تانية
     // (صافي المسير وتعريفه ومستبعدوه مش بتوع فرعه — وGET /payroll/runs/:id نفسه بيرفضه)، بياخدوا بيانات القسيمة بس
     const payrollReader = userHasPerm(user, 'payroll.view') && allowed && await this.runAccessible(user, run, em)
-    return { item, run: payrollReader ? this.lightRun(run) : this.ownPayslipRun(run), employee, member, identitySource: snapshot ? 'SNAPSHOT' : 'CURRENT_NAME_ONLY', obligationDetails, financialExemptions, reversal, leaveDeductions, lines }
+    // CR38-B02 (مسح الصنف): أسماء القيود والإعفاءات وسطور القسيمة من غير فترة مسير مخفي للحساب لصاحب القسيمة («مرحّل من قيد … (مسير 2026-07)»)
+    const hiddenPeriods = user.employeeId != null && user.employeeId === item.employeeId ? undefined
+      : (await hiddenRunPeriodsByEmployee(em, scope, [item.employeeId], user.employeeId ?? null)).get(item.employeeId)
+    return { item, run: payrollReader ? this.lightRun(run) : this.ownPayslipRun(run), employee, member, identitySource: snapshot ? 'SNAPSHOT' : 'CURRENT_NAME_ONLY',
+      obligationDetails: scrubRunPeriodsDeep(obligationDetails, hiddenPeriods), financialExemptions: scrubRunPeriodsDeep(financialExemptions, hiddenPeriods), reversal, leaveDeductions,
+      lines: scrubRunPeriodsDeep(lines, hiddenPeriods) }
     })
   }
 

@@ -26,7 +26,7 @@ import { PayrollDecimal } from './payroll-decimal'
 import { salaryPayrollPeriodBounds } from './payroll-period-salary'
 import { PAYROLL_SALARY_EVIDENCE_MODE_KEY, parsePayrollSalaryEvidenceMode, PayrollSalaryEvidenceMode, selectPayrollRunSalary } from './payroll-run-salary'
 import { lockPayrollEmployees } from './payroll-settlement-boundary'
-import { maskPayloadRunRefs, payloadRunIds, payrollRunRefVisibility, scrubEventReferences } from './payroll-run-visibility'
+import { hiddenRunPeriodsByEmployee, maskPayloadRunRefs, payloadRunIds, payrollRunPeriods, payrollRunRefVisibility, scrubEventReferences, scrubRunPeriods } from './payroll-run-visibility'
 // C8 / الخطوة 31: بند مسير عُكس صرفه بسطر منفذ لا يُغلق شهر الموظف ولا يُعد آخر مسير له
 import { payrollLineNotReversedSql } from './payroll-reversal-sql'
 import { PayrollItem, PayrollRun } from './payroll.entities'
@@ -807,8 +807,9 @@ export class TypedDeductionsService {
     return { visible, steps, people }
   }
 
-  private obligationView(item: EmployeeObligation, shown: (runId: number | null | undefined, employeeId: number) => boolean = () => true) {
-    return { id: item.id, type: item.type, category: item.category, label: item.label, amount: money(item.amount), status: item.status,
+  private obligationView(item: EmployeeObligation, shown: (runId: number | null | undefined, employeeId: number) => boolean = () => true, hiddenPeriods?: ReadonlySet<string>) {
+    // CR38-B02: اسم القيد من غير فترة مسير مخفي («مرحّل من قيد … (مسير 2026-07)»، «مؤجَّل من مسير …»)
+    return { id: item.id, type: item.type, category: item.category, label: scrubRunPeriods(item.label, hiddenPeriods ?? []) ?? item.label, amount: money(item.amount), status: item.status,
       statusLabel: DEDUCTION_LABELS.obligationStatuses[item.status] ?? item.status, targetPeriod: item.targetPeriod, effectiveDate: item.effectiveDate,
       // CR33-B01: رقم المسير للحساب اللي يشوفه بس
       reservedPayrollRunId: shown(item.reservedPayrollRunId, item.employeeId) ? item.reservedPayrollRunId : null,
@@ -833,6 +834,7 @@ export class TypedDeductionsService {
     const obligations = await this.inChunks(ids, chunk => em.getRepository(EmployeeObligation).find({ where: { deductionRequestId: In(chunk) }, order: { id: 'ASC' } }))
     const events = await this.inChunks(ids, chunk => em.getRepository(DeductionRequestEvent).find({ where: { requestId: In(chunk), eventType: In(OBJECTION_EVENTS) }, order: { id: 'ASC' } }))
     const shown = await this.runShown(em, user, obligations.flatMap(item => [item.appliedPayrollRunId, item.reservedPayrollRunId]), obligations.map(item => item.employeeId))
+    const hiddenPeriods = await hiddenRunPeriodsByEmployee(em, branchScopeOf(user), visible.map(row => row.employeeId), user.employeeId ?? null)
     return visible.map(row => {
       const chain = steps.get(row.id)!, employee = people.get(row.employeeId), step = currentDeductionStep(chain)
       const snapshot = json<Record<string, any>>(row.typeSnapshot, {})
@@ -857,7 +859,7 @@ export class TypedDeductionsService {
           fallbackFromLabel: item.fallbackFrom ? DEDUCTION_LABELS.roles[item.fallbackFrom] : null,
           approverName: item.approverEmployeeId ? people.get(item.approverEmployeeId)?.fullName ?? null : null })),
         currentStepOrder: step?.order ?? null, escalated: row.escalated, outOfScope: row.outOfScope, overrides: json(row.overrides, null),
-        obligations: rowObligations.map(item => this.obligationView(item, shown)),
+        obligations: rowObligations.map(item => this.obligationView(item, shown, hiddenPeriods.get(item.employeeId))),
         collectedAmount: totals.collected, reversedAmount: totals.reversed,
         objections, openObjection: open,
         decisionReason: row.decisionReason, decidedByUserId: row.decidedByUserId, decidedAt: row.decidedAt, createdAt: row.createdAt, updatedAt: row.updatedAt,
@@ -932,9 +934,13 @@ export class TypedDeductionsService {
     const payloads = events.map(event => json<Record<string, unknown> | null>(event.payload, null))
     const runIds = payloads.flatMap(payload => payloadRunIds(payload))
     const shown = runIds.length ? await this.runShown(em, user, runIds, [row.employeeId]) : () => true
+    // CR38-B02: فترة المسير المخفي كمان («عكس صرف مسير 2026-07» ← «عكس صرف مسير خارج نطاق صلاحيتك»)
+    const hiddenIds = runIds.filter(runId => !shown(runId, row.employeeId))
+    const periods = hiddenIds.length ? await payrollRunPeriods(em, hiddenIds) : new Map<number, string>()
     return { ...view, events: events.map((event, index) => {
       const { payload, hidden } = maskPayloadRunRefs(payloads[index], runId => shown(runId, row.employeeId))
-      return { ...event, payload, reason: hidden ? scrubEventReferences(event.reason) : event.reason }
+      const eventPeriods = payloadRunIds(payloads[index]).filter(runId => !shown(runId, row.employeeId)).map(runId => periods.get(runId))
+      return { ...event, payload, reason: hidden ? scrubEventReferences(event.reason, eventPeriods) : event.reason }
     }) }
   }
 
@@ -1438,7 +1444,10 @@ export class TypedDeductionsService {
           AND ${payrollLineNotReversedSql('r.[id]', 'i.[employeeId]')} GROUP BY i.[employeeId]`, chunk)
       for (const row of rows) lastRuns.set(Number(row.employeeId), String(row.lastPeriod))
     }
-    const ledgerRow = (item: EmployeeObligation, reason: string | null = null) => {
+    // CR38-B02: «دخل الموظف مسير 2026-07 …» من غير فترة مسير مخفي للحساب لموظف القيد (آخر مسير ممكن يكون في فرع تاني قبل النقل)
+    const ledgerHidden = await hiddenRunPeriodsByEmployee(em, branchScopeOf(user), openDebits.map(item => item.employeeId), user.employeeId ?? null)
+    const ledgerRow = (item: EmployeeObligation, rawReason: string | null = null) => {
+      const reason = scrubRunPeriods(rawReason, ledgerHidden.get(item.employeeId) ?? [])
       const row = byId.get(item.deductionRequestId ?? -1)
       return { obligationId: item.id, requestId: item.deductionRequestId, employeeId: item.employeeId, fullName: personName(item.employeeId), employeeCode: people.get(item.employeeId)?.employeeCode ?? null,
         typeName: row ? snapshots.get(row.id)?.nameAr ?? null : null, amount: money(item.amount), targetPeriod: item.targetPeriod, status: item.status,

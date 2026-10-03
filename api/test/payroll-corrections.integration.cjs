@@ -933,3 +933,37 @@ test('CR37-B02: تقرير الإضافي وتقرير «بلا مسير» — �
   const companyUnassigned = expectStatus(await request(users.admin, 'GET', '/reports/payroll/unassigned?period=2026-09'), 200).rows.find(item => item.employeeId === emp.id)
   assert.deepEqual([companyUnassigned.lastRun.id, companyUnassigned.lastRun.status], [august.id, 'PAID'])
 })
+
+test('CR38-B01/B02: موظف اتنقل — قايمة مسيرات «بلا مسير» لقارئ الفرع الجديد زي ما هي (مسيره القديم مايظهرش)، واسم قيده من غير فترة المسير القديم، والشركة بتشوف الكل', { timeout: 900000 }, async () => {
+  const policy = await publishPolicy('مجموعة فرع التصحيح — قايمة CR38')
+  const emp = await employee(9000)
+  let august = expectStatus(await request(users.desk, 'POST', '/payroll/runs', { name: 'مسير أغسطس لقايمة CR38', policyVersionId: policy.versionId, period,
+    filters: { employeeIds: [emp.id] } }), 201)
+  august = await calculate(august, users.desk)
+  await acknowledge(august, users.approver)
+  expectStatus(await request(users.approver, 'POST', `/payroll/runs/${august.id}/approve`), 201)
+  expectStatus(await request(users.approver, 'POST', `/payroll/runs/${august.id}/pay`, { channel: 'BANK_TRANSFER', reference: 'TRX-CR38-AUG' }), 201)
+  const reader = await repo('User').save({ email: 'reports-other-cr38@payroll-corrections-test.invalid', displayName: 'reports-other-cr38', passwordHash: 'test-only', role: 'hr_manager',
+    branchId: org.other.id, permissions: JSON.stringify(['reports.view', 'payroll.view']) })
+  const url = `/reports/payroll/unassigned?period=${period}`
+  const before = expectStatus(await request(reader, 'GET', url), 200)
+  // قيد بنفس شكل اسم الترحيل بعد حماية الصافي (الاسم بيشاور على فترة مسير الصرف)
+  const carried = await repo('EmployeeObligation').save({ employeeId: emp.id, type: 'DEBIT', category: 'manual', amount: 10, status: 'PENDING', targetPeriod: '2026-09',
+    label: `مرحّل من قيد #1 (مسير ${period}): غرامة اختبار CR38` })
+  await repo('Employee').update(emp.id, { branchId: org.other.id })
+  expectStatus(await request(reader, 'GET', `/payroll/runs/${august.id}`), 403)
+
+  // CR38-B01: نقل الموظف مابيضيفش مسيره القديم (لقطة عضويته في الفرع الأول) لقايمة مسيرات القارئ
+  const after = expectStatus(await request(reader, 'GET', url), 200)
+  assert.deepEqual(after.runs, before.runs)
+  assert.equal(JSON.stringify(after.runs).includes('مسير أغسطس لقايمة CR38'), false)
+  const company = expectStatus(await request(users.admin, 'GET', url), 200)
+  assert.ok(company.runs.some(run => run.id === august.id && run.status === 'PAID'))
+
+  // CR38-B02: اسم القيد في الدفتر من غير فترة المسير المخفي، والمبلغ والشهر المستهدف زي ما هم؛ والشركة بتشوف الاسم كامل
+  const ledger = expectStatus(await request(reader, 'GET', `/obligations/employee/${emp.id}`), 200).find(row => row.id === carried.id)
+  assert.deepEqual([ledger.label, Number(ledger.amount), ledger.targetPeriod], ['مرحّل من قيد #1 (مسير خارج نطاق صلاحيتك): غرامة اختبار CR38', 10, '2026-09'])
+  const companyLedger = expectStatus(await request(users.admin, 'GET', `/obligations/employee/${emp.id}`), 200).find(row => row.id === carried.id)
+  assert.equal(companyLedger.label, `مرحّل من قيد #1 (مسير ${period}): غرامة اختبار CR38`)
+  assert.equal((await repo('EmployeeObligation').findOneByOrFail({ id: carried.id })).label, companyLedger.label, 'المخزن زي ما هو')
+})

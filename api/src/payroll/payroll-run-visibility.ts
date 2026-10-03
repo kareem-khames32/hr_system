@@ -2,6 +2,7 @@ import { In, type EntityManager } from 'typeorm'
 import { branchScopeOf, inBranchScope, type BranchScope } from '../auth/guards'
 import type { JwtPayload } from '../auth/auth.service'
 import { PayrollRunMember } from './payroll.entities'
+import { PAYROLL_REVERSAL_LINES_TABLE } from './payroll-reversal-sql'
 
 // CR34-B01: مراجع المسير في حمولة حدث (أي مفتاح runId أو ينتهي بـRunId وقيمته رقم، في أي عمق)
 const RUN_REF_KEY = /^runId$|RunId$/
@@ -30,9 +31,68 @@ export function maskPayloadRunRefs<T>(payload: T, visible: (runId: number) => bo
   return { payload: masked, hidden }
 }
 
-/** نص الحدث اللي مسيره مخفي: من غير «#رقم» (رقم إعفاء أو قيد أو مسير من الفرع التاني) ولا القوسين اللي فضيوا بعده */
-export const scrubEventReferences = (text: string | null | undefined): string | null =>
-  text == null ? null : text.replace(/\s*#\d+/g, '').replace(/\(\s*\)/g, '').replace(/\s{2,}/g, ' ').trim()
+/** CR38-B02: الوصف العام لمسير مخفي في نص («عكس صرف مسير 2026-08» ← «عكس صرف مسير خارج نطاق صلاحيتك») */
+export const HIDDEN_RUN_TEXT = 'مسير خارج نطاق صلاحيتك'
+
+/** CR38-B02: «مسير YYYY-MM» لفترة مسير مخفي بيبقى الوصف العام. تاريخ العمل والشهر المستهدف من غير كلمة «مسير» قبلهم مابيتلمسوش */
+export function scrubRunPeriods(text: string | null | undefined, hiddenPeriods: Iterable<string | null | undefined> = []): string | null {
+  if (text == null) return null
+  let out = text
+  for (const period of new Set(hiddenPeriods)) {
+    if (typeof period === 'string' && /^\d{4}-\d{2}$/.test(period)) out = out.split(`مسير ${period}`).join(HIDDEN_RUN_TEXT)
+  }
+  return out
+}
+
+/**
+ * نص الحدث اللي مسيره مخفي: من غير «#رقم» (رقم إعفاء أو قيد أو مسير من الفرع التاني) ولا القوسين اللي فضيوا بعده،
+ * ومن غير فترة المسير المخفي (CR38-B02 — hiddenPeriods = فترات المسيرات المخفية اللي الحدث بيشاور عليها)
+ */
+export const scrubEventReferences = (text: string | null | undefined, hiddenPeriods: Iterable<string | null | undefined> = []): string | null =>
+  text == null ? null : (scrubRunPeriods(text, hiddenPeriods) as string).replace(/\s*#\d+/g, '').replace(/\(\s*\)/g, '').replace(/\s{2,}/g, ' ').trim()
+
+/** CR38-B02: فترة كل مسير (رقمه ← YYYY-MM) — لحجب فترة المسير المخفي في النصوص */
+export async function payrollRunPeriods(em: EntityManager, runIds: Iterable<number | null | undefined>): Promise<Map<number, string>> {
+  const ids = [...new Set([...runIds].filter((id): id is number => Number.isSafeInteger(id) && Number(id) > 0))]
+  const periods = new Map<number, string>()
+  for (let offset = 0; offset < ids.length; offset += 500) {
+    const rows: Array<{ id: number; period: string }> = await em.query(`SELECT [id], [period] FROM [payroll_runs] WHERE [id] IN (SELECT CAST([value] AS int) FROM OPENJSON(@0))`,
+      [JSON.stringify(ids.slice(offset, offset + 500))])
+    for (const row of rows) periods.set(Number(row.id), String(row.period))
+  }
+  return periods
+}
+
+/**
+ * CR38-B02 (مسح الصنف): فترات المسيرات المخفية للحساب لكل موظف — كل مسير الموظف عضو فيه أو ليه بند فيه أو سطر عكس، والحساب مايشوفهوش
+ * لموظفه. لنصوص من غير مراجع مسير منظمة (اسم قيد الدفتر: «مرحّل من قيد … (مسير 2026-08)»، «مؤجَّل من مسير …»، «إعادة قيد … بعد عكس صرف مسير …»).
+ * فترة فيها مسير مرئي ومسير مخفي للموظف بتتحجب (الأأمن). scope = null (الشركة) = مفيش حجب.
+ */
+export async function hiddenRunPeriodsByEmployee(em: EntityManager, scope: BranchScope, employeeIds: Iterable<number | null | undefined>,
+  selfEmployeeId: number | null = null): Promise<Map<number, Set<string>>> {
+  const result = new Map<number, Set<string>>()
+  if (scope === null) return result
+  const people = [...new Set([...employeeIds].filter((id): id is number => Number.isSafeInteger(id) && Number(id) > 0))].filter(id => id !== selfEmployeeId)
+  if (!people.length) return result
+  const pairs: Array<{ runId: number; employeeId: number }> = []
+  for (let offset = 0; offset < people.length; offset += 500) {
+    pairs.push(...await em.query(`SELECT DISTINCT x.[runId], x.[employeeId] FROM (
+        SELECT [runId], [employeeId] FROM [payroll_run_members]
+        UNION SELECT [runId], [employeeId] FROM [payroll_items]
+        UNION SELECT [reversalRunId] AS [runId], [employeeId] FROM [${PAYROLL_REVERSAL_LINES_TABLE}]
+      ) x WHERE x.[employeeId] IN (SELECT CAST([value] AS int) FROM OPENJSON(@0))`, [JSON.stringify(people.slice(offset, offset + 500))]))
+  }
+  if (!pairs.length) return result
+  const shown = await payrollRunRefVisibility(em, scope, pairs.map(pair => Number(pair.runId)), people, selfEmployeeId)
+  const periods = await payrollRunPeriods(em, pairs.map(pair => Number(pair.runId)))
+  for (const pair of pairs) {
+    const runId = Number(pair.runId), employeeId = Number(pair.employeeId), period = periods.get(runId)
+    if (!period || shown(runId, employeeId)) continue
+    if (!result.has(employeeId)) result.set(employeeId, new Set())
+    result.get(employeeId)!.add(period)
+  }
+  return result
+}
 
 // CR32-B01 وCR33-B01 (مراجعة Codex الجولتين 32 و33): مرجع مسير (رقمه أو اسمه أو حالته) في رد أو رسالة رفض أو عرض لحساب فرع بيظهر بس لو
 // الموظف المعني عضو في المسير بلقطة فرع من نطاق الحساب — أو مسير قديم من غير أعضاء خالص على فرع من نطاقه. فالمسير اللي اتعمل في فرع
@@ -79,14 +139,33 @@ export async function payrollRunRefVisibility(em: EntityManager, scope: BranchSc
  * null. الصف من غير مرجع مخفي بيرجع زي ما هو بالظبط، والتواريخ والمبالغ مابتتلمسش. viewer = null (داخلي) = من غير حجب
  */
 export async function scopeRunRefRows<T extends object>(em: EntityManager, viewer: JwtPayload | null, rows: readonly T[], employeeIdOf: (row: T) => number): Promise<T[]> {
+  if (!viewer || !rows.length) return [...rows]
   const refs = rows.map(row => payloadRunIds(row))
-  if (!viewer || !refs.some(ids => ids.length)) return [...rows]
-  const shown = await payrollRunRefVisibility(em, branchScopeOf(viewer), refs.flat(), rows.map(employeeIdOf), viewer.employeeId ?? null)
+  // CR38-B02 (مسح الصنف): نص الصف (اسم القيد: «مرحّل من قيد … (مسير 2026-08)»، «مؤجَّل من مسير …») من غير فترة أي مسير مخفي للحساب لموظف الصف
+  const periods = await hiddenRunPeriodsByEmployee(em, branchScopeOf(viewer), rows.map(employeeIdOf), viewer.employeeId ?? null)
+  const shown = refs.some(ids => ids.length) ? await payrollRunRefVisibility(em, branchScopeOf(viewer), refs.flat(), rows.map(employeeIdOf), viewer.employeeId ?? null) : null
   return rows.map((row, index) => {
-    if (!refs[index].length) return row
-    const { payload, hidden } = maskPayloadRunRefs(row, runId => shown(runId, employeeIdOf(row)))
-    return hidden ? payload : row
+    const masked = shown && refs[index].length ? maskPayloadRunRefs(row, runId => shown(runId, employeeIdOf(row))) : { payload: row, hidden: false }
+    const hiddenPeriods = periods.get(employeeIdOf(row))
+    if (!hiddenPeriods?.size) return masked.hidden ? masked.payload : row
+    return scrubRunPeriodsDeep(masked.payload, hiddenPeriods)
   })
+}
+
+/** CR38-B02: حقول النص اللي ممكن تحمل «مسير YYYY-MM» (اسم القيد، السبب، الملاحظة) في صفوف الدفتر والقسيمة وسجلات الإضافي */
+const RUN_PERIOD_TEXT_KEYS = new Set(['label', 'reason', 'note', 'notes', 'description'])
+
+/** CR38-B02: نسخة من القيمة (أي عمق) حقول نصها من غير فترة أي مسير مخفي — التواريخ والمبالغ والأرقام زي ما هي */
+export function scrubRunPeriodsDeep<T>(value: T, hiddenPeriods: ReadonlySet<string> | undefined): T {
+  if (!hiddenPeriods?.size) return value
+  const walk = (item: unknown): unknown => {
+    if (Array.isArray(item)) return item.map(walk)
+    if (!item || typeof item !== 'object' || item instanceof Date) return item
+    const copy: Record<string, unknown> = {}
+    for (const [key, field] of Object.entries(item)) copy[key] = RUN_PERIOD_TEXT_KEYS.has(key) && typeof field === 'string' ? scrubRunPeriods(field, hiddenPeriods) : walk(field)
+    return copy
+  }
+  return walk(value) as T
 }
 
 /** مانع فيه مرجع مسير في تفاصيله (runId أو *RunId) ونص بديل من غير المرجع (redactedMessage) */

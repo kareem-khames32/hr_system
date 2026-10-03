@@ -430,7 +430,8 @@ test('CR34-B01: دفتر السلفة لقارئ رواتب الفرع — رق�
   // قارئ رواتب فرع الموظف الحالي: مسير فرعه بس
   const branchView = expect(await http(f.hr, 'GET', `/loans/${loanId}/ledger`), 200)
   assert.deepEqual(shape(branchView), [['PAYROLL_POSTED', seen, `خصم قسط بمسير #${seen}`], ['PAYROLL_POSTED', null, 'خصم قسط بمسير'],
-    ['REVERSAL', null, 'عكس صرف مسير 2026-06 بمسير العكس']])
+    // CR38-B02: وفترة المسير المخفي كمان
+    ['REVERSAL', null, 'عكس صرف مسير خارج نطاق صلاحيتك بمسير العكس']])
   const branchJson = JSON.stringify(branchView)
   for (const id of [hidden, reversal]) for (const end of [',', '}', ' ', ')', '"']) {
     assert.ok(!branchJson.includes(`#${id}${end}`) && !branchJson.includes(`"payrollRunId":${id}${end}`), `run ${id} leaked`)

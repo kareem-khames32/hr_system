@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { DataSource, EntityManager } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, branchScopeSql, inBranchScope, userHasPerm } from '../auth/guards'
-import { payrollRunRefVisibility, scrubEventReferences } from '../payroll/payroll-run-visibility'
+import { payloadRunIds, payrollRunPeriods, payrollRunRefVisibility, scrubEventReferences } from '../payroll/payroll-run-visibility'
 import { PayrollDecimal } from '../payroll/payroll-decimal'
 import { readLoanInstallmentPositions } from '../payroll/payroll-installment-balances'
 import { repayLoanEarly } from '../payroll/payroll-installment-ledger'
@@ -201,9 +201,22 @@ export class LoansService {
     // من غير «#رقم» في نصه. السجل المخزن زي ما هو
     if (viewer) {
       const shown = await payrollRunRefVisibility(em, branchScopeOf(viewer), events.map((event: any) => event.payrollRunId), [employeeId], viewer.employeeId ?? null)
-      for (const event of events) if (event.payrollRunId != null && !shown(event.payrollRunId, employeeId)) {
+      const hiddenEvents = events.filter((event: any) => event.payrollRunId != null && !shown(event.payrollRunId, employeeId))
+      // CR38-B02: وفترة المسير المخفي كمان — مسير الحدث ومسيرات حمولته (عكس الصرف: الأصل اللي فترته في النص)
+      const payloads = new Map<number, unknown>()
+      if (hiddenEvents.length) {
+        for (const row of await em.query(`SELECT [id],[payload] FROM [loan_installment_events] WHERE [id] IN (SELECT CAST([value] AS int) FROM OPENJSON(@0))`,
+          [JSON.stringify(hiddenEvents.map((event: any) => Number(event.id)))])) {
+          try { payloads.set(Number(row.id), row.payload ? JSON.parse(row.payload) : null) } catch { payloads.set(Number(row.id), null) }
+        }
+      }
+      const refsOf = (event: any): number[] => [Number(event.payrollRunId), ...payloadRunIds(payloads.get(Number(event.id)) ?? null)]
+      const payloadShown = hiddenEvents.length ? await payrollRunRefVisibility(em, branchScopeOf(viewer), hiddenEvents.flatMap(refsOf), [employeeId], viewer.employeeId ?? null) : null
+      const periods = hiddenEvents.length ? await payrollRunPeriods(em, hiddenEvents.flatMap(refsOf)) : new Map<number, string>()
+      for (const event of hiddenEvents) {
+        const hiddenPeriods = refsOf(event).filter(runId => !payloadShown || !payloadShown(runId, employeeId)).map(runId => periods.get(runId))
         event.payrollRunId = null
-        event.reason = scrubEventReferences(event.reason)
+        event.reason = scrubEventReferences(event.reason, hiddenPeriods)
       }
     }
     return loans.map((loan: any) => {

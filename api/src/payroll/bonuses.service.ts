@@ -25,7 +25,7 @@ import { payrollPeriodOfDate } from './payroll-period'
 import { salaryPayrollPeriodBounds } from './payroll-period-salary'
 import { PAYROLL_SALARY_EVIDENCE_MODE_KEY, parsePayrollSalaryEvidenceMode, type PayrollSalaryEvidenceMode, selectPayrollRunSalary } from './payroll-run-salary'
 import { lockPayrollEmployees } from './payroll-settlement-boundary'
-import { maskPayloadRunRefs, payloadRunIds, payrollRunRefVisibility, scrubEventReferences } from './payroll-run-visibility'
+import { hiddenRunPeriodsByEmployee, maskPayloadRunRefs, payloadRunIds, payrollRunPeriods, payrollRunRefVisibility, scrubEventReferences, scrubRunPeriods } from './payroll-run-visibility'
 import { PayrollRun } from './payroll.entities'
 import {
   addPayrollMonths,
@@ -589,13 +589,16 @@ export class BonusesService {
     return { visible, steps, people }
   }
 
-  private obligationView(item: EmployeeObligation, runs: Map<number, string>, shown: (runId: number | null | undefined, employeeId: number) => boolean = () => true) {
-    return { id: item.id, type: item.type, category: item.category, label: item.label, amount: money(item.amount), status: item.status,
+  private obligationView(item: EmployeeObligation, runs: Map<number, string>, shown: (runId: number | null | undefined, employeeId: number) => boolean = () => true,
+    hiddenPeriods?: ReadonlySet<string>) {
+    // CR38-B02: اسم القيد من غير فترة مسير مخفي («مرحّل من قيد … (مسير 2026-07)»)
+    return { id: item.id, type: item.type, category: item.category, label: scrubRunPeriods(item.label, hiddenPeriods ?? []) ?? item.label, amount: money(item.amount), status: item.status,
       statusLabel: BONUS_LABELS.obligationStatuses[item.status] ?? item.status, targetPeriod: item.targetPeriod, effectiveDate: item.effectiveDate,
       // CR33-B01: رقم المسير للحساب اللي يشوفه بس (الشهر بيفضل)
       reservedPayrollRunId: shown(item.reservedPayrollRunId, item.employeeId) ? item.reservedPayrollRunId : null,
       appliedPayrollRunId: shown(item.appliedPayrollRunId, item.employeeId) ? item.appliedPayrollRunId : null,
-      appliedPeriod: item.appliedPayrollRunId ? runs.get(item.appliedPayrollRunId) ?? null : null, appliedAmount: money(item.appliedAmount),
+      // CR38-B02: شهر المسير اللي صرف القيد بيظهر بس لو المسير مرئي للحساب لموظف القيد
+      appliedPeriod: item.appliedPayrollRunId && shown(item.appliedPayrollRunId, item.employeeId) ? runs.get(item.appliedPayrollRunId) ?? null : null, appliedAmount: money(item.appliedAmount),
       reversal: item.category === BONUS_REVERSAL_OBLIGATION_CATEGORY }
   }
 
@@ -615,7 +618,8 @@ export class BonusesService {
     // قيد الاسترداد اليدوي المستهلك في مسير عُكس صرفه يمثله قيد إعادته (نفس المبلغ) فلا يُحتسب مرتين
     const reversals = obligations.filter(item => item.bonusRequestId === row.id && item.type === 'DEBIT' && item.category === BONUS_REVERSAL_OBLIGATION_CATEGORY && item.status !== 'CANCELLED' && item.payrollReversalRunId == null)
     const state: BonusPayoutState | null = row.status === 'APPROVED' ? bonusPayoutState(credit) : null
-    const period = credit?.appliedPayrollRunId ? runs.get(credit.appliedPayrollRunId) ?? null : null
+    // CR38-B02: «مصروف في مسير 2026-07» بس لو المسير مرئي للحساب لموظف المكافأة (الداخلي والموظف نفسه بيشوفوه دايمًا)
+    const period = credit?.appliedPayrollRunId && shown(credit.appliedPayrollRunId, row.employeeId) ? runs.get(credit.appliedPayrollRunId) ?? null : null
     const statusLabel = row.status !== 'APPROVED' ? BONUS_LABELS.statuses[row.status] ?? row.status
       : state === 'PAID' ? (period ? `مصروف في مسير ${period}` : shown(credit?.appliedPayrollRunId, row.employeeId) ? `مصروف في مسير #${credit?.appliedPayrollRunId}` : 'مصروف')
         : state === 'RESERVED' ? BONUS_LABELS.payout.RESERVED : BONUS_LABELS.statuses.APPROVED
@@ -630,6 +634,7 @@ export class BonusesService {
     if (!visible.length) return []
     const { obligations, runs } = await this.ledger(em, visible.map(row => row.id))
     const shown = await this.runShown(em, user, obligations.flatMap(item => [item.appliedPayrollRunId, item.reservedPayrollRunId]), obligations.map(item => item.employeeId))
+    const hiddenPeriods = await hiddenRunPeriodsByEmployee(em, branchScopeOf(user), visible.map(row => row.employeeId), user.employeeId ?? null)
     return visible.map(row => {
       const chain = steps.get(row.id)!, employee = people.get(row.employeeId), step = currentDeductionStep(chain)
       const snapshot = json<Record<string, any>>(row.typeSnapshot, {})
@@ -649,7 +654,7 @@ export class BonusesService {
           fallbackFromLabel: item.fallbackFrom ? BONUS_LABELS.roles[item.fallbackFrom] : null,
           approverName: item.approverEmployeeId ? people.get(item.approverEmployeeId)?.fullName ?? null : null })),
         currentStepOrder: step?.order ?? null, escalated: row.escalated, capExceeded: row.capExceeded, outOfScope: row.outOfScope, overrides: json(row.overrides, null),
-        obligations: obligations.filter(item => item.bonusRequestId === row.id).map(item => this.obligationView(item, runs, shown)),
+        obligations: obligations.filter(item => item.bonusRequestId === row.id).map(item => this.obligationView(item, runs, shown, hiddenPeriods.get(item.employeeId))),
         payout: payout.view, paidAmount: payout.paidAmount, reversedAmount: payout.reversedAmount,
         decisionReason: row.decisionReason, decidedByUserId: row.decidedByUserId, decidedAt: row.decidedAt, createdAt: row.createdAt, updatedAt: row.updatedAt,
         capabilities: {
@@ -720,9 +725,13 @@ export class BonusesService {
     const payloads = events.map(event => json<Record<string, unknown> | null>(event.payload, null))
     const runIds = payloads.flatMap(payload => payloadRunIds(payload))
     const shown = runIds.length ? await this.runShown(em, user, runIds, [row.employeeId]) : () => true
+    // CR38-B02: فترة المسير المخفي كمان («عكس صرف مسير 2026-07» ← «عكس صرف مسير خارج نطاق صلاحيتك»)
+    const hiddenIds = runIds.filter(runId => !shown(runId, row.employeeId))
+    const periods = hiddenIds.length ? await payrollRunPeriods(em, hiddenIds) : new Map<number, string>()
     return { ...view, events: events.map((event, index) => {
       const { payload, hidden } = maskPayloadRunRefs(payloads[index], runId => shown(runId, row.employeeId))
-      return { ...event, payload, reason: hidden ? scrubEventReferences(event.reason) : event.reason }
+      const eventPeriods = payloadRunIds(payloads[index]).filter(runId => !shown(runId, row.employeeId)).map(runId => periods.get(runId))
+      return { ...event, payload, reason: hidden ? scrubEventReferences(event.reason, eventPeriods) : event.reason }
     }) }
   }
 

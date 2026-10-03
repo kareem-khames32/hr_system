@@ -476,7 +476,8 @@ export async function payrollUnassignedReport(em: EntityManager, scope: PayrollR
 
     const employeeMembers = membersByEmployee.get(employeeId) ?? []
     const rawItems = itemsByEmployee.get(employeeId) ?? []
-    for (const row of [...employeeMembers, ...rawItems]) visibleRunIds.add(Number(row.runId))
+    // CR38-B01: قايمة مسيرات التقرير بقاعدة رؤية المسير لموظفه (لقطة عضويته)، مش عضويته وبس — مسير الفرع القديم لموظف اتنقل مايظهرش
+    for (const row of [...employeeMembers, ...rawItems]) if (!runShown || runShown(Number(row.runId), employeeId)) visibleRunIds.add(Number(row.runId))
     // C8: البند المعكوس صرفه بسطر منفذ لا يغطي الموظف في الفترة (يغطيه المسير التكميلي المربوط إن صُرف)
     const reversedIn = (runId: number) => reversedKeys.has(memberKey(runId, employeeId))
     const reversedRunIds = new Set<number>([...employeeMembers.filter(member => member.membershipStatus !== 'EXCLUDED'), ...rawItems]
