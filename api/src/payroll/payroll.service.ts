@@ -120,6 +120,8 @@ import { explainPayrollNegativeNet, payrollNegativeNetMessage, type PayrollNegat
 import { claimPayrollApproval } from './payroll-approval-lock'
 // B1.7: اتغيّر إيه من آخر مسير، وضابط الشخص الواحد في الاعتماد (مقفول افتراضيًا)
 import { collectPayrollRunMemberChanges, payrollItemMonthlyGross, payrollRunChangeItems, payrollRunLeavers } from './payroll-run-changes'
+// B1.12: عرض شاشة المسير الخفيف، وبند حدث الحساب من غير التفصيل
+import { payrollEventItem, payrollRunScreenBreakdown, payrollRunScreenMember } from './payroll-run-screen-view'
 import { onePersonControlEnabled } from './one-person-controls'
 import { PayrollRunApproval } from './payroll-approval-chain.entities'
 import { recordOutboxEvent } from '../queue/outbox'
@@ -467,8 +469,15 @@ export class PayrollService {
     // تبسيط الرواتب (2026-09-15): الحساب يجدد أيام الحضور حتى اليوم فقط (materializeAbsences لا تتجاوز اليوم، وcomputeDay لا يحفظ يومًا لم يأتِ)،
     // ويقرأ صفوف الأيام اللاحقة كما هي مخزنة. فاليوم اللاحق يُقارن بصفه المخزن لا بإعادة حسابه، وإلا لا تطابق فترة مفتوحة لقطتها أبدًا.
     const today = localDateOf(new Date())
-    for (const item of items) {
-      const saved = item.breakdown ? JSON.parse(item.breakdown) : {}
+    // B1.12: إعادة حساب الأيام بدفعة قراءة واحدة للاعتماد كله — أيام وبصمات وتصحيحات واستثناءات كل الموظفين محمّلة مرة واحدة
+    // (500 موظف × 30 يوم كانوا ~19 استعلام لكل يوم). نفس الحكم ونفس الرسايل بنفس ترتيب الموظفين.
+    const parsed = items.map(item => ({ item, saved: item.breakdown ? JSON.parse(item.breakdown) : {} }))
+    const checked = parsed.filter(row => Array.isArray(row.saved.attendanceRules))
+    if (!checked.length) return
+    const bounds = checked.map(({ saved }) => [saved.coverFrom ?? run.startDate, saved.coverTo ?? run.endDate] as [string, string])
+    const attendance = await this.attendanceService.readOnlyRange(em, checked.map(({ item }) => item.employeeId),
+      bounds.map(([from]) => from).sort()[0], bounds.map(([, to]) => to).sort().reverse()[0])
+    for (const { item, saved } of parsed) {
       // المسيرات القديمة تسبق هذا الدليل؛ لا نصنع لها لقطة من الإعدادات الحالية.
       if (!Array.isArray(saved.attendanceRules)) continue
       if (saved.attendanceRules.some((day: { reviewRequired: boolean }) => day.reviewRequired)) {
@@ -484,7 +493,7 @@ export class PayrollService {
       const fresh: ReturnType<PayrollService['attendanceRuleTrace']>[] = []
       for (const day of rows) {
         if (suspended.has(day.date) || exemptionPolicyOnDate(exemptions, day.date, { overtimeEligible: false, unpaidLeaveDeductible: true }).isExempt) continue
-        fresh.push(this.attendanceRuleTrace(day.date > today ? day : await this.attendanceService.computeDay(item.employeeId, day.date, false, true, em)))
+        fresh.push(this.attendanceRuleTrace(day.date > today ? day : await attendance.computeDay(item.employeeId, day.date, false, true)))
       }
       if (comparable(fresh) !== comparable(saved.attendanceRules)) {
         throw new ConflictException({ code: 'PAYRUN-ATTENDANCE-CHANGED',
@@ -1356,8 +1365,11 @@ export class PayrollService {
           (oldIds.has(member.employeeId) && comparableItem(previousItem) !== comparableItem(currentItem))
       }).map(member => member.employeeId),
     }
+    // B1.12: الحدث بيخزن البنود بأرقامها من غير تفصيلها (كان مكرر قبل وبعد: ~30 ميجا لمسير 500 موظف)، ومكانه بصمته.
+    // التفصيل الكامل محفوظ في البند نفسه؛ والأعضاء بلقطاتهم زي ما هم (سجل العضوية وفحص نطاق السجل بيقروهم)
     await this.event(em, user, run.id, existing ? 'RECALCULATED' : isDraft ? 'CALCULATED' : 'CREATED', existing ? this.requireReason(dto.reason) : null,
-      { before, after, diff, refreshInstallmentPolicy: dto.refreshInstallmentPolicy === true,
+      { before: before ? { ...before, items: before.items.map(payrollEventItem) } : null, after: { ...after, items: after.items.map(payrollEventItem) }, diff,
+        refreshInstallmentPolicy: dto.refreshInstallmentPolicy === true,
         allowDraftConflicts: dto.allowDraftConflicts === true, conflictRunIds: [...new Set(conflicts.map(row => row.otherRunId))],
         periodContinuity: periodContinuity.map(({ otherRunId: _otherRunId, otherRunName: _otherRunName, ...issue }) => issue),
         // الخطوة 19: مصدر اللقطة (أول حساب / محفوظة / محدّثة بطلب صريح) وفروق التحديث؛ الخطوة 20: الوضع وبصمة تقرير التكافؤ
@@ -1779,7 +1791,8 @@ export class PayrollService {
       runType: run.runType ?? null, parentRunId: run.parentRunId ?? null, correctionReason: run.correctionReason ?? null }
   }
 
-  async detail(user: JwtPayload, runId: number) {
+  // B1.12: view = 'screen' ← تفصيل كل بند بالمفاتيح اللي شاشة المسير بتقراها بس (رد 500 موظف تحت 2 ميجا بدل ~18). من غيره الرد زي ما هو
+  async detail(user: JwtPayload, runId: number, view?: 'screen') {
     return this.readRun(runId, async (em, run) => {
     await this.assertRunAccess(user, run, em)
     const items = await em.getRepository(PayrollItem).find({
@@ -1839,8 +1852,12 @@ export class PayrollService {
     // CR40 (مسح الصنف): نص تفصيل البنود المحفوظ (اسم القيد جوه سطور الإعفاء المالي) من غير فترة أي مسير مخفي للحساب — كل بند بفترات موظفه (CR41)
     const scope = branchScopeOf(user)
     const hidden = scope === null ? new Map<number, Set<string>>() : await hiddenRunPeriodsByEmployee(em, scope, items.map(item => item.employeeId), user.employeeId ?? null)
-    const shownItems = hidden.size ? items.map(item => hidden.has(item.employeeId) ? { ...item, breakdown: scrubRunPeriods(item.breakdown, hidden.get(item.employeeId)) } : item) : items
-    return { ...this.lightRun(run), items: shownItems, members: await this.visibleMembers(user, members, em), conflicts, pendingOvertime, periodContinuity, selection, policyVersion, engine,
+    const scrubbedItems = hidden.size ? items.map(item => hidden.has(item.employeeId) ? { ...item, breakdown: scrubRunPeriods(item.breakdown, hidden.get(item.employeeId)) } : item) : items
+    // الحجب الأول على النص الكامل، وبعده عرض الشاشة (سطور القيود جواه بتفضل بنصها المحجوب)
+    const shownItems = view === 'screen' ? scrubbedItems.map(item => ({ ...item, breakdown: payrollRunScreenBreakdown(item.breakdown) })) : scrubbedItems
+    const visibleMembers = await this.visibleMembers(user, members, em)
+    return { ...this.lightRun(run), items: shownItems, members: view === 'screen' ? visibleMembers.map(payrollRunScreenMember) : visibleMembers,
+      conflicts, pendingOvertime, periodContinuity, selection, policyVersion, engine,
       actors, approvalGuard, payRecord, collection, correction, negativeNet }
     })
   }

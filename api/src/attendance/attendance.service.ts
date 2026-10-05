@@ -57,7 +57,7 @@ import { DEVICE_KEY_MIN_LENGTH, deviceKeyWeakness } from './device-key'
 import { AttendanceExemption } from './attendance-exemption.entities'
 import { AttendanceRuleVersion } from './attendance-rule.entities'
 import type { AttendanceRuleSourceType } from './attendance-rule.entities'
-import { exemptionOnDate, exemptionPolicyOnDate, loadAttendanceExemptions } from './attendance-exemption-resolver'
+import { attendanceExemptionsForDay, exemptionOnDate, exemptionPolicyOnDate, loadAttendanceExemptions, queryAttendanceExemptionRows } from './attendance-exemption-resolver'
 import { readOpenSuspensions, suspendedDatesBetween } from '../employees/employee-suspensions'
 import { suspensionCovers } from '../employees/employee-suspension-rules'
 import { assertAttendanceRulePeriodOpen, attendanceFlexPolicy, attendanceGeneralGrace, attendanceRuleDate, lockAttendanceRuleMutation, pickAttendanceRule,
@@ -312,11 +312,86 @@ export class AttendanceService {
   //   - مابيدخلهاش أي جدول بيتكتب أثناء حساب اليوم: أيام الحضور والبصمات والتصحيحات والإضافي والطلبات والتراكم
   //     بتتقري كل مرة زي ما هي.
   //   - نتيجة الوردية بترجع نسخة مستقلة لكل نداء، فمحدش يقدر يعدّل المحفوظ.
-  private batch: { calendar: CalendarResolverCache; values: Map<string, Promise<unknown>> } | null = null
+  private batch: { calendar: CalendarResolverCache; values: Map<string, Promise<unknown>>; range?: AttendanceReadRange } | null = null
 
   /** نسخة الخدمة داخل em بذاكرة دفعة: لحساب أيام كتير في نفس المعاملة (تراكم المسير). */
   batchScope(em: EntityManager): AttendanceService {
     return this.inManager(em).withBatch()
+  }
+
+  /**
+   * B1.12: دفعة قراءة بس بمدى محمّل مقدمًا لموظفين وفترة (فحص لقطة الحضور وقت اعتماد المسير: 500 موظف × 30 يوم كانوا ~19 استعلام لكل يوم).
+   * فوق ذاكرة الدفعة: أيام الحضور المخزنة، والبصمات، والتصحيحات، وتعديلات جدول اليوم، ونوافذ الاستثناء، والمسيرات المقفولة — استعلام واحد لكل نوع
+   * لكل الموظفين بدل استعلام لكل يوم. النتيجة نفسها بالحرف: نفس الفلاتر والترتيب في الذاكرة، والموظف أو اليوم أو نافذة البصمات برّه المدى
+   * بترجع للاستعلام العادي. للقراءة بس: computeDay بـreadOnly=false بيرفضها (اللي بيكتب ممكن يغيّر المحمّل).
+   */
+  async readOnlyRange(em: EntityManager, employeeIds: readonly number[], from: string, to: string): Promise<AttendanceService> {
+    const scoped = this.batchScope(em)
+    const ids = [...new Set(employeeIds.filter(id => Number.isSafeInteger(id) && id > 0))]
+    // نافذة البصمات: إطار اليوم ممكن يبدأ ليلة اليوم اللي قبله وينتهي صباح اللي بعده (الوردية الليلية)
+    const punchFrom = atMinute(dateAfter(from, -1), 0), punchTo = atMinute(dateAfter(to, 2), 0)
+    const range: AttendanceReadRange = { employees: new Set(ids), from, to, overrideFrom: dateAfter(from, -1), punchFrom, punchTo,
+      days: new Map(), punches: new Map(), corrections: new Map(), overrides: new Map(), exemptions: [], closed: new Map(), permissionRequests: new Map() }
+    // أسابيع جدول الأسبوع اللي ممكن تتسأل: من اليوم اللي قبل البداية (وردية الليلة اللي فاتت) لليوم اللي بعد النهاية (نافذة الوردية الليلية)
+    const weeks: string[] = []
+    for (let week = weekKeyOf(dateAfter(from, -1)); week <= weekKeyOf(dateAfter(to, 1)); week = dateAfter(week, 7)) weeks.push(week)
+    const prime = (key: string, value: unknown) => scoped.batch!.values.set(key, Promise.resolve(value))
+    for (let offset = 0; offset < ids.length; offset += 1000) {
+      const chunk = ids.slice(offset, offset + 1000)
+      // قراءات مرجعية كانت استعلام لكل موظف (وللأسبوع): بتتحمّل مرة وتتحط في ذاكرة الدفعة بنفس مفاتيحها ونفس شكل نتيجتها بالحرف.
+      // جدول الأسبوع فريد لكل (أسبوع، موظف)، فالصف المحمّل هو نفس صف findOne؛ والغايب null زيه.
+      const weekEntries = new Map((await scoped.schedule.find({ where: { weekStart: In(weeks), employeeId: In(chunk) } })).map(entry => [`${entry.employeeId}:${entry.weekStart}`, entry]))
+      for (const employeeId of chunk) for (const week of weeks) prime(`WEEK_ENTRY:${employeeId}:${week}`, weekEntries.get(`${employeeId}:${week}`) ?? null)
+      // نسخ قاعدة الموظف (جدول عمله ووضع المرونة): نفس قراءة readAttendanceRuleVersions (الأحدث الأول) لكل الموظفين مرة واحدة
+      const employeeRules = new Map<number, AttendanceRuleVersion[]>(chunk.map(employeeId => [employeeId, []]))
+      for (const version of await scoped.days.manager.find(AttendanceRuleVersion, { where: { sourceType: 'EMPLOYEE', sourceId: In(chunk) }, order: { version: 'DESC' } })) {
+        employeeRules.get(Number(version.sourceId))?.push(version)
+      }
+      for (const [employeeId, versions] of employeeRules) prime(`RULE:EMPLOYEE:${employeeId}`, versions)
+      // طلبات الأذونات المعتمدة للموظف (كلها، زي approvedPermissionWindows): كانت استعلام لكل يوم-موظف
+      for (const employeeId of chunk) range.permissionRequests.set(employeeId, [])
+      for (const request of await scoped.requests.find({ where: { requesterId: In(chunk), typeCode: 'PERMISSION', status: In(['COMPLETED', 'APPROVED', 'IN_EXECUTION']) } })) {
+        range.permissionRequests.get(request.requesterId)?.push(request)
+      }
+      for (const day of await scoped.days.find({ where: { employeeId: In(chunk), date: Between(from, to) } })) range.days.set(`${day.employeeId}:${day.date}`, day)
+      for (const punch of await scoped.punches.find({ where: { employeeId: In(chunk), punchTime: Between(punchFrom, punchTo) }, order: { punchTime: 'ASC' } })) {
+        if (!range.punches.has(punch.employeeId!)) range.punches.set(punch.employeeId!, [])
+        range.punches.get(punch.employeeId!)!.push(punch)
+      }
+      for (const correction of await scoped.corrections.find({ where: { employeeId: In(chunk), date: Between(from, to) }, order: { id: 'ASC' } })) {
+        const key = `${correction.employeeId}:${correction.date}`
+        if (!range.corrections.has(key)) range.corrections.set(key, [])
+        range.corrections.get(key)!.push(correction)
+      }
+      for (const override of await scoped.dayOverrides.find({ where: { employeeId: In(chunk), date: Between(range.overrideFrom, to) }, order: { id: 'ASC' } })) {
+        // نفس findOne: أول صف (لو اتكرر لنفس اليوم بالخطأ)
+        const key = `${override.employeeId}:${override.date}`
+        if (!range.overrides.has(key)) range.overrides.set(key, override)
+      }
+      range.exemptions.push(...await queryAttendanceExemptionRows(scoped.days.manager, chunk, from, to))
+      // المسيرات المعتمدة أو المصروفة اللي الموظف فيها (بند أو عضو داخل) ومش معكوس صرفه — نفس شرط financiallyClosedDay
+      const closed: Array<{ employeeId: number; startDate: string; endDate: string }> = await scoped.days.manager.query(`SELECT x.[employeeId],
+          CONVERT(varchar(10), r.[startDate], 23) AS [startDate], CONVERT(varchar(10), r.[endDate], 23) AS [endDate]
+        FROM dbo.payroll_runs r CROSS APPLY (
+          SELECT i.[employeeId] FROM dbo.payroll_items i WHERE i.[runId] = r.[id]
+          UNION SELECT m.[employeeId] FROM dbo.payroll_run_members m WHERE m.[runId] = r.[id] AND (m.[membershipStatus] IS NULL OR m.[membershipStatus] = 'INCLUDED')) x
+        WHERE r.[status] IN ('APPROVED','PAID') AND r.[startDate] <= @0 AND r.[endDate] >= @1
+          AND x.[employeeId] IN (SELECT CAST([value] AS int) FROM OPENJSON(@2))
+          AND ${payrollLineNotReversedSql('r.[id]', 'x.[employeeId]')}`, [to, from, JSON.stringify(chunk)])
+      for (const row of closed) {
+        const employeeId = Number(row.employeeId)
+        if (!range.closed.has(employeeId)) range.closed.set(employeeId, [])
+        range.closed.get(employeeId)!.push({ from: String(row.startDate), to: String(row.endDate) })
+      }
+    }
+    scoped.batch!.range = range
+    return scoped
+  }
+
+  /** الموظف واليوم جوه المدى المحمّل؟ */
+  private inRange(employeeId: number, date: string, from?: string): AttendanceReadRange | null {
+    const range = this.batch?.range
+    return range && range.employees.has(employeeId) && date >= (from ?? range.from) && date <= range.to ? range : null
   }
 
   /** نفس الخدمة بمستودعاتها زي ما هي + ذاكرة دفعة (شاشة الحضور اليومي: نفس اللي كانت بتقرا بيه بالحرف). */
@@ -360,10 +435,14 @@ export class AttendanceService {
 
   // نفس المدى بالظبط (مش مدى أوسع): التحميل بيفحص تداخل النوافذ اللي جوّه المدى بس، ومدى أوسع كان هيرمي تداخل مالوش علاقة باليوم
   private exemptionsOf(employeeId: number, from: string, to: string) {
+    const range = from === to ? this.inRange(employeeId, from) : null
+    if (range) return Promise.resolve(attendanceExemptionsForDay(range.exemptions, employeeId, from))
     return this.batched(`EXEMPTIONS:${employeeId}:${from}:${to}`, () => loadAttendanceExemptions(this.days.manager, employeeId, from, to))
   }
 
   private async financiallyClosedDay(employeeId: number, date: string) {
+    const range = this.inRange(employeeId, date)
+    if (range) return (range.closed.get(employeeId) ?? []).some(run => run.from <= date && run.to >= date)
     const rows = await this.days.manager.query(`SELECT TOP (1) r.id FROM dbo.payroll_runs r
       WHERE r.status IN ('APPROVED','PAID') AND r.startDate<=@0 AND r.endDate>=@0
       AND (EXISTS (SELECT 1 FROM dbo.payroll_items i WHERE i.runId=r.id AND i.employeeId=@1)
@@ -1525,7 +1604,8 @@ export class AttendanceService {
         flexEnabled: employeeOverrideMode === 'ENABLED', flexWindowMinutes: null,
       } as DayAttendanceShift
     }
-    const override = await this.dayOverrides.findOne({ where: { employeeId, date } })
+    const overrideRange = this.inRange(employeeId, date, this.batch?.range?.overrideFrom)
+    const override = overrideRange ? overrideRange.overrides.get(`${employeeId}:${date}`) ?? null : await this.dayOverrides.findOne({ where: { employeeId, date } })
     if (override) return scheduled(override, 'override', ' (يوم خاص)')
     // جدول الأسبوع واحد لأيامه السبعة
     const weekStart = weekKeyOf(date)
@@ -2232,7 +2312,9 @@ export class AttendanceService {
     }>
   > {
     const month = date.slice(0, 7)
-    const rows = await this.requests.find({
+    // B1.12: من المدى المحمّل لو الموظف واليوم جواه (نفس الصفوف: كل أذونات الموظف المعتمدة؛ الترتيب بيتحسم تحت)
+    const ranged = this.inRange(employeeId, date)
+    const rows = ranged ? ranged.permissionRequests.get(employeeId) ?? [] : await this.requests.find({
       where: {
         requesterId: employeeId,
         typeCode: 'PERMISSION',
@@ -2437,13 +2519,16 @@ export class AttendanceService {
   async computeDay(employeeId: number, date: string, cascade = true, readOnly = false, em?: EntityManager,
     options: { recomputeLegacy?: boolean } = {}): Promise<AttendanceDayWithExemption> {
     if (em && em !== this.days.manager) return this.inManager(em).computeDay(employeeId, date, cascade, readOnly, undefined, options)
+    if (!readOnly && this.batch?.range) throw new Error('دفعة الحضور المحمّلة مقدمًا للقراءة بس')
     if (!readOnly && !this.days.manager.queryRunner?.isTransactionActive) {
       return this.days.manager.transaction(async manager => {
         await lockPayrollEmployees(manager, [employeeId])
         return this.inManager(manager).computeDay(employeeId, date, cascade, false, undefined, options)
       })
     }
-    const storedDay = await this.days.findOne({ where: { employeeId, date } })
+    const dayRange = this.inRange(employeeId, date)
+    // B1.12: من المدى المحمّل لو جواه (نسخة مستقلة: computeDay بيعدّل الكائن اللي بيرجّعه)
+    const storedDay = dayRange ? copyOf(dayRange.days.get(`${employeeId}:${date}`)) : await this.days.findOne({ where: { employeeId, date } })
     if (await this.financiallyClosedDay(employeeId, date)) {
       if (storedDay) return Object.assign(storedDay, {
         attendanceExempt: storedDay.attendanceRuleSnapshot?.attendanceExempt ?? storedDay.status === 'exempt',
@@ -2481,10 +2566,13 @@ export class AttendanceService {
     const frame = await this.workdayFrame(employeeId, date, shift)
     const dayStart = frame.from
     const dayEnd = frame.to
-    const punches = await this.punches.find({
-      where: { employeeId, punchTime: Between(dayStart, dayEnd) },
-      order: { punchTime: 'ASC' },
-    })
+    const punchRange = dayRange && dayStart >= dayRange.punchFrom && dayEnd <= dayRange.punchTo ? dayRange : null
+    const punches = punchRange
+      ? (punchRange.punches.get(employeeId) ?? []).filter(punch => punch.punchTime >= dayStart && punch.punchTime <= dayEnd)
+      : await this.punches.find({
+        where: { employeeId, punchTime: Between(dayStart, dayEnd) },
+        order: { punchTime: 'ASC' },
+      })
 
     // بلا أي وردية أو جدول: البصمة تُسجَّل بلا تأخير ولا انصراف مبكر ولا أوفرتايم
     const unscheduled = shift.source === 'none'
@@ -2501,10 +2589,12 @@ export class AttendanceService {
     // يُعاد تصنيفها بالنوافذ (المستخدم قال «حضور» فهي حضور مهما كان وقتها)
     // (صباح الغد لليلية بساعة ممتدة 06:05 → 30:05 — تُخزَّن بساعة الحائط)
     const rawInstants = punches.map((p) => frame.clock(p.punchTime))
-    const corrections = await this.corrections.find({
-      where: { employeeId, date },
-      order: { id: 'ASC' },
-    })
+    const corrections = dayRange
+      ? [...(dayRange.corrections.get(`${employeeId}:${date}`) ?? [])]
+      : await this.corrections.find({
+        where: { employeeId, date },
+        order: { id: 'ASC' },
+      })
     if (storedDay && !storedDay.attendanceRuleSnapshot && !punches.length && !corrections.length &&
       !options.recomputeLegacy && ['present', 'late', 'early_leave', 'partial_leave', 'missing_punch'].includes(storedDay.status)) {
       // Imported/legacy summaries are evidence in their own right. Rebuilding a
@@ -3814,7 +3904,9 @@ export class AttendanceService {
   // محسوب (لا بصمة ولا تصحيح) ولا إجازة معتمدة تغطيه، وقد مرّت بداية ورديته +
   // السماحية (المرنة: نهاية نافذة الحضور إن ضُبطت). يوم «بلا وردية» لا وقت
   // مرجعي له فيُترك للتجسيد الليلي. للسجل اليومي وكارت «غائبون» في اللوحة
-  async liveAbsences(date: string, scope: BranchScope): Promise<Array<AttendanceDay & { live: true }>> {
+  // B1.12: القراءات المرجعية (ملف الموظف والوردية وقواعد الدوام والتقويم والإعدادات) بذاكرة دفعة واحدة للطلب بدل مرة لكل موظف
+  // (500 موظف: ~12,500 استعلام و6.8 ثانية). النتيجة نفسها بالحرف؛ batch=false = المسار القديم (للمقارنة في الاختبارات).
+  async liveAbsences(date: string, scope: BranchScope, options: { batch?: boolean } = {}): Promise<Array<AttendanceDay & { live: true }>> {
     const now = new Date()
     if (date !== localDateOf(now)) return []
     const nowMin = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60
@@ -3832,20 +3924,25 @@ export class AttendanceService {
       && !exemptionOnDate(exemptions.get(emp.id) ?? [], date)
       && !(suspensions.get(emp.id) ?? []).some(period => suspensionCovers(period, date)))
     const out: Array<AttendanceDay & { live: true }> = []
+    // دفعة قراءة بس للمرشحين (اليوم واللي بعده عشان إطار اليوم): نفس دوال الحساب بالحرف، وقراءاتها المرجعية مرة واحدة
+    const reader = options.batch === false || !candidates.length ? this
+      : await this.readOnlyRange(this.days.manager, candidates.map(emp => emp.id), date, dateAfter(date, 1))
+    // ملف كل مرشح اتقرا فوق كامل، فمايتقراش تاني لكل موظف (نفس الصف بالحرف)
+    if (reader !== this) for (const emp of candidates) reader.batch!.values.set(`EMPLOYEE:${emp.id}`, Promise.resolve(emp))
     for (let i = 0; i < candidates.length; i += 20) {
       const batch = await Promise.all(candidates.slice(i, i + 20).map(async emp => {
-        const shift = await this.shiftFor(emp.id, date)
+        const shift = await reader.shiftFor(emp.id, date)
         if (shift.source === 'none' || !shift.start) return null
-        const calendar = await this.calendarDay(emp.id, date)
+        const calendar = await reader.calendarDay(emp.id, date)
         if (!calendar.working) return null
-        const frame = await this.workdayFrame(emp.id, date, shift)
+        const frame = await reader.workdayFrame(emp.id, date, shift)
         const start = toMinutes(shift.start), end = toMinutes(shift.end) + (frame.overnight ? 1440 : 0)
         if (nowMin < start) return null
         const mid = Math.round((start + end) / 2)
         const halfLeaveWindows = leaves.filter(l => l.employeeId === emp.id && (l.period ?? 'FULL') !== 'FULL')
           .map(l => ({ from: l.period === 'MORNING' ? start : mid, to: l.period === 'MORNING' ? mid : end }))
-        const policy = shift.sourceSettings?.flexPolicy ?? await attendanceFlexPolicy(this.days.manager)
-        const graceResolution = await resolveAttendanceGrace(this.days.manager, date, shift)
+        const policy = shift.sourceSettings?.flexPolicy ?? await reader.flexPolicyOf()
+        const graceResolution = await resolveAttendanceGrace(this.days.manager, date, shift, undefined, () => reader.generalGraceOf())
         const grace = graceResolution.minutes
         const result = calculateAttendanceFlex({
           startMinute: start, endMinute: end, checkInMinute: nowMin, checkOutMinute: null,
@@ -3854,7 +3951,7 @@ export class AttendanceService {
             (shift.sourceSettings?.requiredHours != null ? Number(shift.sourceSettings.requiredHours) * 60 : end - start)),
           graceMinutes: grace, windowSupersedesGrace: policy.windowSupersedesGrace,
           prorateFlexWindowOnPartialLeave: policy.prorateWindowOnPartialLeave,
-          halfLeaveWindows, permissions: (await this.approvedPermissionWindows(emp.id, date)).map(w => frame.window(w)),
+          halfLeaveWindows, permissions: (await reader.approvedPermissionWindows(emp.id, date)).map(w => frame.window(w)),
         })
         const invalid = result.flexOutcome === 'INVALID_CONFIGURATION'
         if (result.lateMinutes <= 0 && !invalid) return null
@@ -4181,4 +4278,28 @@ export class AttendanceService {
       failed: failed + mat.failed.length,
     }
   }
+}
+
+/** B1.12: المدى المحمّل مقدمًا لدفعة قراءة (readOnlyRange) */
+interface AttendanceReadRange {
+  employees: Set<number>
+  from: string
+  to: string
+  /** تعديلات جدول اليوم من اليوم اللي قبل البداية (وردية الليلة اللي فاتت في إطار اليوم) */
+  overrideFrom: string
+  punchFrom: Date
+  punchTo: Date
+  days: Map<string, AttendanceDay>
+  punches: Map<number, AttendancePunch[]>
+  corrections: Map<string, AttendanceCorrection[]>
+  overrides: Map<string, ScheduleDayOverride>
+  exemptions: AttendanceExemption[]
+  closed: Map<number, Array<{ from: string; to: string }>>
+  /** طلبات الأذونات المعتمدة لكل موظف (كل تواريخها — نفس قراءة approvedPermissionWindows) */
+  permissionRequests: Map<number, Request[]>
+}
+
+/** نسخة مستقلة من صف محمّل (null لو مش موجود) — زي ما الاستعلام بيرجّع كائن جديد كل مرة */
+function copyOf<T extends object>(row: T | undefined): T | null {
+  return row ? Object.assign(Object.create(Object.getPrototypeOf(row)), structuredClone({ ...row })) as T : null
 }

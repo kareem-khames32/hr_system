@@ -249,7 +249,7 @@ export default function PayrollPage() {
     setLinesError('')
     setChain(null)
     try {
-      const detail = await fetchPayrollRun(id)
+      const detail = await fetchPayrollRun(id, 'screen')
       if (request !== detailRequest.current) return
       setRunDetail(detail)
       const [report, lines, runChain] = await Promise.allSettled([fetchPayMethodReport(id), fetchPayrollRunLines(id), fetchPayrollRunChain(id)])
@@ -487,7 +487,7 @@ export default function PayrollPage() {
     if (!runDetail || runDetail.status === 'CANCELLED' || !isRegularRun || actionBusy) return
     setError('')
     try {
-      const source = await fetchPayrollRun(runDetail.id) as PayrollRunWithSelection
+      const source = await fetchPayrollRun(runDetail.id, 'screen') as PayrollRunWithSelection
       const selection = source.selection
       setEditingDraft(null)
       setNextMonthInitial({

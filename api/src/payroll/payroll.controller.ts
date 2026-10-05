@@ -280,10 +280,11 @@ export class PayrollController {
     return this.service.list(user)
   }
 
+  // B1.12: ?view=screen لشاشة المسير (تفصيل كل بند بالمفاتيح اللي الشاشة بتقراها بس). أي قيمة تانية أو من غيره = الرد الكامل زي ما هو
   @Perm('payroll.view')
   @Get('runs/:id')
-  detail(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number) {
-    return this.service.detail(user, id)
+  detail(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Query('view') view?: string) {
+    return this.service.detail(user, id, view === 'screen' ? 'screen' : undefined)
   }
 
   // طلب المالك 19 سبتمبر: بنود الاستحقاقات والاستقطاعات لكل موظف بأسمائها (قراءة فقط، مجموعها = أعمدة البند المحفوظة)

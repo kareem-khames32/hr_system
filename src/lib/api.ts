@@ -1146,7 +1146,8 @@ export const deleteLanguage = (employeeId: number, rowId: number) =>
 
 // ===== الرواتب =====
 export const fetchPayrollRuns = () => get<ApiPayrollRun[]>('/payroll/runs')
-export const fetchPayrollRun = (id: number) => get<ApiPayrollRun>(`/payroll/runs/${id}`)
+// B1.12: view = 'screen' لشاشة المسير — تفصيل كل بند بالمفاتيح اللي الشاشة بتقراها بس (الرد الكامل لمسير كبير بالميجات)
+export const fetchPayrollRun = (id: number, view?: 'screen') => get<ApiPayrollRun>(`/payroll/runs/${id}${view ? `?view=${view}` : ''}`)
 // B1.7: سبب تعدّي مدير النظام لضابط «اللي غيّر مايعتمدش لوحده» (لما يكون مفتوح)
 export const approvePayroll = (id: number, overrideReason?: string) =>
   post<ApiPayrollRun>(`/payroll/runs/${id}/approve`, overrideReason ? { overrideReason } : undefined)

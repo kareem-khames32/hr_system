@@ -86,6 +86,40 @@ export async function loadAttendanceExemptions(
   return windows
 }
 
+/**
+ * B1.12: نوافذ الاستثناء المعتمدة لموظفين ومدى، من غير فحص التداخل (الفحص بيتعمل لكل يوم لوحده في
+ * attendanceExemptionsForDay بنفس قاعدة loadAttendanceExemptions بالظبط). للتحميل المسبق في دفعة قراءة.
+ */
+export async function queryAttendanceExemptionRows(em: EntityManager, employeeIds: readonly number[], from: string, to: string): Promise<AttendanceExemption[]> {
+  dateOnly(from); dateOnly(to)
+  const rows: AttendanceExemption[] = []
+  for (let offset = 0; offset < employeeIds.length; offset += 1000) {
+    const chunk = employeeIds.slice(offset, offset + 1000)
+    if (!chunk.length) continue
+    rows.push(...await em.getRepository(AttendanceExemption).createQueryBuilder('exemption')
+      .where('exemption.employeeId IN (:...ids)', { ids: chunk })
+      .andWhere('exemption.status = :status', { status: 'APPROVED' })
+      .andWhere('exemption.effectiveFrom <= :to', { to })
+      .andWhere('(exemption.effectiveTo IS NULL OR exemption.effectiveTo >= :from)', { from })
+      .andWhere('(exemption.terminatedFrom IS NULL OR exemption.terminatedFrom > :from)', { from })
+      .orderBy('exemption.effectiveFrom', 'ASC').addOrderBy('exemption.id', 'ASC').getMany())
+  }
+  return rows
+}
+
+/** نفس نتيجة loadAttendanceExemptions(em, employeeId, date, date) بالحرف (الفلتر والترتيب وفحص الصلاحية والتداخل) من صفوف محمّلة لمدى أوسع */
+export function attendanceExemptionsForDay(rows: readonly AttendanceExemption[], employeeId: number, date: string): AttendanceExemption[] {
+  dateOnly(date)
+  const windows = rows.filter(row => row.employeeId === employeeId && row.status === 'APPROVED' && row.effectiveFrom <= date &&
+    (row.effectiveTo == null || row.effectiveTo >= date) && (row.terminatedFrom == null || row.terminatedFrom > date))
+    .sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom) || a.id - b.id)
+  for (let i = 0; i < windows.length; i++) {
+    validateWindow(windows[i])
+    for (let j = 0; j < i; j++) if (overlapping(windows[j], windows[i])) throw overlapError(windows[j], windows[i])
+  }
+  return windows
+}
+
 export function exemptionOnDate<T extends AttendanceExemptionWindow>(windows: readonly T[], date: string): T | null {
   dateOnly(date)
   let result: T | null = null
