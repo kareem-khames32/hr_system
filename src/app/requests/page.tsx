@@ -74,6 +74,7 @@ import {
   type CustomFieldDef,
   type ApiOvertimePreview,
 } from '@/lib/api'
+import { onBehalfText } from '@/lib/delegations-api'
 
 // الإجازة المعتمدة كما يرجعها الباك — تحمل «نطاق اليوم» فوق نوع ApiLeave
 type ApprovedLeave = ApiLeave & { period?: 'FULL' | 'MORNING' | 'EVENING' }
@@ -1468,7 +1469,7 @@ export default function MyRequestsPage() {
             <OvertimeRequestSummary overtime={requestDetail.overtime ?? undefined} reviewRequired={requestDetail.overtimeReviewRequired} />
             <LetterDownloadButton reference={requestDetail.destinationRef} />
             <h3 className="font-bold">تعليقات المعتمدين</h3>
-            {(requestDetail.approvals ?? []).map(a => <div key={a.id} className="p-3 bg-gray-50 rounded-xl"><p className="text-sm font-medium">{({ APPROVE: 'اعتماد', APPROVED: 'اعتماد', REJECT: 'رفض', REJECTED: 'رفض', RETURN: 'إرجاع للاستكمال', RETURNED_FOR_INFO: 'إرجاع للاستكمال', ESCALATED: 'تصعيد', CANCELLED: 'إلغاء', EXECUTION_FAILED: 'تعذّر التنفيذ المجدول', EXECUTED: 'تنفيذ الطلب' } as Record<string, string>)[a.action] ?? a.action}</p><p className="text-sm whitespace-pre-wrap">{a.comment || 'بدون تعليق'}</p><time className="text-xs text-gray-400">{a.actedAt?.slice(0, 10)}</time></div>)}
+            {(requestDetail.approvals ?? []).map(a => <div key={a.id} className="p-3 bg-gray-50 rounded-xl"><p className="text-sm font-medium">{({ APPROVE: 'اعتماد', APPROVED: 'اعتماد', REJECT: 'رفض', REJECTED: 'رفض', RETURN: 'إرجاع للاستكمال', RETURNED_FOR_INFO: 'إرجاع للاستكمال', ESCALATED: 'تصعيد', CANCELLED: 'إلغاء', EXECUTION_FAILED: 'تعذّر التنفيذ المجدول', EXECUTED: 'تنفيذ الطلب' } as Record<string, string>)[a.action] ?? a.action}</p>{onBehalfText(a) && <p className="text-xs text-amber-800" data-on-behalf>{onBehalfText(a)}</p>}<p className="text-sm whitespace-pre-wrap">{a.comment || 'بدون تعليق'}</p><time className="text-xs text-gray-400">{a.actedAt?.slice(0, 10)}</time></div>)}
             {!requestDetail.approvals?.length && <p className="text-gray-500 text-sm">لم تُسجّل تعليقات بعد</p>}
           </div></div>}
         {/* New Request Modal */}

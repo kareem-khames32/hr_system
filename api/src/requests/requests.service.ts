@@ -41,7 +41,7 @@ import {
 import { OvertimeEntry } from './entities/attendance.entities'
 import { OVERTIME_ZERO_AT_APPROVAL_BLOCKERS, overtimeSubmissionBlockers, type OvertimeEvidence } from '../attendance/overtime-evidence'
 import { overtimeWindowRedactor } from '../attendance/overtime-window-view'
-import { ApproverResolver, ResolvedStep } from './approver-resolver.service'
+import { ApproverResolver, FUNCTIONAL_APPROVER_ROLES, ResolvedStep } from './approver-resolver.service'
 import { audienceNeedsPositions, audienceSubjectOf, requestAudienceAllows, requestTypeInBranch, type AudiencePositions } from './request-audience'
 import { definitionInBranch } from '../common/definition-branch'
 import { orgPositionsOf } from './request-audience-positions'
@@ -58,9 +58,10 @@ import { Leave, LeaveType } from './entities/leave.entities'
 import { assertLeaveTypeDateRules, assertLeaveTypeDaysRules, leaveCountsAllDays, leaveTypeBackdateLimit } from './leave-type-rules'
 import { assertLeaveOutsideSuspension } from '../employees/employee-suspension-overlap'
 import { ApprovalChain } from './entities/approval-chain.entity'
-import { ApprovalStep } from './entities/approval-step.entity'
+import { ApprovalStep, type ApproverRole } from './entities/approval-step.entity'
 import { ApprovalAction, RequestApproval } from './entities/request-approval.entity'
 import { normalizeApprovalAction } from './approval-actions'
+import { activeDelegationsTo, approvedOnBehalfIn, delegatorsForCategory, onBehalfOfApprovals, recordOnBehalf } from './approval-delegations'
 import {
   cancelExecutionTask, executionAwaitedRequestIds, executionAwaitsAccount, executionInfoOf, executionPending, executionRequestsWithTask, openExecutionTask,
   EXECUTION_CONFIDENTIAL_REJECT_BLOCKED,
@@ -182,6 +183,9 @@ function assertNotLegacyBonusRoute(type: { code?: string; destinationHandler?: s
 const MODULES_ALWAYS_ON: Pick<ModulesService, 'allowedFor' | 'isEnabled' | 'jobEnabled'> = {
   allowedFor: async () => true, isEnabled: async () => true, jobEnabled: async () => true,
 }
+
+// B2.6-ب: اللي سياق التفويض بيقراه من الطلب
+export type DelegableRequest = Pick<Request, 'id' | 'typeCode' | 'definitionCode' | 'resolvedSteps' | 'requesterId' | 'createdByUserId'>
 
 @Injectable()
 export class RequestsService {
@@ -1249,6 +1253,7 @@ export class RequestsService {
         dueAt,
         actedAt: null,
         action: null,
+        ...(s.canDelegate === false ? { canDelegate: false } : {}),
       }
       resolved.push(step)
       if (skipLevel?.top) topSteps.add(step)
@@ -1321,8 +1326,10 @@ export class RequestsService {
       // ممنوع من التصرف فيه إلا لو صاحب سلطة الموارد البشرية — قراره نهائي (قرار المالك 26 سبتمبر)
       const selfRequest = this.isOwnRequestFor(user, req)
       const hrUnblock = !selfRequest
+      // B2.6-ب: خطوة المعتمد المسمّى مستنية بديله كمان طول فترة التفويض
+      const actingFor = (await this.delegationContext(user, [req], em))?.(req)
       const mine = group.find(
-        (s) => !s.actedAt && this.resolver.satisfies(user, s, { hrUnblock, selfRequest })
+        (s) => !s.actedAt && this.resolver.satisfies(user, s, { hrUnblock, selfRequest, actingFor })
       )
       if (!mine) {
         throw new ForbiddenException(
@@ -1330,6 +1337,14 @@ export class RequestsService {
             ? 'كل أعضاء هذه الخطوة تصرفوا بالفعل'
             : 'لا تملك صلاحية التصرف في هذه الخطوة'
         )
+      }
+
+      // B2.6-ب: القرار ده بالنيابة؟ الخطوة مش بتاعة الحساب نفسه، وبقت عليه بتفويض معتمدها
+      const onBehalf = mine.approverEmployeeId != null && !this.resolver.holdsStep(user, mine) && this.resolver.holdsStep(user, mine, actingFor)
+      // واللي اعتمد في الطلب ده بالنيابة مايعتمدش فيه خطوة بصفته (اتصعّدت له، أو خد صلاحيتها بعدها): شخص واحد مايعتمدش مستويين عن طريق
+      // التفويض. مدير النظام برّه (آخر مخرج للطلب الواقف)
+      if (dto.action === 'APPROVE' && !onBehalf && user.role !== 'super_admin' && await approvedOnBehalfIn(em, req.id, user.sub)) {
+        throw new ForbiddenException('اعتمدت خطوة في الطلب ده بالنيابة عن معتمد تاني — لازم حد غيرك يعتمد الخطوة دي')
       }
 
       // B1.7 (D08، إعداد مقفول): نفس الشخص مايعتمدش خطوتين في نفس طلب «تغيير حساب بنكي» — حتى بسلطة الموارد البشرية
@@ -1392,6 +1407,8 @@ export class RequestsService {
         comment,
       }
       await em.getRepository(RequestApproval).save(audit)
+      // B2.6-ب: قرار البديل بيتسجّل «بالنيابة عن» المفوِّض
+      if (onBehalf) await recordOnBehalf(em, audit.id!, mine.approverEmployeeId!)
 
       mine.actedAt = new Date().toISOString()
       mine.action = action
@@ -1431,6 +1448,11 @@ export class RequestsService {
       const nextOrder = orders[orders.indexOf(req.currentStep!) + 1]
       if (nextOrder !== undefined) {
         req.currentStep = nextOrder
+        // B2.6-ب: مهلة الخطوة بتبدأ لما توصل لصاحبها. كانت بتتحسب كلها من وقت التقديم، فالخطوة اللي بتوصل بعد مهلتها كانت «متأخرة» من أول
+        // لحظة وبتتصعّد في ساعتها — وده بقى بينقلها فعلًا لمعتمد تاني من ساعة ما التصعيد الهيكلي بقى بيحسب صاحب الدور
+        for (const step of resolved) {
+          if (step.stepOrder === nextOrder && step.slaDays) step.dueAt = new Date(Date.now() + step.slaDays * 86400000).toISOString()
+        }
         req.resolvedSteps = JSON.stringify(resolved)
         const advanced = await em.getRepository(Request).save(req)
         await this.recordStepPendingEvent(em, advanced)
@@ -1527,11 +1549,71 @@ export class RequestsService {
    * ومش طلبه ولا هو اللي أنشأه، والخطوة الحالية اللي لسه ماتصرّفش فيها بتاعته — من غير المخرجين: مدير النظام اللي يقدر يتصرف في أي
    * خطوة، والموارد البشرية للطلب الواقف. دول بيشوفوا الطلب في صندوقهم، بس مش هم اللي «مستني عليهم»، فمابيتبعتلهمش إشعار بكل طلب.
    */
-  stepAwaitsAccount(user: JwtPayload, req: Pick<Request, 'status' | 'branchId' | 'currentStep' | 'resolvedSteps' | 'requesterId' | 'createdByUserId'>, role?: string | null): boolean {
+  stepAwaitsAccount(user: JwtPayload, req: Pick<Request, 'status' | 'branchId' | 'currentStep' | 'resolvedSteps' | 'requesterId' | 'createdByUserId'>, role?: string | null,
+    actingFor?: ReadonlySet<number>): boolean {
     if (req.status !== 'UNDER_REVIEW' || !inBranchScope(branchScopeOf(user), req.branchId)) return false
     if (this.isOwnRequestFor(user, req)) return false
     // role: خطوات الدور ده بس من المجموعة الحالية (التصعيد)
-    return this.waitingSteps(req).some(step => (!role || step.role === role) && this.resolver.holdsStep(user, step))
+    return this.waitingSteps(req).some(step => (!role || step.role === role) && this.resolver.holdsStep(user, step, actingFor))
+  }
+
+  /**
+   * B2.6-ب: الحساب بينوب عن مين في كل طلب — null لو مالوش تفويض ساري (الحالة العادية، بقراءة واحدة). البديل بينوب عن المفوِّض في الطلب لو
+   * تفويضه بيغطّي فئته، ومالوش هو خطوة في الطلب لسه مااتصرّفش فيها حد (باسمه، أو دور وظيفي بصلاحيته)، وماعتمدش فيه قبل كده بصفة تانية
+   * (بنفسه، أو عن مفوِّض تاني): شخص واحد مايعتمدش مستويين عن طريق التفويض. اللي اعتمده عن نفس المفوِّض مابيمنعش (خطوتين للمفوِّض، أو نفس
+   * الخطوة بعد إرجاع وإعادة تقديم). والبديل بياخد موانع المفوِّض: مابينوبش عنه في طلب المفوِّض صاحبه أو منشئه. والطلب السري مابيوصلش للمدير
+   * المباشر لصاحبه بتفويض (التقديم نفسه بيتخطّاه). النتيجة بتتدّي لـsatisfies/holdsStep/stepAwaitsAccount (actingFor)، فالصندوق والقرار
+   * والبريد على نفس الحكم.
+   */
+  async delegationContext(user: JwtPayload, requests: ReadonlyArray<DelegableRequest>,
+    em: EntityManager = this.ds.manager): Promise<((req: DelegableRequest) => ReadonlySet<number> | undefined) | null> {
+    const delegations = await activeDelegationsTo(em, user.employeeId)
+    if (!delegations.length) return null
+    const types: Array<{ code: string; category: string; isConfidential: boolean }> = await em.query('SELECT [code], [category], [isConfidential] FROM [request_types]')
+    const categoryOf = new Map(types.map(type => [type.code, type.category]))
+    // السري بأحكام التقديم (تأجيل القسط بيمشي على سرية السلفة)
+    const confidentialCodes = new Set(types.filter(type => !!type.isConfidential).map(type => type.code))
+    const confidential = (code: string) => confidentialCodes.has(code) || (code === LOAN_DEFERRAL_TYPE && confidentialCodes.has('LOAN'))
+    // المدير المباشر (دلوقتي) لأصحاب الطلبات السرية
+    const resolver = new ApproverResolver(em.getRepository(Employee), em.getRepository(Team), em.getRepository(Department), em.getRepository(Branch))
+    const directManagerOf = new Map<number, number | null>()
+    for (const req of requests) {
+      if (!confidential(definitionCodeOf(req)) || directManagerOf.has(req.requesterId)) continue
+      directManagerOf.set(req.requesterId, await resolver.directManagerOf(req.requesterId))
+    }
+    // منشئي الطلبات (حساب ← موظف)
+    const creatorOf = new Map<number, number>()
+    const creatorIds = [...new Set(requests.map(req => req.createdByUserId).filter((id): id is number => !!id))]
+    for (let offset = 0; offset < creatorIds.length; offset += 1000) {
+      const part = creatorIds.slice(offset, offset + 1000)
+      const rows: Array<{ id: number; employeeId: number }> = await em.query(
+        `SELECT [id], [employeeId] FROM [users] WHERE [employeeId] IS NOT NULL AND [id] IN (${part.map((_, index) => `@${index}`).join(', ')})`, part)
+      for (const row of rows) creatorOf.set(Number(row.id), Number(row.employeeId))
+    }
+    // اعتمادات الحساب في الطلبات دي: كل واحد عن مين (null = بصفته هو)
+    const approvedFor = new Map<number, Array<number | null>>()
+    const ids = requests.map(req => req.id)
+    for (let offset = 0; offset < ids.length; offset += 1000) {
+      const part = ids.slice(offset, offset + 1000)
+      const rows: Array<{ requestId: number; onBehalfOf: number | null }> = await em.query(
+        `SELECT [requestId], [onBehalfOfEmployeeId] AS [onBehalfOf] FROM [request_approvals] WHERE [approverId] = @0 AND [action] IN (N'APPROVED', N'APPROVE', N'APPPROVE')
+           AND [requestId] IN (${part.map((_, index) => `@${index + 1}`).join(', ')})`, [user.sub, ...part])
+      for (const row of rows) approvedFor.set(Number(row.requestId), [...(approvedFor.get(Number(row.requestId)) ?? []), row.onBehalfOf == null ? null : Number(row.onBehalfOf)])
+    }
+    return req => {
+      const code = definitionCodeOf(req)
+      const covering = delegatorsForCategory(delegations, categoryOf.get(code))
+      if (!covering.size) return undefined
+      // طلب سري والحساب هو المدير المباشر لصاحبه: مايوصلوش بتفويض
+      if (confidential(code) && directManagerOf.get(req.requesterId) === user.employeeId) return undefined
+      // ليه هو خطوة في الطلب لسه مستنية (هيعتمدها بصفته): مابينوبش فيه عن حد
+      if (this.parseSteps(req.resolvedSteps).some(step => !step.actedAt && this.resolver.holdsStep(user, step))) return undefined
+      const earlier = approvedFor.get(req.id) ?? []
+      // المفوِّض اللي الطلب طلبه أو هو اللي أنشأه مايعتمدوش، فبديله مايعتمدوش عنه
+      const own = new Set([req.requesterId, req.createdByUserId ? creatorOf.get(req.createdByUserId) : undefined])
+      const acting = new Set([...covering].filter(delegator => !own.has(delegator) && earlier.every(onBehalfOf => onBehalfOf === delegator)))
+      return acting.size ? acting : undefined
+    }
   }
 
   /** خطوات المجموعة الحالية اللي لسه ماتصرّفش فيها حد (نفس اختيار صندوق الاعتماد) */
@@ -1965,9 +2047,11 @@ export class RequestsService {
     )
     // CRP2H: واللي مهمة تنفيذ الطلب مفتوحة عليه طرف فيه هنا كمان (نفس حكم التفاصيل)
     const executing = await executionAwaitedRequestIds(this.ds.manager, user, confIds)
+    // B2.6-ب: والبديل طول ما الخطوة الحالية مستنية المفوِّض (نفس حكم التفاصيل)
+    const acting = await this.delegationContext(user, rows.filter((r) => confidential.has(definitionCodeOf(r))))
     return this.withExecutionInfo(rows.map((r) =>
       !confidential.has(definitionCodeOf(r)) ||
-      this.seesConfidential(user, r, true, acted.has(r.id) || executing.has(r.id))
+      this.seesConfidential(user, r, true, acted.has(r.id) || executing.has(r.id), acting?.(r))
         ? this.withCanonicalStepActions(r)
         : this.maskConfidential(r)
     ))
@@ -2112,6 +2196,8 @@ export class RequestsService {
     const stuck = this.resolver.hasHrOverride(user)
       ? await this.stuckRequestIds(candidates)
       : new Set<number>()
+    // B2.6-ب: خطوات المفوِّض بتظهر في صندوق بديله طول فترة التفويض
+    const acting = await this.delegationContext(user, candidates)
     const pending = candidates.filter((req) => {
       const resolved = this.parseSteps(req.resolvedSteps)
       const selfRequest = this.isOwnRequestFor(user, req)
@@ -2121,11 +2207,18 @@ export class RequestsService {
         (s) =>
           s.stepOrder === req.currentStep &&
           !s.actedAt &&
-          this.resolver.satisfies(user, s, { hrUnblock, selfRequest })
+          this.resolver.satisfies(user, s, { hrUnblock, selfRequest, actingFor: acting?.(req) })
       )
     })
+    // الطلب اللي في الصندوق بالنيابة (خطوته بتاعة المفوِّض مش بتاعة الحساب): المفوِّض، للشارة
+    const delegatorOf = new Map<number, number>()
+    if (acting) for (const req of pending) {
+      if (this.isOwnRequestFor(user, req)) continue
+      const step = this.waitingSteps(req).find(s => !this.resolver.holdsStep(user, s) && this.resolver.holdsStep(user, s, acting(req)))
+      if (step?.approverEmployeeId != null) delegatorOf.set(req.id, step.approverEmployeeId)
+    }
     // اسم مقدّم الطلب ضمن الحمولة — المعتمد يعرضه بلا حاجة لصلاحية employees.view
-    const ids = [...new Set(pending.map((r) => r.requesterId))]
+    const ids = [...new Set([...pending.map((r) => r.requesterId), ...delegatorOf.values()])]
     const emps = ids.length
       ? await this.employees.find({
           where: { id: In(ids) },
@@ -2141,6 +2234,8 @@ export class RequestsService {
         requesterCode: emp?.employeeCode,
         // المسمى الحالي بس لو فرع الموظف الحالي جوه نطاق المعتمد — نفس بطاقة التفاصيل (مراجعة Codex الجولة 5)
         requesterJobTitle: emp && inBranchScope(scope, emp.branchId) ? emp.jobTitle : undefined,
+        ...(delegatorOf.has(req.id)
+          ? { onBehalfOfEmployeeId: delegatorOf.get(req.id), onBehalfOfName: empById.get(delegatorOf.get(req.id)!)?.fullName ?? null } : {}),
       }
     })
   }
@@ -2162,7 +2257,9 @@ export class RequestsService {
       req,
       inScope,
       // B2.6: واللي مهمة تنفيذ الطلب مفتوحة عليه (بحكم محرك المهام) طرف فيه زي المعتمد: محتاج حقوله عشان ينفّذ
-      approvals.some((a) => a.approverId === user.sub) || (await executionAwaitsAccount(this.ds.manager, user, req.id))
+      approvals.some((a) => a.approverId === user.sub) || (await executionAwaitsAccount(this.ds.manager, user, req.id)),
+      // B2.6-ب: والبديل طول ما الخطوة الحالية مستنية المفوِّض
+      (await this.delegationContext(user, [req]))?.(req)
     )
     // طلب برّه النطاق ومش طرف فيه = نفس رد الرقم اللي مش موجود (فرق 403/404 كان بيكشف وجوده — مراجعة Codex الجولة 4)؛
     // جوه النطاق من غير صلاحية العرض: رفض صريح زي الأول
@@ -2173,6 +2270,8 @@ export class RequestsService {
     const type = await this.types.findOne({ where: { code: definitionCodeOf(req) } })
     // السرّي لغير أطرافه: لا بطاقة موظف ولا منشئ — نفس حجب الهوية في القائمة
     if (!party && type?.isConfidential) return { ...this.maskConfidential({ ...this.withCanonicalStepActions(req), approvals }), requester: null, submittedBy: null }
+    // B2.6-ب: «بالنيابة عن» على سطور السجل اللي اتاخدت بتفويض — والأسماء لأطراف الطلب بس
+    await this.attachOnBehalf(approvals, party)
     // بطاقة صاحب الطلب أعلى شاشات التفاصيل الثلاث (بانتظار موافقتي، طلباتي، لوحة الطلبات)
     const full = { ...this.withCanonicalStepActions(req), approvals, ...(await this.requestPeople(req, user)) }
     if (!type || !this.isOvertimeDefinition(type)) return full
@@ -2507,6 +2606,11 @@ export class RequestsService {
           const resolved = this.parseSteps(req.resolvedSteps)
           const current = resolved.find(step => step.stepOrder === req.currentStep && !step.actedAt)
           if (!current?.dueAt || current.dueAt > new Date().toISOString() || !current.escalateTo) return false
+          // B2.6-ب: التصعيد لدور هيكلي بيحسب صاحب الدور الجديد بأحكام التقديم (قبل كده اسم الدور كان بيتبدّل والخطوة بتفضل على نفس
+          // الشخص). مفيش صاحب مسموح للدور: الخطوة بتفضل مع معتمدها الحالي، والتشغيل الجاي بيحاول تاني
+          const structural = !(FUNCTIONAL_APPROVER_ROLES as readonly string[]).includes(current.escalateTo)
+          const escalatedTo = structural ? await this.escalationApprover(em, req, current.escalateTo as ApproverRole) : null
+          if (structural && !escalatedTo) return false
           await em.getRepository(RequestApproval).save({
             requestId: req.id, step: current.stepOrder, approverId: 0, action: 'ESCALATED',
             comment: `تجاوز SLA — تصعيد من ${current.role} إلى ${current.escalateTo}`,
@@ -2518,6 +2622,8 @@ export class RequestsService {
               payload: { fromRole: current.role, toRole: current.escalateTo } })
           }
           current.role = current.escalateTo as ResolvedStep['role']
+          // الهيكلي بصاحبه المحسوب دلوقتي. والدور الوظيفي بالصلاحية، فخطوته بتتحفظ زي الأول بالحرف
+          if (structural) current.approverEmployeeId = escalatedTo
           current.escalateTo = null
           current.dueAt = current.slaDays ? new Date(Date.now() + current.slaDays * 86400000).toISOString() : null
           req.resolvedSteps = JSON.stringify(resolved)
@@ -2531,6 +2637,26 @@ export class RequestsService {
       }
     }
     return { escalated }
+  }
+
+  /**
+   * B2.6-ب: صاحب الدور الهيكلي اللي الخطوة المتأخرة هتتصعّد له، بأحكام التقديم نفسها: الطلب السري مابيروحش للمدير المباشر (ولا «مدير المدير»
+   * لو وقع على المدير المباشر نفسه)، ومش لصاحب الطلب ولا منشئه، ومش لـ«مدير مدير» تابع له في دايرة مديرين. null = الخطوة تفضل مع معتمدها.
+   */
+  private async escalationApprover(em: EntityManager, req: Request, role: ApproverRole): Promise<number | null> {
+    const resolver = new ApproverResolver(em.getRepository(Employee), em.getRepository(Team), em.getRepository(Department), em.getRepository(Branch))
+    const skipLevel = role === 'manager_of_direct_manager' ? await resolver.managerOfDirectManagerOf(req.requesterId) : null
+    if (role === 'direct_manager_of_requester' || skipLevel?.top) {
+      // تأجيل القسط بيمشي على سلسلة السلفة وسريتها (زي التقديم)
+      const code = definitionCodeOf(req), codes = code === LOAN_DEFERRAL_TYPE ? [code, 'LOAN'] : [code]
+      if (await em.getRepository(RequestType).count({ where: { code: In(codes), isConfidential: true } })) return null
+    }
+    const approver = skipLevel ? skipLevel.approverId : await resolver.resolveApproverEmployee(role, req.requesterId, req.payload ? JSON.parse(req.payload) : {}, null)
+    if (!approver || approver === req.requesterId) return null
+    // ولا لمنشئ الطلب نيابةً: مايعتمدش اللي أنشأه، فالخطوة كانت هتقف عنده
+    if (req.createdByUserId && await em.getRepository(User).count({ where: { id: req.createdByUserId, employeeId: approver } })) return null
+    if (skipLevel && await resolver.reportsTo(approver, req.requesterId)) return null
+    return approver
   }
 
   // ===== تنفيذ النقل المجدول بتاريخ السريان (يومي) =====
@@ -3048,12 +3174,17 @@ export class RequestsService {
     user: JwtPayload,
     req: Request,
     inScope: boolean,
-    hasActed: boolean
+    hasActed: boolean,
+    actingFor?: ReadonlySet<number>
   ): boolean {
     if (req.requesterId === user.employeeId || req.createdByUserId === user.sub) {
       return true
     }
     if (hasActed) return true
+    // B2.6-ب: البديل طرف طول ما الخطوة الحالية مستنية المفوِّض وفرع الطلب في نطاقه — مش كل طلب المفوِّض ليه خطوة فيه
+    if (actingFor?.size && inScope && req.status === 'UNDER_REVIEW' && this.waitingSteps(req).some((s) => this.resolver.holdsStep(user, s, actingFor))) {
+      return true
+    }
     return this.parseSteps(req.resolvedSteps).some(
       (s) =>
         (inScope ||
@@ -3062,6 +3193,26 @@ export class RequestsService {
         // المحتوى السرّي يبقى لأطرافه وحدهم كما كان
         this.resolver.satisfies(user, s)
     )
+  }
+
+  /**
+   * B2.6-ب: سطور السجل اللي اتاخدت بتفويض بيتزوّد عليها إنها «بالنيابة» — ولأطراف الطلب: اسم المفوِّض واسم اللي اتصرف عنه. (السري
+   * المحجوب مابيوصلش هنا.)
+   */
+  private async attachOnBehalf(approvals: RequestApproval[], withNames: boolean) {
+    const delegatorOf = await onBehalfOfApprovals(this.ds.manager, approvals.map((row) => row.id))
+    if (!delegatorOf.size) return
+    const delegators = withNames ? await this.employees.find({ where: { id: In([...new Set(delegatorOf.values())]) }, select: ['id', 'fullName'] }) : []
+    const delegatorName = new Map(delegators.map((row) => [row.id, row.fullName]))
+    const actors = withNames
+      ? await this.ds.getRepository(User).find({ where: { id: In([...new Set(approvals.filter((row) => delegatorOf.has(row.id)).map((row) => row.approverId))]) }, select: { id: true, displayName: true } })
+      : []
+    const actorName = new Map(actors.map((row) => [row.id, row.displayName ?? null]))
+    for (const row of approvals) {
+      const delegator = delegatorOf.get(row.id)
+      if (delegator == null) continue
+      Object.assign(row, { onBehalf: true, ...(withNames ? { onBehalfOfName: delegatorName.get(delegator) ?? null, actedByName: actorName.get(row.approverId) ?? null } : {}) })
+    }
   }
 
   // السرّي لغير أطرافه: تُحجب هوية المقدّم ومنشئه ومحتواه وتعليقات المعتمدين،

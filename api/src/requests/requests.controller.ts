@@ -11,6 +11,8 @@ import {
   UseGuards,
 } from '@nestjs/common'
 import {
+  ArrayMaxSize,
+  IsArray,
   IsIn,
   IsInt,
   IsNumber,
@@ -20,6 +22,7 @@ import {
   IsUUID,
   Matches,
   MaxLength,
+  Min,
   MinLength,
 } from 'class-validator'
 import { InjectRepository } from '@nestjs/typeorm'
@@ -31,6 +34,7 @@ import { LeaveType } from './entities/leave.entities'
 import { definitionBranchQuery, definitionBranchWhere } from '../common/definition-branch'
 import { LeaveBalancesService } from './leave-balances.service'
 import { RequestsService } from './requests.service'
+import { ApprovalDelegationsService } from './approval-delegations.service'
 import { leaveTypeView } from '../common/leave-contract'
 // ملاحظة النقل تُحفظ في custody_assignments.condition nvarchar(100) — الحد نفسه في الـDTO والخدمة
 import { TransferCustodyDto } from '../assets/custody.dto'
@@ -131,12 +135,44 @@ class AdjustLeaveBalanceDto {
   expectedRemaining?: number
 }
 
+// B2.6-ب: تفويض الاعتمادات
+class CreateDelegationDto {
+  // المفوِّض — فاضي = صاحب الحساب نفسه. لموظف تاني: صلاحية «بانِي دورات الاعتماد» (الفحص في الخدمة)
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  delegatorEmployeeId?: number
+
+  @IsInt({ message: 'اختار البديل' })
+  @Min(1)
+  delegateEmployeeId: number
+
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'تاريخ بداية التفويض بصيغة YYYY-MM-DD' })
+  startDate: string
+
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'تاريخ نهاية التفويض بصيغة YYYY-MM-DD' })
+  endDate: string
+
+  // فئات الطلبات — فاضي = الكل
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  categories?: string[] | null
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  reason?: string | null
+}
+
 @RequireModule('requests')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller()
 export class RequestsController {
   constructor(
     private readonly service: RequestsService,
+    private readonly delegationsService: ApprovalDelegationsService,
     private readonly balances: LeaveBalancesService,
     @InjectRepository(LeaveType)
     private readonly leaveTypes: Repository<LeaveType>,
@@ -301,6 +337,25 @@ export class RequestsController {
   @Get('requests/inbox')
   inbox(@CurrentUser() user: JwtPayload) {
     return this.service.inbox(user)
+  }
+
+  // ===== B2.6-ب: تفويض الاعتمادات =====
+  // تفويضاتي، واللي أنا بديل فيها، ولصاحب «بانِي دورات الاعتماد»: تفويضات موظفي نطاقه. قبل ':id' حتى لا يلتقطه
+  @Get('requests/delegations')
+  delegations(@CurrentUser() user: JwtPayload) {
+    return this.delegationsService.list(user)
+  }
+
+  // الموظف ينشئ تفويضه لنفسه؛ ولموظف تاني بصلاحية «بانِي دورات الاعتماد» في نطاقه (الفحص في الخدمة)
+  @Post('requests/delegations')
+  createDelegation(@CurrentUser() user: JwtPayload, @Body() dto: CreateDelegationDto) {
+    return this.delegationsService.create(user, dto)
+  }
+
+  // المفوِّض نفسه، أو صاحب الصلاحية والمفوِّض في نطاقه — غيرهم نفس رد التفويض اللي مش موجود
+  @Post('requests/delegations/:id/revoke')
+  revokeDelegation(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number) {
+    return this.delegationsService.revoke(user, id)
   }
 
   @Get('requests/:id')

@@ -23,6 +23,7 @@ import {
 import { categoryLabels } from '@/data/requestsCatalog'
 import MyClearanceItems from '@/components/dashboard/MyClearanceItems'
 import MyApprovalDecisions from '@/components/MyApprovalDecisions'
+import ApprovalDelegations from '@/components/approvals/ApprovalDelegations'
 // كل مفاتيح الحمولة بتسمياتها — مشترك مع ويدجت لوحة التحكم (SEC-REQ-2)
 import RequestPayload from '@/components/RequestPayload'
 // بطاقة صاحب الطلب أعلى التفاصيل: الاسم والكود والمسمى والقسم والفرع والفريق والمدير المباشر
@@ -124,6 +125,8 @@ interface InboxItem {
   totalSteps: number
   stepRoleLabel: string // صفة المعتمد في الخطوة الحالية — بالعربية دائماً
   slaDaysLeft: number | null // المتبقي قبل انتهاء مهلة الرد — من dueAt للخطوة الحالية
+  // B2.6-ب: الطلب عندي بالنيابة عن المعتمد ده (تفويض ساري) — null لو الخطوة بتاعتي أنا
+  onBehalfOf: string | null
 }
 
 export default function ApprovalsInboxPage() {
@@ -269,6 +272,7 @@ export default function ApprovalsInboxPage() {
             totalSteps: steps.length || 1,
             stepRoleLabel: roleLabelOf(current?.role ?? ''),
             slaDaysLeft,
+            onBehalfOf: r.onBehalfOfEmployeeId ? r.onBehalfOfName ?? 'المعتمد' : null,
           }
         })
       )
@@ -382,6 +386,7 @@ export default function ApprovalsInboxPage() {
         </div>
 
         <MyApprovalDecisions onOpen={setDetailId} revision={decisionsRevision} />
+        <ApprovalDelegations />
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
 
         {payrollPending && (payrollPending.deductions > 0 || payrollPending.bonuses > 0) && (
@@ -531,6 +536,7 @@ export default function ApprovalsInboxPage() {
                           <div className="flex items-center gap-2 flex-wrap">
                             <h3 className="font-bold text-gray-800">{item.title}</h3>
                             <span className={`badge text-xs ${cfg.color}`}>{cfg.label}</span>
+                            {item.onBehalfOf && <span className="badge text-xs bg-amber-100 text-amber-800" data-on-behalf>بالنيابة عن {item.onBehalfOf}</span>}
                             {item.branchName && (
                               <span className="badge text-xs bg-indigo-100 text-indigo-700">
                                 {item.branchName}

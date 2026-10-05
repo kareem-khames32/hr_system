@@ -109,7 +109,9 @@ export function usageText(count: number, lastAt: string | null): string {
 const stepsOf = (item: ApiChain) => [...item.steps]
   .sort((a, b) => a.stepOrder - b.stepOrder || a.id - b.id)
   .map((step) => [step.stepOrder, step.approverRole, step.specificEmployeeId ?? null, !!step.isParallel, step.thresholdField ?? null,
-    step.thresholdOp ?? null, step.thresholdValue == null ? null : Number(step.thresholdValue), step.slaDays ?? null, step.escalateTo ?? null])
+    step.thresholdOp ?? null, step.thresholdValue == null ? null : Number(step.thresholdValue), step.slaDays ?? null, step.escalateTo ?? null,
+    // B2.6-ب: خطوة مقفول تفويضها مش زي خطوة مسموح تتفوّض (التوحيد على سلسلة «زيها» كان هيشيل القفل)
+    step.canDelegate !== false])
 
 // بصمة السلسلة نفسها: الخطوات بالترتيب + التنفيذ الفوري (من غير نسخ الفروع)
 export const chainStepsSignature = (chain: ApiChain): string => JSON.stringify([chain.isActive, chain.autoApprove, stepsOf(chain)])

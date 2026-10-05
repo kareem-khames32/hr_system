@@ -12,6 +12,7 @@ import { ModulesService } from '../modules-registry/modules.service'
 import { routeAvailable } from '../modules-registry/registry'
 import { enqueueQueueJob, queueTablesReady, type DomainEventType } from '../queue/outbox'
 import { QueueService } from '../queue/queue.service'
+import { activeDelegationsFrom } from '../requests/approval-delegations'
 import { ApproverResolver, FUNCTIONAL_APPROVER_ROLES } from '../requests/approver-resolver.service'
 import { RequestType } from '../requests/entities/request-type.entity'
 import { Request } from '../requests/entities/request.entity'
@@ -192,8 +193,14 @@ export class NotificationsService implements OnModuleInit {
     const functional = waiting.some(step => (FUNCTIONAL_APPROVER_ROLES as readonly string[]).includes(step.role))
     const named = waiting.map(step => step.approverEmployeeId).filter((id): id is number => id != null)
     if (!functional && !named.length) return 0
-    const users = await this.ds.getRepository(User).find({ where: functional ? { isActive: true } : { isActive: true, employeeId: In(named) } })
-    const recipients = (await this.auth.accountPayloads(users)).filter(account => this.requests.stepAwaitsAccount(account, req, role))
+    // B2.6-ب: بدلاء المعتمدين المسمّين في تفويض ساري بيتبلّغوا كمان — الحكم النهائي لكل حساب في stepAwaitsAccount بسياق تفويضه
+    const delegates = new Set(named.length ? (await activeDelegationsFrom(this.ds.manager, named)).map(row => row.delegateEmployeeId) : [])
+    const users = await this.ds.getRepository(User).find({ where: functional ? { isActive: true } : { isActive: true, employeeId: In([...named, ...delegates]) } })
+    const recipients: JwtPayload[] = []
+    for (const account of await this.auth.accountPayloads(users)) {
+      const actingFor = account.employeeId != null && delegates.has(account.employeeId) ? (await this.requests.delegationContext(account, [req]))?.(req) : undefined
+      if (this.requests.stepAwaitsAccount(account, req, role, actingFor)) recipients.push(account)
+    }
     const facts = await this.requestFacts(req)
     return this.deliver({
       event, code: facts.confidential ? 'request.confidential' : escalated ? 'request.escalated' : 'request.pending_approval',
@@ -434,7 +441,10 @@ export class NotificationsService implements OnModuleInit {
       const req = Number.isSafeInteger(id) ? await this.ds.getRepository(Request).findOne({ where: { id } }) : null
       // نوع الطلب بقى سري بعد ما الرسالة اتجهّزت بنوعه واسم صاحبه: النص المتخزن مابيطلعش (الإشعار السري قالبه عام من الأول)
       if (req && notification.eventCode !== 'request.confidential' && (await this.requestFacts(req)).confidential) return 'نوع الطلب بقى سري بعد تجهيز الرسالة'
-      if (notification.category === 'approval') return req && this.requests.stepAwaitsAccount(account, req) ? null : 'الطلب مابقاش مستني اعتماد الحساب ده'
+      // B2.6-ب: والبديل لسه بديل (تفويضه ماتلغاش ولا انتهى) وقت الإرسال
+      if (notification.category === 'approval') {
+        return req && this.requests.stepAwaitsAccount(account, req, null, (await this.requests.delegationContext(account, [req]))?.(req)) ? null : 'الطلب مابقاش مستني اعتماد الحساب ده'
+      }
       // إشعارات صاحب الطلب (قرار، إرجاع — والسري منهم): الحساب اتربط بموظف تاني بعدها = مابقاش حساب صاحب الطلب
       if (!req || !user.employeeId || user.employeeId !== req.requesterId) return 'الحساب مابقاش حساب صاحب الطلب'
       // «اترجع لاستكمال» بدلالة حدث المصدر مش بكود القالب: الطلب السري قالبه عام، وإرجاعه بياخد نفس الفحص

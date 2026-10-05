@@ -7,6 +7,7 @@ import { EmployeesModule } from '../employees/employees.module'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
+import { ApprovalDelegationsService } from './approval-delegations.service'
 import { ApproverResolver } from './approver-resolver.service'
 import { DestinationsService } from './destinations.service'
 import { LeaveBalancesService } from './leave-balances.service'
@@ -14,6 +15,7 @@ import { LeavesController } from './leaves.controller'
 import { LeaveAttachmentsController } from './leave-attachments.controller'
 import { LeaveAttachmentDeadlineJob } from './leave-attachment-deadline.job'
 import { ApprovalChain } from './entities/approval-chain.entity'
+import { ApprovalDelegation } from './entities/approval-delegation.entity'
 import { ApprovalStep } from './entities/approval-step.entity'
 import { AttendanceCorrection, OvertimeEntry } from './entities/attendance.entities'
 import { OvertimeDayClaim, OvertimeEntryEvent } from './entities/overtime-workflow.entities'
@@ -47,6 +49,7 @@ import { OvertimeDispatchSubscriber } from './overtime-dispatch.subscriber'
       RequestType,
       ApprovalChain,
       ApprovalStep,
+      ApprovalDelegation,
       Request,
       RequestApproval,
       RequestAttachment,
@@ -80,6 +83,7 @@ import { OvertimeDispatchSubscriber } from './overtime-dispatch.subscriber'
     RequestsService,
     OvertimeDispatchSubscriber,
     ApproverResolver,
+    ApprovalDelegationsService,
     DestinationsService,
     LeaveBalancesService,
     RequestsScheduler,

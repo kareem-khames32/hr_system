@@ -12,6 +12,7 @@ import {
 } from '@/lib/api'
 import { fetchMyPayrollApprovalsCount } from '@/lib/payroll-approval-chain-api'
 import { fetchMyTasksCount, TASKS_CHANGED_EVENT } from '@/lib/tasks-api'
+import { fetchDelegations } from '@/lib/delegations-api'
 import { DEFAULT_MODULES, routeAvailable, useModules } from '@/lib/modules'
 import { useBranding } from '@/lib/branding'
 import { BrandLogo } from '@/components/branding/BrandLogo'
@@ -326,6 +327,14 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
   // B2.5: عدد اللي على الحساب في «مهامي» (مهام عامة + تهيئة + إخلاء)
   const [tasksCount, setTasksCount] = useState<number>(0)
   const [tasksRevision, setTasksRevision] = useState(0)
+  // B2.6-ب: المعتمد الهيكلي وطرف التفويض بيلاقوا «بانتظار موافقتي» حتى والصندوق فاضي — منها بيسجّل تفويضه قبل إجازته وبيلغيه
+  const [delegationEntry, setDelegationEntry] = useState(false)
+  useEffect(() => {
+    if (getCurrentUser()?.role !== 'employee') return
+    fetchDelegations()
+      .then((data) => setDelegationEntry(data.available && (data.approver || data.toMe.length > 0 || data.mine.some((row) => row.canRevoke))))
+      .catch(() => setDelegationEntry(false))
+  }, [])
 
   // الإطار ثابت بين الصفحات: الجلسة تُقرأ من جديد وعدّاد الموافقات يتحدث مع كل انتقال
   useEffect(() => {
@@ -377,7 +386,7 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
     }
 
     const isPrivileged = adminItems.length > 0
-    const showInbox = currentUser.role !== 'employee' || inboxCount > 0 || inboxError
+    const showInbox = currentUser.role !== 'employee' || inboxCount > 0 || inboxError || delegationEntry
 
     // بورتال الموظف — يظهر للجميع (كل مستخدم موظف أيضاً)
     const portalItems: MenuItem[] = [
@@ -433,7 +442,7 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
     ]
 
     return [...portalItems.filter((item) => available(item.href)), ...adminItems]
-  }, [currentUser, inboxCount, inboxError, payrollApprovals, tasksCount, enabledModules])
+  }, [currentUser, inboxCount, inboxError, delegationEntry, payrollApprovals, tasksCount, enabledModules])
 
   const activeHref = activeHrefFor(pathname, menuItems)
   const activeGroup = menuItems.find((item) => item.children?.some((child) => child.href === activeHref))?.id

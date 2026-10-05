@@ -142,7 +142,15 @@ export type StepForm = {
   thresholdOp: string
   thresholdValue: string
   isParallel: boolean
+  // B2.6-ب: مسموح تتفوّض لبديل المعتمد المسمّى (للأدوار الهيكلية)
+  canDelegate: boolean
 }
+
+// B2.6-ب: الأدوار اللي خطوتها باسم موظف بعينه، فبتتفوّض لبديله (نفس قايمة holdsStep في الخادم). الأدوار الوظيفية بالصلاحية ومالهاش تفويض
+export const DELEGABLE_ROLES: readonly string[] = [
+  'direct_manager_of_requester', 'manager_of_direct_manager', 'department_manager_of_requester', 'administration_manager_of_requester',
+  'branch_manager_of_requester', 'receiving_team_manager', 'specific_employee',
+]
 
 export type ChainForm = {
   name: string
@@ -161,6 +169,7 @@ export const emptyStep = (): StepForm => ({
   thresholdOp: '',
   thresholdValue: '',
   isParallel: false,
+  canDelegate: true,
 })
 
 export const stepFormOf = (s: ApiChainStep, key: string): StepForm => ({
@@ -174,6 +183,7 @@ export const stepFormOf = (s: ApiChainStep, key: string): StepForm => ({
   thresholdOp: s.thresholdOp ?? '',
   thresholdValue: s.thresholdValue != null ? String(s.thresholdValue) : '',
   isParallel: !!s.isParallel,
+  canDelegate: s.canDelegate !== false,
 })
 
 // تحقق محلي يطابق قواعد الباك إند قبل الإرسال
@@ -220,6 +230,8 @@ export const buildChainSteps = (form: ChainForm): ChainStepInput[] =>
       : {}),
     ...(s.slaDays !== '' ? { slaDays: Number(s.slaDays) } : {}),
     ...(s.escalateTo ? { escalateTo: s.escalateTo } : {}),
+    // «مش مسموح تتفوّض» بتتبعت لما تتقفل بس، ولدور بيتفوّض (الافتراضي في الخادم مسموح)
+    ...(!s.canDelegate && DELEGABLE_ROLES.includes(s.approverRole) ? { canDelegate: false } : {}),
     ...(s.thresholdField.trim()
       ? {
           thresholdField: s.thresholdField.trim(),

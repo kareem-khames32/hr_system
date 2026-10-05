@@ -130,12 +130,16 @@ const EXCEPTIONS = {
   'RequestsController.act': 'SERVICE_CHECK', // POST /requests/:id/act
   'RequestsController.cancel': 'SERVICE_CHECK', // POST /requests/:id/cancel
   'RequestsController.create': 'SERVICE_CHECK', // POST /requests
+  // B2.6-ب: تفويض الاعتمادات — الموظف لنفسه، ولغيره بصلاحية «بانِي دورات الاعتماد» في نطاقه (الفحص في الخدمة)
+  'RequestsController.createDelegation': 'SERVICE_CHECK', // POST /requests/delegations
+  'RequestsController.delegations': 'SERVICE_CHECK', // GET /requests/delegations
   'RequestsController.detail': 'SERVICE_CHECK', // GET /requests/:id
   'RequestsController.inbox': 'SERVICE_CHECK', // GET /requests/inbox
   'RequestsController.managerConfirm': 'SERVICE_CHECK', // POST /requests/custody/:assignmentId/manager-confirm · POST /custody/:assignmentId/manager-confirm
   'RequestsController.myLeaves': 'SERVICE_CHECK', // GET /requests/my-leaves · GET /leaves/mine
   'RequestsController.rejectCustody': 'SERVICE_CHECK', // POST /requests/custody/:assignmentId/reject · POST /custody/:assignmentId/reject
   'RequestsController.resubmit': 'SERVICE_CHECK', // POST /requests/:id/resubmit
+  'RequestsController.revokeDelegation': 'SERVICE_CHECK', // POST /requests/delegations/:id/revoke
   'RequestsController.submit': 'SERVICE_CHECK', // POST /requests/:id/submit
   'RequestsController.transfer': 'SERVICE_CHECK', // POST /requests/custody/:assignmentId/transfer · POST /custody/:assignmentId/transfer
   'TypedDeductionsController.approve': 'SERVICE_CHECK', // POST /deductions/:id/approve

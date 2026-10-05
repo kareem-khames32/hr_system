@@ -73,6 +73,9 @@ export interface ResolvedStep {
   dueAt: string | null // ISO — يُحسب من slaDays وقت التقديم
   actedAt: string | null
   action: ApprovalAction | null
+  // B2.6-ب: false = الخطوة مش مسموح تتفوّض لبديل معتمدها (من خطوة السلسلة وقت التقديم). من غير الخانة = مسموح، زي كل الخطوات المحفوظة
+  // من قبل كده (القيمة الافتراضية للعمود)
+  canDelegate?: boolean
 }
 
 // حل خطوة «مدير الإدارة»: المعتمد، أو سبب إيقاف التقديم برسالة بتسمّي القسم أو الإدارة
@@ -300,7 +303,7 @@ export class ApproverResolver {
   satisfies(
     user: JwtPayload,
     step: ResolvedStep,
-    options: { hrUnblock?: boolean; selfRequest?: boolean } = {}
+    options: { hrUnblock?: boolean; selfRequest?: boolean; actingFor?: ReadonlySet<number> } = {}
   ): boolean {
     // تدقيق ما قبل التشغيل (موجة ب): الأدوار الوظيفية (hr/مالية/IT/عهدة/رواتب/تنفيذي)
     // وsuper_admin كانت بتطابق بالدور وحده، فصاحب الطلب اللي بيحمل دور الخطوة كان
@@ -310,14 +313,15 @@ export class ApproverResolver {
     // super_admin يتصرف في أي خطوة — يفكّ أي انسداد
     if (user.role === 'super_admin') return true
     if (options.hrUnblock === true && this.hasHrOverride(user)) return true
-    return this.holdsStep(user, step)
+    return this.holdsStep(user, step, options.actingFor)
   }
 
   /**
    * الخطوة دي بتاعة الحساب ده فعلًا؟ (المعتمد الهيكلي المسمّى، أو حامل الدور الوظيفي بصلاحيته) — نفس حكم satisfies من غير مخرج مدير
    * النظام ولا مخرج الموارد البشرية للشغل الواقف. B2.4: الإشعار بيروح للي الخطوة بتاعتهم، مش لكل اللي «يقدر يتصرف».
    */
-  holdsStep(user: Pick<JwtPayload, 'role' | 'permissions' | 'employeeId'>, step: Pick<ResolvedStep, 'role' | 'approverEmployeeId'>): boolean {
+  holdsStep(user: Pick<JwtPayload, 'role' | 'permissions' | 'employeeId'>, step: Pick<ResolvedStep, 'role' | 'approverEmployeeId' | 'canDelegate'>,
+    actingFor?: ReadonlySet<number>): boolean {
     switch (step.role) {
       case 'direct_manager_of_requester':
       case 'manager_of_direct_manager':
@@ -326,9 +330,10 @@ export class ApproverResolver {
       case 'branch_manager_of_requester':
       case 'receiving_team_manager':
       case 'specific_employee':
+        // المعتمد المسمّى نفسه، أو بديله في تفويض ساري (actingFor = المفوِّضين اللي الحساب بينوب عنهم في الطلب ده) لو الخطوة مسموح تتفوّض
         return (
           step.approverEmployeeId !== null &&
-          user.employeeId === step.approverEmployeeId
+          (user.employeeId === step.approverEmployeeId || (step.canDelegate !== false && !!actingFor?.has(step.approverEmployeeId)))
         )
       // الأدوار الوظيفية بالصلاحية (holdsFunctionalStep — نفس الحكم اللي محرر السلاسل بينبّه بيه)
       case 'hr':

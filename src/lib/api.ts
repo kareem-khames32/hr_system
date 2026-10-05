@@ -442,6 +442,8 @@ export interface ApiRequest {
   approvals?: ApiApproval[]
   // صندوق الموافقات: بيانات المقدّم من السيرفر (بلا GET /employees)
   requesterName?: string; requesterCode?: string; requesterJobTitle?: string
+  // B2.6-ب: الطلب في صندوقي بالنيابة عن المعتمد ده (تفويض ساري)
+  onBehalfOfEmployeeId?: number; onBehalfOfName?: string | null
   // سرّي محجوب لغير أطرافه: requesterId/payload/تعليقات المعتمدين = null
   confidentialMasked?: boolean
   overtimeReviewRequired?: boolean
@@ -498,6 +500,8 @@ export interface ApiOvertimeRequestDetail {
 export interface ApiApproval {
   id: number; requestId: number; step: number; approverId: number
   action: string; comment?: string; actedAt: string
+  // B2.6-ب: القرار اتاخد بتفويض — والاسمين (المفوِّض، واللي اتصرف عنه) لأطراف الطلب بس
+  onBehalf?: boolean; onBehalfOfName?: string | null; actedByName?: string | null
 }
 export interface ApiAttendanceDay {
   id: number; employeeId: number; branchId?: number; date: string
@@ -1329,6 +1333,8 @@ export interface ChainStepInput {
   slaDays?: number
   escalateTo?: string
   isParallel?: boolean
+  // B2.6-ب: false = الخطوة مش مسموح تتفوّض لبديل معتمدها (الافتراضي مسموح)
+  canDelegate?: boolean
 }
 export const createApprovalChain = (c: { code: string; nameAr: string; branchId?: number; steps: ChainStepInput[] }) =>
   post<any>('/settings/approval-chains', c)

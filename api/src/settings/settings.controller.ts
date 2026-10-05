@@ -330,6 +330,11 @@ class ChainStepDto {
   @IsOptional()
   @IsIn(APPROVER_ROLES, { message: 'دور التصعيد غير صالح' })
   escalateTo?: string
+
+  // B2.6-ب: الخطوة مسموح تتفوّض لبديل معتمدها المسمّى (الأدوار الهيكلية). من غير الخانة = مسموح (افتراضي العمود)
+  @IsOptional()
+  @IsBoolean()
+  canDelegate?: boolean
 }
 
 class ReplaceStepsDto {
@@ -1291,11 +1296,11 @@ export class SettingsController {
       if (step.escalateTo === 'specific_employee') {
         throw new BadRequestException('التصعيد إلى موظف محدد يحتاج مساراً يدعم تحديد موظف التصعيد')
       }
-      // التصعيد بيغيّر دور الخطوة بس ومابيحلّش معتمد جديد، فالتصعيد لـ«مدير المدير المباشر» كان هيوقف الطلب
+      // اتمنع لما التصعيد كان بيغيّر اسم الدور بس. من B2.6-ب التصعيد بيحسب صاحب الدور الجديد، وفتح الجهة دي من الإعدادات قرار للمالك (Q-022)
       if (step.escalateTo === 'manager_of_direct_manager') {
         throw new BadRequestException('«مدير المدير المباشر» بيتحط كخطوة اعتماد في السلسلة، مش كجهة تصعيد — اختار جهة تصعيد تانية')
       }
-      // نفس السبب لـ«مدير الإدارة»: التصعيد مابيحلّش مدير الإدارة، فالخطوة كانت هتقف
+      // نفس الحكم لـ«مدير الإدارة»
       if (step.escalateTo === 'administration_manager_of_requester') {
         throw new BadRequestException('«مدير الإدارة» بيتحط كخطوة اعتماد في السلسلة، مش كجهة تصعيد — اختار جهة تصعيد تانية')
       }

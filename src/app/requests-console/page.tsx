@@ -9,6 +9,7 @@ import { canCancelSalaryIncreaseExecution, cancelSalaryIncreaseExecution } from 
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import { useOrgFilter } from '@/components/OrgFilter'
+import { onBehalfText } from '@/lib/delegations-api'
 import {
   Search,
   Download,
@@ -727,6 +728,7 @@ export default function RequestsConsolePage() {
                                 {a.actedAt.slice(0, 10)}
                               </span>
                             </div>
+                            {onBehalfText(a) && <p className="text-xs text-amber-800 mt-1" data-on-behalf>{onBehalfText(a)}</p>}
                             {a.comment && (
                               <p className="text-xs text-gray-500 mt-1">{a.comment}</p>
                             )}

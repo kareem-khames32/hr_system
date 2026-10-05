@@ -145,6 +145,8 @@ export default function PendingApprovals() {
                       {getCategoryIcon(type?.category)}
                       {type?.nameAr ?? req.typeCode}
                     </span>
+                    {/* B2.6-ب: الطلب هنا بتفويض — نفس شارة «بانتظار موافقتي» */}
+                    {req.onBehalfOfEmployeeId && <span className="badge text-xs bg-amber-100 text-amber-800" data-on-behalf>بالنيابة عن {req.onBehalfOfName ?? 'المعتمد'}</span>}
                   </div>
                   <p className="text-sm text-gray-500 mt-0.5">
                     {req.requesterJobTitle ?? req.requesterCode ?? ''}

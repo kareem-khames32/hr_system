@@ -21,6 +21,7 @@ import {
   branchesWithoutVersionOf,
   branchVersionsOfChain,
   buildChainSteps,
+  DELEGABLE_ROLES,
   emptyStep,
   escalationRoles,
   generalChainOf,
@@ -437,6 +438,19 @@ function ChainEditorDialog({
                             موازية مع السابقة
                           </span>
                         </label>
+                        {/* B2.6-ب: خطوة باسم موظف بعينه بتتفوّض لبديله طول فترة تفويضه — إلا لو اتقفلت هنا */}
+                        {DELEGABLE_ROLES.includes(step.approverRole) && (
+                          <label className="flex items-center gap-1.5 mr-3" title="طول فترة تفويض المعتمد، الخطوة بتظهر عند بديله كمان" data-step-can-delegate>
+                            <input
+                              type="checkbox"
+                              checked={step.canDelegate}
+                              disabled={readOnly}
+                              onChange={(e) => updateStep(index, 'canDelegate', e.target.checked)}
+                              className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:cursor-not-allowed"
+                            />
+                            <span className="text-xs text-gray-600">مسموح تتفوّض</span>
+                          </label>
+                        )}
                       </div>
                       {!readOnly && (
                         <div className="flex items-center gap-1">

@@ -41,6 +41,11 @@ export class RequestApproval {
   @Column({ length: 1000, nullable: true })
   comment: string
 
+  // B2.6-ب (ترحيل 090): قرار اتاخد بتفويض — المفوِّض اللي الخطوة كانت باسمه (approverId = حساب البديل). برّه القراءة والكتابة العادية:
+  // الكود بيشتغل قبل الترحيل، والقراءة والكتابة بـSQL صريح بعد التأكد من وجوده (approval-delegations.ts)
+  @Column({ type: 'int', nullable: true, select: false, insert: false, update: false })
+  onBehalfOfEmployeeId: number | null
+
   @CreateDateColumn()
   actedAt: Date
 }
