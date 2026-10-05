@@ -420,6 +420,11 @@ export interface ApiRequestType {
   // D12: RECORD_ONLY = «تسجيل فقط» (الطلب المعتمد هو السجل بلا أثر آلي)
   executionMode?: 'RECORD_ONLY' | 'EXECUTES' | 'UNSUPPORTED'
   executionLabel?: string | null
+  // B2.6: «مهمة تنفيذ بعد الاعتماد» — الدور الوظيفي (null = من غير مهمة)، والمهلة بالأيام، والإثبات إجباري. executionAvailable = ترحيل 089 متطبق
+  executionRole?: string | null
+  executionDays?: number | null
+  executionProof?: boolean
+  executionAvailable?: boolean
   definitionCode?: string
   leaveTypeCode?: LeaveTypeCode | null
   leaveProfiles?: ApiRequestType[]
@@ -431,6 +436,9 @@ export interface ApiRequest {
   status: string; currentStep?: number; payload?: string
   destinationRef?: string; resolvedSteps?: string
   createdAt: string; submittedAt?: string; completedAt?: string
+  // B2.6: للطلب المعتمد اللي لسه مااكتملش (قايمة لوحة الطلبات) — إمتى اتعتمد، ومهمة تنفيذه ومسؤولها (null = مستني معالجه أو تنفيذه متعذّر)
+  approvedAt?: string | null
+  executionTask?: { id: number; assignee: string | null; status: string; dueDate: string | null; overdue: boolean } | null
   approvals?: ApiApproval[]
   // صندوق الموافقات: بيانات المقدّم من السيرفر (بلا GET /employees)
   requesterName?: string; requesterCode?: string; requesterJobTitle?: string
@@ -875,10 +883,12 @@ export const fetchEmployeeDirectory = () =>
 // ===== الطلبات =====
 export const fetchRequestTypes = () => get<ApiRequestType[]>('/requests/types')
 export const fetchMyRequests = () => get<ApiRequest[]>('/requests/mine')
-export const fetchAllRequests = (q?: { status?: string; typeCode?: string }) => {
+// execution: 'pending' = تقرير «معتمد ومااتنفذش» (B2.6): اتعتمد ولسه مااكتملش
+export const fetchAllRequests = (q?: { status?: string; typeCode?: string; execution?: 'pending' }) => {
   const p = new URLSearchParams()
   if (q?.status) p.set('status', q.status)
   if (q?.typeCode) p.set('typeCode', q.typeCode)
+  if (q?.execution) p.set('execution', q.execution)
   const qs = p.toString()
   return get<ApiRequest[]>(`/requests/all${qs ? `?${qs}` : ''}`)
 }
@@ -1990,6 +2000,7 @@ export const createRequestType = (d: {
   visibleTo?: { mode: string; ids: Array<number | string>; where?: { mode: 'branches' | 'departments'; ids: number[] } }
   // فرع النوع: فاضي = كل الشركة؛ حساب الفرع يتضاف لفرعه تلقائيًا
   branchId?: number | null
+  executionRole?: string | null; executionDays?: number | null; executionProof?: boolean
 }) => post<ApiRequestType>('/settings/request-types', d)
 export const updateRequestTypeFull = (id: number, d: Record<string, unknown>) =>
   patch<ApiRequestType>(`/settings/request-types/${id}`, d)

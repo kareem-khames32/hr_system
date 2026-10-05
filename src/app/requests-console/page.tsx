@@ -36,6 +36,7 @@ import {
   fetchEmployees,
   fetchDepartments,
   fetchRequest,
+  rejectFailedRequestExecution,
   can,
   type ApiRequest,
   type ApiRequestType,
@@ -92,6 +93,7 @@ const approvalActionLabels: Record<string, string> = {
   ESCALATED: 'صُعِّد',
   CANCELLED: 'ألغاه النظام آلياً',
   EXECUTION_FAILED: 'تعذّر تنفيذه المجدول',
+  EXECUTED: 'نفّذ الطلب',
 }
 
 // ===== سجل طلبات الشركة — صف الشاشة المشتق من ApiRequest =====
@@ -110,6 +112,10 @@ interface CompanyRequestRow {
   status: RequestStatus
   currentStep: string
   destinationRecord: string | null // مرجع السجل الدائم بعد التنفيذ
+  // B2.6: للمعتمد اللي لسه مااكتملش — أيام من اعتماده
+  approvedDays: number | null
+  // مهمة تنفيذه لسه مفتوحة (رفض التنفيذ من هنا بيلغيها)
+  executionTaskOpen: boolean
   effectiveDate?: string
   effectivePayrollPeriod?: string
 }
@@ -135,7 +141,17 @@ const stepText = (r: ApiRequest, steps: ResolvedStep[]): string => {
   if (current) {
     return `${roleLabels[current.role] ?? current.role} (${current.stepOrder} من ${steps.length})`
   }
+  if (r.executionTask) {
+    const task = r.executionTask
+    return `مهمة تنفيذ على ${task.assignee ?? '—'}${task.dueDate ? ` — موعدها ${task.dueDate}` : ''}${task.overdue ? ' (متأخرة)' : ''}`
+  }
   return ['APPROVED', 'IN_EXECUTION'].includes(r.status) ? 'قيد التنفيذ' : '—'
+}
+
+// عمر الطلب المعتمد اللي لسه مااتنفذش: أيام من اعتماده لحد النهارده
+const approvedDays = (approvedAt?: string | null): number | null => {
+  const at = approvedAt ? Date.parse(approvedAt) : NaN
+  return Number.isNaN(at) ? null : Math.max(0, Math.floor((Date.now() - at) / 86_400_000))
 }
 
 export default function RequestsConsolePage() {
@@ -148,6 +164,8 @@ export default function RequestsConsolePage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [filterCategory, setFilterCategory] = useState<'' | RequestCategory>('')
   const [filterStatus, setFilterStatus] = useState<'' | RequestStatus>('')
+  // B2.6: تقرير «معتمد ومااتنفذش» — القايمة بتتحمّل من الخادم بالفلتر ده (مش من آخر 500 طلب بس)
+  const [pendingExecution, setPendingExecution] = useState(false)
   // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد
   const org = useOrgFilter()
   const [detail, setDetail] = useState<ApiRequest | null>(null)
@@ -162,7 +180,7 @@ export default function RequestsConsolePage() {
       try {
         setError(null)
         const [all, typeList, branchList, employees, departments] = await Promise.all([
-          fetchAllRequests(),
+          fetchAllRequests(pendingExecution ? { execution: 'pending' } : undefined),
           fetchRequestTypes(),
           fetchBranches().catch(() => { setLookupWarning('بعض أسماء الفروع أو الموظفين غير متاحة؛ سجل الطلبات المعروض كامل حسب صلاحيتك.'); return [] }),
           fetchEmployees().catch(() => { setLookupWarning('بعض أسماء الفروع أو الموظفين غير متاحة؛ سجل الطلبات المعروض كامل حسب صلاحيتك.'); return [] }),
@@ -200,6 +218,8 @@ export default function RequestsConsolePage() {
               status: r.status as RequestStatus,
               currentStep: stepText(r, steps),
               destinationRecord: r.destinationRef ?? null,
+              approvedDays: ['APPROVED', 'IN_EXECUTION'].includes(r.status) ? approvedDays(r.approvedAt) : null,
+              executionTaskOpen: !!r.executionTask && ['OPEN', 'IN_PROGRESS', 'WAITING'].includes(r.executionTask.status),
               effectiveDate:
                 typeof payload.effectiveDate === 'string'
                   ? payload.effectiveDate
@@ -221,7 +241,7 @@ export default function RequestsConsolePage() {
       }
     }
     load()
-  }, [])
+  }, [pendingExecution])
 
   const openDetail = async (id: number) => {
     setDetailLoading(true)
@@ -264,6 +284,24 @@ export default function RequestsConsolePage() {
   const detailType = detail ? requestDefinition(types, detail) : undefined
   const detailSteps = detail ? parseJson<ResolvedStep[]>(detail.resolvedSteps, []) : []
   const canCancelSalaryExecution = canCancelSalaryIncreaseExecution(detail, detailType?.destinationHandler, can('settings.manage'))
+  // B2.6: طلب معتمد مستني مهمة تنفيذه — مسؤول الإعدادات يقدر يرفض تنفيذه بسبب (المهمة بتتلغي والطلب بيتقفل «مرفوض»). السري لأطرافه بس
+  const canRejectExecution = !!detail && can('settings.manage') && !detail.confidentialMasked && detail.status === 'IN_EXECUTION'
+    && requests.some(row => row.id === detail.id && row.executionTaskOpen)
+  const rejectExecution = async () => {
+    if (!detail || executionCancelling) return
+    const target = detail, reason = executionCancelReason.trim()
+    if (reason.length < 3) { setExecutionCancelError('اكتب سبب رفض التنفيذ'); return }
+    setExecutionCancelling(true)
+    setExecutionCancelError('')
+    try {
+      const result = await rejectFailedRequestExecution(target.id, reason)
+      setDetail(current => current?.id === target.id ? result : current)
+      setRequests(current => current.map(row => row.id === target.id
+        ? { ...row, status: result.status as RequestStatus, currentStep: stepText(result, parseJson<ResolvedStep[]>(result.resolvedSteps, [])), approvedDays: null, executionTaskOpen: false } : row))
+      setExecutionCancelReason('')
+    } catch (cause) { setExecutionCancelError(cause instanceof Error ? cause.message : 'تعذر رفض تنفيذ الطلب.') }
+    finally { setExecutionCancelling(false) }
+  }
   const cancelSalaryExecution = async () => {
     if (!detail || executionCancelling) return
     const target = detail
@@ -290,10 +328,10 @@ export default function RequestsConsolePage() {
             </p>
           </div>
           <button disabled={loading || filtered.length === 0} onClick={() => downloadCsv(`requests-${csvDateStamp()}.csv`,
-            ['رقم الطلب', 'النوع', 'الموظف', 'القسم', 'الفرع', 'التاريخ', 'الحالة', 'الخطوة', 'مرجع التنفيذ'],
+            ['رقم الطلب', 'النوع', 'الموظف', 'القسم', 'الفرع', 'التاريخ', 'الحالة', 'الخطوة', 'مرجع التنفيذ', 'معتمد من (يوم)'],
             filtered.map(r => [r.displayId, requestDefinition(types, r)?.nameAr ?? getTypeByCode(r.typeCode)?.nameAr ?? 'نوع مؤرشف',
               r.requesterName, r.department, branches.find(b => b.id === r.branchId)?.name ?? '', r.submittedAt,
-              statusLabels[r.status] ?? r.status, r.currentStep, r.destinationRecord]))} className="btn-secondary flex items-center gap-2 disabled:opacity-50">
+              statusLabels[r.status] ?? r.status, r.currentStep, r.destinationRecord, r.approvedDays ?? '']))} className="btn-secondary flex items-center gap-2 disabled:opacity-50">
             <Download size={18} />
             تصدير النتائج CSV
           </button>
@@ -388,6 +426,10 @@ export default function RequestsConsolePage() {
                     </option>
                   ))}
                 </select>
+                <label className="flex items-center gap-2 text-sm text-gray-700" data-pending-execution>
+                  <input type="checkbox" checked={pendingExecution} onChange={(e) => { setLoading(true); setPendingExecution(e.target.checked) }} />
+                  معتمد ومااتنفذش
+                </label>
                 {/* الفرع ← الإدارة ← القسم ← الفريق */}
                 {org.element}
               </div>
@@ -478,7 +520,7 @@ export default function RequestsConsolePage() {
                               </p>
                             )}
                           </td>
-                          <td className="table-cell text-sm text-gray-600">{req.currentStep}</td>
+                          <td className="table-cell text-sm text-gray-600">{req.currentStep}{req.approvedDays !== null && <span className="block text-xs text-gray-400">معتمد من {req.approvedDays} يوم</span>}</td>
                           <td className="table-cell">
                             {req.destinationRecord ? (
                               <div className="flex items-start gap-1.5">
@@ -620,6 +662,14 @@ export default function RequestsConsolePage() {
                     <label className="label text-sm">سبب الإلغاء<textarea className="input mt-1" maxLength={900} value={executionCancelReason} disabled={executionCancelling} onChange={event => setExecutionCancelReason(event.target.value)} /></label>
                     {executionCancelError && <p role="alert" className="text-sm text-red-700">{executionCancelError}</p>}
                     <button type="button" disabled={executionCancelling || executionCancelReason.trim().length < 3} onClick={cancelSalaryExecution} className="btn-secondary text-red-700 disabled:opacity-50">{executionCancelling ? 'جارٍ إلغاء التنفيذ...' : 'إلغاء تنفيذ زيادة الراتب'}</button>
+                  </div>}
+
+                  {canRejectExecution && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3" data-reject-execution>
+                    <h3 className="text-sm font-semibold text-amber-900">رفض تنفيذ الطلب</h3>
+                    <p className="text-xs text-amber-900">الطلب معتمد ومستني مهمة تنفيذه. لو تنفيذه مش ممكن ارفضه بسبب: مهمة التنفيذ بتتلغي، والطلب بيتقفل «مرفوض»، وصاحبه بيتبلّغ.</p>
+                    <label className="label text-sm">سبب الرفض<textarea className="input mt-1" maxLength={900} value={executionCancelReason} disabled={executionCancelling} onChange={event => setExecutionCancelReason(event.target.value)} /></label>
+                    {executionCancelError && <p role="alert" className="text-sm text-red-700">{executionCancelError}</p>}
+                    <button type="button" disabled={executionCancelling || executionCancelReason.trim().length < 3} onClick={rejectExecution} className="btn-secondary text-red-700 disabled:opacity-50">{executionCancelling ? 'لحظة…' : 'رفض التنفيذ'}</button>
                   </div>}
 
                   {detail.destinationRef && (

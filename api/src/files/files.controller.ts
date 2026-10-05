@@ -30,6 +30,7 @@ import { fileStorage } from './storage'
 import { assertHrDocumentFileAccess } from '../hr-documents/hr-document-access'
 import { assertLetterFileAccess } from '../letters/letter-access'
 import { assertTaskFileAccess } from '../tasks/task-rules'
+import { assertExecutionProofAccess } from '../requests/execution-tasks'
 import { RequireModule } from '../modules-registry/module.guard'
 import {
   classifyUpload, FILE_TYPE_EXTENSIONS, FILE_TYPE_MIME, FILES_ALLOWED_TYPES_KEY, FILES_MAX_SIZE_KEY, FILES_MAX_SIZE_LIMIT_MB,
@@ -153,6 +154,8 @@ export class FilesController {
     } else if (f.entityType === 'task') {
       // B2.5: إثبات إقفال مهمة — بنفس حكم المهمة (مسؤولها، منشئها، مدير مسؤولها، «عرض كل المهام» في فرعها)، مش بملكية الرفع العامة
       await assertTaskFileAccess(this.ds.manager, user, f)
+      // B2.6: إثبات مهمة تنفيذ طلب تبع الطلب (ممكن يكون سري): لرافعه بس
+      await assertExecutionProofAccess(this.ds.manager, user, f)
     } else {
     const isOwner = (!!user.employeeId && f.employeeId === user.employeeId) || (!!user.sub && f.uploadedBy === user.sub)
     // صور الموظفين قابلة للعرض لأي مطّلع على الموظفين (ليست مستنداً حساساً)

@@ -26,6 +26,7 @@ import {
   MinLength,
   Max,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator'
 import { Type } from 'class-transformer'
@@ -43,6 +44,11 @@ import {
 import { LeaveType } from '../requests/entities/leave.entities'
 import { RequestType } from '../requests/entities/request-type.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
+import { FUNCTIONAL_APPROVER_ROLES } from '../requests/approver-resolver.service'
+import {
+  executionSchemaReady, executionSettingOf, executionSettings, resolveExecutionSetting, writeExecutionSetting, EXECUTION_DAYS_MAX, EXECUTION_RECORD_ONLY_REQUIRED,
+  type ExecutionSetting,
+} from '../requests/execution-tasks'
 import { DEVICE_KEY_MIN_LENGTH, deviceKeyWeakness } from '../attendance/device-key'
 import { normalizeWeekendDays, weekendDaysError } from '../attendance/weekend-days'
 import { eosConfigError } from '../offboarding/eos'
@@ -474,6 +480,23 @@ class CreateRequestTypeDto {
   @IsString()
   destinationHandler?: string
 
+  // B2.6: «مهمة تنفيذ بعد الاعتماد» — الدور (null = من غير مهمة)، والمهلة بالأيام، والإثبات إجباري
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsIn([...FUNCTIONAL_APPROVER_ROLES], { message: 'دور مهمة التنفيذ غير معروف' })
+  executionRole?: string | null
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsInt({ message: 'مهلة التنفيذ عدد أيام صحيح' })
+  @Min(1)
+  @Max(EXECUTION_DAYS_MAX)
+  executionDays?: number | null
+
+  @IsOptional()
+  @IsBoolean()
+  executionProof?: boolean
+
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -522,6 +545,23 @@ class UpdateRequestTypeFullDto {
   @IsOptional()
   @IsString()
   destinationHandler?: string
+
+  // B2.6: «مهمة تنفيذ بعد الاعتماد» — الدور (null = من غير مهمة)، والمهلة بالأيام، والإثبات إجباري
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsIn([...FUNCTIONAL_APPROVER_ROLES], { message: 'دور مهمة التنفيذ غير معروف' })
+  executionRole?: string | null
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsInt({ message: 'مهلة التنفيذ عدد أيام صحيح' })
+  @Min(1)
+  @Max(EXECUTION_DAYS_MAX)
+  executionDays?: number | null
+
+  @IsOptional()
+  @IsBoolean()
+  executionProof?: boolean
 
   @IsOptional()
   @IsString()
@@ -1287,7 +1327,13 @@ export class SettingsController {
   async listRequestTypes(@CurrentUser() user: JwtPayload) {
     // حساب الفرع يرى أنواع الشركة كلها + أنواع فرعه (قرار المالك 16 سبتمبر)
     const types = await this.requestTypes.find({ where: definitionBranchWhere<RequestType>(user), order: { category: 'ASC', id: 'ASC' } })
-    return types.map((t) => this.withDestinationStatus(t))
+    // B2.6: إعداد مهمة التنفيذ لكل نوع (برّه الكيان)، وهل الإعداد متاح (ترحيل 089)
+    const [execution, available] = await Promise.all([executionSettings(this.requestTypes.manager), executionSchemaReady(this.requestTypes.manager)])
+    return types.map((t) => ({ ...this.withDestinationStatus(t), ...this.executionFields(execution.get(t.id) ?? null), executionAvailable: available }))
+  }
+
+  private executionFields(setting: ExecutionSetting | null) {
+    return { executionRole: setting?.role ?? null, executionDays: setting?.days ?? null, executionProof: setting?.proof ?? false }
   }
 
   // destinationSupported: هل للنوع تنفيذ بعد الاعتماد؟ غير المبني لا يُفعَّل ولا يُقدَّم (REQ-3)
@@ -1410,8 +1456,14 @@ export class SettingsController {
     const dup = await this.requestTypes.findOne({ where: { code } })
     if (dup) throw new BadRequestException(`الكود ${code} مستخدم بالفعل`)
     const handler = dto.destinationHandler ?? 'none'
+    // B2.6: إعداد مهمة التنفيذ بيتراجع قبل ما النوع يتعمل
+    const execution = await resolveExecutionSetting(this.requestTypes.manager, null, dto)
     if (!this.isKnownHandler(handler, code)) {
       throw new BadRequestException('الوجهة غير معروفة — اختر من القائمة')
+    }
+    // مهمة التنفيذ لأنواع «تسجيل فقط» بس
+    if (execution?.setting && this.destinations.executionModeOf({ code, destinationHandler: handler }) !== 'RECORD_ONLY') {
+      throw new BadRequestException(EXECUTION_RECORD_ONLY_REQUIRED)
     }
     if (dto.approvalChainId) {
       const chain = await this.chains.findOne({
@@ -1470,7 +1522,8 @@ export class SettingsController {
         phase: 'P1',
       })
     )
-    return this.withDestinationStatus(created)
+    await writeExecutionSetting(this.requestTypes.manager, created.id, execution)
+    return { ...this.withDestinationStatus(created), ...this.executionFields(execution?.setting ?? null) }
   }
 
   // تعديل شامل: اسم/تفعيل/سلسلة/حقول/جمهور/وجهة/مرفقات
@@ -1486,6 +1539,8 @@ export class SettingsController {
     if (!type) throw new NotFoundException('نوع الطلب غير موجود')
     assertDefinitionWritable(user, type)
     assertDefinitionBranchUnchanged(type, dto.branchId)
+    // B2.6: إعداد مهمة التنفيذ بيتراجع قبل أي حفظ
+    const execution = await resolveExecutionSetting(this.requestTypes.manager, type.id, dto)
     if (dto.approvalChainId !== undefined) {
       // نفس شروط الإضافة: فرع النوع ثابت، فالسلسلة لازم تكون لكل الشركة أو لنفس فرعه.
       // null صراحةً مرفوض: TypeORM يتجاهل null في where فكان هيطابق أي سلسلة
@@ -1511,6 +1566,11 @@ export class SettingsController {
         throw new BadRequestException('الوجهة غير معروفة — اختر من القائمة')
       }
       type.destinationHandler = dto.destinationHandler
+    }
+    // B2.6: مهمة التنفيذ لأنواع «تسجيل فقط» بس — بيتراجع لما الإعداد أو الوجهة يتلمسوا (الإعداد بعد التعديل مع الوجهة بعد التعديل)
+    if (execution !== null || dto.destinationHandler !== undefined) {
+      const setting = execution !== null ? execution.setting : await executionSettingOf(this.requestTypes.manager, type.id)
+      if (setting && this.destinations.executionModeOf(type) !== 'RECORD_ONLY') throw new BadRequestException(EXECUTION_RECORD_ONLY_REQUIRED)
     }
     if (dto.customFields !== undefined) {
       const customFields = this.validateCustomFields(dto.customFields) as string
@@ -1557,6 +1617,8 @@ export class SettingsController {
           `اختر وجهة منفّذة أو «سجل فقط — بلا تنفيذ آلي» من «تعديل» ثم فعّله`
       )
     }
-    return this.withDestinationStatus(await this.requestTypes.save(type))
+    const saved = await this.requestTypes.save(type)
+    await writeExecutionSetting(this.requestTypes.manager, saved.id, execution)
+    return { ...this.withDestinationStatus(saved), ...this.executionFields(await executionSettingOf(this.requestTypes.manager, saved.id)) }
   }
 }

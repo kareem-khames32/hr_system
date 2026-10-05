@@ -19,6 +19,7 @@ export type RequestStatus =
   | 'RETURNED_FOR_INFO'
 
 @Entity('requests')
+@Index('UX_requests_execution_task', ['executionTaskId'], { unique: true, where: '[executionTaskId] IS NOT NULL' })
 export class Request {
   @PrimaryGeneratedColumn()
   id: number
@@ -71,4 +72,9 @@ export class Request {
 
   @Column({ type: 'datetime', nullable: true })
   completedAt: Date
+
+  // B2.6 (ترحيل 089): مهمة تنفيذ الطلب في محرك المهام (tasks.id) — الطلب بيفضل «قيد التنفيذ» لحد ما تتقفل. برّه الكيان للقراءة
+  // والكتابة (الكود بيشتغل قبل الترحيل): requests/execution-tasks.ts
+  @Column({ type: 'int', nullable: true, select: false, insert: false, update: false })
+  executionTaskId?: number | null
 }

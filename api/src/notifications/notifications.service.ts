@@ -51,7 +51,9 @@ export const NOTIFICATIONS_MAIL_PAUSE_MS = 60_000
 // الأحداث اللي المحرك مشترك فيها
 export const NOTIFICATION_SOURCE_EVENTS: readonly DomainEventType[] = ['REQUEST_STEP_PENDING', 'REQUEST_APPROVED', 'REQUEST_REJECTED', 'REQUEST_RETURNED', 'PAYROLL_RUN_APPROVED',
   // B2.5
-  'TASK_ASSIGNED', 'TASK_DUE_SOON', 'TASK_OVERDUE']
+  'TASK_ASSIGNED', 'TASK_DUE_SOON', 'TASK_OVERDUE',
+  // B2.6
+  'REQUEST_EXECUTED']
 // الملخص اليومي اللي فشل إرساله بيتجرّب تاني اليوم اللي بعده لحد العدد ده
 const DIGEST_MAX_ATTEMPTS = 3
 // رسالة «مستنية» من غير مهمة شغالة أكتر من المدة دي = مهمتها وقفت من غير ما تسجّل نتيجة
@@ -62,6 +64,8 @@ const DECISIONS: Record<string, { text: string; kind: 'success' | 'error' | 'war
   REQUEST_APPROVED: { text: 'تمت الموافقة على طلبك', kind: 'success' },
   REQUEST_REJECTED: { text: 'تم رفض طلبك', kind: 'error' },
   REQUEST_RETURNED: { text: 'أُعيد طلبك لاستكمال المعلومات', kind: 'warning' },
+  // B2.6: مهمة تنفيذ الطلب المعتمد اتقفلت — من غير نص الإثبات
+  REQUEST_EXECUTED: { text: 'طلبك اتنفّذ', kind: 'success' },
 }
 
 // خادم البريد رفض العنوان نفسه (مش عطل اتصال): الإعادة مش هتغيّر حاجة
@@ -155,6 +159,7 @@ export class NotificationsService implements OnModuleInit {
       case 'REQUEST_STEP_PENDING': return this.onStepPending(event)
       case 'REQUEST_APPROVED':
       case 'REQUEST_REJECTED':
+      case 'REQUEST_EXECUTED':
       case 'REQUEST_RETURNED': return this.onDecision(event)
       case 'PAYROLL_RUN_APPROVED': return this.onPayrollApproved(event)
       case 'TASK_ASSIGNED':

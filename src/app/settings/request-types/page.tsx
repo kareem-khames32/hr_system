@@ -152,11 +152,25 @@ const parseOptions = (raw: string): string[] =>
     .map((s) => s.trim())
     .filter(Boolean)
 
+// B2.6: الأدوار اللي ينفع تتكلّف بمهمة تنفيذ بعد الاعتماد (نفس أدوار محرك المهام وتسمياتها)
+const EXECUTION_ROLES: Array<{ key: string; label: string }> = [
+  { key: 'hr', label: 'الموارد البشرية' },
+  { key: 'finance', label: 'المالية' },
+  { key: 'it', label: 'تقنية المعلومات' },
+  { key: 'custody_officer', label: 'مسؤول العهد' },
+  { key: 'payroll_officer', label: 'مسؤول الرواتب' },
+  { key: 'executive', label: 'الإدارة التنفيذية' },
+]
+
 type BuilderForm = {
   nameAr: string
   category: string
   code: string
   destinationHandler: string
+  // مهمة تنفيذ بعد الاعتماد: '' = من غير مهمة
+  executionRole: string
+  executionDays: string
+  executionProof: boolean
   approvalChainId: string
   requiredAttachments: string
   fields: FieldRow[]
@@ -179,6 +193,9 @@ const emptyForm = (): BuilderForm => ({
   category: 'leaves',
   code: '',
   destinationHandler: 'none',
+  executionRole: '',
+  executionDays: '',
+  executionProof: false,
   approvalChainId: '',
   requiredAttachments: '',
   fields: [],
@@ -279,6 +296,11 @@ export default function RequestTypesPage() {
   const [updatingId, setUpdatingId] = useState<number | null>(null)
   const [empFilter, setEmpFilter] = useState('')
   const [form, setForm] = useState<BuilderForm>(emptyForm())
+  // B2.6: الخادم بيقول لو إعداد «مهمة التنفيذ» متاح (ترحيل 089 متطبق) مع كل نوع في القايمة
+  const executionAvailable = !requestTypes.some((rt) => rt.executionAvailable === false)
+  // مهمة التنفيذ لأنواع «تسجيل فقط» بس: الوجهة «سجل فقط»، أو وجهة النوع المحفوظة لو الخادم حاسبها «تسجيل فقط»
+  const recordOnlyDestination = (handler: string) => handler === 'none'
+    || (!!editing && handler === (editing.destinationHandler || 'none') && editing.executionMode === 'RECORD_ONLY')
   // سلاسل الاعتماد تحتاج approval_chains.manage — بدونها يُخفى اختيار السلسلة وتعديلها فقط
   const [chainsAvailable, setChainsAvailable] = useState(true)
   // سلسلة كل فئة + وضع كل نوع + استخدامه (طلب المالك 26 سبتمبر) — فشلها لا يُسقط الشاشة
@@ -557,6 +579,9 @@ export default function RequestTypesPage() {
         category: rt.category,
         code: rt.code,
         destinationHandler: rt.destinationHandler || 'none',
+        executionRole: rt.executionRole ?? '',
+        executionDays: rt.executionDays != null ? String(rt.executionDays) : '',
+        executionProof: rt.executionProof === true,
         approvalChainId: rt.approvalChainId ? String(rt.approvalChainId) : '',
         requiredAttachments: raw.requiredAttachments ?? '',
         fields: cf.map((f) => ({
@@ -663,6 +688,21 @@ export default function RequestTypesPage() {
     }))
     const visibleTo = audienceOfForm(form, audienceIds())
 
+    // مهمة التنفيذ: من غير دور = من غير مهمة (والمهلة والإثبات بيتشالوا معاه)
+    const execution = {
+      executionRole: form.executionRole || null,
+      executionDays: form.executionRole && form.executionDays ? Number(form.executionDays) : null,
+      executionProof: !!form.executionRole && form.executionProof,
+    }
+    if (execution.executionDays !== null && (!Number.isInteger(execution.executionDays) || execution.executionDays < 1 || execution.executionDays > 365)) {
+      setModalError('مهلة مهمة التنفيذ من يوم لـ365 يوم')
+      return
+    }
+    const executionChanged = !editing
+      ? execution.executionRole !== null
+      : execution.executionRole !== (editing.executionRole ?? null) || execution.executionDays !== (editing.executionDays ?? null)
+        || execution.executionProof !== (editing.executionProof === true)
+
     setSaving(true)
     setModalError(null)
     try {
@@ -675,6 +715,8 @@ export default function RequestTypesPage() {
           ...(form.destinationHandler !== (editing.destinationHandler || 'none')
             ? { destinationHandler: form.destinationHandler }
             : {}),
+          // مهمة التنفيذ بتتبعت لما تتغيّر بس (نفس قاعدة الوجهة)
+          ...(executionChanged ? execution : {}),
           requiredAttachments: form.requiredAttachments.trim() || undefined,
           ...(form.approvalChainId
             ? { approvalChainId: Number(form.approvalChainId) }
@@ -691,6 +733,7 @@ export default function RequestTypesPage() {
             ? { requiredAttachments: form.requiredAttachments.trim() }
             : {}),
           destinationHandler: form.destinationHandler,
+          ...(executionChanged ? execution : {}),
           ...(form.approvalChainId
             ? { approvalChainId: Number(form.approvalChainId) }
             : {}),
@@ -1019,6 +1062,16 @@ export default function RequestTypesPage() {
               {handlerLabelOf(rt.destinationHandler)}
             </span>
           </div>
+          {rt.executionRole && (
+            <div className="flex items-center gap-3 text-sm" data-type-execution>
+              <FileOutput size={16} className="text-gray-400" />
+              <span className="text-gray-600">مهمة تنفيذ:</span>
+              <span className="text-gray-700">
+                {EXECUTION_ROLES.find((role) => role.key === rt.executionRole)?.label ?? rt.executionRole}
+                {rt.executionDays ? ` — خلال ${rt.executionDays} يوم` : ''}{rt.executionProof ? ' — بإثبات' : ''}
+              </span>
+            </div>
+          )}
           <div className="flex items-center gap-3 text-sm">
             {rt.affectsBalance ? (
               <CheckCircle size={16} className="text-success-500" />
@@ -1376,7 +1429,9 @@ export default function RequestTypesPage() {
                     <select
                       value={form.destinationHandler}
                       onChange={(e) =>
-                        setForm({ ...form, destinationHandler: e.target.value })
+                        // وجهة بتنفّذ آليًا مالهاش مهمة تنفيذ: الإعداد بيتشال من النموذج معاها
+                        setForm({ ...form, destinationHandler: e.target.value,
+                          ...(recordOnlyDestination(e.target.value) ? {} : { executionRole: '', executionDays: '', executionProof: false }) })
                       }
                       className="input w-full"
                     >
@@ -1394,6 +1449,38 @@ export default function RequestTypesPage() {
                         )}
                     </select>
                   </div>
+                </div>
+
+                {/* B2.6: مهمة تنفيذ بعد الاعتماد — الطلب بيفضل «قيد التنفيذ» لحد ما المسؤول يقفل مهمته */}
+                <div className="rounded-xl border border-gray-200 p-4 space-y-3" data-execution-task>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2" htmlFor="execution-role">مهمة تنفيذ بعد الاعتماد</label>
+                    <select id="execution-role" className="input w-full" disabled={!executionAvailable || !recordOnlyDestination(form.destinationHandler)} value={form.executionRole}
+                      onChange={(e) => setForm({ ...form, executionRole: e.target.value, ...(e.target.value ? {} : { executionDays: '', executionProof: false }) })}>
+                      <option value="">من غير مهمة — الطلب بيكتمل لحظة اعتماده</option>
+                      {EXECUTION_ROLES.map((role) => <option key={role.key} value={role.key}>مهمة على: {role.label}</option>)}
+                    </select>
+                    <p className="text-xs text-gray-500 mt-1">
+                      {!executionAvailable
+                        ? 'الإعداد ده هيشتغل بعد تطبيق ترحيل 089 على السيرفر.'
+                        : !recordOnlyDestination(form.destinationHandler)
+                        ? 'مهمة التنفيذ لأنواع «سجل فقط» بس — الوجهة دي بتنفّذ آليًا بعد الاعتماد.'
+                        : 'لو اخترت دور: بعد الاعتماد النهائي بتتفتح مهمة لحاملي الدور في فرع الطلب، والطلب بيفضل «قيد التنفيذ» لحد ما تتقفل.'}
+                    </p>
+                  </div>
+                  {form.executionRole && (
+                    <div className="grid grid-cols-2 gap-4 items-end">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2" htmlFor="execution-days">المهلة (أيام)</label>
+                        <input id="execution-days" type="number" min={1} max={365} className="input w-full" placeholder="من غير موعد" value={form.executionDays}
+                          onChange={(e) => setForm({ ...form, executionDays: e.target.value })} />
+                      </div>
+                      <label className="flex items-center gap-2 text-sm text-gray-700 pb-2">
+                        <input type="checkbox" checked={form.executionProof} onChange={(e) => setForm({ ...form, executionProof: e.target.checked })} />
+                        الإثبات إجباري عند الإقفال
+                      </label>
+                    </div>
+                  )}
                 </div>
 
                 {/* سلسلة الاعتماد والمرفقات */}

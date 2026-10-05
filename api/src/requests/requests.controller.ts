@@ -286,9 +286,10 @@ export class RequestsController {
   listAll(
     @CurrentUser() user: JwtPayload,
     @Query('status') status?: string,
-    @Query('typeCode') typeCode?: string
+    @Query('typeCode') typeCode?: string,
+    @Query('execution') execution?: string
   ) {
-    return this.service.listAll(user, { status, typeCode })
+    return this.service.listAll(user, { status, typeCode, execution })
   }
 
   @Get('requests/my-decisions')

@@ -76,4 +76,16 @@ export class RequestType {
 
   @Column({ default: true })
   isActive: boolean
+
+  // B2.6 (ترحيل 089): «مهمة تنفيذ بعد الاعتماد» — الدور الوظيفي اللي بينفّذ، ومهلته بالأيام، والإثبات إجباري ولا لأ. فاضي = من غير مهمة
+  // (السلوك القايم). برّه الكيان للقراءة والكتابة (الكود بيشتغل قبل الترحيل): بيتقروا ويتكتبوا بـSQL صريح بعد التأكد من وجودهم
+  // (requests/execution-tasks.ts)
+  @Column({ type: 'nvarchar', length: 40, nullable: true, select: false, insert: false, update: false })
+  executionRole?: string | null
+
+  @Column({ type: 'int', nullable: true, select: false, insert: false, update: false })
+  executionDays?: number | null
+
+  @Column({ type: 'bit', nullable: true, select: false, insert: false, update: false })
+  executionProof?: boolean | null
 }

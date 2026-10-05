@@ -61,6 +61,9 @@ import { ApprovalChain } from './entities/approval-chain.entity'
 import { ApprovalStep } from './entities/approval-step.entity'
 import { ApprovalAction, RequestApproval } from './entities/request-approval.entity'
 import { normalizeApprovalAction } from './approval-actions'
+import {
+  cancelExecutionTask, executionAwaitsAccount, executionInfoOf, executionPending, executionRequestsWithTask, openExecutionTask, EXECUTION_CONFIDENTIAL_REJECT_BLOCKED,
+} from './execution-tasks'
 import { RequestType } from './entities/request-type.entity'
 import { Request, RequestStatus } from './entities/request.entity'
 import { Asset, CustodyAssignment } from './entities/custody.entities'
@@ -1491,7 +1494,11 @@ export class RequestsService {
       .execute(em, req, type)
       .catch((e: unknown) => this.executionFailure(req.id, e))
     req.destinationRef = result.ref
-    if (result.completed) {
+    // B2.6: نوع «تسجيل فقط» عليه «مهمة تنفيذ بعد الاعتماد» — الطلب بيفضل قيد التنفيذ لحد ما مهمته تتقفل (المهمة في نفس المعاملة).
+    // من غير الإعداد (أو قبل ترحيل 089) openExecutionTask بترجّع null والطلب بيكتمل زي الأول. والنوع اللي وجهته بتنفّذ آليًا مالوش
+    // مهمة حتى لو الإعداد متخزن عليه: «قيد التنفيذ» عنده معناها إن وجهته لسه ماتنفّذتش
+    const task = result.completed && this.destinations.executionModeOf(type) === 'RECORD_ONLY' ? await openExecutionTask(em, req, type) : null
+    if (result.completed && !task) {
       req.status = 'COMPLETED'
       req.completedAt = new Date()
     } else {
@@ -1661,20 +1668,26 @@ export class RequestsService {
       const type = await em.getRepository(RequestType).findOne({ where: { code: definitionCodeOf(req) } })
       const salary = !!type && isSalaryChangeType(type)
       const scheduledSalary = req.status === 'IN_EXECUTION' && salary
-      if (req.status !== 'APPROVED' && !scheduledSalary) {
+      // B2.6: طلب مستني مهمة تنفيذه (مهمته لسه مفتوحة) بيترفض تنفيذه من هنا، ومهمته بتتلغي معاه
+      const awaitingTask = !scheduledSalary && (await executionPending(em, req))
+      // طلب سري مستني مهمته: اللي بيرفض تنفيذه اسمه بيتكتب في سجله فيبقى طرف فيه ويقراه — لأطرافه بس (مدير النظام منهم)
+      if (awaitingTask && type?.isConfidential && !this.seesConfidential(user, req, true,
+        (await em.getRepository(RequestApproval).count({ where: { requestId: req.id, approverId: user.sub } })) > 0)) throw new ForbiddenException(EXECUTION_CONFIDENTIAL_REJECT_BLOCKED)
+      if (req.status !== 'APPROVED' && !scheduledSalary && !awaitingTask) {
         throw new BadRequestException('الرفض هنا للطلب المعتمد اللي تعذّر تنفيذه بس')
       }
       // استثناء محصور في قرار الأجر المؤجل قبل أي كتابة مالية؛ لا يغير انتقالات الوجهات الأخرى.
       if (salary) await assertSalaryRequestUnexecuted(em, req)
-      if (!scheduledSalary) assertTransition(req.status, 'REJECTED')
+      if (!scheduledSalary && !awaitingTask) assertTransition(req.status, 'REJECTED')
       const steps = this.parseSteps(req.resolvedSteps)
       await em.getRepository(RequestApproval).save({
         requestId: req.id,
         step: steps.length ? Math.max(...steps.map((s) => s.stepOrder)) : 0,
         approverId: user.sub,
         action: 'REJECTED',
-        comment: `${scheduledSalary ? 'إغلاق زيادة الأجر قبل تنفيذها' : 'رفض بعد تعذّر التنفيذ'}: ${reason}`,
+        comment: `${scheduledSalary ? 'إغلاق زيادة الأجر قبل تنفيذها' : awaitingTask ? 'رفض التنفيذ' : 'رفض بعد تعذّر التنفيذ'}: ${reason}`,
       })
+      if (awaitingTask) await cancelExecutionTask(em, req.id, user.sub, reason)
       req.status = 'REJECTED'
       req.completedAt = new Date()
       await this.releaseRequestOvertime(em, req, 'REJECTED', user.sub, reason)
@@ -1914,12 +1927,14 @@ export class RequestsService {
   // ===== السجل الكامل (كونسول HR) — بنطاق الفرع مع فلاتر =====
   async listAll(
     user: JwtPayload,
-    filters: { status?: string; typeCode?: string } = {}
+    filters: { status?: string; typeCode?: string; execution?: string } = {}
   ) {
     const scope = branchScopeOf(user)
     const where: Record<string, unknown> = {}
     if (scope !== null) where.branchId = branchIdIn(scope)
     if (filters.status) where.status = filters.status
+    // B2.6: «معتمد ومااتنفذش» = اتعتمد ولسه مااكتملش (تنفيذه متعذّر، أو معالجه مجدول، أو مستني مهمة تنفيذه)
+    if (filters.execution === 'pending') where.status = In(['APPROVED', 'IN_EXECUTION'])
     if (filters.typeCode) {
       const filterDefinition = await this.types.findOneBy({ code: filters.typeCode })
       if (filterDefinition && isLeaveDefinition(filterDefinition) && filters.typeCode !== 'LEAVE') where.definitionCode = filters.typeCode
@@ -1936,7 +1951,7 @@ export class RequestsService {
       (await this.types.find({ where: { isConfidential: true } })).map((t) => t.code)
     )
     const confIds = rows.filter((r) => confidential.has(definitionCodeOf(r))).map((r) => r.id)
-    if (confIds.length === 0) return rows.map(r => this.withCanonicalStepActions(r))
+    if (confIds.length === 0) return this.withExecutionInfo(rows.map(r => this.withCanonicalStepActions(r)))
     const acted = new Set(
       (
         await this.approvals.find({
@@ -1944,12 +1959,20 @@ export class RequestsService {
         })
       ).map((a) => a.requestId)
     )
-    return rows.map((r) =>
+    return this.withExecutionInfo(rows.map((r) =>
       !confidential.has(definitionCodeOf(r)) ||
       this.seesConfidential(user, r, true, acted.has(r.id))
         ? this.withCanonicalStepActions(r)
         : this.maskConfidential(r)
-    )
+    ))
+  }
+
+  // B2.6: الطلبات المعتمدة اللي لسه مااكتملتش بيتزوّد عليها إمتى اتعتمدت ومين مسؤول تنفيذها (تقرير «معتمد ومااتنفذش»)
+  private async withExecutionInfo<T extends { id: number; status: string }>(rows: T[]) {
+    const open = rows.filter(row => row.status === 'APPROVED' || row.status === 'IN_EXECUTION')
+    if (open.length === 0) return rows
+    const info = await executionInfoOf(this.ds.manager, open.map(row => row.id))
+    return rows.map(row => (info.has(row.id) ? { ...row, ...info.get(row.id) } : row))
   }
 
   // إجازاتي المعتمدة (خدمة ذاتية) — لمنتقي «إلغاء/تعديل إجازة»
@@ -2132,7 +2155,8 @@ export class RequestsService {
       user,
       req,
       inScope,
-      approvals.some((a) => a.approverId === user.sub)
+      // B2.6: واللي مهمة تنفيذ الطلب مفتوحة عليه (بحكم محرك المهام) طرف فيه زي المعتمد: محتاج حقوله عشان ينفّذ
+      approvals.some((a) => a.approverId === user.sub) || (await executionAwaitsAccount(this.ds.manager, user, req.id))
     )
     // طلب برّه النطاق ومش طرف فيه = نفس رد الرقم اللي مش موجود (فرق 403/404 كان بيكشف وجوده — مراجعة Codex الجولة 4)؛
     // جوه النطاق من غير صلاحية العرض: رفض صريح زي الأول
@@ -2562,7 +2586,10 @@ export class RequestsService {
     if (scheduledTypes.length) {
       const byCode = new Map(scheduledTypes.map(type => [type.code, type]))
       const pending = await this.requests.find({ where: { typeCode: In([...byCode.keys()]), status: 'IN_EXECUTION' }, order: { id: 'ASC' } })
+      // B2.6: طلب عليه مهمة تنفيذ وجهته خلصت ومستني مهمته — مش تغيير مجدول (نوعه ممكن وجهته تتغيّر بعد ما طلباته اتعتمدت)
+      const awaitingTask = await executionRequestsWithTask(this.requests.manager, pending.map(req => req.id))
       for (const req of pending) {
+        if (awaitingTask.has(req.id)) continue
         try {
           const type = byCode.get(req.typeCode)!, payload = JSON.parse(req.payload || '{}')
           // زيادة الراتب تُنفَّذ عند بداية دورة شهر سريانها (قاعدة المالك: الشهر كامل، لا تاريخ يومي).

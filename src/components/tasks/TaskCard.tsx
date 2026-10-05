@@ -109,6 +109,8 @@ export default function TaskCard({ task, onChanged, onEdit, highlighted }: Props
           </span>
         )}
         {task.requiresProof && open && <span>لازم إثبات عند الإقفال</span>}
+        {task.execution && <span>مهمة تنفيذ طلب معتمد — إقفالها بيكمّل الطلب</span>}
+        {task.requestId && <a href={`/approvals-inbox?request=${task.requestId}`} className="text-primary-600 underline" data-task-request>افتح الطلب</a>}
         {task.statusNote && <span>{task.status === 'WAITING' ? 'مستنية: ' : task.status === 'CANCELLED' ? 'سبب الإلغاء: ' : task.status === 'OPEN' ? 'اتفتحت تاني: ' : ''}{task.statusNote}</span>}
         {task.closedByName && <span>{task.status === 'DONE' ? 'قفلها: ' : 'لغاها: '}{task.closedByName}</span>}
       </div>
@@ -124,7 +126,7 @@ export default function TaskCard({ task, onChanged, onEdit, highlighted }: Props
       {panel ? (
         <div className="mt-3 space-y-2" data-task-panel={panel}>
           <label className="label" htmlFor={`task-note-${task.id}`}>
-            {panel === 'done' ? `اللي اتعمل${task.requiresProof ? ' (أو ارفع ملف)' : ' (اختياري)'}` : panel === 'waiting' ? 'المهمة مستنية إيه؟ *'
+            {panel === 'done' ? `اللي اتعمل${task.requiresProof ? ' (أو ارفع ملف)' : ' (اختياري)'}${task.execution ? ' — بيتكتب في سجل الطلب وصاحبه بيشوفه' : ''}` : panel === 'waiting' ? 'المهمة مستنية إيه؟ *'
               : panel === 'reopen' ? 'سبب إعادة الفتح * (إثبات الإقفال اللي فات هيتشال)' : 'سبب الإلغاء *'}
           </label>
           <textarea id={`task-note-${task.id}`} className="input" rows={2} maxLength={panel === 'done' ? 1000 : 500} value={note} onChange={event => setNote(event.target.value)} />

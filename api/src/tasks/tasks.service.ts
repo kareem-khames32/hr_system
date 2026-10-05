@@ -14,6 +14,7 @@ import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
 import { recordOutboxEvent } from '../queue/outbox'
 import { ApproverResolver, FUNCTIONAL_APPROVER_ROLES } from '../requests/approver-resolver.service'
+import { completeExecution, executionOwnRequest, executionRequestOfTask, executionRequestsOfTasks, EXECUTION_TASK_CANCEL_BLOCKED, EXECUTION_TASK_CLOSE_BLOCKED, EXECUTION_TASK_EDIT_BLOCKED, EXECUTION_TASK_OWN_BLOCKED, EXECUTION_TASK_REOPEN_BLOCKED } from '../requests/execution-tasks'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { Task, TASK_OPEN_STATUSES, type TaskPriority, type TaskStatus } from './task.entity'
 import {
@@ -294,8 +295,12 @@ export class TasksService {
   /** تعديل المهمة المفتوحة: اللي بيديرها (taskManagedBy). تغيير المسؤول = تكليف جديد بنفس شروط التكليف، واللي حوّلها بيبقى هو اللي كلّف بيها */
   async update(user: JwtPayload, id: number, input: TaskInput) {
     const saved = await this.ds.transaction(async em => {
+      // B2.6: مهمة تنفيذ طلب معتمد مسؤولها من إعداد نوع الطلب — ماتتعدّلش ولا تتحوّل من هنا: مسؤولها بيقرا الطلب، فتحويلها كان
+      // هيدّي «إدارة المهام» حق تختار مين يقراه. (الربط بالطلب ثابت من يوم ما المهمة اتفتحت، فبيتقري قبل قفل صفها)
+      const execution = await executionRequestOfTask(em, id)
       const { task, access } = await this.load(user, id, em, true)
       if (!access.manage) throw new ForbiddenException('تعديل المهمة لمنشئها أو لصاحب صلاحية «إدارة المهام»')
+      if (execution) throw new BadRequestException(EXECUTION_TASK_EDIT_BLOCKED)
       if (!TASK_OPEN_STATUSES.includes(task.status as TaskStatus)) throw new BadRequestException('المهمة مقفولة — افتحها تاني الأول')
       if (input.title !== undefined) task.title = this.cleanTitle(input.title)
       if (input.description !== undefined) task.description = this.cleanText(input.description, 2000)
@@ -332,7 +337,12 @@ export class TasksService {
    */
   async setStatus(user: JwtPayload, id: number, input: TaskStatusInput) {
     const saved = await this.ds.transaction(async em => {
+      // B2.6: مهمة تنفيذ طلب معتمد — صف طلبها بيتقفل قبل صفها (نفس ترتيب الاعتماد ورفض التنفيذ)
+      const execution = await executionRequestOfTask(em, id, true)
       const { task, access } = await this.load(user, id, em, true)
+      // مهمة تنفيذ طلب بيشتغل عليها اللي هي عليه، أو مدير النظام (فكّ الانسداد) — ومش صاحب الطلب ولا منشئه: نفس قاعدتي الاعتماد
+      const own = !!execution && executionOwnRequest(user, execution, this.resolver.hasHrOverride(user))
+      const work = execution ? !own && (access.work || user.role === 'super_admin') : access.work
       const open = TASK_OPEN_STATUSES.includes(task.status as TaskStatus)
       const next = input.status as TaskStatus
       const note = this.cleanText(input.note, 500)
@@ -340,24 +350,32 @@ export class TasksService {
       if (next === 'OPEN') {
         if (open) throw new BadRequestException('المهمة مفتوحة فعلًا')
         if (!access.manage) throw new ForbiddenException('إعادة فتح المهمة لمنشئها أو لصاحب صلاحية «إدارة المهام»')
+        // مهمة تنفيذ طلب: بتقفل الطلب معاها (مكتمل، أو مرفوض تنفيذه)، فماتتفتحش تاني
+        if (execution) throw new BadRequestException(EXECUTION_TASK_REOPEN_BLOCKED)
         if (!note) throw new BadRequestException('اكتب سبب إعادة فتح المهمة')
         Object.assign(task, { status: 'OPEN', statusNote: note, closedByUserId: null, closedAt: null, proofNote: null, proofFileId: null, remindedAt: null, escalatedAt: null })
       } else {
         if (!open) throw new BadRequestException('المهمة مقفولة')
         if (next === 'CANCELLED') {
           if (!access.manage) throw new ForbiddenException('إلغاء المهمة لمنشئها أو لصاحب صلاحية «إدارة المهام»')
+          if (execution) throw new BadRequestException(EXECUTION_TASK_CANCEL_BLOCKED)
           if (!note) throw new BadRequestException('اكتب سبب الإلغاء')
           Object.assign(task, { status: 'CANCELLED', statusNote: note, closedByUserId: user.sub, closedAt: new Date() })
         } else if (next === 'DONE') {
-          if (!access.work && !access.manage) throw new ForbiddenException('إقفال المهمة لمسؤولها أو لمنشئها')
+          // مهمة تنفيذ طلب: اللي بيقفلها بيتكتب في سجل الطلب وبيبقى طرف فيه — للي بيشتغل عليها بس، مش لمجرد «إدارة المهام»
+          if (!work && (execution || !access.manage)) {
+            throw new ForbiddenException(own ? EXECUTION_TASK_OWN_BLOCKED : execution ? EXECUTION_TASK_CLOSE_BLOCKED : 'إقفال المهمة لمسؤولها أو لمنشئها')
+          }
           const proofNote = this.cleanText(input.proofNote, 1000)
           const proofFileId = input.proofFileId ?? null
           if (proofFileId !== null) await this.assertProofFile(em, user, proofFileId, task.id)
           if (task.requiresProof && !proofNote && proofFileId === null) throw new BadRequestException('المهمة دي مطلوب لها إثبات: اكتب اللي اتعمل أو ارفع ملف')
           Object.assign(task, { status: 'DONE', statusNote: null, proofNote, proofFileId, closedByUserId: user.sub, closedAt: new Date() })
+          // مهمة تنفيذ طلب: الطلب «مكتمل» في نفس المعاملة، وسطر «اتنفّذ» في سجله
+          if (execution) await completeExecution(em, execution.requestId, user.sub, proofNote)
         } else {
           // «جاري» و«مستنية»: شغل المسؤول نفسه
-          if (!access.work) throw new ForbiddenException('الحالة دي بيغيّرها مسؤول المهمة')
+          if (!work) throw new ForbiddenException(own ? EXECUTION_TASK_OWN_BLOCKED : 'الحالة دي بيغيّرها مسؤول المهمة')
           if (next === 'WAITING' && !note) throw new BadRequestException('اكتب المهمة مستنية إيه')
           Object.assign(task, { status: next, statusNote: next === 'WAITING' ? note : null })
         }
@@ -432,6 +450,9 @@ export class TasksService {
     const ids = <T>(values: Array<T | null | undefined>) => [...new Set(values.filter((value): value is T => value != null))]
     const employeeIds = ids(tasks.map(task => task.assigneeEmployeeId)), userIds = ids(tasks.flatMap(task => [task.createdByUserId, task.closedByUserId]))
     // «اللي كلّف بيها» بيديرها طول ما هو المدير المباشر لمسؤولها (نفس حكم taskAccess): مرؤوسيه مرة واحدة للقايمة كلها
+    // B2.6: مهام تنفيذ الطلبات (رقم المهمة ← طلبها)
+    const requestOf = await executionRequestsOfTasks(this.ds.manager, tasks.map(task => task.id))
+    const hrOverride = this.resolver.hasHrOverride(user)
     const mayManageAsManager = !!user.employeeId && tasks.some(task => task.createdByUserId === user.sub && task.assigneeEmployeeId != null)
     const reports = new Set(mayManageAsManager ? knownReports ?? await this.resolver.directReportsOf(user.employeeId!) : [])
     const [employees, users, branches] = await Promise.all([
@@ -446,6 +467,14 @@ export class TasksService {
     // المفتوح الأول، وجوّاه الأقرب موعدًا (اللي من غير موعد في الآخر)
     return [...tasks].sort((a, b) => rank(a) - rank(b) || (a.dueDate ?? '9999-12-31').localeCompare(b.dueDate ?? '9999-12-31') || a.id - b.id).map(task => {
       const open = rank(task) === 0, employee = task.assigneeEmployeeId != null ? employeeOf.get(task.assigneeEmployeeId) : undefined
+      const mine = taskAwaitsAccount(user, task)
+      const canManage = taskManagedBy(user, task, task.assigneeEmployeeId != null && task.assigneeEmployeeId !== user.employeeId && reports.has(task.assigneeEmployeeId))
+      // B2.6: مهمة تنفيذ طلب (link) مابتتدارش من هنا، وبيشتغل عليها اللي هي عليه أو مدير النظام — مش صاحب الطلب ولا منشئه. وتفاصيلها
+      // (رقم الطلب، والإثبات، وسبب التعليق أو الإلغاء، ومين قفلها) تبع الطلب، فللي يقدر يفتحه بس: اللي بيشتغل عليها وهي مفتوحة، واللي
+      // قفلها. الباقي (عرض كل المهام، إدارة المهام) بيشوفوا إنها موجودة وحالتها وموعدها
+      const link = requestOf.get(task.id), unblocks = !!link && user.role === 'super_admin'
+      const works = link ? !executionOwnRequest(user, link, hrOverride) && (mine || unblocks) : mine
+      const party = !link || (open ? mine || unblocks : task.closedByUserId === user.sub)
       return {
         id: task.id, title: task.title, description: task.description ?? null,
         assigneeEmployeeId: task.assigneeEmployeeId ?? null, assigneeName: employee?.fullName ?? null, assigneeCode: employee?.employeeCode ?? null,
@@ -454,11 +483,11 @@ export class TasksService {
         createdByUserId: task.createdByUserId, createdByName: userName.get(task.createdByUserId) ?? null, createdAt: task.createdAt,
         dueDate: task.dueDate ?? null, overdue: open && !!task.dueDate && task.dueDate < today,
         priority: task.priority, status: task.status, requiresProof: task.requiresProof === true,
-        proofNote: task.proofNote ?? null, proofFileId: task.proofFileId ?? null, statusNote: task.statusNote ?? null,
-        closedAt: task.closedAt ?? null, closedByName: task.closedByUserId ? userName.get(task.closedByUserId) ?? null : null,
+        proofNote: party ? task.proofNote ?? null : null, proofFileId: party ? task.proofFileId ?? null : null, statusNote: party ? task.statusNote ?? null : null,
+        closedAt: task.closedAt ?? null, closedByName: party && task.closedByUserId ? userName.get(task.closedByUserId) ?? null : null,
         // اللي الحساب يقدر يعمله: شغل المسؤول (جاري، مستنية، خلصت) وإدارة صاحب الصلاحية أو اللي كلّف بيها (تعديل، تحويل، إلغاء، إعادة فتح)
-        canWork: open && taskAwaitsAccount(user, task),
-        canManage: taskManagedBy(user, task, task.assigneeEmployeeId != null && task.assigneeEmployeeId !== user.employeeId && reports.has(task.assigneeEmployeeId)),
+        canWork: open && works, canManage: canManage && !link,
+        execution: !!link, requestId: link && party ? link.requestId : null,
       }
     })
   }

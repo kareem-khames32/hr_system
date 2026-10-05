@@ -11,6 +11,8 @@ export const DOMAIN_EVENTS = {
   // B2.4: الطلب وصل لخطوة مستنية معتمد (تقديم، خطوة تالية، إعادة تقديم، تصعيد)، والطلب اترجع لصاحبه لاستكمال معلومات
   REQUEST_STEP_PENDING: 'الطلب بانتظار معتمد',
   REQUEST_RETURNED: 'الطلب أُعيد لاستكمال معلومات',
+  // B2.6: مهمة تنفيذ الطلب المعتمد اتقفلت والطلب بقى «مكتمل»
+  REQUEST_EXECUTED: 'الطلب اتنفّذ',
   PAYROLL_RUN_APPROVED: 'المسير اتعتمد',
   DOCUMENT_EXPIRING: 'مستند هينتهي',
   EMPLOYEE_TERMINATED: 'الموظف انتهت خدمته',

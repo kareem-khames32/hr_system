@@ -311,6 +311,7 @@ export class PortalController {
           ESCALATED: 'تم تصعيد',
           CANCELLED: 'ألغى النظام', // إلغاء آلي (approverId = 0)
           EXECUTION_FAILED: 'تعذّر تنفيذ', // تنفيذ مجدول فشل — السبب في التعليق
+          EXECUTED: 'تم تنفيذ', // B2.6: مهمة تنفيذ الطلب اتقفلت
         }
         // الاسم العربي للنوع — الكود لا يظهر للمستخدم أبداً
         const typeCodes = [...new Set(myRequests.map((r) => r.definitionCode || r.typeCode))]
@@ -326,7 +327,7 @@ export class PortalController {
           items.push({
             id: `act-${a.id}`,
             category: 'request',
-            kind: ['APPROVE', 'APPROVED'].includes(a.action) ? 'success' : ['REJECT', 'REJECTED'].includes(a.action) ? 'error' : 'warning',
+            kind: ['APPROVE', 'APPROVED', 'EXECUTED'].includes(a.action) ? 'success' : ['REJECT', 'REJECTED'].includes(a.action) ? 'error' : 'warning',
             title: `${actLabel[a.action] ?? a.action} طلبك`,
             body: `${typeName}${a.comment ? ` — ${a.comment}` : ''}`,
             at: a.actedAt,

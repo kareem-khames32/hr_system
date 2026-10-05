@@ -16,6 +16,8 @@ export type ApprovalAction =
   | 'CANCELLED'
   // تعذّر تنفيذ مجدول (approverId = 0) — السبب في التعليق، ويُسجَّل مرة لكل سبب جديد
   | 'EXECUTION_FAILED'
+  // B2.6: مهمة تنفيذ الطلب اتقفلت (approverId = اللي قفلها) — الإثبات في التعليق
+  | 'EXECUTED'
 
 // سجل تدقيق غير قابل للتعديل — لا UPDATE ولا DELETE عليه
 @Entity('request_approvals')
