@@ -171,6 +171,17 @@ test('B1.3: سجل الدخول بكل محاولة ونتيجتها والـIP 
   // من غير صلاحية إدارة الحسابات: ممنوع
   assert.equal((await http('GET', '/users/login-events', undefined, U.target)).status, 403)
   assert.equal((await http('GET', '/users/login-events?outcome=bad', undefined, U.admin)).status, 400)
+  // CRP1-N01 (مراجعة Codex للمرحلة 1): فلتر التاريخ بيقبل YYYY-MM-DD وبيفلتر، وأي صيغة تانية 400. المدى يوم قبل ويوم بعد عشان فرق ساعة القاعدة
+  const day = offset => new Date(Date.now() + offset * 86400000).toLocaleDateString('en-CA')
+  const dated = await http('GET', `/users/login-events?from=${day(-1)}&to=${day(1)}`, undefined, U.admin)
+  assert.equal(dated.status, 200, JSON.stringify(dated.body))
+  assert.equal(dated.body.rows.length, all.body.rows.length, 'محاولات النهارده كلها جوه المدى')
+  const past = await http('GET', '/users/login-events?from=2020-01-01&to=2020-01-31', undefined, U.admin)
+  assert.deepEqual([past.status, past.body.rows.length], [200, 0])
+  for (const bad of ['2026/10/01', '20261001', '2026-10-1', 'x2026-10-01', '2026-10-01T00:00']) {
+    assert.equal((await http('GET', `/users/login-events?from=${encodeURIComponent(bad)}`, undefined, U.admin)).status, 400, bad)
+    assert.equal((await http('GET', `/users/login-events?to=${encodeURIComponent(bad)}`, undefined, U.admin)).status, 400, bad)
+  }
 })
 
 test('B1.3: سياسة كلمة السر (NIST) في التغيير والإنشاء والتعديل والكلمة المؤقتة، والموجودة مابتتأثرش', async () => {

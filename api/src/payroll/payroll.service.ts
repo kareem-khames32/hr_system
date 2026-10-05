@@ -1459,7 +1459,9 @@ export class PayrollService {
 
   /**
    * B1.7 (R10): «اتغيّر إيه من آخر مسير» لقارئ الرواتب بنطاق المسير — لكل عضو: الراتب الشهري (آخر مسير ← ده)، وتغييرات الراتب
-   * والحساب البنكي وطريقة الصرف ومين وإمتى من بعد آخر مسير معتمد ليه، والجداد، والخارجين من آخر مسير في نفس السلسلة. قراءة بس
+   * والحساب البنكي وطريقة الصرف ومين وإمتى من بعد آخر مسير معتمد ليه، والجداد، والخارجين من آخر مسير في نفس السلسلة. قراءة بس.
+   * CRP1-B01: «آخر مسير» لحساب فروع = آخر مسير يشوفه هو للموظف (موظف اتنقل من فرع تاني: مسيره هناك مش مرجع مقارنة، فلا شهره ولا راتبه
+   * ولا عدّاد معتمد عليه بيطلع). `scoped` بتقول للشاشة إن المقارنة بمسيرات فروعه بس.
    */
   async runChanges(user: JwtPayload, runId: number) {
     return this.readRun(runId, async (em, run) => {
@@ -1468,7 +1470,8 @@ export class PayrollService {
       const included = members.filter(member => member.membershipStatus === 'INCLUDED' || member.membershipStatus == null)
       const items = await em.getRepository(PayrollItem).find({ where: { runId }, select: { id: true, runId: true, employeeId: true, breakdown: true, payMethod: true } })
       const ids = [...new Set([...included.map(member => member.employeeId), ...items.map(item => item.employeeId)])]
-      const changes = await collectPayrollRunMemberChanges(em, run, ids)
+      const viewer = { scope: branchScopeOf(user), selfEmployeeId: user.employeeId ?? null }
+      const changes = await collectPayrollRunMemberChanges(em, run, ids, viewer)
       const previousItems = await payrollRunChangeItems(em, [...new Set([...changes.values()].map(entry => entry.previousRunId).filter((id): id is number => id != null))], ids)
       const names = await this.userNames(em, [...changes.values()].flatMap(entry => entry.changes.map(change => change.changedByUserId)))
       const identity = new Map(members.map(member => [member.employeeId, member.snapshot]))
@@ -1483,8 +1486,8 @@ export class PayrollService {
           payMethod: previous && item && previous.payMethod !== item.payMethod ? { previous: previous.payMethod, current: item.payMethod } : null,
           changes: entry.changes.map(change => ({ ...change, changedByName: change.changedByUserId != null ? names.get(change.changedByUserId) ?? null : null })) }
       }).filter(row => row.isNew || row.salary || row.payMethod || row.changes.length)
-      const { previousPeriod, leavers } = await payrollRunLeavers(em, run, new Set(ids), branchScopeOf(user))
-      return { runId: run.id, period: run.period, previousSeriesPeriod: previousPeriod, rows, leavers,
+      const { previousPeriod, leavers } = await payrollRunLeavers(em, run, new Set(ids), viewer.scope)
+      return { runId: run.id, period: run.period, scoped: viewer.scope !== null, previousSeriesPeriod: previousPeriod, rows, leavers,
         counts: { changed: rows.filter(row => !row.isNew).length, new: rows.filter(row => row.isNew).length, leavers: leavers.length } }
     })
   }
@@ -1497,7 +1500,8 @@ export class PayrollService {
   private async assertNotLoneChanger(em: EntityManager, user: JwtPayload, run: PayrollRun, chain: Record<string, unknown> | null, overrideReason?: string | null) {
     if (!(await onePersonControlEnabled(em, 'blockRecentChangers'))) return null
     const items = await em.getRepository(PayrollItem).find({ where: { runId: run.id }, select: { id: true, employeeId: true } })
-    const changes = await collectPayrollRunMemberChanges(em, run, items.map(item => item.employeeId))
+    // CRP1-B01: الضابط قرار مش عرض — بيجمع بكل المسيرات (من غير قارئ)، واللي بيطلع منه أرقام موظفي المسير ده بس
+    const changes = await collectPayrollRunMemberChanges(em, run, items.map(item => item.employeeId), null)
     const mine = [...changes.values()].filter(entry => entry.changes.some(change => change.changedByUserId === user.sub)).map(entry => entry.employeeId)
     if (!mine.length) return null
     if (chain && await em.getRepository(PayrollRunApproval).count({ where: { runId: run.id, snapshotVersion: run.snapshotVersion, decision: 'APPROVED',
