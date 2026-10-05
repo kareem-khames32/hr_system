@@ -228,10 +228,10 @@ export const DOMAIN_SYNC_COMPANY_WIDE_ONLY =
 
 // B1.3: فلاتر سجل الدخول
 class LoginEventsQueryDto {
-  @IsOptional() @Matches(/^d{4}-d{2}-d{2}$/, { message: 'التاريخ بصيغة YYYY-MM-DD' })
+  @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'التاريخ بصيغة YYYY-MM-DD' })
   from?: string
 
-  @IsOptional() @Matches(/^d{4}-d{2}-d{2}$/, { message: 'التاريخ بصيغة YYYY-MM-DD' })
+  @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'التاريخ بصيغة YYYY-MM-DD' })
   to?: string
 
   @IsOptional() @Type(() => Number) @IsInt()

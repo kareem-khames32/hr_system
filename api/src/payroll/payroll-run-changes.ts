@@ -7,10 +7,18 @@ import { PAYMENT_CHANGE_FIELDS, PAYMENT_CHANGE_FIELD_LABELS, PAYMENT_CHANGE_SOUR
 import { EmployeeSalaryHistoryVersion } from './payroll-salary-history.entities'
 import { PayrollItem, PayrollRun, PayrollRunMember } from './payroll.entities'
 import { payrollRunSeriesName } from './payroll-run-membership-moves'
+import { payrollRunRefVisibility } from './payroll-run-visibility'
 
 // B1.7 (R10): «اتغيّر إيه من آخر مسير» — لكل موظف في المسير: الراتب والحساب البنكي وطريقة الصرف، ومين غيّر وإمتى، من بعد آخر مسير
 // معتمد أو مصروف ليه. المصدر: تاريخ الراتب الشهري (مين وإمتى)، وسجل تغييرات الصرف (ترحيل 081)، وقبله أو قبل أول صف فيه سجل تغييرات
 // الموظف القديم. نفس الجمع بيتسأل منه ضابط «اللي غيّر مايعتمدش لوحده». قراءة بس.
+//
+// CRP1-B01 (مراجعة Codex للمرحلة 1): الجمع نوعين. ضابط الاعتماد (قرار) بيجمع بكل المسيرات من غير قارئ. والعرض بيتجمع لقارئ بعينه:
+// المسير السابق لكل موظف هو آخر مسير **القارئ يقدر يشوفه للموظف ده** (قاعدة مراجع المسير: payrollRunRefVisibility)، فلا شهر ولا مبلغ
+// ولا حد «من بعد اعتماده» ولا عدّاد في الرد بييجي من مسير برّه نطاقه (موظف اتنقل من فرع تاني: مسيره هناك كأنه مش موجود).
+
+/** قارئ العرض: نطاق فروعه ورقم ملفه (الموظف بيشوف مسيراته زي القسيمة). null في الجمع = داخلي بكل المسيرات (ضابط الاعتماد، مش عرض) */
+export interface PayrollRunChangesViewer { scope: BranchScope; selfEmployeeId: number | null }
 
 export interface PayrollRunMemberChange {
   kind: 'SALARY' | 'PAYMENT'
@@ -46,27 +54,55 @@ export async function databaseClockSkewMs(em: EntityManager): Promise<number> {
 }
 const json = (ids: number[]) => JSON.stringify(ids)
 
-/** آخر مسير معتمد أو مصروف (مش عكس) لكل موظف لحد شهر المسير ده، غير المسير نفسه */
-async function previousApprovedRuns(em: EntityManager, run: Pick<PayrollRun, 'id' | 'period'>, employeeIds: number[]) {
+interface PreviousRunRow { employeeId: number; runId: number; period: string; approvedAt: Date | null; name: string | null }
+// المسيرات المرشحة: معتمد أو مصروف (مش عكس) لحد شهر المسير ده، غير المسير نفسه، وللموظف بند فيه
+const PREVIOUS_RUN_SOURCE = `FROM [payroll_items] i INNER JOIN [payroll_runs] r ON r.[id] = i.[runId]
+        WHERE r.[status] IN ('APPROVED', 'PAID') AND (r.[runType] IS NULL OR r.[runType] <> 'REVERSAL') AND r.[id] <> @0 AND r.[period] <= @1
+          AND i.[employeeId] IN (SELECT CAST([value] AS int) FROM OPENJSON(@2))`
+
+/**
+ * آخر مسير معتمد أو مصروف (مش عكس) لكل موظف لحد شهر المسير ده، غير المسير نفسه.
+ * CRP1-B01: لقارئ بنطاق فروع، المسير اللي مايشوفهوش للموظف بيتعدّى وبناخد اللي قبله المرئي؛ ومن غير أي مسير مرئي الموظف مالوش سابق.
+ */
+async function previousApprovedRuns(em: EntityManager, run: Pick<PayrollRun, 'id' | 'period'>, employeeIds: number[], viewer: PayrollRunChangesViewer | null) {
   const result = new Map<number, { runId: number; period: string; approvedAt: Date | null; name: string | null }>()
+  const previousOf = (row: PreviousRunRow) => ({ runId: Number(row.runId), period: row.period, approvedAt: row.approvedAt ? new Date(row.approvedAt) : null, name: row.name })
   for (let offset = 0; offset < employeeIds.length; offset += 1000) {
-    const rows: Array<{ employeeId: number; runId: number; period: string; approvedAt: Date | null; name: string | null }> = await em.query(`
+    const rows: PreviousRunRow[] = await em.query(`
       SELECT x.[employeeId], x.[runId], x.[period], x.[approvedAt], x.[name] FROM (
         SELECT i.[employeeId], r.[id] AS [runId], r.[period], r.[approvedAt], r.[name],
           ROW_NUMBER() OVER (PARTITION BY i.[employeeId] ORDER BY r.[period] DESC, r.[approvedAt] DESC, r.[id] DESC) AS [rn]
-        FROM [payroll_items] i INNER JOIN [payroll_runs] r ON r.[id] = i.[runId]
-        WHERE r.[status] IN ('APPROVED', 'PAID') AND (r.[runType] IS NULL OR r.[runType] <> 'REVERSAL') AND r.[id] <> @0 AND r.[period] <= @1
-          AND i.[employeeId] IN (SELECT CAST([value] AS int) FROM OPENJSON(@2))
+        ${PREVIOUS_RUN_SOURCE}
       ) x WHERE x.[rn] = 1`, [run.id, run.period, json(employeeIds.slice(offset, offset + 1000))])
-    for (const row of rows) result.set(Number(row.employeeId), { runId: Number(row.runId), period: row.period, approvedAt: row.approvedAt ? new Date(row.approvedAt) : null, name: row.name })
+    for (const row of rows) result.set(Number(row.employeeId), previousOf(row))
+  }
+  if (!viewer || viewer.scope === null || !result.size) return result
+  // الأغلب إن آخر مسير مرئي (الموظف مااتنقلش): فحص واحد. واللي آخر مسير ليه مخفي بس بنجيب كل مرشحيه بنفس الترتيب وناخد أول مرئي
+  const shown = await payrollRunRefVisibility(em, viewer.scope, [...result.values()].map(previous => previous.runId), [...result.keys()], viewer.selfEmployeeId)
+  const concealed = [...result].filter(([employeeId, previous]) => !shown(previous.runId, employeeId)).map(([employeeId]) => employeeId)
+  for (const employeeId of concealed) result.delete(employeeId)
+  for (let offset = 0; offset < concealed.length; offset += 500) {
+    const chunk = concealed.slice(offset, offset + 500)
+    const rows: PreviousRunRow[] = await em.query(`SELECT i.[employeeId], r.[id] AS [runId], r.[period], r.[approvedAt], r.[name]
+        ${PREVIOUS_RUN_SOURCE}
+        ORDER BY i.[employeeId], r.[period] DESC, r.[approvedAt] DESC, r.[id] DESC`, [run.id, run.period, json(chunk)])
+    const visible = await payrollRunRefVisibility(em, viewer.scope, rows.map(row => Number(row.runId)), chunk, viewer.selfEmployeeId)
+    for (const row of rows) {
+      const employeeId = Number(row.employeeId)
+      if (!result.has(employeeId) && visible(Number(row.runId), employeeId)) result.set(employeeId, previousOf(row))
+    }
   }
   return result
 }
 
-/** التغييرات من بعد آخر مسير معتمد لكل موظف (الأقدم الأول). الموظف من غير مسير قبل كده: مالوش تغييرات (هو «جديد») */
-export async function collectPayrollRunMemberChanges(em: EntityManager, run: Pick<PayrollRun, 'id' | 'period'>, employeeIds: readonly number[]): Promise<Map<number, PayrollRunMemberChanges>> {
+/**
+ * التغييرات من بعد آخر مسير معتمد لكل موظف (الأقدم الأول). الموظف من غير مسير قبل كده: مالوش تغييرات (هو «جديد»).
+ * viewer = قارئ العرض (آخر مسير يشوفه هو للموظف)؛ من غيره = جمع داخلي بكل المسيرات (ضابط الاعتماد) — مايترجعش في رد لحساب فروع.
+ */
+export async function collectPayrollRunMemberChanges(em: EntityManager, run: Pick<PayrollRun, 'id' | 'period'>, employeeIds: readonly number[],
+  viewer: PayrollRunChangesViewer | null = null): Promise<Map<number, PayrollRunMemberChanges>> {
   const ids = [...new Set(employeeIds)].filter(id => Number.isSafeInteger(id) && id > 0)
-  const previous = await previousApprovedRuns(em, run, ids)
+  const previous = await previousApprovedRuns(em, run, ids, viewer)
   const result = new Map<number, PayrollRunMemberChanges>(ids.map(id => {
     const prev = previous.get(id)
     return [id, { employeeId: id, previousRunId: prev?.runId ?? null, previousPeriod: prev?.period ?? null, since: prev?.approvedAt ? prev.approvedAt.toISOString() : null, changes: [] }]
@@ -121,18 +157,35 @@ export async function collectPayrollRunMemberChanges(em: EntityManager, run: Pic
   return result
 }
 
-/** الخارجين: أعضاء آخر مسير معتمد أو مصروف من نفس السلسلة (نفس الاسم) قبل الشهر ده ومش في المسير ده — بنطاق القارئ (لقطة العضوية) */
+// CRP1-B01: أقصى عدد مسيرات من السلسلة بندوّر فيها عن آخر مسير مرئي لحساب فروع (نفس الاسم ممكن يتكرر في فروع تانية)
+const SERIES_SCAN_LIMIT = 50
+
+/**
+ * الخارجين: أعضاء آخر مسير معتمد أو مصروف من نفس السلسلة (نفس الاسم) قبل الشهر ده ومش في المسير ده — بنطاق القارئ (لقطة العضوية).
+ * CRP1-B01: لحساب فروع، «آخر مسير في السلسلة» هو آخر واحد فيه عضو واحد على الأقل يشوفه (لقطة فرعه في نطاقه، أو مسير قديم من غير أعضاء
+ * وفرعه في نطاقه). المسير اللي كله برّه نطاقه بيتعدّى كأنه مش موجود، فشهره مابيطلعش. حساب الشركة: آخر مسير في السلسلة زي ما هو.
+ */
 export async function payrollRunLeavers(em: EntityManager, run: Pick<PayrollRun, 'id' | 'period' | 'name'>, memberIds: ReadonlySet<number>, scope: BranchScope) {
+  const none = { previousPeriod: null as string | null, leavers: [] as Array<{ employeeId: number; employeeCode: string | null; fullName: string | null }> }
   const series = payrollRunSeriesName(run.name)
-  if (!series) return { previousPeriod: null as string | null, leavers: [] as Array<{ employeeId: number; employeeCode: string | null; fullName: string | null }> }
-  const [previous] = await em.query(`SELECT TOP (1) [id], [period] FROM [payroll_runs] WHERE LTRIM(RTRIM([name])) = @0 AND [status] IN ('APPROVED', 'PAID')
+  if (!series) return none
+  const candidates: Array<{ id: number; period: string }> = await em.query(`SELECT TOP (${scope === null ? 1 : SERIES_SCAN_LIMIT}) [id], [period] FROM [payroll_runs]
+    WHERE LTRIM(RTRIM([name])) = @0 AND [status] IN ('APPROVED', 'PAID')
     AND ([runType] IS NULL OR [runType] <> 'REVERSAL') AND [period] < @1 AND [id] <> @2 ORDER BY [period] DESC, [id] DESC`, [series, run.period, run.id])
-  if (!previous) return { previousPeriod: null, leavers: [] }
-  const members = await em.getRepository(PayrollRunMember).find({ where: { runId: Number(previous.id) }, select: { id: true, employeeId: true, membershipStatus: true, snapshot: true } })
-  const leavers = members.filter(member => (member.membershipStatus === 'INCLUDED' || member.membershipStatus == null) && !memberIds.has(member.employeeId)
-    && inBranchScope(scope, member.snapshot?.branchId ?? null))
-    .map(member => ({ employeeId: member.employeeId, employeeCode: member.snapshot?.employeeCode ?? null, fullName: member.snapshot?.fullName ?? null }))
-  return { previousPeriod: String(previous.period), leavers }
+  for (const candidate of candidates) {
+    const previousId = Number(candidate.id)
+    const members = await em.getRepository(PayrollRunMember).find({ where: { runId: previousId }, select: { id: true, employeeId: true, membershipStatus: true, snapshot: true } })
+    if (scope !== null) {
+      // من غير استثناء «الموظف نفسه»: المطلوب هنا عضو من نطاق القارئ، مش قسيمته هو
+      const shown = await payrollRunRefVisibility(em, scope, [previousId], members.map(member => member.employeeId))
+      if (!(members.length ? members.some(member => shown(previousId, member.employeeId)) : shown(previousId, 0))) continue
+    }
+    const leavers = members.filter(member => (member.membershipStatus === 'INCLUDED' || member.membershipStatus == null) && !memberIds.has(member.employeeId)
+      && inBranchScope(scope, member.snapshot?.branchId ?? null))
+      .map(member => ({ employeeId: member.employeeId, employeeCode: member.snapshot?.employeeCode ?? null, fullName: member.snapshot?.fullName ?? null }))
+    return { previousPeriod: String(candidate.period), leavers }
+  }
+  return none
 }
 
 /** الراتب الشهري (المكونات الست) في بند المسير — للمقارنة بين آخر مسير والمسير ده */

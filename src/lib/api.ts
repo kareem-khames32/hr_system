@@ -1153,6 +1153,8 @@ export const approvePayroll = (id: number, overrideReason?: string) =>
 // B1.7 (R10): «اتغيّر إيه من آخر مسير»
 export interface PayrollRunChanges {
   runId: number; period: string; previousSeriesPeriod: string | null
+  /** CRP1-B01: حساب فروع — المقارنة بآخر مسير في فروعه بس (الموظف المنقول من فرع تاني بيبان «جديد») */
+  scoped?: boolean
   rows: Array<{ employeeId: number; employeeCode: string | null; fullName: string | null; isNew: boolean; previousPeriod: string | null
     salary: { previous: number; current: number } | null; payMethod: { previous: string; current: string } | null
     changes: Array<{ kind: 'SALARY' | 'PAYMENT'; field: string | null; label: string; oldValue: string | null; newValue: string | null

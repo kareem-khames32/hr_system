@@ -38,12 +38,14 @@ export function PayrollRunChangesPanel({ runId }: { runId: number }) {
       </button>
       {open && (
         <div className="space-y-3">
+          {/* CRP1-B01: حساب الفروع بيقارن بمسيرات فروعه بس */}
+          {data.scoped && <p className="text-xs text-gray-400">المقارنة بآخر مسير لكل موظف في فروعك. اللي اتنقل من فرع تاني بيبان «جديد».</p>}
           {data.rows.length === 0 && data.leavers.length === 0 && <p className="text-sm text-gray-500">مفيش راتب ولا حساب بنكي ولا طريقة صرف اتغيّروا من آخر مسير، ومفيش حد جديد أو خرج.</p>}
           {data.rows.map(row => (
             <div key={row.employeeId} className="border-t border-gray-100 pt-2 text-sm">
               <p className="font-semibold text-gray-800">
                 {row.fullName ?? `#${row.employeeId}`}{row.employeeCode ? ` (${row.employeeCode})` : ''}
-                {row.isNew && <span className="badge badge-primary ms-2">جديد في المسيرات</span>}
+                {row.isNew && <span className="badge badge-primary ms-2">{data.scoped ? 'جديد على مسيرات فروعك' : 'جديد في المسيرات'}</span>}
               </p>
               {row.salary && <p className="text-gray-700">الراتب الشهري: <span dir="ltr">{formatMoney(row.salary.previous)}</span> ← <span dir="ltr">{formatMoney(row.salary.current)}</span>
                 {row.previousPeriod && <span className="text-xs text-gray-400"> (من مسير {row.previousPeriod})</span>}</p>}

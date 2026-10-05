@@ -20,6 +20,7 @@ const sql = require('../node_modules/mssql')
 const env = require('../node_modules/dotenv').parse(fs.readFileSync(path.join(apiRoot, '.env')))
 const { writeParityReasonsBeforeApproval } = require('./fixtures/payroll-parity-reasons.cjs')
 const { employeeRequiredFields } = require('./helpers/employee-fixture.cjs')
+const { future } = require('./fixtures/future-calendar.cjs')
 
 const database = `hr_one_person_test_${crypto.randomBytes(8).toString('hex')}`
 const NAME = /^hr_one_person_test_[a-f0-9]{16}$/
@@ -251,6 +252,99 @@ test('OP-2: «اتغيّر إيه من آخر مسير» — الراتب قبل
   assert.ok([403, 404].includes((await request(U.readerB, 'GET', `/payroll/runs/${run.id}/changes`)).status))
   // من غير صلاحية عرض الرواتب
   expectStatus(await request(U.finA, 'GET', `/payroll/runs/${run.id}/changes`), 403)
+})
+
+// CRP1-B01 (مراجعة Codex للمرحلة 1): مرجع المقارنة لحساب فروع هو آخر مسير يشوفه هو للموظف. الشهور الجاية بـfuture() عشان لقطة فرع العضو
+// تبقى فرعه بعد النقل (النقل بيتم النهارده)، والشهور اللي فاتت بتاخد فرعه وقتها.
+const monthBefore = period => { const [year, month] = period.split('-').map(Number); return month === 1 ? `${year - 1}-12` : `${year}-${String(month - 1).padStart(2, '0')}` }
+const refresh = async emp => Object.assign(emp, await repo('Employee').findOneByOrFail({ id: emp.id }))
+const changesOf = async (user, run) => expectStatus(await request(user, 'GET', `/payroll/runs/${run.id}/changes`), 200)
+// نقل بتاريخ سريان بعينه: الدوام الجديد مايتداخلش مع مسير معتمد قبله
+async function moveFrom(emp, branch, effectiveFrom) {
+  const context = expectStatus(await request(U.admin, 'GET', `/attendance/calendar-context?scope=EMPLOYEE&sourceId=${emp.id}`), 200)
+  expectStatus(await request(U.admin, 'PATCH', `/employees/${emp.id}`, { branchId: branch.id, calendarChange: { effectiveFrom, reason: 'نقل لاختبار مرجع المقارنة',
+    expectedRevision: context.revision, expectedCurrentSourceHash: context.currentSourceHash } }), 200)
+  await refresh(emp)
+}
+
+test('OP-2b (CRP1-B01): موظف اتنقل من فرع تاني — قارئ الفرع مايشوفش شهر مسيره هناك ولا راتبه ولا شهر السلسلة، وحساب الشركة بيشوف', async () => {
+  const series = `مسير المنقول ${crypto.randomUUID().slice(0, 6)}`, next = future('2026-11')
+  const mover = await employee(B.b)
+  expectStatus(await monthlyHistory(U.admin, mover, [['2026-01', null, '6000.00']]), 201)
+  const prior = await approved('2026-07', [mover], series)
+  expectStatus(await monthlyHistory(U.admin, mover, [['2026-01', monthBefore(next), '6000.00'], [next, null, '9000.00']]), 201)
+  expectStatus(await transferTo(U.admin, mover, B.a), 200)
+  await refresh(mover)
+  const run = await calculate(next, [mover], series)
+  // مسير الفرع التاني مقفول على قارئ فرع أ، ومسير فرعه مفتوح
+  expectStatus(await request(U.hrA, 'GET', `/payroll/runs/${prior.id}`), 403)
+  expectStatus(await request(U.hrA, 'GET', `/payroll/runs/${run.id}`), 200)
+  const company = await changesOf(U.admin, run), full = company.rows.find(item => item.employeeId === mover.id)
+  assert.deepEqual([company.previousSeriesPeriod, full.isNew, full.previousPeriod, full.salary], ['2026-07', false, '2026-07', { previous: 6000, current: 9000 }])
+  assert.equal(full.changes.filter(change => change.kind === 'SALARY').length, 1, 'حساب الشركة بيشوف تغيير الأجر من بعد مسير يوليو')
+  const view = await changesOf(U.hrA, run), row = view.rows.find(item => item.employeeId === mover.id)
+  const text = JSON.stringify(view)
+  assert.ok(!text.includes('2026-07') && !text.includes('6000'), `لا شهر مسير الفرع التاني ولا راتبه في رد قارئ الفرع: ${text}`)
+  assert.deepEqual([view.previousSeriesPeriod, view.leavers, view.counts], [null, [], { changed: 0, new: 1, leavers: 0 }])
+  assert.deepEqual([row.isNew, row.previousPeriod, row.salary, row.payMethod, row.changes], [true, null, null, null, []])
+  // الشاشة بتعرف إن المقارنة بمسيرات فروع القارئ بس
+  assert.deepEqual([company.scoped, view.scoped], [false, true])
+})
+
+test('OP-2c (CRP1-B01): مسير أحدث في فرع تاني وأقدم في فرع القارئ — المقارنة بالأقدم المرئي، والموظف نفسه بيشوف مسيره هناك', async () => {
+  // النقل من تعديل الملف بيسري النهارده أو في تاريخ فات مفتوح، فالشهور كلها فاتت: مارس في أ، أبريل في ب، ورجع أ من مايو
+  const series = `مسير الراجع ${crypto.randomUUID().slice(0, 6)}`, away = '2026-04', next = '2026-06'
+  const back = await employee(B.a)
+  expectStatus(await monthlyHistory(U.admin, back, [['2026-01', null, '5000.00']]), 201)
+  const old = await approved('2026-03', [back], `${series} أ`)
+  // راح فرع ب واتعمد له مسير هناك براتب تاني، وبعدين رجع فرع أ براتب تالت
+  await moveFrom(back, B.b, `${away}-01`)
+  expectStatus(await monthlyHistory(U.admin, back, [['2026-01', monthBefore(away), '5000.00'], [away, null, '7000.00']]), 201)
+  const foreign = await approved(away, [back], `${series} ب`)
+  await moveFrom(back, B.a, '2026-05-01')
+  expectStatus(await monthlyHistory(U.admin, back, [['2026-01', monthBefore(away), '5000.00'], [away, away, '7000.00'], ['2026-05', null, '8000.00']]), 201)
+  const run = await calculate(next, [back], `${series} أ`)
+  expectStatus(await request(U.hrA, 'GET', `/payroll/runs/${old.id}`), 200)
+  expectStatus(await request(U.hrA, 'GET', `/payroll/runs/${foreign.id}`), 403)
+  // حساب الشركة: آخر مسير هو بتاع فرع ب
+  const full = (await changesOf(U.admin, run)).rows.find(item => item.employeeId === back.id)
+  assert.deepEqual([full.isNew, full.previousPeriod, full.salary], [false, away, { previous: 7000, current: 8000 }])
+  assert.equal(full.changes.filter(change => change.kind === 'SALARY').length, 1, 'من بعد اعتماد مسير فرع ب: تغيير واحد')
+  // قارئ فرع أ: مسير فرع ب كأنه مش موجود — المقارنة بمسير مارس، والتغييرات من بعد اعتماده هو
+  const view = await changesOf(U.hrA, run), row = view.rows.find(item => item.employeeId === back.id)
+  const text = JSON.stringify(view)
+  assert.ok(!text.includes(away) && !text.includes('7000'), `لا شهر مسير الفرع التاني ولا راتبه في رد قارئ الفرع: ${text}`)
+  assert.deepEqual([view.previousSeriesPeriod, view.counts], ['2026-03', { changed: 1, new: 0, leavers: 0 }])
+  assert.deepEqual([row.isNew, row.previousPeriod, row.salary], [false, '2026-03', { previous: 5000, current: 8000 }])
+  assert.equal(row.changes.filter(change => change.kind === 'SALARY').length, 2, 'من بعد اعتماد مسير مارس: التغييرين')
+  const approvedAt = (await repo('PayrollRun').findOneByOrFail({ id: old.id })).approvedAt
+  for (const change of row.changes) assert.ok(Date.parse(change.changedAt) > approvedAt.getTime())
+  assert.equal(view.scoped, true)
+  // الموظف نفسه (حساب بنطاق فرع أ وصلاحية عرض الرواتب) بيشوف مسيره في فرع ب زي قسيمته
+  const self = await repo('User').save({ email: `self-${crypto.randomUUID().slice(0, 6)}@one-person.invalid`, displayName: 'self-a', passwordHash: 'isolated-test-token-only',
+    role: 'employee', branchId: B.a.id, employeeId: back.id, permissions: JSON.stringify(['payroll.view']) })
+  const own = (await changesOf(self, run)).rows.find(item => item.employeeId === back.id)
+  assert.deepEqual([own.isNew, own.previousPeriod, own.salary], [false, away, { previous: 7000, current: 8000 }])
+})
+
+test('OP-2d (CRP1-B01): نفس اسم السلسلة في فرعين — قارئ الفرع بياخد آخر مسير من فرعه وخارجينه، ومايشوفش شهر مسير الفرع التاني', async () => {
+  const series = `مسير مشترك ${crypto.randomUUID().slice(0, 6)}`
+  const stays = await employee(B.a), leaves = await employee(B.a), other = await employee(B.b)
+  await approved('2026-03', [stays, leaves], series)
+  // فرع ب عنده مسير بنفس الاسم وأحدث
+  const foreign = await approved('2026-04', [other], series)
+  const run = await calculate('2026-05', [stays], series)
+  expectStatus(await request(U.hrA, 'GET', `/payroll/runs/${foreign.id}`), 403)
+  const view = await changesOf(U.hrA, run)
+  assert.deepEqual([view.previousSeriesPeriod, view.leavers.map(item => [item.employeeId, item.employeeCode, item.fullName]), view.counts],
+    ['2026-03', [[leaves.id, leaves.employeeCode, leaves.fullName]], { changed: 0, new: 0, leavers: 1 }])
+  assert.ok(!JSON.stringify(view).includes('2026-04'), 'شهر مسير الفرع التاني مش في الرد')
+  // قارئ فرع ب على مسيره هو (اسم المسير مابيتكررش في نفس الشهر، فمسيره في يونيو): السلسلة عنده مسير أبريل
+  const mine = await calculate('2026-06', [other], series)
+  const viewB = await changesOf(U.readerB, mine)
+  assert.deepEqual([viewB.previousSeriesPeriod, viewB.leavers], ['2026-04', []])
+  // حساب الشركة زي ما هو: آخر مسير في السلسلة بالاسم
+  assert.equal((await changesOf(U.admin, run)).previousSeriesPeriod, '2026-04')
 })
 
 test('OP-3: «اللي غيّر مايعتمدش لوحده» — مقفول زي النهارده؛ مفتوح رفض برسالة، وحد تاني بيعتمد، ومدير النظام بسبب بيعدّي ويتسجل', async () => {

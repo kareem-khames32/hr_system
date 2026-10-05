@@ -1,0 +1,13 @@
+'use strict'
+// Transport fixture only: Express defaults to ignoring files below the supplied .claude worktree.
+// Permit dot directory segments solely for known private PDF/photo fixtures, after real guards/file access.
+const path=require('node:path'),response=require('../node_modules/express').response
+const original=response.sendFile,root=path.resolve(__dirname,'codex-review-p1-tmp')+path.sep
+response.sendFile=function(file,options,callback){
+ const target=path.resolve(String(file)),relative=target.startsWith(root)?target.slice(root.length):''
+ if(/^hr-sec1-files-[^\\/]+[\\/]letters[\\/][a-f0-9-]+\.pdf$/i.test(relative)||/^hr-profile-files-[^\\/]+[\\/]\d{4}-\d{2}[\\/][a-f0-9-]+\.png$/i.test(relative)){
+  return original.call(this,file,{...(options&&typeof options==='object'?options:{}),dotfiles:'allow'},typeof options==='function'?options:callback)
+ }
+ return original.call(this,file,options,callback)
+}
+console.log('CRP1_TRANSPORT private PDF/photo fixtures permit dot directory segments; authorization and storage checks unchanged')
