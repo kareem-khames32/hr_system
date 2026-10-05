@@ -95,6 +95,9 @@ export const PERMISSIONS: Record<string, string> = {
   'settings.modules': 'تفعيل وقفل موديولات النظام',
   // B2.1: سجل التدقيق المركزي — قراءة بس، ولا يمنحها إلا مدير النظام (SUPER_ADMIN_ONLY_GRANTS)
   'audit.view': 'سجل التدقيق',
+  // B2.5: المهام العامة. المدير المباشر بيكلّف مرؤوسيه من غير صلاحية، و«مهامي» لكل حساب
+  'tasks.manage': 'إدارة المهام',
+  'tasks.view_all': 'عرض كل المهام',
   'request_types.manage': 'بانِي أنواع الطلبات',
   'approval_chains.manage': 'بانِي دورات الاعتماد',
   'candidates.manage': 'المرشحون والتعيين',
@@ -142,6 +145,7 @@ export const PERMISSION_MODULES: Array<{ key: string; labelAr: string; permissio
   },
   { key: 'assets', labelAr: 'الأصول والعهد', permissions: ['custody.assign'] },
   { key: 'offboarding', labelAr: 'إنهاء الخدمة', permissions: ['offboarding.manage', 'settlement.edit', 'settlement.approve'] },
+  { key: 'tasks', labelAr: 'المهام', permissions: ['tasks.manage', 'tasks.view_all'] },
   { key: 'insights', labelAr: 'التقارير واللوحات', permissions: ['reports.view', 'dashboard.view_all', 'calendar.view_all'] },
   { key: 'access', labelAr: 'الحسابات والأدوار', permissions: ['users.manage', 'roles.manage', 'audit.view'] },
   { key: 'settings', labelAr: 'إعدادات النظام', permissions: ['settings.manage', 'settings.modules', 'request_types.manage', 'approval_chains.manage'] },
@@ -212,6 +216,8 @@ export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   'reports.view': 'يفتح مركز التقارير (الأعداد والحضور والإجازات) — التقارير المالية محتاجة معاها «عرض مسيرات الرواتب»',
   'dashboard.view_all': 'يشوف لوحة التحكم الإدارية بأرقام نطاقه',
   'calendar.view_all': 'يشوف إجازات كل موظفي نطاقه في التقويم (من غيرها يشوف إجازاته هو بس)',
+  'tasks.manage': 'يكلّف أي موظف أو دور في نطاق فروعه بمهمة، ويعدّلها ويحوّلها ويلغيها (المدير المباشر بيكلّف مرؤوسيه من غيرها). شاشة «المهام» نفسها بصلاحية «عرض كل المهام»',
+  'tasks.view_all': 'يفتح شاشة «المهام»: كل المهام العامة في نطاق فروعه وتقرير المتأخر منها',
   'users.manage': 'ينشئ حسابات الدخول ويغيّر دورها وفرعها وكلمة مرورها ويعطّلها — لا يمنحها إلا مدير النظام',
   'audit.view': 'يشوف سجل التدقيق (الدخول والصلاحيات والإعدادات والبيانات البنكية والرواتب والتصدير وإجراءات المسير) بنطاق فروعه — قراءة بس، ولا يمنحها إلا مدير النظام',
   'roles.manage': 'ينشئ الأدوار ويعدّل صلاحيات كل دور، ويمنح أو يسحب صلاحية من مستخدم بعينه — لا يمنحها إلا مدير النظام',
@@ -322,6 +328,8 @@ export const ROLE_PRESETS: Array<{
       'financial_exemption.view', 'financial_exemption.grant', 'financial_exemption.approve', 'financial_exemption.override_limits',
       'custody.assign', 'documents.manage',
       'offboarding.manage', 'settlement.edit', 'settlement.approve',
+      // B2.5: حزمة الدور في الكود بس — دور الشركة القايم مابيتغيّرش بترحيل، وشاشة الأدوار بتعرض الفرق والمالك يمنحها
+      'tasks.manage', 'tasks.view_all',
       'reports.view', 'dashboard.view_all', 'calendar.view_all',
       'settings.manage', 'request_types.manage', 'approval_chains.manage',
       'candidates.manage', 'transfers.view',

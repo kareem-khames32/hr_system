@@ -144,7 +144,7 @@ test('MS-02: الكتالوج — الموديولات بمجموعاتها وح
     assert.ok(row.nameAr && row.description && registry.MODULE_GROUPS[row.group], row.key)
     assert.deepEqual([row.enabled, row.effective, row.audience, row.enabledAt], [true, true, null, null], `${row.key}: من غير صفوف كل الموجود مفعّل`)
   }
-  assert.deepEqual(catalog.modules.filter(row => row.core).map(row => row.key), ['platform', 'org', 'employees', 'self_service', 'requests', 'notifications', 'documents', 'reports'])
+  assert.deepEqual(catalog.modules.filter(row => row.core).map(row => row.key), ['platform', 'org', 'employees', 'self_service', 'requests', 'notifications', 'tasks', 'documents', 'reports'])
   assert.deepEqual(moduleOf(catalog, 'shifts').dependsOn, ['attendance'])
   assert.deepEqual(moduleOf(catalog, 'loans').dependsOn, ['payroll'])
   assert.deepEqual(moduleOf(catalog, 'recruitment').preset, 'standard')

@@ -11,6 +11,7 @@ import {
   type CurrentUser,
 } from '@/lib/api'
 import { fetchMyPayrollApprovalsCount } from '@/lib/payroll-approval-chain-api'
+import { fetchMyTasksCount, TASKS_CHANGED_EVENT } from '@/lib/tasks-api'
 import { DEFAULT_MODULES, routeAvailable, useModules } from '@/lib/modules'
 import { useBranding } from '@/lib/branding'
 import { BrandLogo } from '@/components/branding/BrandLogo'
@@ -38,6 +39,7 @@ import {
   Inbox,
   UserMinus,
   Gift,
+  ListChecks,
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -92,6 +94,14 @@ const adminMenuDefs: MenuItem[] = [
     icon: <UserMinus size={20} />,
     href: '/offboarding',
     perm: 'offboarding.manage',
+  },
+  // B2.5: قايمة كل المهام العامة في نطاق الحساب («مهامي» لكل حساب في بنود البوابة)
+  {
+    id: 'tasks',
+    label: 'المهام',
+    icon: <ListChecks size={20} />,
+    href: '/tasks',
+    perm: 'tasks.view_all',
   },
   {
     id: 'attendance',
@@ -313,6 +323,9 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
   const [inboxCount, setInboxCount] = useState<number>(0)
   // سلسلة اعتماد المسير: عدد المسيرات اللي الدور فيها على المستخدم (التسمية في السلسلة هي المنحة، فممكن يكون بلا أي صلاحية رواتب)
   const [payrollApprovals, setPayrollApprovals] = useState<number>(0)
+  // B2.5: عدد اللي على الحساب في «مهامي» (مهام عامة + تهيئة + إخلاء)
+  const [tasksCount, setTasksCount] = useState<number>(0)
+  const [tasksRevision, setTasksRevision] = useState(0)
 
   // الإطار ثابت بين الصفحات: الجلسة تُقرأ من جديد وعدّاد الموافقات يتحدث مع كل انتقال
   useEffect(() => {
@@ -330,6 +343,19 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
         .catch(() => setPayrollApprovals(0))
     }
   }, [inboxRevision, pathname, payrollOn])
+
+  // عدّاد «مهامي»: مع كل انتقال، وبعد أي تغيير في المهام من أي شاشة (TASKS_CHANGED_EVENT). فشل النداء = البند ظاهر من غير عدّاد
+  useEffect(() => {
+    if (!getCurrentUser()) return
+    fetchMyTasksCount()
+      .then((result) => setTasksCount(result.open))
+      .catch(() => setTasksCount(0))
+  }, [pathname, tasksRevision])
+  useEffect(() => {
+    const bump = () => setTasksRevision((value) => value + 1)
+    window.addEventListener(TASKS_CHANGED_EVENT, bump)
+    return () => window.removeEventListener(TASKS_CHANGED_EVENT, bump)
+  }, [])
 
   // القائمة تُبنى من صلاحيات المستخدم الحالي والموديولات المفعّلة — الفرض الحقيقي في الباك إند
   const menuItems = useMemo<MenuItem[]>(() => {
@@ -389,6 +415,7 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
             } satisfies MenuItem,
           ]
         : []),
+      { id: 'my-tasks', label: 'مهامي', icon: <ListChecks size={20} />, href: '/my/tasks', badge: tasksCount },
       { id: 'my-attendance', label: 'حضوري', icon: <Clock size={20} />, href: '/my/attendance' },
       { id: 'my-leaves', label: 'إجازاتي وأرصدتي', icon: <Calendar size={20} />, href: '/my/leaves' },
       { id: 'my-payslips', label: 'قسائم راتبي', icon: <Wallet size={20} />, href: '/my/payslips' },
@@ -406,7 +433,7 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
     ]
 
     return [...portalItems.filter((item) => available(item.href)), ...adminItems]
-  }, [currentUser, inboxCount, inboxError, payrollApprovals, enabledModules])
+  }, [currentUser, inboxCount, inboxError, payrollApprovals, tasksCount, enabledModules])
 
   const activeHref = activeHrefFor(pathname, menuItems)
   const activeGroup = menuItems.find((item) => item.children?.some((child) => child.href === activeHref))?.id

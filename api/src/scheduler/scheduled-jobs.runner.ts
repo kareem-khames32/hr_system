@@ -10,6 +10,7 @@ import { RequestsScheduler } from '../requests/requests-scheduler.service'
 import { RequestsService } from '../requests/requests.service'
 import { QueueService } from '../queue/queue.service'
 import { NotificationsService } from '../notifications/notifications.service'
+import { TasksService } from '../tasks/tasks.service'
 import { Scheduled } from './scheduled-jobs'
 import { ScheduledJobsService } from './scheduled-jobs.service'
 
@@ -87,6 +88,11 @@ export class ScheduledJobsRunner {
   @Scheduled('notifications.daily-digest')
   notificationsDailyDigest() {
     return this.jobs.tick('notifications.daily-digest', () => this.use(NotificationsService).digestHourlyWork())
+  }
+
+  @Scheduled('tasks.reminders')
+  tasksReminders() {
+    return this.jobs.tick('tasks.reminders', () => this.use(TasksService).runReminders())
   }
 
   // B2.4: ومعاه مهام الطابور المنتهية (DONE) الأقدم من نفس المدة — الطابور ماكانلوش تنضيف

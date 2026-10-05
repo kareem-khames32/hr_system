@@ -42,6 +42,8 @@ export const SCHEDULED_JOBS = {
     label: 'أحداث المستندات اللي هتنتهي (للطابور)', schedule: 'كل يوم 00:50' },
   'notifications.daily-digest': { cron: '5 * * * *', module: 'notifications.daily-digest', lock: 'notifications.daily-digest',
     label: 'الملخص اليومي لإشعارات البريد', schedule: 'فحص كل ساعة عند الدقيقة 5 — الإرسال في الساعة المضبوطة (افتراضي 8 الصبح)' },
+  'tasks.reminders': { cron: '30 7 * * *', module: 'tasks.reminders', lock: 'tasks.reminders',
+    label: 'تذكير المهام وتصعيد المتأخر منها', schedule: 'كل يوم 07:30' },
   'scheduler.prune-runs': { cron: '40 3 * * *', module: null, lock: 'scheduler.prune-runs',
     label: 'مسح سجل المهام ومهام الطابور المنتهية الأقدم من 30 يوم', schedule: 'كل يوم 03:40' },
 } as const satisfies Record<string, ScheduledJobDef>

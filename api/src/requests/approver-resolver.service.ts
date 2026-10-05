@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Repository } from 'typeorm'
+import { Equal, In, IsNull, Or, Repository } from 'typeorm'
 import { Employee } from '../employees/employee.entity'
 import { Team } from '../org/entities/team.entity'
 import { Department } from '../org/entities/department.entity'
@@ -117,6 +117,47 @@ export class ApproverResolver {
       return branch.managerEmployeeId
     }
     return null
+  }
+
+  // B2.5 («مهام فريقي»): مرؤوسي المدير المباشرين — عكس directManagerOf بنفس ترتيبه بالحرف: المدير المسجّل في الملف، وإلا قائد
+  // الفريق، وإلا رئيس القسم، وإلا مدير الفرع. المرشحين من القاعدة، والحكم لكل واحد بنفس التدرّج (اختبار بيقارنه بـdirectManagerOf)
+  async directReportsOf(managerEmployeeId: number): Promise<number[]> {
+    const [teams, departments, branches] = await Promise.all([
+      this.teams.find({ where: { leaderEmployeeId: managerEmployeeId }, select: { id: true } }),
+      this.departments.find({ where: { managerEmployeeId }, select: { id: true } }),
+      this.branches.find({ where: { managerEmployeeId }, select: { id: true } }),
+    ])
+    // «من غير مدير مسجّل» عند directManagerOf = فاضي أو صفر (العمود مالوش مفتاح أجنبي)
+    const unregistered = () => Or(IsNull(), Equal(0))
+    const candidates = await this.employees.find({
+      where: [
+        { managerEmployeeId },
+        ...(teams.length ? [{ managerEmployeeId: unregistered(), teamId: In(teams.map(row => row.id)) }] : []),
+        ...(departments.length ? [{ managerEmployeeId: unregistered(), departmentId: In(departments.map(row => row.id)) }] : []),
+        ...(branches.length ? [{ managerEmployeeId: unregistered(), branchId: In(branches.map(row => row.id)) }] : []),
+      ],
+      select: { id: true, managerEmployeeId: true, teamId: true, departmentId: true, branchId: true },
+    })
+    const idsOf = (values: Array<number | null | undefined>) => [...new Set(values.filter((value): value is number => !!value))]
+    const teamIds = idsOf(candidates.map(row => row.teamId)), departmentIds = idsOf(candidates.map(row => row.departmentId)), branchIds = idsOf(candidates.map(row => row.branchId))
+    const [teamRows, departmentRows, branchRows] = await Promise.all([
+      teamIds.length ? this.teams.find({ where: { id: In(teamIds) }, select: { id: true, leaderEmployeeId: true } }) : [],
+      departmentIds.length ? this.departments.find({ where: { id: In(departmentIds) }, select: { id: true, managerEmployeeId: true } }) : [],
+      branchIds.length ? this.branches.find({ where: { id: In(branchIds) }, select: { id: true, managerEmployeeId: true } }) : [],
+    ])
+    const leaderOf = new Map(teamRows.map(row => [row.id, row.leaderEmployeeId ?? null]))
+    const headOf = new Map(departmentRows.map(row => [row.id, row.managerEmployeeId ?? null]))
+    const branchManagerOf = new Map(branchRows.map(row => [row.id, row.managerEmployeeId ?? null]))
+    return candidates.filter(emp => {
+      if (emp.id === managerEmployeeId) return false
+      if (emp.managerEmployeeId) return emp.managerEmployeeId === managerEmployeeId
+      const leader = emp.teamId ? leaderOf.get(emp.teamId) : null
+      if (leader && leader !== emp.id) return leader === managerEmployeeId
+      const head = emp.departmentId ? headOf.get(emp.departmentId) : null
+      if (head && head !== emp.id) return head === managerEmployeeId
+      const branchManager = branchManagerOf.get(emp.branchId)
+      return !!branchManager && branchManager !== emp.id && branchManager === managerEmployeeId
+    }).map(emp => emp.id)
   }
 
   // «مدير المدير المباشر» (طلب المالك 27 سبتمبر): المدير المباشر لمدير مقدّم الطلب المباشر، بنفس قاعدة

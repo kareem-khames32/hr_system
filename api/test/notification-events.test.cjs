@@ -17,9 +17,10 @@ const TOKEN = /\{\{\s*([a-zA-Z][a-zA-Z0-9._]*)\s*\}\}/g
 const used = text => [...text.matchAll(TOKEN)].map(match => match[1])
 
 test('NE-01: الكتالوج متسق — فئة معروفة، وقالب لكل قناة، والنص الافتراضي بمتغيرات الحدث بس', () => {
-  assert.deepEqual(events.NOTIFICATION_EVENT_CODES, ['request.pending_approval', 'request.escalated', 'request.decided', 'request.returned', 'request.confidential', 'payroll.payslip_available'])
+  assert.deepEqual(events.NOTIFICATION_EVENT_CODES, ['request.pending_approval', 'request.escalated', 'request.decided', 'request.returned', 'request.confidential', 'payroll.payslip_available',
+    'task.assigned', 'task.due_soon', 'task.overdue'])
   assert.deepEqual([...events.NOTIFICATION_CHANNELS], ['IN_APP', 'EMAIL'])
-  assert.deepEqual(Object.keys(events.NOTIFICATION_CATEGORIES), ['approval', 'request', 'payroll'])
+  assert.deepEqual(Object.keys(events.NOTIFICATION_CATEGORIES), ['approval', 'request', 'payroll', 'task'])
   for (const code of events.NOTIFICATION_EVENT_CODES) {
     const def = events.notificationEventDef(code)
     assert.ok(events.isNotificationCategory(def.category), code)

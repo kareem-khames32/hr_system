@@ -28,5 +28,7 @@ import { OnboardingService } from './onboarding.service'
   ],
   controllers: [OnboardingController],
   providers: [OnboardingService, ApproverResolver],
+  // B2.5: «مهامي» بيقرا مهام التهيئة اللي على جهة الحساب من الخدمة نفسها
+  exports: [OnboardingService],
 })
 export class OnboardingModule {}

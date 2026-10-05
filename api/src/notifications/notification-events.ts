@@ -19,6 +19,8 @@ export const NOTIFICATION_CATEGORIES = {
   approval: 'طلبات بانتظار اعتمادي',
   request: 'قرارات طلباتي',
   payroll: 'الرواتب',
+  // B2.5
+  task: 'المهام',
 } as const
 export type NotificationCategoryCode = keyof typeof NOTIFICATION_CATEGORIES
 export const isNotificationCategory = (value: unknown): value is NotificationCategoryCode =>
@@ -48,6 +50,11 @@ const COMMON: readonly NotificationVariable[] = [
 const REQUEST: readonly NotificationVariable[] = [
   { key: 'request.type', label: 'نوع الطلب', sample: 'إجازة سنوية' },
   { key: 'request.requester', label: 'اسم مقدّم الطلب', sample: 'سارة أحمد — بيانات توضيحية' },
+]
+// B2.5: المهمة بعنوانها وموعدها بس — وصفها مابيتبعتش في البريد
+const TASK: readonly NotificationVariable[] = [
+  { key: 'task.title', label: 'عنوان المهمة', sample: 'تجهيز ملف التأمين الطبي' },
+  { key: 'task.due', label: 'موعد المهمة', sample: '2026-10-15' },
 ]
 const greeting = 'السلام عليكم {{recipient.name}}،'
 const closing = '{{company.name}}'
@@ -108,6 +115,34 @@ export const NOTIFICATION_EVENTS = {
       IN_APP: { title: 'قسيمة راتبك متاحة', body: 'قسيمة {{payslip.period}} متاحة في «قسائم راتبي»' },
       EMAIL: { title: 'قسيمة راتبك متاحة: {{payslip.period}}',
         body: `${greeting}\n\nقسيمة راتب {{payslip.period}} متاحة الآن في «قسائم راتبي».\n\nافتحها من هنا:\n{{link}}\n\n${closing}` },
+    },
+  },
+  // B2.5 (محرك المهام): جوه النظام العدّاد المحسوب على «مهامي»، والمحرك بيضيف البريد
+  'task.assigned': {
+    label: 'مهمة جديدة عليك', category: 'task', kind: 'info', storedInApp: false,
+    variables: [...TASK, ...COMMON],
+    templates: {
+      IN_APP: { title: 'مهمة جديدة عليك', body: '{{task.title}}' },
+      EMAIL: { title: 'مهمة جديدة عليك: {{task.title}}',
+        body: `${greeting}\n\nاتكلّفت بمهمة «{{task.title}}».\nالموعد: {{task.due}}\n\nافتحها من هنا:\n{{link}}\n\n${closing}` },
+    },
+  },
+  'task.due_soon': {
+    label: 'موعد مهمتك قرّب', category: 'task', kind: 'warning', storedInApp: false,
+    variables: [...TASK, ...COMMON],
+    templates: {
+      IN_APP: { title: 'موعد مهمتك قرّب', body: '{{task.title}} — {{task.due}}' },
+      EMAIL: { title: 'موعد مهمتك قرّب: {{task.title}}',
+        body: `${greeting}\n\nالمهمة «{{task.title}}» موعدها {{task.due}} ولسه مفتوحة.\n\nافتحها من هنا:\n{{link}}\n\n${closing}` },
+    },
+  },
+  'task.overdue': {
+    label: 'مهمة متأخرة عن موعدها', category: 'task', kind: 'warning', storedInApp: false,
+    variables: [...TASK, { key: 'task.assignee', label: 'المسؤول عن المهمة', sample: 'سارة أحمد — بيانات توضيحية' }, ...COMMON],
+    templates: {
+      IN_APP: { title: 'مهمة متأخرة عن موعدها', body: '{{task.title}} — {{task.assignee}}' },
+      EMAIL: { title: 'مهمة متأخرة: {{task.title}}',
+        body: `${greeting}\n\nالمهمة «{{task.title}}» على {{task.assignee}} عدّت موعدها ({{task.due}}) ولسه مفتوحة.\n\nافتحها من هنا:\n{{link}}\n\n${closing}` },
     },
   },
 } as const satisfies Record<string, NotificationEventDef>

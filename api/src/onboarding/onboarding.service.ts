@@ -5,16 +5,19 @@ import {
   Logger,
   NotFoundException,
   OnApplicationBootstrap,
+  OnModuleInit,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { In, IsNull, MoreThanOrEqual, Not, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchIdIn, branchScopeOf, inBranchScope as scopeHasBranch, userHasPerm } from '../auth/guards'
+import { branchIdIn, branchScopeOf, inBranchScope as scopeHasBranch, isEmptyBranchScope, userHasPerm } from '../auth/guards'
 import { User } from '../auth/user.entity'
 import { HIRING_DOCS_TASK_KEY, hiringDocsTaskBlockedMessage, hiringDocsTaskRow, requiredHiringDocTypes, syncHiringDocsTasks,
   type HiringDocsStatus } from '../assets/hiring-documents'
 import { Employee, EmployeeStatus } from '../employees/employee.entity'
+import { ModulesService } from '../modules-registry/modules.service'
 import { Branch } from '../org/entities/branch.entity'
+import { QueueService } from '../queue/queue.service'
 import { ApproverResolver } from '../requests/approver-resolver.service'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import {
@@ -25,6 +28,8 @@ import {
 } from './onboarding.entities'
 
 // نافذة «الموظف الجديد» بالأيام من تاريخ الالتحاق — من الإعدادات
+// B2.5: مهمة الطابور اللي بتعمل مهام الموظف وقت تعيينه (مستهلك حدث EMPLOYEE_HIRED)
+export const ONBOARDING_HIRED_JOB = 'onboarding.materialize'
 const WINDOW_KEY = 'onboarding.window_days'
 const WINDOW_DEFAULT = 90
 
@@ -67,6 +72,10 @@ const addDays = (ymd: string, n: number): string => {
 // الجهات بالصلاحية مقفولة على فرع الموظف — نطاق null (مدير النظام) = كل الفروع، وحساب الفروع = الفروع دي بس
 const inBranchScope = (user: JwtPayload, branchId?: number | null) => scopeHasBranch(branchScopeOf(user), branchId)
 
+// أرقام بدفعات تحت حد معاملات SQL Server (2100)
+const idChunks = (ids: number[], size = 1000): number[][] =>
+  Array.from({ length: Math.ceil(ids.length / size) }, (_, index) => ids.slice(index * size, (index + 1) * size))
+
 export interface OnboardingTaskInput {
   label: string
   party: OnboardingParty
@@ -90,7 +99,7 @@ export interface OnboardingTemplateInput {
 }
 
 @Injectable()
-export class OnboardingService implements OnApplicationBootstrap {
+export class OnboardingService implements OnApplicationBootstrap, OnModuleInit {
   private readonly logger = new Logger(OnboardingService.name)
   // قفل داخل العملية لكل موظف: نداءان متزامنان لا ينسخان القالب له مرتين
   private readonly locks = new Map<number, Promise<void>>()
@@ -108,8 +117,32 @@ export class OnboardingService implements OnApplicationBootstrap {
     private readonly users: Repository<User>,
     @InjectRepository(RequestsConfig)
     private readonly config: Repository<RequestsConfig>,
-    private readonly resolver: ApproverResolver
+    private readonly resolver: ApproverResolver,
+    private readonly queue: QueueService,
+    private readonly modules: ModulesService
   ) {}
+
+  // B2.5: مهام الموظف الجديد بتتعمل وقت التعيين (حدث «تم التعيين» من الطابور) مش مع أول فتح للشاشة — عشان تظهر في «مهامي»
+  // لأصحابها من أول يوم. فتح الشاشة لسه بينسخ للي اتعيّنوا قبل كده (نفس الدالة، وآمنة للتكرار)
+  onModuleInit() {
+    this.queue.registerHandler(ONBOARDING_HIRED_JOB, async (payload) => {
+      await this.materializeHired(Number((payload as { event?: { payload?: { employeeId?: unknown } } } | null)?.event?.payload?.employeeId))
+    })
+    this.queue.subscribe('EMPLOYEE_HIRED', ONBOARDING_HIRED_JOB)
+  }
+
+  /**
+   * مهام تهيئة موظف لسه متعيّن: نسخ القالب ومهمة المسوغات — نفس اللي فتح الشاشة بيعمله، وبنفس نافذة «الموظف الجديد» بتاعتها
+   * (تاريخ التحاقه جوه النافذة أو لسه جاي). ملف اتضاف بتاريخ التحاق قديم (موظف قايم بيتسجّل) أو من غير تاريخ مش «موظف جديد»:
+   * الشاشة مابتعملوش مهام، ولا التعيين. الموديول مقفول = مفيش مهام
+   */
+  async materializeHired(employeeId: number) {
+    if (!Number.isSafeInteger(employeeId) || !(await this.modules.isEnabled('onboarding'))) return
+    const emp = await this.employees.findOne({ where: { id: employeeId, status: Not(In<EmployeeStatus>(['terminated', 'archived'])) } })
+    if (!emp?.joinDate || String(emp.joinDate).slice(0, 10) < addDays(localDateOf(new Date()), -(await this.windowDays()))) return
+    await this.materialize([emp])
+    if ((await requiredHiringDocTypes(this.tasks.manager)).length) await this.ensureHiringDocsTasks([emp])
+  }
 
   // القالب الافتراضي عند أول إقلاع (الجدول فاضي) — يُعدَّل بعدها من الشاشة
   async onApplicationBootstrap() {
@@ -222,6 +255,61 @@ export class OnboardingService implements OnApplicationBootstrap {
       canManageTemplate: userHasPerm(user, 'settings.manage'),
       employees: rows.filter((r): r is NonNullable<typeof r> => r !== null),
     }
+  }
+
+  // ===== B2.5: مهام التهيئة المفتوحة اللي على جهة الحساب («مهامي») =====
+  // نفس حكم «الجهة» بتاع القايمة (partyOf): صلاحية الجهة في فرع الموظف، أو المدير المباشر هيكليًا — من غير المخرجين اللي بيقفلوا أي
+  // مهمة من شاشة التهيئة ومش كل مهام الشركة «عليهم»: صلاحية الموارد البشرية العامة (employees.edit)، ومدير النظام («*»)، زي ما
+  // خطوات الاعتماد الوظيفية ومهام الأدوار ماشيين. الإقفال من شاشة التهيئة
+  async myOpenTasks(user: JwtPayload) {
+    const scope = branchScopeOf(user)
+    const granted = user.permissions ?? []
+    // العدّاد بيتنادى مع كل صفحة: القراءة على قد الجهات اللي الحساب بيحملها بصلاحيته في نطاق فروعه، ومرؤوسيه المباشرين (لمهام
+    // «المدير المباشر»، بنفس حل المدير المباشر ومن غير قيد فرع). حساب من غير الاتنين مابيقراش ولا مهمة
+    const parties = (Object.keys(PARTY_PERMS) as OnboardingParty[]).filter((party) => PARTY_PERMS[party].some((p) => granted.includes(p)))
+    const reports = user.employeeId ? await this.resolver.directReportsOf(user.employeeId) : []
+    const open = () => this.tasks.createQueryBuilder('t').innerJoin(Employee, 'e', 'e.id = t.employeeId')
+      .where('t.status = :pending', { pending: 'PENDING' }).andWhere('e.status NOT IN (:...inactive)', { inactive: ['terminated', 'archived'] })
+    const pending: OnboardingTask[] = []
+    if (parties.length && !isEmptyBranchScope(scope)) {
+      const byParty = open().andWhere('t.party IN (:...parties)', { parties })
+      if (scope !== null) byParty.andWhere('e.branchId IN (:...scope)', { scope })
+      pending.push(...await byParty.getMany())
+    }
+    for (const part of idChunks(reports)) {
+      pending.push(...await open().andWhere('t.party = :manager', { manager: 'manager' }).andWhere('t.employeeId IN (:...part)', { part }).getMany())
+    }
+    if (pending.length === 0) return []
+    pending.sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate)) || a.id - b.id)
+    const emps: Employee[] = []
+    for (const part of idChunks([...new Set(pending.map((t) => t.employeeId))])) emps.push(...await this.employees.find({ where: { id: In(part) } }))
+    const empById = new Map(emps.map((e) => [e.id, e]))
+    const mine: Array<{ task: OnboardingTask; emp: Employee }> = []
+    for (const task of pending) {
+      const emp = empById.get(task.employeeId)
+      if (emp) mine.push({ task, emp })
+    }
+    // «استلام مسوغات التعيين» حالتها من المستندات: بتتحسب دلوقتي زي القايمة، واللي اكتملت مابتظهرش
+    const hiringEmps = [...new Set(mine.filter((row) => row.task.systemKey === HIRING_DOCS_TASK_KEY).map((row) => row.emp.id))]
+    const stillOpen = new Set<number>()
+    if (hiringEmps.length) {
+      await syncHiringDocsTasks(this.tasks.manager, hiringEmps)
+      for (const part of idChunks(hiringEmps)) {
+        const rows = await this.tasks.find({ where: { employeeId: In(part), systemKey: HIRING_DOCS_TASK_KEY, status: 'PENDING' }, select: { id: true } })
+        for (const row of rows) stillOpen.add(row.id)
+      }
+    }
+    return mine
+      .filter(({ task }) => task.systemKey !== HIRING_DOCS_TASK_KEY || stillOpen.has(task.id))
+      .map(({ task, emp }) => ({
+        taskId: task.id,
+        employeeId: emp.id,
+        employeeName: emp.fullName,
+        employeeCode: emp.employeeCode,
+        label: task.label,
+        party: task.party,
+        dueDate: task.dueDate,
+      }))
   }
 
   // ===== إتمام/إعادة فتح/تعديل مهمة =====
@@ -381,10 +469,10 @@ export class OnboardingService implements OnApplicationBootstrap {
     })
     if (items.length === 0) return
     for (const emp of missing) {
-      await this.withLock(emp.id, async () => {
+      await this.withLock(emp.id, async (tasks) => {
         // فحص ثانٍ داخل القفل — نداء متزامن ربما سبقنا
-        if ((await this.tasks.count({ where: { employeeId: emp.id, systemKey: IsNull() } })) > 0) return
-        await this.tasks.insert(
+        if ((await tasks.count({ where: { employeeId: emp.id, systemKey: IsNull() } })) > 0) return
+        await tasks.insert(
           items.map((it) => ({
             employeeId: emp.id,
             templateItemId: it.id,
@@ -412,17 +500,31 @@ export class OnboardingService implements OnApplicationBootstrap {
     )
     const today = localDateOf(new Date())
     for (const emp of emps.filter((e) => !have.has(e.id))) {
-      await this.withLock(emp.id, async () => {
-        if ((await this.tasks.count({ where: { employeeId: emp.id, systemKey: HIRING_DOCS_TASK_KEY } })) > 0) return
-        await this.tasks.insert(hiringDocsTaskRow(emp, today))
+      await this.withLock(emp.id, async (tasks) => {
+        if ((await tasks.count({ where: { employeeId: emp.id, systemKey: HIRING_DOCS_TASK_KEY } })) > 0) return
+        await tasks.insert(hiringDocsTaskRow(emp, today))
       })
     }
   }
 
-  private withLock(employeeId: number, fn: () => Promise<void>): Promise<void> {
+  // القفل اللي جوه العملية زي ما كان (نداءات نفس الخادم بتقف ورا بعض من غير ما كل واحد يمسك اتصال قاعدة وهو مستني)، وجوّاه قفل
+  // قاعدة لكل موظف (B2.5، قرار B0.1): النسخ بقى بيحصل من الطابور ومن الشاشة، وممكن من نسختين من الخادم، فنداءين متزامنين ماينسخوش
+  // القالب له مرتين. الفحص والكتابة جوه نفس المعاملة اللي ماسكة قفل القاعدة
+  private withLock(employeeId: number, fn: (tasks: Repository<OnboardingTask>) => Promise<void>): Promise<void> {
     const run = (this.locks.get(employeeId) ?? Promise.resolve())
       .catch(() => undefined)
-      .then(fn)
+      .then(() => this.tasks.manager.transaction(async (em) => {
+        if (em.connection.options.type === 'mssql') {
+          const rows = await em.query(
+            `DECLARE @result int;
+             EXEC @result = sys.sp_getapplock @Resource = @0, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 15000;
+             SELECT @result AS lockResult;`,
+            [`hr:onboarding:${employeeId}`]
+          )
+          if (!rows.length || Number(rows[0].lockResult) < 0) throw new Error(`تعذر قفل مهام تهيئة الموظف #${employeeId}`)
+        }
+        await fn(em.getRepository(OnboardingTask))
+      }))
     this.locks.set(employeeId, run)
     return run.finally(() => {
       if (this.locks.get(employeeId) === run) this.locks.delete(employeeId)

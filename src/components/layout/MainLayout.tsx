@@ -58,6 +58,8 @@ const PATH_PERMS: Array<[prefix: string | RegExp, perm: string | string[] | null
   ['/payroll', 'payroll.view'],
   ['/settings', 'settings.manage'],
   ['/requests-console', 'requests.view_all'],
+  // B2.5: قايمة كل المهام («مهامي» تحت /my مفتوحة لكل حساب)
+  ['/tasks', 'tasks.view_all'],
   ['/attendance/exemptions', 'attendance_exemption.view'], // استثناء الحضور — صلاحيته مستقلة عن سجل الحضور
   ['/attendance/shifts', 'settings.manage'], // كتالوج الورديات — كتابته settings.manage
   ['/attendance/devices', 'attendance.sync'],

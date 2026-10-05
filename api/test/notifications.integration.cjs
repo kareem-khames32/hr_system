@@ -570,6 +570,7 @@ test('NT-08: التفضيلات — مقفول = مفيش بريد، وملخص 
     { key: 'approval', label: 'طلبات بانتظار اعتمادي', inApp: null, email: 'ON' },
     { key: 'request', label: 'قرارات طلباتي', inApp: null, email: 'ON' },
     { key: 'payroll', label: 'الرواتب', inApp: 'ON', email: 'ON' },
+    { key: 'task', label: 'المهام', inApp: null, email: 'ON' },
   ])
   for (const body of [{ category: 'unknown', channel: 'EMAIL', mode: 'OFF' }, { category: 'approval', channel: 'SMS', mode: 'OFF' }, { category: 'approval', channel: 'EMAIL', mode: 'LATER' },
     { category: 'payroll', channel: 'IN_APP', mode: 'DIGEST' }, { category: 'approval', channel: 'IN_APP', mode: 'OFF' }]) {
@@ -970,7 +971,8 @@ test('NT-11: القوالب وسجل الإرسال لحساب الشركة بس
   }
   const catalog = expectStatus(await request(users.admin, 'GET', '/notifications/templates'), 200)
   assert.equal(catalog.available, true)
-  assert.deepEqual(catalog.events.map(event => event.code), ['request.pending_approval', 'request.escalated', 'request.decided', 'request.returned', 'request.confidential', 'payroll.payslip_available'])
+  assert.deepEqual(catalog.events.map(event => event.code), ['request.pending_approval', 'request.escalated', 'request.decided', 'request.returned', 'request.confidential', 'payroll.payslip_available',
+    'task.assigned', 'task.due_soon', 'task.overdue'])
   const decided = catalog.events.find(event => event.code === 'request.decided')
   assert.deepEqual([decided.templates.EMAIL.customized, decided.storedInApp, decided.variables.map(variable => variable.key)],
     [false, false, ['request.type', 'request.decision', 'recipient.name', 'company.name', 'link']])

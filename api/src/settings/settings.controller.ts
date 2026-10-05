@@ -615,6 +615,9 @@ export class SettingsController {
     'payroll.approval.net_change_alert_percent': 0,
     // B2.4: ساعة الملخص اليومي لإشعارات البريد (0..23)
     'notifications.digest_hour': 0,
+    // B2.5: أيام تذكير المهمة قبل موعدها، وأيام تصعيدها بعده (0 = من غير تصعيد)
+    'tasks.reminder_days_before': 0,
+    'tasks.escalation_days_after': 0,
     'attendance.flex.shortfall_grace_minutes': 0,
     'attendance.flex.unpaid_break_minutes': 0,
     'attendance.flex.max_session_minutes': 1,
@@ -830,6 +833,15 @@ export class SettingsController {
       dto.value = dto.value.trim()
       if (dto.value !== '' && !parseQuietHours(dto.value)) {
         throw new BadRequestException('ساعات الهدوء بالشكل 22:00-07:00 (من-إلى بتوقيت النظام، والبداية غير النهاية)، أو فاضي لإلغائها')
+      }
+    }
+    // B2.5: أيام تذكير وتصعيد المهام عدد صحيح 0..60 (الكسر أو الرقم الكبير كان هيتقري الافتراضي بصمت)
+    if (dto.key === 'tasks.reminder_days_before' || dto.key === 'tasks.escalation_days_after') {
+      const n = Number(dto.value)
+      if (!Number.isInteger(n) || n > 60) {
+        throw new BadRequestException(dto.key === 'tasks.reminder_days_before'
+          ? 'أيام التذكير قبل موعد المهمة عدد صحيح من 0 إلى 60'
+          : 'أيام التصعيد بعد موعد المهمة عدد صحيح من 0 إلى 60 (0 = من غير تصعيد)')
       }
     }
     // دولة النظام الافتراضية للعطلات الرسمية: رمز الدولة أو فارغ = كل الدول

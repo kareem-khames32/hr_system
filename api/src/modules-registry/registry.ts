@@ -115,6 +115,14 @@ export const MODULES = {
     // B2.4: الملخص اليومي للبريد
     jobs: ['notifications.daily-digest'],
   }),
+  // B2.5: المهمة العامة و«مهامي» (فيه مهام التهيئة وبنود الإخلاء لو موديولاتهم مفعّلة)
+  tasks: moduleDef({
+    nameAr: 'المهام', group: 'core', core: true, dependsOn: ['employees'], softUses: ['onboarding', 'offboarding'],
+    description: 'تكليف موظف أو دور بمهمة بموعد وإثبات، وصندوق «مهامي»، وتذكير وتصعيد المتأخر',
+    permissions: ['tasks.manage', 'tasks.view_all'],
+    routes: ['/tasks', '/my/tasks'],
+    jobs: ['tasks.reminders'],
+  }),
   documents: moduleDef({
     nameAr: 'المستندات والخطابات', group: 'core', core: true, dependsOn: ['employees'],
     description: 'مستندات الموظفين ومسوغات التعيين وقوالب المستندات والخطابات',

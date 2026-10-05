@@ -306,6 +306,9 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'notifications.email.enabled', value: 'false' },
   { key: 'notifications.quiet_hours', value: '' },
   { key: 'notifications.digest_hour', value: '8' },
+  // B2.5 محرك المهام: تذكير المسؤول قبل الموعد بيوم، وتصعيد لمديره بعد 3 أيام تأخير (0 = من غير تصعيد)
+  { key: 'tasks.reminder_days_before', value: '1' },
+  { key: 'tasks.escalation_days_after', value: '3' },
   { key: 'payroll.shortfall_mode', value: 'MINUTES' },
   { key: 'payroll.shortfall_value', value: '1' },
   { key: 'payroll.attendance_overlap_policy', value: 'NET_OF_LATENESS' },

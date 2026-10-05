@@ -17,6 +17,7 @@ import {
   Send,
   Plus,
   Bell,
+  ListChecks,
 } from 'lucide-react'
 import {
   can, fetchConfig, fetchSecurityStatus, fetchTerminationReasons, saveCustomTerminationReasons, sendMailTest, updateConfig,
@@ -272,6 +273,18 @@ const GROUPS: PolicyGroup[] = [
       { key: 'notifications.email.enabled', label: 'إرسال الإشعارات بالبريد', type: 'bool', hint: 'مفتوح: طلب مستني اعتمادك، وقرار طلبك، وقسيمتك ظهرت بيوصلوا بالبريد كمان. مقفول: مفيش رسالة بتطلع، والإشعارات داخل النظام شغالة زي ما هي.' },
       { key: 'notifications.quiet_hours', label: 'ساعات الهدوء', type: 'text', hint: 'بالشكل 22:00-07:00 بتوقيت النظام: البريد اللي ييجي فيها بيتأجل لآخرها. فاضي = مفيش ساعات هدوء.' },
       { key: 'notifications.digest_hour', label: 'ساعة الملخص اليومي', type: 'number', unit: 'الساعة', min: 0, max: 23, integer: true, hint: 'اللي مختار «ملخص يومي» بتوصله رسالة واحدة في الساعة دي (من 0 لـ23 بتوقيت النظام).' },
+    ],
+  },
+  {
+    // B2.5: محرك المهام — تذكير المسؤول قبل الموعد، وتبليغ مديره لو اتأخرت
+    title: 'المهام',
+    icon: ListChecks,
+    iconBg: 'bg-primary-50',
+    iconColor: 'text-primary-500',
+    note: 'التذكير والتبليغ بيطلعوا بالبريد من محرك الإشعارات (لو بريد الإشعارات مفتوح)، مرة واحدة لكل مهمة وموعد. جوه النظام المهمة ظاهرة في «مهامي» بعدّادها.',
+    fields: [
+      { key: 'tasks.reminder_days_before', label: 'تذكير المسؤول قبل الموعد', type: 'number', unit: 'يوم', min: 0, max: 60, integer: true, hint: 'المسؤول بيتبلّغ لما يفضل على موعد المهمة العدد ده من الأيام أو أقل. صفر = يوم الموعد نفسه.' },
+      { key: 'tasks.escalation_days_after', label: 'تبليغ المدير بعد التأخير', type: 'number', unit: 'يوم', min: 0, max: 60, integer: true, hint: 'مدير المسؤول المباشر بيتبلّغ لما المهمة تعدّي موعدها بالعدد ده من الأيام (ومهمة الدور بيتبلّغ اللي كلّف بيها). صفر = من غير تبليغ.' },
     ],
   },
 ]

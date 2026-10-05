@@ -5,6 +5,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/requests-console', 'لوحة الطلبات'],
   ['/requests', 'طلباتي'],
   ['/approvals-inbox', 'بانتظار موافقتي'],
+  ['/my/tasks', 'مهامي'],
   ['/my/attendance', 'حضوري'],
   ['/my/leaves', 'إجازاتي وأرصدتي'],
   ['/my/payslips', 'قسائم راتبي'],
@@ -35,6 +36,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/employees', 'قائمة الموظفين'],
   [/^\/offboarding\/\d+(\/|$)/, 'ملف إنهاء الخدمة'],
   ['/offboarding', 'إنهاء الخدمة'],
+  ['/tasks', 'المهام'],
   // الحضور والانصراف
   ['/attendance/weekly-schedule', 'الجدول الأسبوعي'],
   ['/attendance/shifts', 'الورديات'],

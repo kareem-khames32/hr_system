@@ -37,6 +37,16 @@ const EXCEPTIONS = {
   // B2.4: اختيارات صاحب الحساب لقنوات إشعاراته (user.sub من التوكن — مفيش رقم مستخدم في الطلب)
   'NotificationsController.preferences': 'SELF', // GET /notifications/preferences
   'NotificationsController.setPreference': 'SELF', // PATCH /notifications/preferences
+  // B2.5: «مهامي» وعدّادها و«فريقي» وقايمة «مين أقدر أكلّفه» عن صاحب الحساب نفسه
+  'TasksController.mine': 'SELF', // GET /tasks/mine
+  'TasksController.mineCount': 'SELF', // GET /tasks/mine/count
+  'TasksController.team': 'SELF', // GET /tasks/team
+  'TasksController.assignees': 'SELF', // GET /tasks/assignees
+  // التكليف والقراءة والتعديل والحالة: الحق بيتحكم في الخدمة (المسؤول، المنشئ، المدير المباشر، أو صلاحية المهام في فرعها) — برّه كده 404
+  'TasksController.create': 'SERVICE_CHECK', // POST /tasks
+  'TasksController.detail': 'SERVICE_CHECK', // GET /tasks/:id
+  'TasksController.update': 'SERVICE_CHECK', // PATCH /tasks/:id
+  'TasksController.setStatus': 'SERVICE_CHECK', // POST /tasks/:id/status
   'OffboardingController.mine': 'SELF', // GET /offboarding/mine
   'PayrollController.myPayslips': 'SELF', // GET /payroll/my-payslips
   // B1.14: مستحق الموظف التقديري عن نفسه (user.employeeId) — ورا الميزة الفرعية payroll.live_employee_view (مقفولة = 404)

@@ -29,6 +29,7 @@ import { RequestsService } from '../requests/requests.service'
 import { fileStorage } from './storage'
 import { assertHrDocumentFileAccess } from '../hr-documents/hr-document-access'
 import { assertLetterFileAccess } from '../letters/letter-access'
+import { assertTaskFileAccess } from '../tasks/task-rules'
 import { RequireModule } from '../modules-registry/module.guard'
 import {
   classifyUpload, FILE_TYPE_EXTENSIONS, FILE_TYPE_MIME, FILES_ALLOWED_TYPES_KEY, FILES_MAX_SIZE_KEY, FILES_MAX_SIZE_LIMIT_MB,
@@ -73,7 +74,7 @@ export class FilesController {
     @Query('employeeId') employeeId?: string
   ) {
     if (!file) throw new BadRequestException('لم يصل ملف — أرسل الحقل file')
-    if (entityType && !['request', 'employee_photo', 'company_logo', 'document', 'contract', 'leave_attachment'].includes(entityType)) {
+    if (entityType && !['request', 'employee_photo', 'company_logo', 'document', 'contract', 'leave_attachment', 'task'].includes(entityType)) {
       throw new BadRequestException('تصنيف الملف غير صالح')
     }
     for (const value of [entityId, employeeId]) {
@@ -149,6 +150,9 @@ export class FilesController {
     } else if (f.entityType === 'letter') {
       // نفس سياسة /letters/:id/download — خطاب الراتب يحتاج قراءة المالية (SEC-07)
       await assertLetterFileAccess(this.ds.manager, user, f)
+    } else if (f.entityType === 'task') {
+      // B2.5: إثبات إقفال مهمة — بنفس حكم المهمة (مسؤولها، منشئها، مدير مسؤولها، «عرض كل المهام» في فرعها)، مش بملكية الرفع العامة
+      await assertTaskFileAccess(this.ds.manager, user, f)
     } else {
     const isOwner = (!!user.employeeId && f.employeeId === user.employeeId) || (!!user.sub && f.uploadedBy === user.sub)
     // صور الموظفين قابلة للعرض لأي مطّلع على الموظفين (ليست مستنداً حساساً)

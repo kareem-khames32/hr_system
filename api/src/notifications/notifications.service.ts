@@ -12,11 +12,13 @@ import { ModulesService } from '../modules-registry/modules.service'
 import { routeAvailable } from '../modules-registry/registry'
 import { enqueueQueueJob, queueTablesReady, type DomainEventType } from '../queue/outbox'
 import { QueueService } from '../queue/queue.service'
-import { FUNCTIONAL_APPROVER_ROLES } from '../requests/approver-resolver.service'
+import { ApproverResolver, FUNCTIONAL_APPROVER_ROLES } from '../requests/approver-resolver.service'
 import { RequestType } from '../requests/entities/request-type.entity'
 import { Request } from '../requests/entities/request.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { RequestsService } from '../requests/requests.service'
+import { Task, TASK_OPEN_STATUSES, type TaskStatus } from '../tasks/task.entity'
+import { taskAccess, taskAwaitsAccount, taskLocalDate, tasksTableReady, TASK_ROLE_LABELS } from '../tasks/task-rules'
 import { Notification, NotificationDelivery, NotificationPreference, NotificationTemplate } from './notification.entities'
 import { notificationTablesReady, NOTIFICATIONS_MIGRATION_MISSING } from './notification-store'
 import {
@@ -47,7 +49,9 @@ export const NOTIFICATIONS_EMAIL_PER_MINUTE = 20
 // خادم البريد مش بيرد: الإرسال بيقف المدة دي (الرسايل بتفشل بسرعة وتتعاد) بدل ما كل رسالة تستنى مهلة الاتصال وتوقّف باقي مهام الطابور
 export const NOTIFICATIONS_MAIL_PAUSE_MS = 60_000
 // الأحداث اللي المحرك مشترك فيها
-export const NOTIFICATION_SOURCE_EVENTS: readonly DomainEventType[] = ['REQUEST_STEP_PENDING', 'REQUEST_APPROVED', 'REQUEST_REJECTED', 'REQUEST_RETURNED', 'PAYROLL_RUN_APPROVED']
+export const NOTIFICATION_SOURCE_EVENTS: readonly DomainEventType[] = ['REQUEST_STEP_PENDING', 'REQUEST_APPROVED', 'REQUEST_REJECTED', 'REQUEST_RETURNED', 'PAYROLL_RUN_APPROVED',
+  // B2.5
+  'TASK_ASSIGNED', 'TASK_DUE_SOON', 'TASK_OVERDUE']
 // الملخص اليومي اللي فشل إرساله بيتجرّب تاني اليوم اللي بعده لحد العدد ده
 const DIGEST_MAX_ATTEMPTS = 3
 // رسالة «مستنية» من غير مهمة شغالة أكتر من المدة دي = مهمتها وقفت من غير ما تسجّل نتيجة
@@ -99,7 +103,8 @@ export class NotificationsService implements OnModuleInit {
     private readonly auth: AuthService,
     private readonly requests: RequestsService,
     private readonly modules: ModulesService,
-    private readonly config: ConfigService
+    private readonly config: ConfigService,
+    private readonly resolver: ApproverResolver
   ) {}
 
   onModuleInit() {
@@ -152,6 +157,9 @@ export class NotificationsService implements OnModuleInit {
       case 'REQUEST_REJECTED':
       case 'REQUEST_RETURNED': return this.onDecision(event)
       case 'PAYROLL_RUN_APPROVED': return this.onPayrollApproved(event)
+      case 'TASK_ASSIGNED':
+      case 'TASK_DUE_SOON':
+      case 'TASK_OVERDUE': return this.onTask(event)
       default: return 0
     }
   }
@@ -225,6 +233,55 @@ export class NotificationsService implements OnModuleInit {
     return this.deliver({
       event, code: 'payroll.payslip_available', category: 'payroll', kind: 'info', recipients: await this.auth.accountPayloads(users),
       entityType: 'payroll_run', entityId: runId, link: '/my/payslips', values: { 'payslip.period': String(run.period) },
+    })
+  }
+
+  // ===== B2.5: إشعارات المهام (بريد بس — جوه النظام عدّاد «مهامي») =====
+  /** حسابات المسؤول عن المهمة: حسابات موظفها، أو حاملي دورها اللي فرعها في نطاقهم (نفس حكم «مهامي») */
+  private async taskAssigneeAccounts(task: Task): Promise<JwtPayload[]> {
+    const users = await this.ds.getRepository(User).find({ where: task.assigneeEmployeeId != null ? { isActive: true, employeeId: task.assigneeEmployeeId } : { isActive: true } })
+    return (await this.auth.accountPayloads(users)).filter(account => taskAwaitsAccount(account, task))
+  }
+
+  /**
+   * اللي بيتبلّغ بتأخير المهمة: المدير المباشر للموظف المسؤول؛ ومهمة الدور، أو موظف من غير مدير أو مديره مالوش حساب شغال، اللي كلّف
+   * بيها (التأخير مايضيعش من غير حد يعرف). والمستلم لازم يكون لسه شايف المهمة بحكمها (taskAccess): اللي كلّف بيها وفقد حقه مايوصلوش
+   * اسم مسؤولها ولا موعدها.
+   */
+  private async taskEscalationAccounts(task: Task): Promise<JwtPayload[]> {
+    const manager = task.assigneeEmployeeId != null ? await this.resolver.directManagerOf(task.assigneeEmployeeId) : null
+    const users = this.ds.getRepository(User)
+    const managers = manager ? await users.find({ where: { isActive: true, employeeId: manager } }) : []
+    const found = managers.length ? managers : await users.find({ where: { isActive: true, id: task.createdByUserId } })
+    const allowed: JwtPayload[] = []
+    for (const account of await this.auth.accountPayloads(found)) {
+      // اللي المهمة عليه مابيتصعّدلوش تأخيره هو
+      if (taskAwaitsAccount(account, task)) continue
+      if ((await taskAccess(account, task, employeeId => this.resolver.directManagerOf(employeeId))).visible) allowed.push(account)
+    }
+    return allowed
+  }
+
+  private async taskAssigneeName(task: Task): Promise<string> {
+    if (task.assigneeEmployeeId == null) return TASK_ROLE_LABELS[task.assigneeRole as keyof typeof TASK_ROLE_LABELS] ?? ''
+    return (await this.ds.getRepository(Employee).findOne({ where: { id: task.assigneeEmployeeId }, select: { id: true, fullName: true } }))?.fullName ?? ''
+  }
+
+  /** مهمة اتكلّف بيها مسؤول، أو موعدها قرّب (للمسؤول)، أو اتأخرت (لمدير المسؤول). العنوان والموعد بس — الوصف مابيتبعتش */
+  private async onTask(event: SourceEvent): Promise<number> {
+    if (!(await this.emailRequested()) || !(await tasksTableReady(this.ds.manager))) return 0
+    const taskId = Number(event.payload?.taskId)
+    const task = Number.isSafeInteger(taskId) ? await this.ds.getRepository(Task).findOne({ where: { id: taskId } }) : null
+    // المهمة اتقفلت أو اتلغت قبل ما مهمة التوزيع تشتغل: الحدث قديم
+    if (!task || !TASK_OPEN_STATUSES.includes(task.status as TaskStatus)) return 0
+    const overdue = event.type === 'TASK_OVERDUE'
+    const recipients = overdue ? await this.taskEscalationAccounts(task)
+      // اللي كلّف نفسه مابيتبعتلوش «مهمة جديدة عليك»
+      : (await this.taskAssigneeAccounts(task)).filter(account => event.type !== 'TASK_ASSIGNED' || account.sub !== task.createdByUserId)
+    return this.deliver({
+      event, code: overdue ? 'task.overdue' : event.type === 'TASK_DUE_SOON' ? 'task.due_soon' : 'task.assigned', category: 'task', kind: event.type === 'TASK_ASSIGNED' ? 'info' : 'warning',
+      recipients, entityType: 'task', entityId: task.id, link: `/my/tasks?task=${task.id}`,
+      values: { 'task.title': task.title, 'task.due': task.dueDate ?? 'من غير موعد', ...(overdue ? { 'task.assignee': await this.taskAssigneeName(task) } : {}) },
     })
   }
 
@@ -366,6 +423,20 @@ export class NotificationsService implements OnModuleInit {
       const returned = notification.eventCode === 'request.returned'
         || (notification.eventCode === 'request.confidential' && (await this.sourceEventType(notification)) === 'REQUEST_RETURNED')
       return returned && req.status !== 'RETURNED_FOR_INFO' ? 'الطلب اتقدّم تاني أو اتحسم' : null
+    }
+    if (notification.entityType === 'task') {
+      const id = Number(notification.entityId)
+      const task = Number.isSafeInteger(id) && (await tasksTableReady(this.ds.manager)) ? await this.ds.getRepository(Task).findOne({ where: { id } }) : null
+      if (!task || !TASK_OPEN_STATUSES.includes(task.status as TaskStatus)) return 'المهمة اتقفلت أو اتلغت'
+      if (notification.eventCode === 'task.overdue') {
+        if (!task.dueDate || task.dueDate >= taskLocalDate(new Date())) return 'المهمة مابقتش متأخرة'
+        // ختم التصعيد اتشال (المهمة اتحوّلت أو موعدها اتغيّر بعد ما الرسالة اتجهّزت باسم مسؤولها وموعدها): الرسالة عن وضع فات
+        if (!task.escalatedAt) return 'المهمة اتحوّلت أو موعدها اتغيّر بعد تجهيز الرسالة'
+        return (await this.taskEscalationAccounts(task)).some(row => row.sub === user.id) ? null : 'تأخير المهمة مابقاش بيتبلّغ بيه الحساب ده'
+      }
+      if (!taskAwaitsAccount(account, task)) return 'المهمة مابقتش على الحساب ده'
+      // «موعدها قرّب» اتجهّزت بموعد: لو الموعد اتشال أو اتغيّر بعدها (ختم التذكير اتشال) الرسالة بتقول موعد مابقاش بتاعها
+      return notification.eventCode === 'task.due_soon' && (!task.dueDate || !task.remindedAt) ? 'موعد المهمة اتغيّر بعد تجهيز الرسالة' : null
     }
     if (notification.entityType === 'payroll_run') {
       // نفس شرط «قسائم راتبي»: مسير معتمد أو مصروف ليه بند لموظف الحساب
