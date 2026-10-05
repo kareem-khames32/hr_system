@@ -1182,7 +1182,7 @@ export interface ApiPayrollRunAccrual {
 }
 export const fetchPayrollRunAccrual = (id: number) => get<ApiPayrollRunAccrual>(`/payroll/runs/${id}/accrual`)
 export const refreshPayrollRunAccrual = (id: number) =>
-  post<{ runId: number; employees: number; days: number; computed: number; reused: number; accrual: ApiPayrollRunAccrual }>(`/payroll/runs/${id}/accrual/refresh`)
+  post<{ runId: number; employees: number; days: number; computed: number; reused: number; failed: number; accrual: ApiPayrollRunAccrual }>(`/payroll/runs/${id}/accrual/refresh`)
 // تقرير طرق الصرف — نفس أرقام كشف البنوك: صافي كل طريقة، ومنه كام بنك وكام نقدي
 export interface ApiPayMethodReportRow { label: string; count: number; total: number; bank: number; cash: number }
 export const fetchPayMethodReport = (id: number) =>

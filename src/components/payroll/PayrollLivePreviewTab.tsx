@@ -32,16 +32,19 @@ export function PayrollLivePreviewTab() {
     setBusy(true); setError(''); setNotice('')
     try {
       // كل طلب بيحسب لحد ~20 ثانية وبيقول الباقي: الشاشة بتكمّل لحد ما يخلصوا، وبتقف لو جولة ماحسبتش حاجة
-      let computed = 0
+      let computed = 0, left = 0
       for (;;) {
         const result = await refreshPayrollLive()
         if (result.preview) setData(result.preview)
         if (result.disabled) { setNotice('التراكم اليومي مقفول من الإعدادات أو ترحيله مش متطبق'); return }
         computed += result.computed
+        left = result.remaining
         if (!(result.remaining > 0) || result.computed === 0) break
         setNotice(`بيحسب… لسه ${result.remaining} موظف`)
       }
-      setNotice(computed > 0 ? `اتحسب ${computed} يوم-موظف` : 'كل الأيام محسوبة، مفيش حاجة جديدة')
+      // موظف عليه عملية مالية شغالة دلوقتي (حساب مسير أو اعتماد) مابيتحسبش في نفس اللحظة: بيتقال إنه فاضل بدل «كله محسوب»
+      if (left > 0) setNotice(`${computed > 0 ? `اتحسب ${computed} يوم-موظف، و` : ''}فاضل ${left} موظف ماتحسبلهمش دلوقتي (عليهم عملية مالية شغالة) — جرّب تاني بعد شوية`)
+      else setNotice(computed > 0 ? `اتحسب ${computed} يوم-موظف` : 'كل الأيام محسوبة، مفيش حاجة جديدة')
     } catch (e) { setError(payrollRunErrorMessage(e, 'تعذر تحديث الحساب')) } finally { setBusy(false) }
   }
 

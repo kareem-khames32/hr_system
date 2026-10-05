@@ -3,6 +3,8 @@
 // الربط بكود البصمة، والأربعة بلا بصمة بالاسم. التقسيم: 65% أساسي، 25% سكن، والباقي مواصلات.
 // بدل ضغط العمل يتكتب زي ما هو من الشيت.
 import 'reflect-metadata'
+// CRP2C-D-N01: نفس تصليح دقة الأعمدة العشرية بتاع التطبيق — الاتصال هنا مابيعدّيش على app.module
+import '../src/common/typeorm-mssql-output-precision'
 import * as path from 'node:path'
 import { config as dotenv } from 'dotenv'
 import { DataSource } from 'typeorm'

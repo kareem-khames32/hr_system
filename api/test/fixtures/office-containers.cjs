@@ -1,5 +1,5 @@
 'use strict'
-// حاويات ملفات Office مبنية بالبايت للاختبارات (CRP2A-B02 وCRP2B-A-B01): أرشيف ZIP حقيقي (حزمة Word أو Excel الجديد بعلاقتها ونوع جزئها،
+// حاويات ملفات Office مبنية بالبايت للاختبارات (CRP2A-B02 وCRP2B-A-B01 وCRP2C-A-B01): أرشيف ZIP حقيقي (حزمة Word أو Excel الجديد بعلاقتها ونوع جزئها،
 // أو أي أرشيف تاني بتعليق)، وحاوية OLE حقيقية بشجرة دليلها (Word أو Excel القديم، أو أي حاوية تانية). من غير مكتبات، عشان الاختبار
 // يتحكم في كل بايت (تعليق، جزء ناقص، نوع معلن، علاقة، تيار أو مجلد، في الجذر أو جوه مجلد).
 const zlib = require('node:zlib')
@@ -41,18 +41,25 @@ const relationships = (target, type = OFFICE_DOCUMENT) => '<?xml version="1.0" e
  * حزمة Office: الجزء الرئيسي بنوعه المعلن وعلاقته. types/rels بيتبدّلوا للحالات الشاذة (rels: null = من غير ملف العلاقات)،
  * وextra أجزاء زيادة، والباقي خيارات الأرشيف (comment, deflate).
  */
-function officePackage(part, type, { types = contentTypes([part, type]), rels = relationships(part), body = '<document/>', extra = [], ...options } = {}) {
+function officePackage(part, type, { types = contentTypes([part, type]), rels = relationships(part), body = mainBody(type), extra = [], ...options } = {}) {
   return zip([['[Content_Types].xml', types], ...(rels === null ? [] : [['_rels/.rels', rels]]), [part, body], ...extra], options)
 }
-const wordPackage = options => officePackage('word/document.xml', WORD_MAIN, { body: '<w:document/>', ...options })
-const excelPackage = options => officePackage('xl/workbook.xml', EXCEL_MAIN, { body: '<workbook/>', ...options })
+const WORD_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main', EXCEL_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+/** جسم الجزء الرئيسي زي الملفات الحقيقية: مستند Word (w:document) أو مصنف Excel (workbook) في مساحته */
+const WORD_BODY = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<w:document xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:w="${WORD_NS}"><w:body><w:p/></w:body></w:document>`
+const EXCEL_BODY = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<workbook xmlns="${EXCEL_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets/></workbook>`
+// نوع مصنف (عادي أو ماكرو أو قالب) ← جسم مصنف؛ وأي نوع تاني (مستند عادي أو ماكرو أو قالب) ← جسم مستند
+const mainBody = type => /spreadsheetml|ms-excel/.test(String(type)) ? EXCEL_BODY : WORD_BODY
+const wordPackage = options => officePackage('word/document.xml', WORD_MAIN, options)
+const excelPackage = options => officePackage('xl/workbook.xml', EXCEL_MAIN, options)
 
 const OLE_NONE = 0xffffffff, OLE_END = 0xfffffffe
 /** موضع مدخل الدليل رقم id في حاوية مبنية بـole() (الدليل بيبدأ في القطاع 1) */
 const oleEntryOffset = id => 1024 + id * 128
 /**
  * حاوية OLE حقيقية (قطاعات 512 بايت): رأس + قطاع توزيع + قطاعات دليل (4 مدخلات في القطاع) + سلسلة قطاعات بيانات لكل تيار.
- * entries: اسم تيار في الجذر (نص)، أو { name, kind: 'stream' | 'storage', size, children: [...] }.
+ * entries: اسم تيار في الجذر (نص)، أو { name, kind: 'stream' | 'storage', size, head, children: [...] }.
+ * التيار بيبدأ ببداية صيغته حسب اسمه (WordDocument برأس مستند Word، وWorkbook وBook بسجل بداية المصنف) زي الملفات الحقيقية؛ head بيبدّلها.
  * التيار الافتراضي 4096 بايت (8 قطاعات)، والأصغر من 4096 بيتخزن في تيار الجذر المصغّر (قطاعات 64 بايت) زي الملفات الحقيقية.
  * المدخلات بترتيب الكتابة (الجذر 0، وبعده الأولاد بالعمق)، وأولاد كل مجلد سلسلة: الابن الأول في خانة الابن، وكل واحد أخوه اليمين اللي بعده.
  */
@@ -61,7 +68,7 @@ function ole(entries) {
   const add = (spec, parent) => {
     const node = typeof spec === 'string' ? { name: spec } : spec
     const storage = node.kind === 'storage'
-    const entry = { name: node.name, kind: storage ? 1 : 2, size: node.size ?? (storage ? 0 : 4096), children: [] }
+    const entry = { name: node.name, kind: storage ? 1 : 2, size: node.size ?? (storage ? 0 : 4096), head: node.head ?? OLE_STREAM_HEADS[node.name] ?? null, children: [] }
     parent.children.push(flat.push(entry) - 1)
     for (const child of node.children ?? []) add(child, entry)
   }
@@ -80,6 +87,8 @@ function ole(entries) {
   }
   const directory = Buffer.alloc(512 * directorySectors), miniFat = Buffer.alloc(512, 0xff)
   let miniSectors = 0
+  // بدايات التيارات المصغّرة: [رقم أول قطاع مصغّر، البداية] — بتتكتب في تيار الجذر بعد ما قطاعاته تتحجز
+  const miniHeads = []
   flat.forEach((entry, id) => {
     const at = id * 128, nameBytes = Buffer.from(entry.name + '\0', 'utf16le')
     nameBytes.copy(directory, at); directory.writeUInt16LE(nameBytes.length, at + 64); directory[at + 66] = entry.kind; directory[at + 67] = 1
@@ -87,11 +96,16 @@ function ole(entries) {
     directory.writeUInt32LE(entry.children.length ? entry.children[0] : OLE_NONE, at + 76)
     directory.writeUInt32LE(OLE_END, at + 116); directory.writeUInt32LE(entry.size, at + 120)
     if (entry.kind !== 2 || entry.size <= 0) return
-    if (entry.size >= 4096) directory.writeUInt32LE(chain(Math.ceil(entry.size / 512)), at + 116)
-    else {
+    if (entry.size >= 4096) {
+      const first = chain(Math.ceil(entry.size / 512))
+      directory.writeUInt32LE(first, at + 116)
+      // أول قطاع بيانات في التيار (القطاع رقم n هو العنصر n - 1 - قطاعات الدليل في القايمة)
+      if (entry.head) Buffer.from(entry.head).copy(sectors[first - 1 - directorySectors])
+    } else {
       // تيار صغير: سلسلة قطاعات مصغّرة (64 بايت) في تيار الجذر المصغّر
       const count = Math.ceil(entry.size / 64)
       directory.writeUInt32LE(miniSectors, at + 116)
+      if (entry.head) miniHeads.push([miniSectors, Buffer.from(entry.head)])
       for (let index = 0; index < count; index++) { miniFat.writeUInt32LE(index === count - 1 ? OLE_END : miniSectors + 1, miniSectors * 4); miniSectors++ }
     }
   })
@@ -104,14 +118,19 @@ function ole(entries) {
   for (let index = 0; index < 109; index++) header.writeUInt32LE(index === 0 ? 0 : OLE_NONE, 76 + index * 4)
   if (miniSectors) {
     // تيار الجذر المصغّر (بيشيل القطاعات المصغّرة) وجدول توزيعها
-    directory.writeUInt32LE(chain(Math.ceil(miniSectors * 64 / 512)), 116); directory.writeUInt32LE(miniSectors * 64, 120)
+    const rootFirst = chain(Math.ceil(miniSectors * 64 / 512))
+    directory.writeUInt32LE(rootFirst, 116); directory.writeUInt32LE(miniSectors * 64, 120)
+    // القطاع المصغّر رقم n عند البايت n × 64 من تيار الجذر (قطاعاته ورا بعض هنا)
+    for (const [mini, head] of miniHeads) head.copy(sectors[rootFirst - 1 - directorySectors + Math.floor(mini * 64 / 512)], (mini * 64) % 512)
     header.writeUInt32LE(chain(1), 60); header.writeUInt32LE(1, 64)
     sectors[sectors.length - 1] = miniFat
   }
   return Buffer.concat([header, fat, directory, ...sectors])
 }
+// رأس مستند Word (wIdent = 0xA5EC)، وسجل بداية مصنف Excel (BOF = 0x0809 بطول 16)
+const OLE_STREAM_HEADS = { WordDocument: [0xec, 0xa5, 0xc1, 0x00], Workbook: [0x09, 0x08, 0x10, 0x00, 0x00, 0x06, 0x05, 0x00], Book: [0x09, 0x08, 0x08, 0x00, 0x00, 0x05, 0x05, 0x00] }
 const oldWord = () => ole(['1Table', 'WordDocument', 'SummaryInformation'])
 const oldExcel = () => ole(['Workbook', 'SummaryInformation'])
 
 module.exports = { zip, ole, oleEntryOffset, contentTypes, relationships, officePackage, wordPackage, excelPackage, oldWord, oldExcel,
-  WORD_MAIN, EXCEL_MAIN, OFFICE_DOCUMENT, TYPES_OPEN, OLE_NONE, OLE_END }
+  WORD_MAIN, EXCEL_MAIN, OFFICE_DOCUMENT, TYPES_OPEN, OLE_NONE, OLE_END, WORD_BODY, EXCEL_BODY, WORD_NS, EXCEL_NS }

@@ -459,7 +459,7 @@ test('LV-10 (CRP2B-C-B01): صلاحية الحساب من غير صلاحية ا
   const refreshed = await request(user, 'POST', '/payroll/live/refresh')
   assert.equal(refreshed.status, 201)
   // الحساب اتعمل فعلًا، والرد أعداد بس
-  assert.deepEqual(refreshed.body, { employees: 1, computed: totalDays, reused: 0, disabled: false, remaining: 0, preview: null })
+  assert.deepEqual(refreshed.body, { employees: 1, computed: totalDays, reused: 0, disabled: false, remaining: 0, failed: 0, preview: null })
   const text = JSON.stringify(refreshed.body)
   for (const hidden of [emp.fullName, emp.employeeCode, branch.name, 'earned', 'estimatedNet', '11100', '370']) assert.equal(text.includes(hidden), false, hidden)
   // قارئ الرواتب في نفس الفرع بيشوف اللي اتحسب، وبياخد المعاينة في رد التحديث
@@ -574,7 +574,8 @@ test('LV-12 (CRP2B-C-B02): الإقفال بيتفحص جوه المعاملة �
     const started = Date.now()
     await assert.rejects(accrual.refreshEmployee(emp.id), /عملية مالية جارية/)
     const skipped = await accrual.refreshLive([emp.id])
-    assert.deepEqual([skipped.employees, skipped.computed, skipped.remaining], [0, 0, 0])
+    // CRP2C-C-N01: الموظف اللي اتخطّى بيتعدّ في المتبقي (مابيختفيش كأنه اتحسب)
+    assert.deepEqual([skipped.employees, skipped.computed, skipped.remaining, skipped.failed], [0, 0, 1, 1])
     assert.ok(Date.now() - started < 9000, `شغل الخلفية مااستناش مهلة العمليات المالية الكاملة: ${Date.now() - started} مللي`)
     assert.equal(Number((await accrualSums(emp)).dirtyDays), 1)
     await holder.commitTransaction()
@@ -583,4 +584,44 @@ test('LV-12 (CRP2B-C-B02): الإقفال بيتفحص جوه المعاملة �
     if (holder.isTransactionActive) await holder.rollbackTransaction().catch(() => undefined)
     await holder.release()
   }
+})
+
+test('LV-13 (CRP2C-C-N01): الموظف اللي عليه عملية مالية شغالة بيتعدّ «فاضل» في التحديث — من المعاينة، ومن تراكم المسير، ومن مهمة الليل', async t => {
+  if (!D.late) { t.skip('الفترة الجارية لسه مفيهاش يوم شغل فات'); return }
+  const { branch, emp, user } = await isolated('LVH', ['payroll.view', 'payroll.calculate'])
+  const totalDays = dates(win.startDate, win.upTo).length
+  const hold = async () => {
+    const holder = ds.createQueryRunner()
+    await holder.connect(); await holder.startTransaction()
+    const [lock] = await holder.query(`DECLARE @result int; EXEC @result = sys.sp_getapplock @Resource = @0, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 0;
+      SELECT @result AS [lockResult];`, [`hr:employee-finance:${emp.id}`])
+    assert.ok(Number(lock.lockResult) >= 0)
+    return holder
+  }
+  const release = async holder => { if (holder.isTransactionActive) await holder.rollbackTransaction().catch(() => undefined); await holder.release() }
+
+  // (أ) زرار المعاينة — حالة المراجعة بالحرف: الموظف مشغول، فالرد بيقول إنه فاضل وماتحسبش (مش «remaining: 0»)
+  let holder = await hold()
+  try {
+    const busy = ok(await request(user, 'POST', '/payroll/live/refresh'), 201)
+    assert.deepEqual([busy.computed, busy.remaining, busy.failed, busy.preview.counts.pending], [0, 1, 1, 1])
+    assert.equal((await accrualRows(emp)).length, 0, 'ولا صف اتكتب')
+  } finally { await release(holder) }
+  const retry = ok(await request(user, 'POST', '/payroll/live/refresh'), 201)
+  assert.deepEqual([retry.computed, retry.remaining, retry.failed, retry.preview.counts.pending], [totalDays, 0, 0, 0])
+
+  // (ب) تراكم المسير المفتوح (زرار «حدّث الحساب» في شاشة المسير): نفس العدّ
+  const run = await repo('PayrollRun').save({ name: 'مسير موظف مشغول', period: win.period, startDate: win.startDate, endDate: win.endDate, branchId: branch.id, scopeType: 'CUSTOM',
+    employeeIds: JSON.stringify([emp.id]), runType: 'REGULAR', status: 'CALCULATED', totalNet: 0 })
+  await markDirty(emp, D.late)
+  holder = await hold()
+  try {
+    const busy = await accrual.refreshDirty(run.id)
+    assert.deepEqual([busy.employees, busy.computed, busy.failed], [1, 0, 1])
+    // (ج) مهمة الليل بتعدّه برضه (وبتكمّل باقي الموظفين)
+    assert.ok((await accrual.accrueOpenRuns()).failed >= 1)
+  } finally { await release(holder) }
+  const done = await accrual.refreshDirty(run.id)
+  assert.deepEqual([done.computed, done.failed], [1, 0])
+  await repo('PayrollRun').update({ id: run.id }, { status: 'CANCELLED' })
 })

@@ -246,7 +246,7 @@ test('FU-08 (CRP2B-A-B01): الرفع الفعلي — نوع ماكرو بتص�
   const MACRO = 'application/vnd.ms-word.document.macroEnabled.main+xml', MAIN = 'word/document.xml'
   const override = type => `<Override PartName="/${MAIN}" ContentType="${type}"/>`
   const types = inner => `${TYPES_OPEN}${inner}</Types>`
-  const word = options => officePackage(MAIN, WORD_MAIN, { body: '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>', deflate: true, ...options })
+  const word = options => officePackage(MAIN, WORD_MAIN, { deflate: true, ...options })
   await setConfig('files.allowed_types', 'docx')
   try {
     const [rows, files] = [await rowCount(), diskFiles()]
@@ -292,6 +292,60 @@ test('FU-08 (CRP2B-A-B01): الرفع الفعلي — نوع ماكرو بتص�
     }
     assert.deepEqual([await rowCount(), diskFiles()], [rows, files])
     assert.equal((await upload(users.me, oldWord(), 'old.doc')).status, 201)
+  } finally { await setConfig('files.allowed_types', 'jpeg,png,webp,pdf,doc,docx,xls,xlsx') }
+})
+
+test('FU-09 (CRP2C-A-B01): الرفع الفعلي — تيار Word من غير بايتات تتقري، أو قطاع بيشاور على نفسه، أو محتواه مش Word = مرفوض؛ وملف تعريف مش XML سليم مرفوض', async () => {
+  const { ole, oleEntryOffset, wordPackage, contentTypes, WORD_MAIN, OLE_END } = require('./fixtures/office-containers.cjs')
+  await setConfig('files.allowed_types', 'doc')
+  try {
+    const [rows, files] = [await rowCount(), diskFiles()]
+    const small = () => ole([{ name: 'WordDocument', size: 300 }]), regular = () => ole(['WordDocument'])
+    const entry = oleEntryOffset(1), rootEntry = oleEntryOffset(0), first = regular().readUInt32LE(entry + 116)
+    const patched = (make, change) => { const copy = Buffer.from(make()); change(copy); return copy }
+    // حالات المراجعة بالحرف: التيار الصغير من غير بداية، ومن غير جدول القطاعات المصغّرة، ومن غير بيانات الجذر، وبداية برّه الجذر، وقطاع بيشاور على نفسه
+    const refused = [
+      ['stream-has-no-start.doc', patched(small, copy => copy.writeUInt32LE(OLE_END, entry + 116))],
+      ['mini-fat-absent.doc', patched(small, copy => { copy.writeUInt32LE(OLE_END, 60); copy.writeUInt32LE(0, 64) })],
+      ['root-data-absent.doc', patched(small, copy => copy.writeUInt32LE(OLE_END, rootEntry + 116))],
+      ['stream-start-outside-root.doc', patched(small, copy => copy.writeUInt32LE(123456, entry + 116))],
+      ['looping-data.doc', patched(regular, copy => copy.writeUInt32LE(first, 512 + first * 4))],
+      // نفس الصنف: حلقة في السلسلة المصغّرة، وتيار بيتقري ومحتواه مش Word، واسم مكرر في الجذر
+      ['mini-loop.doc', patched(small, copy => copy.writeUInt32LE(0, copy.length - 512))],
+      ['not-word-content.doc', ole([{ name: 'WordDocument', head: [0x4d, 0x5a, 0x90, 0x00] }])],
+      ['duplicate-name.doc', ole(['WordDocument', { name: 'WordDocument', kind: 'storage' }])],
+    ]
+    for (const [name, bytes] of refused) {
+      const response = await upload(users.me, bytes, name)
+      assert.equal(response.status, 400, `${name}: ${JSON.stringify(response.body)}`)
+      assert.match(messageOf(response), /محتوى الملف مش من الأنواع المسموحة/, name)
+    }
+    assert.deepEqual([await rowCount(), diskFiles()], [rows, files], 'ولا صف ولا ملف اتكتب')
+    // السليم: تيار صغير (في التيار المصغّر) وتيار عادي
+    for (const [name, bytes] of [['valid-small.doc', small()], ['valid.doc', regular()]]) {
+      const response = await upload(users.me, bytes, name)
+      assert.equal(response.status, 201, `${name}: ${JSON.stringify(response.body)}`)
+      assert.equal(response.body.mime, 'application/msword')
+    }
+  } finally { await setConfig('files.allowed_types', 'jpeg,png,webp,pdf,doc,docx,xls,xlsx') }
+  await setConfig('files.allowed_types', 'docx')
+  try {
+    const [rows, files] = [await rowCount(), diskFiles()]
+    const good = contentTypes(['word/document.xml', WORD_MAIN])
+    // حالتي المراجعة بالحرف (وسم إقفال باسم تاني، ونص بعد الجذر)، ونفس الصنف: جزء رئيسي مش مستند Word
+    for (const [name, bytes] of [['mismatched-root.docx', wordPackage({ types: good.replace('</Types>', '</NotTypes>') })],
+      ['trailing-content.docx', wordPackage({ types: good + 'THIS IS NOT XML' })],
+      ['text-inside.docx', wordPackage({ types: good.replace('<Override', 'x<Override') })],
+      ['not-a-document.docx', wordPackage({ body: 'MZ this is not a Word document', deflate: true })],
+      ['wrong-root.docx', wordPackage({ body: '<html xmlns="http://www.w3.org/1999/xhtml"/>' })]]) {
+      const response = await upload(users.me, bytes, name)
+      assert.equal(response.status, 400, `${name}: ${JSON.stringify(response.body)}`)
+      assert.match(messageOf(response), /محتوى الملف مش من الأنواع المسموحة \(Word\)/, name)
+    }
+    assert.deepEqual([await rowCount(), diskFiles()], [rows, files])
+    for (const [name, bytes] of [['minimal.docx', wordPackage({ deflate: true })], ['library.docx', await docx()]]) {
+      assert.equal((await upload(users.me, bytes, name)).status, 201, name)
+    }
   } finally { await setConfig('files.allowed_types', 'jpeg,png,webp,pdf,doc,docx,xls,xlsx') }
 })
 

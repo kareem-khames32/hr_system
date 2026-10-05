@@ -27,6 +27,8 @@ require(path.join(apiRoot, 'node_modules', 'reflect-metadata'))
 const { DataSource } = require(path.join(apiRoot, 'node_modules', 'typeorm'))
 
 const src = (...parts) => require(path.join(apiRoot, 'src', ...parts))
+// CRP2C-D-N01: نفس تصليح دقة الأعمدة العشرية بتاع التطبيق — الاتصال هنا مابيعدّيش على app.module
+src('common', 'typeorm-mssql-output-precision')
 const { DirectoryService } = src('auth', 'directory.service')
 const { DomainLoginService } = src('auth', 'domain-login.service')
 const { DomainSyncService, DOMAIN_SYNC_ACTIONS } = src('auth', 'domain-sync.service')

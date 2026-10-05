@@ -39,6 +39,12 @@ test('LV-UI-02: تاب «لحد امبارح» في شاشة الرواتب — 
   assert.match(tab, /if \(busy\) return/)
   // كل طلب بميزانية وقت: الشاشة بتكمّل طول ما فيه باقي، وبتقف لو جولة ماحسبتش حاجة (مفيش حلقة للأبد)
   assert.match(tab, /if \(!\(result\.remaining > 0\) \|\| result\.computed === 0\) break/)
+  // CRP2C-C-N01: لو فاضل موظفين ماتحسبوش (عليهم عملية مالية شغالة) الشاشة بتقول كده، مش «كل الأيام محسوبة»
+  assert.match(tab, /left = result\.remaining/)
+  assert.ok(tab.indexOf('if (left > 0) setNotice(') > 0 && tab.indexOf('if (left > 0) setNotice(') < tab.indexOf("'كل الأيام محسوبة، مفيش حاجة جديدة'"))
+  assert.match(tab, /فاضل \$\{left\} موظف ماتحسبلهمش دلوقتي/)
+  assert.match(read('src/lib/payroll-live-api.ts'), /remaining: number; failed: number; preview/)
+  assert.match(read('src/app/payroll/page.tsx'), /if \(result\.failed > 0\) setError\(/)
   assert.match(read('api/src/payroll/payroll-live.service.ts'), /refreshLive\(pending, \{ budgetMs: PAYROLL_LIVE_REFRESH_BUDGET_MS \}\)/)
   assert.match(tab, /disabled=\{loading \|\| busy\}/)
   // الموظف اللي لسه ماتحسبش أو عليه يوم محتاج إعادة حساب أو ناقصه أيام باين

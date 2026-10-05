@@ -413,7 +413,8 @@ export class PayrollDailyAccrualService implements OnModuleInit {
     const yesterday = new Date(Date.parse(`${today}T12:00:00Z`) - 86400000).toISOString().slice(0, 10)
     const to = [options.upTo ?? yesterday, run.endDate].sort()[0]
     const from = options.from && options.from > run.startDate ? options.from : run.startDate
-    const totals = { runId: run.id, employees: 0, days: 0, computed: 0, reused: 0 }
+    // failed = موظفين ماتحسبلهمش في المرة دي (عليهم عملية مالية شغالة، أو حسابهم وقف بخطأ): أيامهم بتفضل ناقصة أو متعلّمة للمرة الجاية
+    const totals = { runId: run.id, employees: 0, days: 0, computed: 0, reused: 0, failed: 0 }
     if (from > to) return totals
     const employeeIds = await this.runEmployeeIds(this.runs.manager, run)
     totals.employees = employeeIds.length
@@ -427,6 +428,7 @@ export class PayrollDailyAccrualService implements OnModuleInit {
         totals.reused += result.reused
         totals.days += result.computed + result.reused
       } catch (error) {
+        totals.failed++
         this.logger.warn(`تعذر تراكم أيام موظف في المسير ${run.id}: ${(error as Error).message}`)
       }
     }
@@ -437,10 +439,10 @@ export class PayrollDailyAccrualService implements OnModuleInit {
   // مسير واحد في المرة (بلا deadlock)، آمن لإعادة التشغيل، وبيسجل أعداد بس.
   async accrueOpenRuns(options: { upTo?: string; period?: string } = {}) {
     return this.exclusive(async () => {
-      if (!await this.accrualTableReady(this.runs.manager)) return { runs: 0, computed: 0, reused: 0, disabled: true, employees: 0 }
-      if ((await this.cfg(PAYROLL_ACCRUAL_ENABLED_KEY, 'true')) !== 'true') return { runs: 0, computed: 0, reused: 0, disabled: true, employees: 0 }
+      if (!await this.accrualTableReady(this.runs.manager)) return { runs: 0, computed: 0, reused: 0, disabled: true, employees: 0, failed: 0 }
+      if ((await this.cfg(PAYROLL_ACCRUAL_ENABLED_KEY, 'true')) !== 'true') return { runs: 0, computed: 0, reused: 0, disabled: true, employees: 0, failed: 0 }
       const runs = await this.openRuns(this.runs.manager, options.period ?? null)
-      const totals = { runs: 0, computed: 0, reused: 0, disabled: false, employees: 0 }
+      const totals = { runs: 0, computed: 0, reused: 0, disabled: false, employees: 0, failed: 0 }
       for (const run of runs) {
         // المسير ممكن يكون اتعتمد بين القراءة والتنفيذ — نتأكد تحت القفل
         const fresh = await this.runs.findOne({ where: { id: run.id } })
@@ -449,6 +451,7 @@ export class PayrollDailyAccrualService implements OnModuleInit {
         totals.runs++
         totals.computed += result.computed
         totals.reused += result.reused
+        totals.failed += result.failed
       }
       // B1.14 (الراتب الحي): باقي الموظفين النشطين — اللي لسه مالهمش مسير للفترة الجارية — بيتحسب لهم يوم بيوم برضه، فمعاينة الفترة
       // ماتستناش حد يعمل مسير. ورا payroll.live_accrual_all (false = موظفو المسيرات المفتوحة بس، زي الأول)
@@ -459,6 +462,7 @@ export class PayrollDailyAccrualService implements OnModuleInit {
           totals.employees = rest.employees
           totals.computed += rest.computed
           totals.reused += rest.reused
+          totals.failed += rest.failed
         }
       }
       return totals
@@ -483,7 +487,7 @@ export class PayrollDailyAccrualService implements OnModuleInit {
    * بيتقرا والناقص والمتسخ بس بيتحسب، فالتكرار آمن. ولما يتعمل مسير للفترة بيقرا الصفوف دي (نفس المفتاح: موظف وفترة ويوم).
    */
   private async accrueEmployeesIn(employeeIds: readonly number[], window: PayrollLiveWindow) {
-    const totals = { employees: 0, computed: 0, reused: 0 }
+    const totals = { employees: 0, computed: 0, reused: 0, failed: 0 }
     if (window.startDate > window.upTo) return totals
     const basis = await this.deductionBasis(this.runs.manager)
     for (const employeeId of employeeIds) {
@@ -495,6 +499,7 @@ export class PayrollDailyAccrualService implements OnModuleInit {
         totals.computed += result.computed
         totals.reused += result.reused
       } catch (error) {
+        totals.failed++
         this.logger.warn(`تعذر تراكم أيام الموظف ${employeeId} للفترة ${window.period}: ${(error as Error).message}`)
       }
     }
@@ -519,10 +524,12 @@ export class PayrollDailyAccrualService implements OnModuleInit {
    * قبل الترحيل أو والتراكم مقفول بالإعداد: مفيش حاجة تتعمل.
    * budgetMs: الطلب مايبدأش موظف جديد بعد المدة دي (أول حساب لفرع كبير بياخد دقايق) وبيرجّع `remaining` = اللي لسه ماتحسبلهمش،
    * والشاشة بتكمّل بطلب تاني. موظف واحد على الأقل في كل طلب، فالتقدّم مضمون.
+   * CRP2C-C-N01 (مراجعة Codex): الموظف اللي ماتحسبش (عليه عملية مالية شغالة، أو حسابه وقف بخطأ) بيتعدّ في `failed` وفي `remaining` —
+   * مابيختفيش كأنه اتحسب، والشاشة بتقول إنه فاضل.
    */
   async refreshLive(employeeIds: readonly number[], options: { budgetMs?: number } = {}) {
     return this.exclusive(async () => {
-      const totals = { employees: 0, computed: 0, reused: 0, disabled: false, remaining: 0 }
+      const totals = { employees: 0, computed: 0, reused: 0, disabled: false, remaining: 0, failed: 0 }
       if (!await this.accrualTableReady(this.runs.manager) || (await this.cfg(PAYROLL_ACCRUAL_ENABLED_KEY, 'true')) !== 'true') return { ...totals, disabled: true }
       const window = await this.liveWindow()
       const wanted = new Set(employeeIds)
@@ -549,10 +556,13 @@ export class PayrollDailyAccrualService implements OnModuleInit {
             this.accrueEmployeeRange(em, { ...item, today: window.today, basis, background: true })))
           totals.employees++; totals.computed += result.computed; totals.reused += result.reused
         } catch (error) {
+          totals.failed++
           this.logger.warn(`تعذر تراكم أيام الموظف ${item.employeeId} للفترة ${item.period}: ${(error as Error).message}`)
         }
         if (deadline !== null && Date.now() >= deadline) { totals.remaining = work.length - index - 1; break }
       }
+      // اللي لسه مادخلش عليهم الدور + اللي دخل عليهم وماتحسبوش
+      totals.remaining += totals.failed
       return totals
     })
   }

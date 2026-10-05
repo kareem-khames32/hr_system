@@ -21,7 +21,7 @@ export interface PayrollLivePreview {
 export const fetchPayrollLive = () => apiFetch<PayrollLivePreview>('/payroll/live')
 /** طلب واحد بيحسب لحد ~20 ثانية؛ remaining = موظفين لسه ماتحسبلهمش (الشاشة بتكمّل بطلب تاني). preview = null لحساب من غير صلاحية عرض الرواتب */
 export const refreshPayrollLive = () =>
-  apiFetch<{ employees: number; computed: number; reused: number; disabled: boolean; remaining: number; preview: PayrollLivePreview | null }>('/payroll/live/refresh', { method: 'POST' })
+  apiFetch<{ employees: number; computed: number; reused: number; disabled: boolean; remaining: number; failed: number; preview: PayrollLivePreview | null }>('/payroll/live/refresh', { method: 'POST' })
 
 export interface MyLiveSalaryDay {
   date: string; status: string | null; lateMinutes: number; shortfallMinutes: number; overtimeMinutes: number

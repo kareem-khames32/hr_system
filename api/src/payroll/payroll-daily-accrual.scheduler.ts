@@ -58,5 +58,7 @@ export class PayrollDailyAccrualScheduler {
     if (totals.computed > 0 || totals.runs > 0) {
       this.logger.log(`${label}: ${totals.runs} مسير مفتوح — ${totals.computed} يوم-موظف اتحسب، ${totals.reused} متراكم جاهز`)
     }
+    // موظف ماتحسبش (عليه عملية مالية شغالة أو حسابه وقف): أيامه بتتحسب في التشغيل الجاي (اللحاق 10:15 أو الليلة الجاية)
+    if (totals.failed > 0) this.logger.warn(`${label}: ${totals.failed} موظف ماتحسبلهمش في المرة دي — هيتحسبوا في التشغيل الجاي`)
   }
 }

@@ -478,6 +478,8 @@ export default function PayrollPage() {
     try {
       const result = await refreshPayrollRunAccrual(runDetail.id)
       setAccrual(result.accrual)
+      // موظف عليه عملية مالية شغالة دلوقتي مابيتحسبش في نفس اللحظة: بيتقال بدل ما يعدّي في صمت
+      if (result.failed > 0) setError(`${result.failed} موظف ماتحسبلهمش دلوقتي (عليهم عملية مالية شغالة) — جرّب «حدّث الحساب» تاني بعد شوية`)
     } catch (e) {
       setError(payrollRunErrorMessage(e, 'تعذر تحديث حساب الأيام'))
     } finally {

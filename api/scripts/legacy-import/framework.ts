@@ -37,6 +37,8 @@
 // (رسائل flag بلا أسماء/هويات/أرقام جوال — المعرّف القديم يكفي؛ الملف المرفق: rawFilePath(key, id).)
 
 import 'reflect-metadata'
+// CRP2C-D-N01: نفس تصليح دقة الأعمدة العشرية بتاع التطبيق — الاتصال هنا مابيعدّيش على app.module
+import '../../src/common/typeorm-mssql-output-precision'
 import * as dotenv from 'dotenv'
 import * as fs from 'fs'
 import * as os from 'os'

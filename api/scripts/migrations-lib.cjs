@@ -7,6 +7,8 @@ require('../node_modules/ts-node').register({ project: path.join(apiRoot, 'tscon
 require('../node_modules/reflect-metadata')
 const sql = require('../node_modules/mssql')
 const { DataSource, getMetadataArgsStorage } = require('../node_modules/typeorm')
+// CRP2C-D-N01: نفس تصليح دقة الأعمدة العشرية بتاع التطبيق — الاتصال هنا مابيعدّيش على app.module
+require('../src/common/typeorm-mssql-output-precision')
 const env = require('../node_modules/dotenv').parse(fs.readFileSync(path.join(apiRoot, '.env')))
 const excludedTables = ['payroll_runs', 'payroll_items', 'payroll_run_members', 'lateness_tiers']
 function identifier(value) {
