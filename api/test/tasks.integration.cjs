@@ -24,6 +24,8 @@
 //         والمهمة بتفضل في الفرع اللي اتكلّف فيه لو مسؤولها اتنقل، والمدير المباشر من غير قيد فرع.
 //  TK-16) طلبات متزامنة أكتر من اتصالات المجمّع: كل طلب على اتصال معاملته.
 //  TK-17) مدير ليه آلاف المرؤوسين (فوق حد معاملات SQL Server): «فريقي» وقايمة التكليف و«مهامي» شغالين.
+//  TK-18) مهمة مسوغات التعيين في «مهامي» حالتها من المستندات دلوقتي، وبتتعمل لو ناقصة، من غير ما شاشة التهيئة تتفتح الأول (CRP2G-N01).
+//  (CRP2G-N02 في TK-10 وTK-14: حدث التذكير والتأخير بيشيل رقم ختمه، ورسالة الجيل القديم مابتطلعش بعد ما المهمة تتختم تاني.)
 // Run (من api/): node --test test/tasks.integration.cjs
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
@@ -627,7 +629,10 @@ test('TK-10: التذكير والتصعيد مرة واحدة لكل مهمة �
   const counts = async task => [(await eventsOf('TASK_DUE_SOON', task.id)).length, (await eventsOf('TASK_OVERDUE', task.id)).length]
   assert.deepEqual([await counts(far), await counts(soon), await counts(today), await counts(late), await counts(veryLate), await counts(closed)],
     [[0, 0], [1, 0], [1, 0], [0, 0], [0, 1], [0, 0]])
-  assert.deepEqual(JSON.parse((await eventsOf('TASK_OVERDUE', veryLate.id))[0].payload), { taskId: veryLate.id, branchId: org.branchA.id })
+  // الحدث بمراجع بس، ومعاها رقم ختم المهمة اللي اتسجّل معاه زي ما القاعدة بترجّعه — الجيل اللي الرسالة بتاعته (CRP2G-N02)
+  const stampOf = async (task, column) => (await repo('Task').findOneByOrFail({ id: task.id }))[column].getTime()
+  assert.deepEqual(JSON.parse((await eventsOf('TASK_OVERDUE', veryLate.id))[0].payload), { taskId: veryLate.id, branchId: org.branchA.id, stamp: await stampOf(veryLate, 'escalatedAt') })
+  assert.deepEqual(JSON.parse((await eventsOf('TASK_DUE_SOON', soon.id))[0].payload), { taskId: soon.id, branchId: org.branchA.id, stamp: await stampOf(soon, 'remindedAt') })
   // مرة واحدة: تشغيل تاني مابيكررش
   assert.deepEqual(await tasksService.runReminders(), { reminded: 0, escalated: 0 })
   // تشغيلين في نفس اللحظة: كل مهمة بتتذكّر وتتصعّد مرة واحدة (الحكم تحت قفل صفها)
@@ -903,6 +908,86 @@ test('TK-14: إشعارات المهام بالبريد — تكليف وتذك�
   assert.deepEqual((await deliveries(gone.id)).map(row => [row.status, row.detail]), [['SKIPPED', 'المهمة اتقفلت أو اتلغت']])
   expectStatus(await request(users.w2, 'PATCH', '/notifications/preferences', { category: 'task', channel: 'EMAIL', mode: 'ON' }), 200)
 
+  // ===== جيل الرسالة (CRP2G-N02): الموعد اتغيّر والمهمة اتختمت تاني، والحدث الجديد لسه مااتوزّعش — الرسالة القديمة بموعدها القديم مابتطلعش =====
+  const emailRows = (taskId, code) => query(`SELECT d.[id], d.[status] FROM [notification_deliveries] d INNER JOIN [notifications] n ON n.[id] = d.[notificationId]
+    WHERE n.[entityType] = N'task' AND n.[entityId] = @0 AND n.[eventCode] = @1 AND d.[channel] = N'EMAIL' ORDER BY d.[id]`, [String(taskId), code])
+  for (const mode of ['ON', 'DIGEST']) {
+    const rearmed = await create(users.hrA, { title: `موعدها هيتغيّر وتتختم تاني (${mode})`, assigneeEmployeeId: emps.w2.id, dueDate: day(0) })
+    await drain()
+    expectStatus(await request(users.w2, 'PATCH', '/notifications/preferences', { category: 'task', channel: 'EMAIL', mode }), 200)
+    assert.deepEqual(await tasksService.runReminders(), { reminded: 1, escalated: 0 })
+    // توزيع الحدث بس: الإشعار اتعمل والبريد لسه ماطلعش (مهمته في الطابور، أو مستني الملخص)
+    await queue.runOnce({ limit: 200 })
+    const [first] = await emailRows(rearmed.id, 'task.due_soon')
+    assert.equal(first.status, mode === 'ON' ? 'PENDING' : 'DIGEST')
+    expectStatus(await request(users.hrA, 'PATCH', `/tasks/${rearmed.id}`, { dueDate: day(1) }), 200)
+    assert.deepEqual(await tasksService.runReminders(), { reminded: 1, escalated: 0 })
+    mailbox.sent.length = 0
+    if (mode === 'ON') await notifications.sendEmail(String(first.id), { attempt: 1, maxAttempts: 10 })
+    else assert.equal(await notifications.sendDigests(), 0)
+    assert.equal(mailbox.sent.length, 0, 'الرسالة القديمة ماطلعتش')
+    assert.deepEqual((await byCode(rearmed.id, 'task.due_soon')).map(row => row.slice(1)), [['SKIPPED', 'موعد المهمة اتغيّر بعد تجهيز الرسالة']])
+    // الحدث الجديد لما يتوزّع: رسالته بالموعد الجديد
+    await drain()
+    if (mode === 'DIGEST') assert.equal(await notifications.sendDigests(), 1)
+    const fresh = mailbox.sent.filter(message => message.to === 'w2@tasks.invalid')
+    assert.ok(fresh.length === 1 && fresh[0].text.includes(mode === 'ON' ? day(1) : `task=${rearmed.id}`) && !fresh[0].text.includes(day(0)), JSON.stringify(fresh.map(message => message.subject)))
+    await repo('Task').update({ id: rearmed.id }, { status: 'CANCELLED' })
+  }
+  expectStatus(await request(users.w2, 'PATCH', '/notifications/preferences', { category: 'task', channel: 'EMAIL', mode: 'ON' }), 200)
+
+  // ونفس الشيء لـ«متأخرة»: المهمة اتحوّلت لمرؤوس تاني واتختمت تاني قبل توزيع الحدث الجديد — الرسالة القديمة باسم المسؤول القديم مابتطلعش
+  const relayed = await create(users.hrA, { title: 'متأخرة واتحوّلت واتختمت تاني', assigneeEmployeeId: emps.w1.id })
+  await drain()
+  await repo('Task').update({ id: relayed.id }, { dueDate: day(-9) })
+  assert.deepEqual(await tasksService.runReminders(), { reminded: 0, escalated: 1 })
+  await queue.runOnce({ limit: 200 })
+  const [firstLate] = await emailRows(relayed.id, 'task.overdue')
+  assert.equal(firstLate.status, 'PENDING')
+  expectStatus(await request(users.hrA, 'PATCH', `/tasks/${relayed.id}`, { assigneeEmployeeId: emps.w2.id }), 200)
+  assert.deepEqual(await tasksService.runReminders(), { reminded: 0, escalated: 1 })
+  mailbox.sent.length = 0
+  await notifications.sendEmail(String(firstLate.id), { attempt: 1, maxAttempts: 10 })
+  assert.equal(mailbox.sent.length, 0, 'الرسالة القديمة ماطلعتش')
+  assert.deepEqual((await byCode(relayed.id, 'task.overdue')).map(row => row.slice(1)), [['SKIPPED', 'المهمة اتحوّلت أو موعدها اتغيّر بعد تجهيز الرسالة']])
+  await drain()
+  const renewed = mailbox.sent.filter(message => message.subject === 'مهمة متأخرة: متأخرة واتحوّلت واتختمت تاني')
+  assert.ok(renewed.length === 1 && renewed[0].to === 'manager@tasks.invalid' && renewed[0].text.includes(emps.w2.fullName) && !renewed[0].text.includes(emps.w1.fullName),
+    JSON.stringify(mailbox.sent.map(message => [message.to, message.subject])))
+
+  // حدث من جيل قديم اتوزّع متأخر (بعد ما الموعد اتغيّر والمهمة اتختمت تاني): مابيعملش إشعار، والجيل الجديد رسالة واحدة بموعدها
+  const queued = await create(users.hrA, { title: 'حدثها القديم هيتوزّع متأخر', assigneeEmployeeId: emps.w1.id, dueDate: day(1) })
+  await drain()
+  assert.deepEqual(await tasksService.runReminders(), { reminded: 1, escalated: 0 })
+  expectStatus(await request(users.hrA, 'PATCH', `/tasks/${queued.id}`, { dueDate: day(0) }), 200)
+  assert.deepEqual(await tasksService.runReminders(), { reminded: 1, escalated: 0 })
+  mailbox.sent.length = 0
+  await drain()
+  assert.deepEqual(sent(), [['w1@tasks.invalid', 'موعد مهمتك قرّب: حدثها القديم هيتوزّع متأخر']])
+  assert.deepEqual((await byCode(queued.id, 'task.due_soon')).map(row => row.slice(1)), [['SENT', null]])
+  assert.ok(mailbox.sent[0].text.includes(day(0)) && !mailbox.sent[0].text.includes(day(1)), mailbox.sent[0].text)
+
+  // حدث قديم من غير ختم (اتسجّل قبل CRP2G): لسه بيتبعت طول ما المهمة عليها ختم
+  const legacy = await create(users.hrA, { title: 'حدث قديم من غير ختم', assigneeEmployeeId: emps.w1.id, dueDate: day(1) })
+  await drain()
+  assert.deepEqual(await tasksService.runReminders(), { reminded: 1, escalated: 0 })
+  await query(`UPDATE [outbox_events] SET [payload] = @0 WHERE [eventType] = N'TASK_DUE_SOON' AND [entityType] = N'task' AND [entityId] = @1`,
+    [JSON.stringify({ taskId: legacy.id, branchId: org.branchA.id }), String(legacy.id)])
+  mailbox.sent.length = 0
+  await drain()
+  assert.deepEqual(sent(), [['w1@tasks.invalid', 'موعد مهمتك قرّب: حدث قديم من غير ختم']])
+  // ولو ختم المهمة اتشال بعده (الموعد اتأجّل): الحدث القديم مابيعملش إشعار
+  const legacyMoved = await create(users.hrA, { title: 'حدث قديم وموعدها اتأجّل', assigneeEmployeeId: emps.w1.id, dueDate: day(1) })
+  await drain()
+  assert.deepEqual(await tasksService.runReminders(), { reminded: 1, escalated: 0 })
+  await query(`UPDATE [outbox_events] SET [payload] = @0 WHERE [eventType] = N'TASK_DUE_SOON' AND [entityType] = N'task' AND [entityId] = @1`,
+    [JSON.stringify({ taskId: legacyMoved.id, branchId: org.branchA.id }), String(legacyMoved.id)])
+  expectStatus(await request(users.hrA, 'PATCH', `/tasks/${legacyMoved.id}`, { dueDate: day(7) }), 200)
+  mailbox.sent.length = 0
+  await drain()
+  assert.deepEqual([mailbox.sent.length, await byCode(legacyMoved.id, 'task.due_soon')], [0, []])
+  for (const row of [relayed, queued, legacy, legacyMoved]) await repo('Task').update({ id: row.id }, { status: 'CANCELLED' })
+
   // اختيار المستخدم: قافل بريد فئة المهام
   mailbox.sent.length = 0
   expectStatus(await request(users.w1, 'PATCH', '/notifications/preferences', { category: 'task', channel: 'EMAIL', mode: 'OFF' }), 200)
@@ -1059,4 +1144,64 @@ test('TK-17: مدير ليه آلاف المرؤوسين (فوق حد معامل
   assert.deepEqual([crowded.tasks.length, crowded.tasks[0].id, crowded.counts], [500, urgent, { open: 500, overdue: 1 }])
   const crowdedTeam = expectStatus(await request(boss, 'GET', '/tasks/team'), 200).tasks
   assert.deepEqual([crowdedTeam.length, crowdedTeam.some(entry => entry.id === urgent), crowdedTeam.some(entry => entry.id === task.id)], [500, true, false])
+})
+
+test('TK-18: مهمة مسوغات التعيين في «مهامي» حالتها من المستندات دلوقتي — من غير ما شاشة التهيئة تتفتح الأول', async () => {
+  const hiring = on => repo('DocType').update({ code: 'TK_HIRING' }, { requiredForHiring: on })
+  const systemTask = employeeId => repo('OnboardingTask').findOne({ where: { employeeId, systemKey: 'HIRING_DOCS' } })
+  const hrParty = await account('hr-party', 'employee', ['approve.hr'])
+  const hrPartyB = await account('hr-party-b', 'employee', ['approve.hr'], { branchId: org.branchB.id })
+  const hrTasksOf = async (user, employeeId) => (await mine(user)).onboarding.filter(row => row.employeeId === employeeId && row.party === 'hr').map(row => row.taskId)
+  await setting('onboarding.window_days', '90')
+  await hiring(true)
+  try {
+    // نوع مطلوب وقت التعيين: مهمة النظام على الموارد البشرية، وفي «مهامي» بتاعة حامل جهتها في فرع الموظف بس
+    const hired = await employee({ joinDate: day(0) })
+    await onboarding.materializeHired(hired.id)
+    const system = await systemTask(hired.id)
+    assert.deepEqual([system.party, system.status], ['hr', 'PENDING'])
+    assert.ok((await hrTasksOf(hrParty, hired.id)).includes(system.id))
+    assert.deepEqual(await hrTasksOf(hrPartyB, hired.id), [])
+    // النوع مابقاش مطلوب: المهمة بتكتمل لوحدها وتطلع من «مهامي» — من غير فتح الشاشة
+    await hiring(false)
+    assert.equal((await hrTasksOf(hrParty, hired.id)).includes(system.id), false)
+    assert.equal((await systemTask(hired.id)).status, 'DONE')
+    // رجع مطلوب (CRP2G-N01): المهمة بترجع في «مهامي» وعدّادها من غير ما حد يفتح شاشة التهيئة
+    await hiring(true)
+    const back = await mine(hrParty)
+    assert.ok(back.onboarding.some(row => row.taskId === system.id))
+    assert.equal(back.counts.open, back.tasks.length + back.onboarding.length + back.clearance.length)
+    assert.deepEqual(expectStatus(await request(hrParty, 'GET', '/tasks/mine/count'), 200), back.counts)
+    assert.equal((await systemTask(hired.id)).status, 'PENDING')
+    // وده نفس اللي شاشة التهيئة بتقوله
+    const onScreen = expectStatus(await request(hrParty, 'GET', '/onboarding'), 200).employees.find(row => row.id === hired.id).tasks.find(row => row.id === system.id)
+    assert.deepEqual([onScreen.status, onScreen.canAct], ['PENDING', true])
+
+    // نوع بقى مطلوب لأول مرة ومهمة النظام لسه مااتعملتش: بتتعمل للي شاشة التهيئة بتعرضهم في نطاق حامل الجهة
+    await hiring(false)
+    const later = await employee({ joinDate: day(0) }), lingering = await employee({ joinDate: day(-200) }), settled = await employee({ joinDate: day(-200) })
+    const abroad = await employee({ joinDate: day(0), branchId: org.branchB.id })
+    // جديد لسه مالوش ولا مهمة (القالب مااتنسخش له)، وجديد انتهت خدمته
+    const bare = await employee({ joinDate: day(0) }), departed = await employee({ joinDate: day(0), status: 'terminated', isActive: false })
+    for (const person of [later, abroad]) await onboarding.materializeHired(person.id)
+    // موظف قديم لسه عليه مهمة تهيئة مفتوحة (الشاشة بتعرضه)، وقديم مهامه خلصت (مابتعرضوش)
+    await repo('OnboardingTask').save({ employeeId: lingering.id, templateItemId: null, label: 'مهمة لسه مفتوحة', party: 'it', dueDate: day(-150), sortOrder: 10, status: 'PENDING' })
+    await repo('OnboardingTask').save({ employeeId: settled.id, templateItemId: null, label: 'مهمة خلصت', party: 'it', dueDate: day(-150), sortOrder: 10, status: 'DONE' })
+    for (const person of [later, abroad, lingering, settled, bare, departed]) assert.equal(await systemTask(person.id), null)
+    await hiring(true)
+    // حساب من غير جهة الموارد البشرية بيقرا «مهامي»: مفيش تجهيز ولا كتابة
+    await mine(users.itA)
+    assert.equal(await systemTask(later.id), null)
+    // حامل الجهة في فرع «أ»: للجديد وللي لسه عليه مهام في نطاقه — مش للي برّه النافذة ومهامه خلصت، ولا لموظف فرع تاني
+    const seen = await mine(hrParty)
+    const made = { later: await systemTask(later.id), lingering: await systemTask(lingering.id), settled: await systemTask(settled.id), abroad: await systemTask(abroad.id),
+      bare: await systemTask(bare.id), departed: await systemTask(departed.id) }
+    assert.deepEqual([!!made.later, !!made.lingering, !!made.bare, made.settled, made.abroad, made.departed], [true, true, true, null, null, null])
+    assert.ok(seen.onboarding.some(row => row.taskId === made.later.id) && seen.onboarding.some(row => row.taskId === made.lingering.id))
+    // وحامل الجهة في فرع «ب» لموظف فرعه
+    const abroadTasks = await hrTasksOf(hrPartyB, abroad.id)
+    assert.ok(abroadTasks.includes((await systemTask(abroad.id))?.id))
+  } finally {
+    await hiring(false)
+  }
 })

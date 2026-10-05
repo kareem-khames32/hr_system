@@ -270,9 +270,10 @@ export class TasksService {
     return (await this.views(user, [saved]))[0]
   }
 
-  // حدث المهمة في نفس معاملة تغييرها — مراجع بس (زي أحداث الطلبات)
-  private async recordEvent(em: EntityManager, type: 'TASK_ASSIGNED' | 'TASK_DUE_SOON' | 'TASK_OVERDUE', task: Task) {
-    await recordOutboxEvent(em, { type, entityType: 'task', entityId: task.id, payload: { taskId: task.id, branchId: task.branchId } })
+  // حدث المهمة في نفس معاملة تغييرها — مراجع بس (زي أحداث الطلبات). حدثي التذكير والتأخير بيشيلوا كمان رقم ختم المهمة اللي اتسجّل معاهم
+  // (وقت، مش محتوى): محرك الإشعارات بيقارنه بختم المهمة الحالي وقت التوزيع ووقت الإرسال (taskStampCurrent)
+  private async recordEvent(em: EntityManager, type: 'TASK_ASSIGNED' | 'TASK_DUE_SOON' | 'TASK_OVERDUE', task: Task, stamp?: Date | null) {
+    await recordOutboxEvent(em, { type, entityType: 'task', entityId: task.id, payload: { taskId: task.id, branchId: task.branchId, ...(stamp ? { stamp: stamp.getTime() } : {}) } })
   }
 
   // ===== القراءة والتعديل =====
@@ -406,9 +407,13 @@ export class TasksService {
           const remind = !task.remindedAt && left >= 0 && left <= reminderDays
           const escalate = escalationDays > 0 && !task.escalatedAt && -left >= escalationDays
           if (!remind && !escalate) return null
-          if (remind) { task.remindedAt = new Date(); await this.recordEvent(em, 'TASK_DUE_SOON', task) }
-          if (escalate) { task.escalatedAt = new Date(); await this.recordEvent(em, 'TASK_OVERDUE', task) }
+          if (remind) task.remindedAt = new Date()
+          if (escalate) task.escalatedAt = new Date()
           await em.getRepository(Task).save(task)
+          // الختم زي ما القاعدة بترجّعه: نفس القراءة اللي فحص الإرسال هيقارن بيها بعدين
+          const stamped = await em.getRepository(Task).findOneOrFail({ where: { id }, select: { id: true, remindedAt: true, escalatedAt: true } })
+          if (remind) await this.recordEvent(em, 'TASK_DUE_SOON', task, stamped.remindedAt)
+          if (escalate) await this.recordEvent(em, 'TASK_OVERDUE', task, stamped.escalatedAt)
           return { remind, escalate }
         })
         // العدّ بعد ما المعاملة تثبت

@@ -18,7 +18,7 @@ import { Request } from '../requests/entities/request.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { RequestsService } from '../requests/requests.service'
 import { Task, TASK_OPEN_STATUSES, type TaskStatus } from '../tasks/task.entity'
-import { taskAccess, taskAwaitsAccount, taskLocalDate, tasksTableReady, TASK_ROLE_LABELS } from '../tasks/task-rules'
+import { taskAccess, taskAwaitsAccount, taskLocalDate, taskStampCurrent, tasksTableReady, TASK_ROLE_LABELS } from '../tasks/task-rules'
 import { Notification, NotificationDelivery, NotificationPreference, NotificationTemplate } from './notification.entities'
 import { notificationTablesReady, NOTIFICATIONS_MIGRATION_MISSING } from './notification-store'
 import {
@@ -275,6 +275,8 @@ export class NotificationsService implements OnModuleInit {
     // المهمة اتقفلت أو اتلغت قبل ما مهمة التوزيع تشتغل: الحدث قديم
     if (!task || !TASK_OPEN_STATUSES.includes(task.status as TaskStatus)) return 0
     const overdue = event.type === 'TASK_OVERDUE'
+    // حدث تذكير أو تأخير من جيل قديم (الموعد اتغيّر أو المهمة اتحوّلت بعد تسجيله، والمهمة اتختمت تاني أو لسه): الجيل الجديد ليه حدثه
+    if (event.type !== 'TASK_ASSIGNED' && !taskStampCurrent(event.payload, overdue ? task.escalatedAt : task.remindedAt)) return 0
     const recipients = overdue ? await this.taskEscalationAccounts(task)
       // اللي كلّف نفسه مابيتبعتلوش «مهمة جديدة عليك»
       : (await this.taskAssigneeAccounts(task)).filter(account => event.type !== 'TASK_ASSIGNED' || account.sub !== task.createdByUserId)
@@ -395,6 +397,17 @@ export class NotificationsService implements OnModuleInit {
     return row?.eventType ?? null
   }
 
+  /** حمولة حدث المصدر (رقمه متخزن في مفتاح منع التكرار) — null لو الحدث مش موجود أو الطابور مش جاهز */
+  private async sourcePayload(notification: Pick<Notification, 'dedupeKey'>): Promise<Record<string, unknown> | null> {
+    const id = /^outbox:(\d+):/.exec(notification.dedupeKey ?? '')?.[1]
+    if (!id || !(await queueTablesReady(this.ds.manager))) return null
+    const [row]: Array<{ payload: string | null }> = await this.ds.query('SELECT [payload] FROM [outbox_events] WHERE [id] = @0', [id])
+    try {
+      const payload: unknown = row?.payload ? JSON.parse(row.payload) : null
+      return payload && typeof payload === 'object' ? payload as Record<string, unknown> : null
+    } catch { return null }
+  }
+
   /**
    * الإشعار لسه صحيح والمستلم لسه ليه حق فيه وقت الإرسال؟ البريد ممكن يتبعت بعد الحدث بساعات (ساعات الهدوء، إعادة المحاولة، الملخص
    * اليومي)، فكل حاجة اتحكم بيها وقت التوزيع بتتحكم تاني بحالتها دلوقتي قبل ما الرسالة تطلع:
@@ -430,13 +443,15 @@ export class NotificationsService implements OnModuleInit {
       if (!task || !TASK_OPEN_STATUSES.includes(task.status as TaskStatus)) return 'المهمة اتقفلت أو اتلغت'
       if (notification.eventCode === 'task.overdue') {
         if (!task.dueDate || task.dueDate >= taskLocalDate(new Date())) return 'المهمة مابقتش متأخرة'
-        // ختم التصعيد اتشال (المهمة اتحوّلت أو موعدها اتغيّر بعد ما الرسالة اتجهّزت باسم مسؤولها وموعدها): الرسالة عن وضع فات
-        if (!task.escalatedAt) return 'المهمة اتحوّلت أو موعدها اتغيّر بعد تجهيز الرسالة'
+        // الرسالة اتجهّزت باسم مسؤول وموعد: صالحة طول ما ختم التصعيد هو ختم حدثها. تحويل أو تغيير موعد بيشيل الختم، وختم جديد بعدها
+        // = رسالة جديدة بحدثها — القديمة عن وضع فات حتى لو المهمة اتختمت تاني (CRP2G-N02)
+        if (!taskStampCurrent(await this.sourcePayload(notification), task.escalatedAt)) return 'المهمة اتحوّلت أو موعدها اتغيّر بعد تجهيز الرسالة'
         return (await this.taskEscalationAccounts(task)).some(row => row.sub === user.id) ? null : 'تأخير المهمة مابقاش بيتبلّغ بيه الحساب ده'
       }
       if (!taskAwaitsAccount(account, task)) return 'المهمة مابقتش على الحساب ده'
-      // «موعدها قرّب» اتجهّزت بموعد: لو الموعد اتشال أو اتغيّر بعدها (ختم التذكير اتشال) الرسالة بتقول موعد مابقاش بتاعها
-      return notification.eventCode === 'task.due_soon' && (!task.dueDate || !task.remindedAt) ? 'موعد المهمة اتغيّر بعد تجهيز الرسالة' : null
+      // «موعدها قرّب» اتجهّزت بموعد: صالحة طول ما ختم التذكير هو ختم حدثها (نفس القاعدة)
+      return notification.eventCode === 'task.due_soon' && (!task.dueDate || !taskStampCurrent(await this.sourcePayload(notification), task.remindedAt))
+        ? 'موعد المهمة اتغيّر بعد تجهيز الرسالة' : null
     }
     if (notification.entityType === 'payroll_run') {
       // نفس شرط «قسائم راتبي»: مسير معتمد أو مصروف ليه بند لموظف الحساب

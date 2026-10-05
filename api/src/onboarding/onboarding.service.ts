@@ -8,9 +8,9 @@ import {
   OnModuleInit,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { In, IsNull, MoreThanOrEqual, Not, Repository } from 'typeorm'
+import { Brackets, In, IsNull, MoreThanOrEqual, Not, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchIdIn, branchScopeOf, inBranchScope as scopeHasBranch, isEmptyBranchScope, userHasPerm } from '../auth/guards'
+import { branchIdIn, branchScopeOf, inBranchScope as scopeHasBranch, isEmptyBranchScope, userHasPerm, type BranchScope } from '../auth/guards'
 import { User } from '../auth/user.entity'
 import { HIRING_DOCS_TASK_KEY, hiringDocsTaskBlockedMessage, hiringDocsTaskRow, requiredHiringDocTypes, syncHiringDocsTasks,
   type HiringDocsStatus } from '../assets/hiring-documents'
@@ -268,6 +268,9 @@ export class OnboardingService implements OnApplicationBootstrap, OnModuleInit {
     // «المدير المباشر»، بنفس حل المدير المباشر ومن غير قيد فرع). حساب من غير الاتنين مابيقراش ولا مهمة
     const parties = (Object.keys(PARTY_PERMS) as OnboardingParty[]).filter((party) => PARTY_PERMS[party].some((p) => granted.includes(p)))
     const reports = user.employeeId ? await this.resolver.directReportsOf(user.employeeId) : []
+    // مهمة «استلام مسوغات التعيين» على الموارد البشرية (hiringDocsTaskRow)، وحالتها من المستندات دلوقتي مش من آخر مرة شاشة التهيئة
+    // اتفتحت: لحامل جهتها، نفس تجهيز الشاشة لموظفي نطاقه اللي بتعرضهم قبل قراءة المفتوح (CRP2G-N01)
+    if (parties.includes('hr') && !isEmptyBranchScope(scope)) await this.refreshHiringDocs(scope)
     const open = () => this.tasks.createQueryBuilder('t').innerJoin(Employee, 'e', 'e.id = t.employeeId')
       .where('t.status = :pending', { pending: 'PENDING' }).andWhere('e.status NOT IN (:...inactive)', { inactive: ['terminated', 'archived'] })
     const pending: OnboardingTask[] = []
@@ -289,18 +292,7 @@ export class OnboardingService implements OnApplicationBootstrap, OnModuleInit {
       const emp = empById.get(task.employeeId)
       if (emp) mine.push({ task, emp })
     }
-    // «استلام مسوغات التعيين» حالتها من المستندات: بتتحسب دلوقتي زي القايمة، واللي اكتملت مابتظهرش
-    const hiringEmps = [...new Set(mine.filter((row) => row.task.systemKey === HIRING_DOCS_TASK_KEY).map((row) => row.emp.id))]
-    const stillOpen = new Set<number>()
-    if (hiringEmps.length) {
-      await syncHiringDocsTasks(this.tasks.manager, hiringEmps)
-      for (const part of idChunks(hiringEmps)) {
-        const rows = await this.tasks.find({ where: { employeeId: In(part), systemKey: HIRING_DOCS_TASK_KEY, status: 'PENDING' }, select: { id: true } })
-        for (const row of rows) stillOpen.add(row.id)
-      }
-    }
     return mine
-      .filter(({ task }) => task.systemKey !== HIRING_DOCS_TASK_KEY || stillOpen.has(task.id))
       .map(({ task, emp }) => ({
         taskId: task.id,
         employeeId: emp.id,
@@ -310,6 +302,25 @@ export class OnboardingService implements OnApplicationBootstrap, OnModuleInit {
         party: task.party,
         dueDate: task.dueDate,
       }))
+  }
+
+  /**
+   * مهام «استلام مسوغات التعيين» لموظفي النطاق اللي شاشة التهيئة بتعرضهم — الجداد (تاريخ التحاقهم جوه النافذة)، واللي لسه عليهم مهام
+   * مفتوحة: بتتعمل لو ناقصة، وحالتها بتتحسب من المستندات. نفس نداءات list() بالحرف (ensureHiringDocsTasks ثم syncHiringDocsTasks)،
+   * وفلتر الفرع من القاعدة. نوع مستند بقى مطلوب (أو مابقاش) من الإعدادات بيبان من غير ما حد يفتح الشاشة.
+   */
+  private async refreshHiringDocs(scope: BranchScope) {
+    const required = await requiredHiringDocTypes(this.tasks.manager)
+    const from = addDays(localDateOf(new Date()), -(await this.windowDays()))
+    const listed = this.employees.createQueryBuilder('e').select(['e.id', 'e.joinDate'])
+      .where('e.status NOT IN (:...inactive)', { inactive: ['terminated', 'archived'] })
+      .andWhere(new Brackets((qb) => qb.where('e.joinDate >= :from', { from })
+        .orWhere(`EXISTS (SELECT 1 FROM [onboarding_tasks] p WHERE p.[employeeId] = e.id AND p.[status] = :pending)`, { pending: 'PENDING' })))
+    if (scope !== null) listed.andWhere('e.branchId IN (:...scope)', { scope })
+    const emps = await listed.getMany()
+    if (emps.length === 0) return
+    if (required.length) await this.ensureHiringDocsTasks(emps)
+    await syncHiringDocsTasks(this.tasks.manager, emps.map((e) => e.id), required)
   }
 
   // ===== إتمام/إعادة فتح/تعديل مهمة =====

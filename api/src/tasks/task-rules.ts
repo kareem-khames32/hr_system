@@ -64,6 +64,14 @@ export const taskDaysBetween = (from: string, to: string): number =>
 /** تاريخ بعد (أو قبل) أيام — حساب على اليوم نفسه كتاريخ UTC، مش على «الآن» */
 export const taskAddDays = (date: string, days: number): string => new Date(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10)
 
+/**
+ * حدث «موعدها قرّب» أو «متأخرة» لسه بتاع ختم المهمة الحالي؟ الحدث بيشيل رقم الختم اللي اتسجّل معاه (remindedAt أو escalatedAt زي ما
+ * القاعدة بترجّعه). تغيير الموعد أو التحويل أو إعادة الفتح بيشيل الختم، وختم جديد = جيل جديد بحدثه: رسالة الجيل القديم مابتطلعش بموعد أو
+ * مسؤول فات. حدث قديم من غير ختم (قبل CRP2G) صالح طول ما المهمة عليها ختم.
+ */
+export const taskStampCurrent = (payload: { stamp?: unknown } | null | undefined, current: Date | null | undefined): boolean =>
+  !!current && (payload?.stamp == null || current.getTime() === Number(payload.stamp))
+
 /** أرقام بدفعات تحت حد معاملات SQL Server (2100) — مدير فرع كبير ممكن يبقى «المدير المباشر» لآلاف */
 export function taskIdChunks(ids: readonly number[], size = 1000): number[][] {
   const parts: number[][] = []
