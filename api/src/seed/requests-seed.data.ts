@@ -301,6 +301,11 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'payroll.live_accrual_all', value: 'true' },
   // B1.14: تنبيه قبل الاعتماد لو صافي الموظف اتغيّر عن آخر مسير بالنسبة دي أو أكتر (0 = التنبيه مقفول)
   { key: 'payroll.approval.net_change_alert_percent', value: '20' },
+  // B2.4 محرك الإشعارات: البريد مقفول لحد ما المالك يفتحه (الإشعار داخل النظام شغال)، وساعات الهدوء «HH:MM-HH:MM» (فاضي = مفيش)،
+  // وساعة الملخص اليومي (0..23 بتوقيت النظام)
+  { key: 'notifications.email.enabled', value: 'false' },
+  { key: 'notifications.quiet_hours', value: '' },
+  { key: 'notifications.digest_hour', value: '8' },
   { key: 'payroll.shortfall_mode', value: 'MINUTES' },
   { key: 'payroll.shortfall_value', value: '1' },
   { key: 'payroll.attendance_overlap_policy', value: 'NET_OF_LATENESS' },

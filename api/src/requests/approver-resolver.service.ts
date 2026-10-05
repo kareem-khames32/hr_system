@@ -269,7 +269,14 @@ export class ApproverResolver {
     // super_admin يتصرف في أي خطوة — يفكّ أي انسداد
     if (user.role === 'super_admin') return true
     if (options.hrUnblock === true && this.hasHrOverride(user)) return true
+    return this.holdsStep(user, step)
+  }
 
+  /**
+   * الخطوة دي بتاعة الحساب ده فعلًا؟ (المعتمد الهيكلي المسمّى، أو حامل الدور الوظيفي بصلاحيته) — نفس حكم satisfies من غير مخرج مدير
+   * النظام ولا مخرج الموارد البشرية للشغل الواقف. B2.4: الإشعار بيروح للي الخطوة بتاعتهم، مش لكل اللي «يقدر يتصرف».
+   */
+  holdsStep(user: Pick<JwtPayload, 'role' | 'permissions' | 'employeeId'>, step: Pick<ResolvedStep, 'role' | 'approverEmployeeId'>): boolean {
     switch (step.role) {
       case 'direct_manager_of_requester':
       case 'manager_of_direct_manager':

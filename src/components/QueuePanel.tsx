@@ -29,7 +29,7 @@ export default function QueuePanel() {
   return (
     <div className="card space-y-4" data-queue-panel>
       <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2"><Inbox size={20} className="text-primary-600" />الطابور</h2>
-      <p className="text-sm text-gray-500">أحداث النظام (تعيين، قرار طلب، اعتماد مسير، مستند هينتهي، انتهاء خدمة) ومهامها. العامل بيشتغل كل كام ثانية، والمهمة اللي بتفشل بتتعاد بعد مهلة.</p>
+      <p className="text-sm text-gray-500">أحداث النظام (تعيين، طلب وصل لمعتمد، قرار طلب، اعتماد مسير، مستند هينتهي، انتهاء خدمة) ومهامها. العامل بيشتغل كل كام ثانية، والمهمة اللي بتفشل بتتعاد بعد مهلة.</p>
       {error && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 text-sm">{error}</div>}
       {data && !data.available && (
         <div className="bg-amber-50 text-amber-900 rounded-xl p-3 text-sm" data-queue-unavailable>

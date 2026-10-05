@@ -9,6 +9,7 @@ import { LeaveAttachmentDeadlineJob } from '../requests/leave-attachment-deadlin
 import { RequestsScheduler } from '../requests/requests-scheduler.service'
 import { RequestsService } from '../requests/requests.service'
 import { QueueService } from '../queue/queue.service'
+import { NotificationsService } from '../notifications/notifications.service'
 import { Scheduled } from './scheduled-jobs'
 import { ScheduledJobsService } from './scheduled-jobs.service'
 
@@ -83,8 +84,17 @@ export class ScheduledJobsRunner {
     return this.jobs.tick('requests.escalations', () => this.use(RequestsScheduler).escalations())
   }
 
+  @Scheduled('notifications.daily-digest')
+  notificationsDailyDigest() {
+    return this.jobs.tick('notifications.daily-digest', () => this.use(NotificationsService).digestHourlyWork())
+  }
+
+  // B2.4: ومعاه مهام الطابور المنتهية (DONE) الأقدم من نفس المدة — الطابور ماكانلوش تنضيف
   @Scheduled('scheduler.prune-runs')
   pruneRuns() {
-    return this.jobs.tick('scheduler.prune-runs', () => this.jobs.prune())
+    return this.jobs.tick('scheduler.prune-runs', async () => {
+      await this.jobs.prune()
+      await this.use(QueueService).pruneDone()
+    })
   }
 }

@@ -16,6 +16,7 @@ import {
   ShieldCheck,
   Send,
   Plus,
+  Bell,
 } from 'lucide-react'
 import {
   can, fetchConfig, fetchSecurityStatus, fetchTerminationReasons, saveCustomTerminationReasons, sendMailTest, updateConfig,
@@ -258,6 +259,19 @@ const GROUPS: PolicyGroup[] = [
       // B2.2: الملفات المرفوعة
       { key: 'files.max_size_mb', label: 'أقصى حجم للملف المرفوع', type: 'number', unit: 'ميجا', min: 1, max: 50, integer: true, hint: 'أي ملف أكبر بيترفض قبل ما يتحفظ.' },
       { key: 'files.allowed_types', label: 'أنواع الملفات المسموحة', type: 'text', hint: 'من دول بس، مفصولين بفاصلة: jpeg, png, webp, pdf, doc, docx, xls, xlsx. النوع بيتحسب من محتوى الملف نفسه، والامتداد لازم يطابقه (PDF متسمي صورة بيترفض). صورة الموظف وشعار الشركة صور بس.' },
+    ],
+  },
+  {
+    // B2.4: محرك الإشعارات — البريد بيتسلّم مقفول، والإشعار داخل النظام شغال من غيره
+    title: 'الإشعارات',
+    icon: Bell,
+    iconBg: 'bg-primary-50',
+    iconColor: 'text-primary-500',
+    note: 'البريد بيتبعت من خادم البريد المضبوط في api/.env على الخادم. الرسايل من غير مبالغ ومن غير محتوى الطلب. نصوص الرسايل وسجل الإرسال في «المهام المجدولة» ← «الإشعارات»، وكل مستخدم بيختار قنواته من صفحة الإشعارات.',
+    fields: [
+      { key: 'notifications.email.enabled', label: 'إرسال الإشعارات بالبريد', type: 'bool', hint: 'مفتوح: طلب مستني اعتمادك، وقرار طلبك، وقسيمتك ظهرت بيوصلوا بالبريد كمان. مقفول: مفيش رسالة بتطلع، والإشعارات داخل النظام شغالة زي ما هي.' },
+      { key: 'notifications.quiet_hours', label: 'ساعات الهدوء', type: 'text', hint: 'بالشكل 22:00-07:00 بتوقيت النظام: البريد اللي ييجي فيها بيتأجل لآخرها. فاضي = مفيش ساعات هدوء.' },
+      { key: 'notifications.digest_hour', label: 'ساعة الملخص اليومي', type: 'number', unit: 'الساعة', min: 0, max: 23, integer: true, hint: 'اللي مختار «ملخص يومي» بتوصله رسالة واحدة في الساعة دي (من 0 لـ23 بتوقيت النظام).' },
     ],
   },
 ]

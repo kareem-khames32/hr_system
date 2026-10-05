@@ -153,6 +153,28 @@ export class AuthService {
     return result
   }
 
+  /**
+   * B2.4: هوية الحساب زي ما التوكن بيشيلها (الدور والصلاحيات النهائية والموظف والنطاق — نفس حقول issueSession بالحرف)، لمجموعة حسابات
+   * من غير دخول. محرك الإشعارات بيسأل بيها نفس قواعد الصلاحية والنطاق اللي الطلب بيتفحص بيها («الخطوة دي على الحساب ده؟»).
+   */
+  async accountPayloads(users: User[]): Promise<JwtPayload[]> {
+    const permissions = await this.resolvePermissionsMany(users)
+    return users.map((user) => {
+      const scopeAllBranches = user.role !== 'super_admin' && user.scopeAllBranches === true
+      const branchIds = effectiveBranchScope(user)
+      return {
+        sub: user.id,
+        email: user.email,
+        role: user.role,
+        branchId: user.branchId ?? null,
+        employeeId: user.employeeId ?? null,
+        permissions: permissions.get(user.id) ?? [],
+        ...(scopeAllBranches ? { scopeAllBranches: true } : {}),
+        ...(branchIds !== null ? { branchIds } : {}),
+      }
+    })
+  }
+
   // حزمة الدور (صفه الحرفي أو الـpreset) + المنح + العمود القديم − السحب
   private composeBreakdown(
     user: User,

@@ -32,13 +32,15 @@ import { LeaveAttachmentDeadlineJob } from '../requests/leave-attachment-deadlin
 import { EmployeeDocument, PublicHoliday } from './assets.entities'
 import { hiringDocumentsNotification } from './hiring-documents'
 import { NotificationRead } from './notification-read.entity'
+import { storedInAppNotifications } from '../notifications/notification-store'
 import { leaveView } from '../common/leave-contract'
 import { ModulesService } from '../modules-registry/modules.service'
 import { routeAvailable } from '../modules-registry/registry'
 import { RequireModule } from '../modules-registry/module.guard'
 
 // تصنيف صريح لكل إشعار — الواجهة تبني فلاترها من التصنيفات الموجودة فعلاً
-type NotificationCategory = 'request' | 'approval' | 'leave' | 'attendance' | 'contract' | 'document'
+// B2.4: الإشعار المخزّن (محرك الإشعارات) بييجي بفئته من الكتالوج (payroll…)
+type NotificationCategory = 'request' | 'approval' | 'leave' | 'attendance' | 'contract' | 'document' | 'payroll'
 
 interface NotificationItem {
   id: string
@@ -575,6 +577,12 @@ export class PortalController {
 
     // 3د) مرفق الإجازة «بعد الرجوع»: تذكير يومي بالمعلق وإخطار بالتحويل بدون راتب — للموظف وللموارد البشرية في نطاقها
     if (on('leave')) items.push(...await this.leaveAttachments.notificationsFor(user))
+
+    // 4) B2.4: الإشعارات المخزّنة من محرك الإشعارات (قسيمتك ظهرت…) — مصدر زيادة بنفس شكل العنصر؛ قراءتها وحذفها في notification_reads
+    // بنفس المسارين، والأحداث اللي ليها عنصر محسوب فوق (العدّاد وقرار طلبك) مابتتخزنش للقايمة أصلًا
+    for (const stored of await storedInAppNotifications(this.employees.manager, user.sub)) {
+      items.push({ ...stored, category: stored.category as NotificationCategory })
+    }
 
     return items.filter((item) => routeAvailable(item.link, enabled)).sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
   }

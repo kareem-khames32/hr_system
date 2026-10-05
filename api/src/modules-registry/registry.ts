@@ -110,8 +110,10 @@ export const MODULES = {
   }),
   notifications: moduleDef({
     nameAr: 'الإشعارات', group: 'core', core: true,
-    description: 'إشعارات النظام داخل التطبيق',
+    description: 'إشعارات النظام داخل التطبيق وبالبريد',
     routes: ['/notifications'],
+    // B2.4: الملخص اليومي للبريد
+    jobs: ['notifications.daily-digest'],
   }),
   documents: moduleDef({
     nameAr: 'المستندات والخطابات', group: 'core', core: true, dependsOn: ['employees'],

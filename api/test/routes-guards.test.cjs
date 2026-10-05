@@ -117,8 +117,9 @@ test('RG-03: قايمة الاستثناءات من غير بنود قديمة،
   // أي زيادة في الاستثناءات قرار ظاهر في المراجعة: الأعداد مثبّتة
   // B2.1: +1 SELF (تسجيل التصدير من الشاشات في سجل التدقيق)
   // B1.14: +1 SELF (مستحق الموظف التقديري عن نفسه)
-  assert.deepEqual(counts, { PUBLIC_OK: 9, SELF: 24, AUTH_ANY_OK: 11, SERVICE_CHECK: 75 })
-  assert.equal(handlers.filter(handler => handler.perms.length === 0).length, 119)
+  // B2.4: +2 SELF (اختيارات صاحب الحساب لقنوات إشعاراته: قراءة وحفظ)
+  assert.deepEqual(counts, { PUBLIC_OK: 9, SELF: 26, AUTH_ANY_OK: 11, SERVICE_CHECK: 75 })
+  assert.equal(handlers.filter(handler => handler.perms.length === 0).length, 121)
   // من غير حارس دخول = العام بس
   const open = handlers.filter(handler => !guarded(handler, JwtAuthGuard)).map(handler => handler.id).sort()
   assert.deepEqual(open, Object.keys(EXCEPTIONS).filter(id => EXCEPTIONS[id] === 'PUBLIC_OK').sort())
@@ -165,6 +166,12 @@ test('RG-04: المسارات اللي بتخدم أكتر من موديول م�
   expectModule('EmployeeExtrasController.listLoans', ['loans'])
   expectModule('PortalController.calendar', ['self_service'])
   expectModule('PortalController.notifications', ['notifications'])
+  // B2.4: اختيارات الإشعارات والقوالب وسجل الإرسال تابعين لموديول الإشعارات؛ والقوالب والسجل بصلاحية «إدارة الإعدادات»
+  const notifications = handlers.filter(handler => handler.controller === 'NotificationsController')
+  assert.equal(notifications.length, 6)
+  for (const handler of notifications) assert.deepEqual(handler.modules, ['notifications'], handler.id)
+  assert.deepEqual(notifications.filter(handler => handler.perms.length).map(handler => [handler.name, handler.perms]).sort(), [
+    ['deliveries', ['settings.manage']], ['resetTemplate', ['settings.manage']], ['saveTemplate', ['settings.manage']], ['templates', ['settings.manage']]])
   // لوحة التحكم: الأرقام العامة أساسية، وويدجتات الحضور (المنحنى وإحصائيات الأقسام) للحضور
   expectModule('DashboardController.stats', ['platform'])
   expectModule('DashboardController.attendanceTrend', ['attendance'])
@@ -215,7 +222,7 @@ test('RG-05: كل مهمة مجدولة بتسأل عن موديولها باس�
   const crons = (runner.match(/^\s*@Scheduled\(/gm) || []).length
   const workFiles = ['attendance/attendance-scheduler.service.ts', 'attendance/device-sync.service.ts', 'offboarding/offboarding.service.ts',
     'payroll/payroll-daily-accrual.scheduler.ts', 'payroll/typed-deductions-scheduler.service.ts', 'requests/leave-attachment-deadline.job.ts',
-    'requests/requests-scheduler.service.ts', 'requests/requests.service.ts', 'queue/queue.service.ts'].map(file => path.join(apiRoot, 'src', file))
+    'requests/requests-scheduler.service.ts', 'requests/requests.service.ts', 'queue/queue.service.ts', 'notifications/notifications.service.ts'].map(file => path.join(apiRoot, 'src', file))
   for (const file of files) {
     const source = fs.readFileSync(file, 'utf8')
     assert.doesNotMatch(source, /^\s*@Cron\(/m, `${path.relative(apiRoot, file)}: الموعد بيعدي على @Scheduled`)
@@ -229,7 +236,8 @@ test('RG-05: كل مهمة مجدولة بتسأل عن موديولها باس�
     }
   }
   // عدد المواعيد مثبّت (12 + مسح سجل المهام): مهمة جديدة لازم تتسجّل في السجل وتتغطى في modules-enforcement (ME-05). B2.3: + أحداث المستندات
-  assert.equal(crons, 13)
+  // B2.4: + الملخص اليومي لإشعارات البريد
+  assert.equal(crons, 14)
   const registered = registry.MODULE_KEYS.flatMap(key => registry.MODULES[key].jobs)
   assert.deepEqual([...used].sort(), [...registered].sort())
   assert.deepEqual([...scheduled].sort(), [...registered].sort())

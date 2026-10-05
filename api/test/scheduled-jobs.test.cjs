@@ -31,8 +31,8 @@ test('TZ: الفاضي = توقيت الجهاز، والاسم المعروف �
 test('قايمة المهام: كل مهمة بموعد صالح، وكل موعد في الكود من القايمة ومتسجل مرة واحدة، ومفيش @Cron خارجها', () => {
   const ids = jobs.SCHEDULED_JOB_IDS
   assert.equal(new Set(ids).size, ids.length)
-  // B2.3: + أحداث المستندات اللي هتنتهي
-  assert.equal(ids.length, 13)
+  // B2.3: + أحداث المستندات اللي هتنتهي. B2.4: + الملخص اليومي لإشعارات البريد
+  assert.equal(ids.length, 14)
   for (const id of ids) {
     const job = jobs.SCHEDULED_JOBS[id]
     assert.doesNotThrow(() => new CronTime(job.cron, systemTimeZone()), id)

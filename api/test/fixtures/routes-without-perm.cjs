@@ -21,7 +21,7 @@ const EXCEPTIONS = {
   'BrandingController.branding': 'PUBLIC_OK', // GET /branding
   'BrandingController.logo': 'PUBLIC_OK', // GET /branding/logo
   'HealthController.check': 'PUBLIC_OK', // GET /health
-  // ===== SELF (24) — خدمة ذاتية: بيشتغل على بيانات صاحب الحساب بس (user.sub / user.employeeId) — دور «موظف» صلاحياته فاضية فمفيش مفتاح ينفع =====
+  // ===== SELF (26) — خدمة ذاتية: بيشتغل على بيانات صاحب الحساب بس (user.sub / user.employeeId) — دور «موظف» صلاحياته فاضية فمفيش مفتاح ينفع =====
   'AssetsController.myCustody': 'SELF', // GET /custody/mine
   'AttendanceController.myToday': 'SELF', // GET /attendance/my-today
   // B2.1: تصدير صاحب الحساب نفسه من شاشة في سجل التدقيق (مابيقراش أي بيانات)
@@ -34,6 +34,9 @@ const EXCEPTIONS = {
   'FinancialExemptionsController.mine': 'SELF', // GET /payroll/exemptions/mine
   'HiringDocumentsController.mine': 'SELF', // GET /hiring-documents/mine
   'LoansController.mine': 'SELF', // GET /loans/mine
+  // B2.4: اختيارات صاحب الحساب لقنوات إشعاراته (user.sub من التوكن — مفيش رقم مستخدم في الطلب)
+  'NotificationsController.preferences': 'SELF', // GET /notifications/preferences
+  'NotificationsController.setPreference': 'SELF', // PATCH /notifications/preferences
   'OffboardingController.mine': 'SELF', // GET /offboarding/mine
   'PayrollController.myPayslips': 'SELF', // GET /payroll/my-payslips
   // B1.14: مستحق الموظف التقديري عن نفسه (user.employeeId) — ورا الميزة الفرعية payroll.live_employee_view (مقفولة = 404)

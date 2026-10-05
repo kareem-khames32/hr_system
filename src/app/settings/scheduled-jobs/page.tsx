@@ -6,6 +6,7 @@ import { MainLayout } from '@/components/layout'
 import { fetchScheduledJobs, type ApiScheduledJob, type ApiScheduledJobRun } from '@/lib/api'
 import { formatDateTime } from '@/lib/dates'
 import QueuePanel from '@/components/QueuePanel'
+import NotificationsAdminPanel from '@/components/NotificationsAdminPanel'
 
 // المهام المجدولة (خطة التنفيذ B1.4): كل مهمة بموعدها والجاية إمتى، وآخر تشغيل وآخر فشل، وعدد آخر 24 ساعة، وآخر 20 تشغيل.
 // قراءة بس، لصاحب «إدارة الإعدادات» على كل الفروع. التشغيل نفسه مرة واحدة حتى لو فيه أكتر من نسخة من الـAPI.
@@ -134,6 +135,9 @@ export default function ScheduledJobsPage() {
 
         {/* B2.3: الطابور والـoutbox */}
         <QueuePanel />
+
+        {/* B2.4: سجل إرسال الإشعارات ونصوصها */}
+        <NotificationsAdminPanel />
       </div>
     </MainLayout>
   )

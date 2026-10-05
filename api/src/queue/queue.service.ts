@@ -17,6 +17,8 @@ interface Registered { handler: QueueJobHandler; maxAttempts: number }
 interface ClaimedJob { id: string; jobType: string; payload: string | null; attempts: number; maxAttempts: number }
 
 export const QUEUE_STALE_AFTER_MS = 10 * 60_000
+// المهمة المنتهية (DONE) بتتمسح بعد المدة دي — نفس مدة سجل المهام المجدولة
+export const QUEUE_DONE_KEEP_DAYS = 30
 export const DOCUMENT_EXPIRY_WINDOW_DAYS = 30
 export { QUEUE_DEFAULT_MAX_ATTEMPTS } from './outbox'
 const BACKOFF_BASE_MS = 30_000, BACKOFF_MAX_MS = 3_600_000
@@ -159,6 +161,25 @@ export class QueueService {
       }
       return created
     })
+  }
+
+  /**
+   * مسح المهام المنتهية بنجاح (DONE) الأقدم من 30 يوم (مع مهمة scheduler.prune-runs). الميتة (DEAD) والمستنية مابتتمسحش،
+   * والأحداث نفسها (outbox_events) بتفضل: مفتاح منع تكرار الحدث لازم يفضل موجود. بيرجّع عدد الصفوف.
+   */
+  async pruneDone(now: Date = new Date(), keepDays = QUEUE_DONE_KEEP_DAYS): Promise<number> {
+    if (!(await queueTablesReady(this.ds.manager))) return 0
+    const before = new Date(now.getTime() - Math.max(1, keepDays) * 86_400_000).toISOString().slice(0, 23)
+    let total = 0
+    // على دفعات: مسح كبير في جملة واحدة بيمسك الجدول اللي العامل بيسحب منه. الجملة بتبدأ بـWITH (زي السحب): جملة بتبدأ بـDELETE
+    // المشغّل بيرجّع لها [الصفوف، العدد] مش الصفوف
+    for (;;) {
+      const rows: unknown[] = await this.ds.query(`WITH old AS (
+          SELECT TOP (2000) * FROM [jobs_queue] WHERE [status] = N'DONE' AND [finishedAt] < CONVERT(datetime2, @0, 126) ORDER BY [id])
+        DELETE FROM old OUTPUT DELETED.[id]`, [before])
+      total += rows.length
+      if (rows.length < 2000) return total
+    }
   }
 
   /** شاشة الطابور: العدّ بكل حالة، وآخر الأحداث الماتوزعتش، وآخر المهام الميتة برسايلها */

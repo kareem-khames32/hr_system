@@ -237,6 +237,8 @@ test('MR-05: المهام المجدولة والصلاحيات — كل اسم 
   assert.equal(registry.moduleOfJob('offboarding.finalize-due'), 'offboarding')
   assert.equal(registry.moduleOfJob('requests.escalations'), 'requests')
   assert.equal(registry.moduleOfJob('requests.scheduled-transfers'), 'employees')
+  // B2.4: الملخص اليومي لإشعارات البريد تابع لموديول الإشعارات (أساسي)
+  assert.equal(registry.moduleOfJob('notifications.daily-digest'), 'notifications')
   assert.equal(registry.moduleOfJob('nope'), null)
   const jobs = MODULE_KEYS.flatMap(key => MODULES[key].jobs), permissions = MODULE_KEYS.flatMap(key => MODULES[key].permissions)
   assert.equal(new Set(jobs).size, jobs.length, 'مهمة مجدولة في موديولين')

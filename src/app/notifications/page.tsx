@@ -14,6 +14,7 @@ import {
   Settings,
   Trash2,
   Check,
+  Wallet,
 } from 'lucide-react'
 import {
   dismissNotification,
@@ -22,6 +23,7 @@ import {
   NOTIFICATIONS_CHANGED,
 } from '@/lib/api'
 import { formatDate } from '@/lib/dates'
+import NotificationPreferences from '@/components/NotificationPreferences'
 
 interface Notification {
   id: string
@@ -57,6 +59,8 @@ const CATEGORY_META: Record<string, { label: string; icon: typeof Bell }> = {
   attendance: { label: 'الحضور', icon: Clock },
   contract: { label: 'العقود', icon: FileText },
   document: { label: 'المستندات', icon: FileText },
+  // B2.4: الإشعارات المخزّنة من محرك الإشعارات (قسيمتك ظهرت)
+  payroll: { label: 'الرواتب', icon: Wallet },
 }
 const CATEGORY_ORDER = Object.keys(CATEGORY_META)
 // تصنيف جديد من السيرفر لم تُعرَّف تسميته هنا بعد
@@ -163,6 +167,9 @@ export default function NotificationsPage() {
 
         {/* Error Banner */}
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+
+        {/* B2.4: اختيارات المستخدم لقنوات إشعاراته */}
+        <NotificationPreferences />
 
         {/* Filters */}
         <div className="flex gap-2 flex-wrap">

@@ -289,6 +289,9 @@ test('ME-05: المهام المجدولة — مهمة الموديول الم�
     // B2.3: أحداث المستندات اللي هتنتهي (موديول المستندات أساسي)
     { module: null, run: () => get('../src/queue/queue.service', 'QueueService').recordDocumentExpiryEvents('2026-10-03'),
       spy: () => spy(get('../src/queue/queue.service', 'QueueService').ds, 'transaction', 0) },
+    // B2.4: الملخص اليومي لإشعارات البريد في ساعته المضبوطة (موديول الإشعارات أساسي)
+    { module: null, run: () => get('../src/notifications/notifications.service', 'NotificationsService').digestHourlyWork(new Date(2026, 9, 5, 8, 5)),
+      spy: () => spy(get('../src/notifications/notifications.service', 'NotificationsService'), 'sendDigests', 0) },
   ]
   const calls = async job => { const watch = job.spy(); try { await job.run(); return watch.calls.length } finally { watch.restore() } }
   // كل الموديولات مفعّلة: كل مهمة بتوصل لشغلها

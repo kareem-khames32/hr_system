@@ -91,12 +91,29 @@ async function acknowledge(runId) {
 }
 // وقت الاعتماد بيتخزن بالثانية (من غير أجزائها)، فتغيير في نفس ثانية الاعتماد وقبله بيتحسب «بعد آخر مسير» (الناحية الأأمن: تغيير زيادة يبان،
 // مش تغيير يستخبى). من B1.12 الحساب والاعتماد بقوا أسرع من ثانية، فالمساعد بيستنى بداية الثانية اللي بعدها قبل الاعتماد: كل تغيير قبله = قبل المسير
-const nextSecond = () => new Promise(resolve => setTimeout(resolve, 1050 - (Date.now() % 1000)))
+// «اتغيّر إيه من آخر مسير» بيقارن وقت الاعتماد (ساعة التطبيق، متخزن بالثانية) بختم التغيير (ساعة القاعدة). الساعتين مش دايمًا ماشيين
+// مع بعض: ساعة حاوية SQL بتتأخر أو تسبق أجزاء من الثانية أو أكتر والجهاز محمّل (OP-2b فشل مرة في التشغيل الكامل يوم 5 أكتوبر والجهاز
+// عليه 3 تشغيلات، وبينجح لوحده). فالاختبار بيستنى بالساعتين: الاعتماد بعد كل تغيير اتعمل قبله، وأي تغيير بعده بعد وقته المخزّن.
+const databaseNow = async () => {
+  const [{ now }] = await raw('SELECT GETDATE() AS [now]')
+  const read = new Date(now).getTime()
+  // نفس حساب المنتج (databaseClockSkewMs): فرق المنطقة بأقرب ربع ساعة، والباقي هو فرق الساعتين الفعلي اللي بنستنى عليه
+  return read + Math.round((Date.now() - read) / 900000) * 900000
+}
+async function waitUntil(reached, label) {
+  for (let attempt = 0; attempt < 300; attempt++) { if (await reached()) return; await new Promise(resolve => setTimeout(resolve, 50)) }
+  throw new Error(label)
+}
 async function approved(period, people, name, approver = U.boss) {
   const run = await calculate(period, people, name)
   await acknowledge(run.id)
-  await nextSecond()
+  // قبل الاعتماد: ساعة التطبيق تعدّي ساعة القاعدة بأكتر من ثانية (وقت الاعتماد بيتخزن بالثانية)، فكل ختم قاعدة اتعمل قبل كده «قبل الاعتماد»
+  const stamped = await databaseNow()
+  await waitUntil(async () => Date.now() >= stamped + 1100, 'ساعة التطبيق ماعدّتش ساعة القاعدة قبل الاعتماد')
   expectStatus(await request(approver, 'POST', `/payroll/runs/${run.id}/approve`), 201)
+  // بعد الاعتماد: ساعة القاعدة تعدّي وقت الاعتماد المخزّن، فأي تغيير الاختبار بيعمله بعد كده «بعد الاعتماد»
+  const approvedAt = new Date((await repo('PayrollRun').findOneByOrFail({ id: run.id })).approvedAt).getTime()
+  await waitUntil(async () => (await databaseNow()) > approvedAt + 100 && Date.now() > approvedAt + 100, 'ساعة القاعدة ماعدّتش وقت الاعتماد')
   return run
 }
 const approveEvent = async runId => (await repo('PayrollRunEvent').find({ where: { runId, eventType: 'APPROVED' }, order: { id: 'DESC' } }))[0]

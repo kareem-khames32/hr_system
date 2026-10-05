@@ -8,6 +8,9 @@ export const DOMAIN_EVENTS = {
   EMPLOYEE_HIRED: 'تم التعيين',
   REQUEST_APPROVED: 'تم اعتماد الطلب',
   REQUEST_REJECTED: 'تم رفض الطلب',
+  // B2.4: الطلب وصل لخطوة مستنية معتمد (تقديم، خطوة تالية، إعادة تقديم، تصعيد)، والطلب اترجع لصاحبه لاستكمال معلومات
+  REQUEST_STEP_PENDING: 'الطلب بانتظار معتمد',
+  REQUEST_RETURNED: 'الطلب أُعيد لاستكمال معلومات',
   PAYROLL_RUN_APPROVED: 'المسير اتعتمد',
   DOCUMENT_EXPIRING: 'مستند هينتهي',
   EMPLOYEE_TERMINATED: 'الموظف انتهت خدمته',

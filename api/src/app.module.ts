@@ -31,6 +31,7 @@ import { ScheduledJobsModule } from './scheduler/scheduled-jobs.module'
 // B2.1: سجل التدقيق المركزي
 import { AuditModule } from './audit/audit.module'
 import { QueueModule } from './queue/queue.module'
+import { NotificationsModule } from './notifications/notifications.module'
 import { StatutoryModule } from './statutory/statutory.module'
 import { validateEnv } from './auth/jwt-secret'
 import { dbPacketSize } from './common/sql-packet-size'
@@ -113,6 +114,8 @@ import { dbPacketSize } from './common/sql-packet-size'
     LeaveYearEndModule,
     // التقارير المالية لشهر الرواتب (كشف الرواتب، التكلفة، الخصومات، السلف، الإضافي)
     FinancialReportModule,
+    // B2.4: محرك الإشعارات (بريد وإشعار مخزّن) — أول مستهلك للطابور
+    NotificationsModule,
   ],
   controllers: [HealthController, DashboardController, ReportsController, CostCenterReportController],
   providers: [CostCenterReportService],

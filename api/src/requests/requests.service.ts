@@ -1019,7 +1019,9 @@ export class RequestsService {
 
     req.status = 'UNDER_REVIEW'
     req.currentStep = resolved[0].stepOrder
-    return em.getRepository(Request).save(req)
+    const pending = await em.getRepository(Request).save(req)
+    await this.recordStepPendingEvent(em, pending)
+    return pending
   }
 
   // مرات نوع الإجازة للموظف في سنة (بتاريخ البداية): الإجازات المعتمدة + طلبات النوع
@@ -1405,7 +1407,10 @@ export class RequestsService {
         assertTransition(req.status, 'RETURNED_FOR_INFO')
         req.status = 'RETURNED_FOR_INFO'
         req.resolvedSteps = JSON.stringify(resolved)
-        return em.getRepository(Request).save(req)
+        const returned = await em.getRepository(Request).save(req)
+        await recordOutboxEvent(em, { type: 'REQUEST_RETURNED', entityType: 'request', entityId: returned.id,
+          payload: { requestId: returned.id, typeCode: definitionCodeOf(returned), requesterId: returned.requesterId ?? null, branchId: returned.branchId ?? null } })
+        return returned
       }
 
       // APPROVE: باقي موازيين في نفس المجموعة؟ ننتظرهم
@@ -1423,7 +1428,9 @@ export class RequestsService {
       if (nextOrder !== undefined) {
         req.currentStep = nextOrder
         req.resolvedSteps = JSON.stringify(resolved)
-        return em.getRepository(Request).save(req)
+        const advanced = await em.getRepository(Request).save(req)
+        await this.recordStepPendingEvent(em, advanced)
+        return advanced
       }
 
       // الاعتماد النهائي: سجل التدقيق + APPROVED + الوجهة في معاملة واحدة (REQ-2) — لو
@@ -1497,6 +1504,31 @@ export class RequestsService {
   private async recordDecisionEvent(em: EntityManager, req: Request, decision: 'APPROVED' | 'REJECTED') {
     await recordOutboxEvent(em, { type: decision === 'APPROVED' ? 'REQUEST_APPROVED' : 'REQUEST_REJECTED', entityType: 'request', entityId: req.id,
       payload: { requestId: req.id, typeCode: definitionCodeOf(req), requesterId: req.requesterId ?? null, branchId: req.branchId ?? null } })
+  }
+
+  // B2.4: حدث «الطلب بانتظار معتمد» في نفس معاملة الوصول للخطوة (تقديم، خطوة تالية، إعادة تقديم، تصعيد) — مراجع بس زي حدث القرار
+  // escalatedRole: الدور اللي الخطوة اتصعّدت له — الإشعار بيروح لحامليه بس، مش لباقي المجموعة المتوازية اللي اتبلّغت قبل كده
+  private async recordStepPendingEvent(em: EntityManager, req: Request, escalatedRole: string | null = null) {
+    await recordOutboxEvent(em, { type: 'REQUEST_STEP_PENDING', entityType: 'request', entityId: req.id,
+      payload: { requestId: req.id, typeCode: definitionCodeOf(req), requesterId: req.requesterId ?? null, branchId: req.branchId ?? null,
+        stepOrder: req.currentStep ?? null, escalated: escalatedRole !== null, ...(escalatedRole !== null ? { role: escalatedRole } : {}) } })
+  }
+
+  /**
+   * B2.4: الخطوة الحالية للطلب على الحساب ده فعلًا؟ نفس حكم صندوق الاعتماد (inbox) بالحرف — الطلب قيد المراجعة، وفرعه في نطاق الحساب،
+   * ومش طلبه ولا هو اللي أنشأه، والخطوة الحالية اللي لسه ماتصرّفش فيها بتاعته — من غير المخرجين: مدير النظام اللي يقدر يتصرف في أي
+   * خطوة، والموارد البشرية للطلب الواقف. دول بيشوفوا الطلب في صندوقهم، بس مش هم اللي «مستني عليهم»، فمابيتبعتلهمش إشعار بكل طلب.
+   */
+  stepAwaitsAccount(user: JwtPayload, req: Pick<Request, 'status' | 'branchId' | 'currentStep' | 'resolvedSteps' | 'requesterId' | 'createdByUserId'>, role?: string | null): boolean {
+    if (req.status !== 'UNDER_REVIEW' || !inBranchScope(branchScopeOf(user), req.branchId)) return false
+    if (this.isOwnRequestFor(user, req)) return false
+    // role: خطوات الدور ده بس من المجموعة الحالية (التصعيد)
+    return this.waitingSteps(req).some(step => (!role || step.role === role) && this.resolver.holdsStep(user, step))
+  }
+
+  /** خطوات المجموعة الحالية اللي لسه ماتصرّفش فيها حد (نفس اختيار صندوق الاعتماد) */
+  waitingSteps(req: Pick<Request, 'currentStep' | 'resolvedSteps'>): ResolvedStep[] {
+    return this.parseSteps(req.resolvedSteps).filter(step => step.stepOrder === req.currentStep && !step.actedAt)
   }
 
   private async afterSubmission(saved: Request) {
@@ -2311,6 +2343,7 @@ export class RequestsService {
           req.currentStep = steps[0].stepOrder
           req.status = 'UNDER_REVIEW'
           await em.getRepository(Request).save(req)
+          await this.recordStepPendingEvent(em, req)
           em.queryRunner!.data.overtimeRequestIds = new Set([req.id])
           // كتابة الطلب تسبق قفل سجل الإضافي؛ القفل المالي يحمي الهوية طوال المعاملة.
           const locked = await em.getRepository(OvertimeEntry).findOne({ where: { id: entry.id }, lock: { mode: 'pessimistic_write' } })
@@ -2459,6 +2492,7 @@ export class RequestsService {
           current.dueAt = current.slaDays ? new Date(Date.now() + current.slaDays * 86400000).toISOString() : null
           req.resolvedSteps = JSON.stringify(resolved)
           await em.getRepository(Request).save(req)
+          await this.recordStepPendingEvent(em, req, current.role)
           return true
         })
         if (changed) escalated++

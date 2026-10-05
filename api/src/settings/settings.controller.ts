@@ -54,6 +54,7 @@ import { loginSecurityConfigError } from '../auth/login-security'
 import { applyGeneralGraceToAttendanceRules, attendanceRuleToday, captureLegacyAttendanceRuleBaselines, lockAttendanceRuleMutation } from '../attendance/attendance-rule-history'
 import { assertCalendarScope, beginCalendarChange, CalendarChangeDto, finishCalendarChange } from '../attendance/attendance-calendar-history'
 import { overtimeWageComponents } from '../payroll/overtime-financial'
+import { parseQuietHours } from '../notifications/notification-events'
 import { PAYROLL_POLICY_CYCLE_CONFIG_KEYS, PAYROLL_POLICY_NULLABLE_CONFIG_KEYS, payrollPolicyCycleConfigError, validatePayrollPolicyDefaultConfig } from '../payroll/payroll-policy-settings'
 import { payrollDecisionConfigError } from '../payroll/payroll-decision-settings'
 import { PAYROLL_SELF_APPROVAL_LICENCE_PERMISSION, payrollSelfApprovalLicenceIssue } from '../payroll/payroll-run-approval'
@@ -612,6 +613,8 @@ export class SettingsController {
     'payroll.daily_accrual_hour': 0,
     // B1.14: نسبة تغيّر الصافي عن آخر مسير اللي بتطلّع تنبيه قبل الاعتماد (0 = مقفول)
     'payroll.approval.net_change_alert_percent': 0,
+    // B2.4: ساعة الملخص اليومي لإشعارات البريد (0..23)
+    'notifications.digest_hour': 0,
     'attendance.flex.shortfall_grace_minutes': 0,
     'attendance.flex.unpaid_break_minutes': 0,
     'attendance.flex.max_session_minutes': 1,
@@ -682,6 +685,8 @@ export class SettingsController {
     'payroll.daily_accrual_enabled': ['true', 'false'],
     // B1.14: مهمة الليل تحسب لكل الموظفين النشطين (الراتب الحي) ولا لموظفي المسيرات المفتوحة بس
     'payroll.live_accrual_all': ['true', 'false'],
+    // B2.4: بريد الإشعارات — 'true' بس هي اللي تفتحه (القارئ بيقارن حرفيًا)
+    'notifications.email.enabled': ['true', 'false'],
     'payroll.shortfall_mode': ['MINUTES', 'MULTIPLIER', 'FRACTION'],
     'payroll.attendance_overlap_policy': ['CUMULATIVE', 'MAX_OF_BOTH', 'NET_OF_LATENESS'],
     'payroll.late_deduction_enabled': ['true', 'false'],
@@ -815,6 +820,17 @@ export class SettingsController {
     if (dto.key === 'payroll.approval.net_change_alert_percent') {
       const n = Number(dto.value)
       if (!Number.isInteger(n) || n > 1000) throw new BadRequestException('نسبة تنبيه تغيّر الصافي عدد صحيح من 0 إلى 1000 (0 = التنبيه مقفول)')
+    }
+    // B2.4: ساعة الملخص اليومي 0..23، وساعات الهدوء «HH:MM-HH:MM» أو فاضي (القيمة الغلط كانت هتتقري «مفيش ساعات هدوء» بصمت)
+    if (dto.key === 'notifications.digest_hour') {
+      const n = Number(dto.value)
+      if (!Number.isInteger(n) || n > 23) throw new BadRequestException('ساعة الملخص اليومي عدد صحيح من 0 إلى 23')
+    }
+    if (dto.key === 'notifications.quiet_hours') {
+      dto.value = dto.value.trim()
+      if (dto.value !== '' && !parseQuietHours(dto.value)) {
+        throw new BadRequestException('ساعات الهدوء بالشكل 22:00-07:00 (من-إلى بتوقيت النظام، والبداية غير النهاية)، أو فاضي لإلغائها')
+      }
     }
     // دولة النظام الافتراضية للعطلات الرسمية: رمز الدولة أو فارغ = كل الدول
     if (dto.key === 'system.country') {
