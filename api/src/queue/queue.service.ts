@@ -2,7 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { DataSource, type EntityManager } from 'typeorm'
 import * as os from 'os'
 import { ModulesService } from '../modules-registry/modules.service'
-import { queueTablesReady, recordOutboxEvent, type DomainEventType } from './outbox'
+import { enqueueQueueJob, QUEUE_DEFAULT_MAX_ATTEMPTS, queueTablesReady, recordOutboxEvent, type DomainEventType } from './outbox'
 
 // B2.3: الطابور (jobs_queue) والعامل اللي بيوزع الـoutbox ويشغّل المهام.
 // - التوزيع: كل حدث ماتوزعش بيتحول لمهمة لكل مستهلك مشترك في نوعه، بمفتاح منع تكرار «حدث:مستهلك»، وبعدين بيتعلّم «اتوزع».
@@ -18,7 +18,7 @@ interface ClaimedJob { id: string; jobType: string; payload: string | null; atte
 
 export const QUEUE_STALE_AFTER_MS = 10 * 60_000
 export const DOCUMENT_EXPIRY_WINDOW_DAYS = 30
-export const QUEUE_DEFAULT_MAX_ATTEMPTS = 5
+export { QUEUE_DEFAULT_MAX_ATTEMPTS } from './outbox'
 const BACKOFF_BASE_MS = 30_000, BACKOFF_MAX_MS = 3_600_000
 export const queueBackoffMs = (attempt: number) => Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** Math.max(0, attempt - 1))
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error ?? 'خطأ غير معروف')).replace(/\s+/g, ' ').trim().slice(0, 1000)
@@ -50,14 +50,9 @@ export class QueueService {
     return this.insertJob(em, input.jobType, input.payload ?? null, input.key ?? null, null, input.runAfter ?? null)
   }
 
-  private async insertJob(em: EntityManager, jobType: string, payload: unknown, key: string | null, outboxEventId: string | null, runAfter: Date | null): Promise<boolean> {
-    const maxAttempts = this.handlers.get(jobType)?.maxAttempts ?? QUEUE_DEFAULT_MAX_ATTEMPTS
-    const rows: Array<{ id: string }> = await em.query(`INSERT INTO [jobs_queue] ([jobType], [payload], [status], [attempts], [maxAttempts], [runAfter], [idempotencyKey], [outboxEventId], [createdAt])
-      OUTPUT INSERTED.[id]
-      SELECT @0, @1, N'PENDING', 0, @2, COALESCE(@3, SYSUTCDATETIME()), @4, @5, SYSUTCDATETIME()
-      WHERE @4 IS NULL OR NOT EXISTS (SELECT 1 FROM [jobs_queue] WITH (UPDLOCK, HOLDLOCK) WHERE [idempotencyKey] = @4)`,
-      [jobType, payload == null ? null : JSON.stringify(payload), maxAttempts, runAfter, key ? key.slice(0, 200) : null, outboxEventId])
-    return rows.length === 1
+  // الإدخال نفسه في outbox.ts (enqueueQueueJob): الكود اللي معاه em بس بيستعمله مباشرة
+  private insertJob(em: EntityManager, jobType: string, payload: unknown, key: string | null, outboxEventId: string | null, runAfter: Date | null): Promise<boolean> {
+    return enqueueQueueJob(em, { jobType, payload, key, runAfter, outboxEventId, maxAttempts: this.handlers.get(jobType)?.maxAttempts })
   }
 
   /** توزيع دفعة من الـoutbox (حدث من غير مستهلك بيتعلّم «اتوزع» من غير مهام) */

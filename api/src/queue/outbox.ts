@@ -53,5 +53,39 @@ export async function recordOutboxEvent(em: EntityManager, input: OutboxEventInp
   return rows.length === 1
 }
 
+export const QUEUE_DEFAULT_MAX_ATTEMPTS = 5
+
+/**
+ * مهمة مباشرة في الطابور في نفس معاملة em (من غير حدث) — للكود اللي معاه em بس ومش معاه خدمة الطابور (B1.14: إعادة حساب يوم اتعلّم متسخ).
+ * key = منع التكرار (لو موجود قبل كده: مفيش صف جديد، false). runAfter = مايتنفذش قبل الوقت ده. قبل الترحيل: false.
+ * نفس إدخال QueueService.enqueue بالحرف (هو بينادي دي).
+ */
+export async function enqueueQueueJob(em: EntityManager, input: { jobType: string; payload?: unknown; key?: string | null; runAfter?: Date | null;
+  maxAttempts?: number; outboxEventId?: string | null
+  /**
+   * من غير قفل مدى على المفتاح: للمسارات الكتير المتزامنة (تعليم يوم متسخ جوه معاملات الحضور والطلبات). القفل (UPDLOCK, HOLDLOCK) بيمسك
+   * فجوة في فهرس المفاتيح لآخر المعاملة، فمعاملتين طويلتين ممكن يستنوا بعض. هنا الفهرس الفريد هو الحكم: مفتاح مكرر = false من غير خطأ
+   */
+  lockFree?: boolean }): Promise<boolean> {
+  if (!(await queueTablesReady(em))) return false
+  // runAfter لحظة UTC (العمود بيتقارن بـSYSUTCDATETIME): بتتبعت نص UTC من غير منطقة، لأن مشغل mssql بيكتب Date بتوقيت الخادم المحلي
+  // (useUTC=false) فكانت هتتأخر بفرق المنطقة الزمنية
+  const runAfterUtc = input.runAfter instanceof Date && !Number.isNaN(input.runAfter.getTime()) ? input.runAfter.toISOString().slice(0, 23) : null
+  try {
+    const rows: Array<{ id: string }> = await em.query(`INSERT INTO [jobs_queue] ([jobType], [payload], [status], [attempts], [maxAttempts], [runAfter], [idempotencyKey], [outboxEventId], [createdAt])
+      OUTPUT INSERTED.[id]
+      SELECT @0, @1, N'PENDING', 0, @2, COALESCE(CONVERT(datetime2, @3, 126), SYSUTCDATETIME()), @4, @5, SYSUTCDATETIME()
+      WHERE @4 IS NULL OR NOT EXISTS (SELECT 1 FROM [jobs_queue]${input.lockFree ? '' : ' WITH (UPDLOCK, HOLDLOCK)'} WHERE [idempotencyKey] = @4)`,
+    [input.jobType, input.payload == null ? null : JSON.stringify(input.payload), input.maxAttempts ?? QUEUE_DEFAULT_MAX_ATTEMPTS, runAfterUtc,
+      input.key ? input.key.slice(0, 200) : null, input.outboxEventId ?? null])
+    return rows.length === 1
+  } catch (error) {
+    // سباق على نفس المفتاح من غير قفل: الفهرس الفريد رفض الصف التاني (2601/2627) = المهمة موجودة
+    const number = Number((error as { number?: unknown; driverError?: { number?: unknown } })?.number ?? (error as { driverError?: { number?: unknown } })?.driverError?.number)
+    if (input.lockFree && (number === 2601 || number === 2627)) return false
+    throw error
+  }
+}
+
 /** للاختبارات: نسيان حالة الجداول */
 export function resetQueueTablesCache() { ready = null; checkedAt = 0; warned = false }

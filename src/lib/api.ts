@@ -1162,6 +1162,13 @@ export interface PayrollRunChanges {
       changedByUserId: number | null; changedByName: string | null; changedAt: string; source: string | null; reason: string | null }> }>
   leavers: Array<{ employeeId: number; employeeCode: string | null; fullName: string | null }>
   counts: { changed: number; new: number; leavers: number }
+  /** B1.14: تنبيهات قبل الاعتماد — صافي اتغيّر بالنسبة المضبوطة أو أكتر عن مسير المقارنة (بالبنود اللي فرقت)، وصافي صفر أو سالب */
+  alerts?: {
+    thresholdPercent: number
+    netChanges: Array<{ employeeId: number; employeeCode: string | null; fullName: string | null; previousPeriod: string | null
+      previousNet: number; currentNet: number; percent: number | null; lines: Array<{ label: string; previous: number; current: number }> }>
+    zeroOrNegativeNet: Array<{ employeeId: number; employeeCode: string | null; fullName: string | null; netPay: number }>
+  }
 }
 export const fetchPayrollRunChanges = (id: number) => get<PayrollRunChanges>(`/payroll/runs/${id}/changes`)
 export const reopenPayroll = (id: number, reason: string) => post<ApiPayrollRun>(`/payroll/runs/${id}/reopen`, { reason })

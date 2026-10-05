@@ -178,6 +178,14 @@ export const MODULES = {
     requestTypes: ['PAYROLL_DEDUCTION', 'PAYROLL_BONUS'],
     requestHandlers: ['salary_update_history', 'payroll_bonus', 'payroll_allowance', 'payroll_adjustment', 'payroll_bank_secure'],
     jobs: ['payroll.daily-accrual', 'payroll.deductions-sla'],
+    features: {
+      // B1.14 (الراتب الحي): الموظف يشوف مستحقه وهو بيتكوّن — مقفولة لحد ما الشركة تقرر
+      'payroll.live_employee_view': {
+        nameAr: 'مستحق الموظف التقديري لحد امبارح',
+        description: 'كارت في بوابة الموظف بمستحقه التقديري من أول فترة الرواتب لحد امبارح، ومبلغ الخصم أو الإضافي جنب كل يوم في «حضوري». تقديري، والنهائي في القسيمة بعد الاعتماد',
+        default: false,
+      },
+    },
   }),
   loans: moduleDef({
     nameAr: 'السلف والالتزامات', group: 'money', dependsOn: ['payroll'],

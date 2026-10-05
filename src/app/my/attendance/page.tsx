@@ -24,6 +24,11 @@ import {
 import { fetchAttendanceSheetRange } from '@/lib/attendance-range-api'
 import { dayRangeError, dayRangeLabel, periodOverlapsRange } from '@/lib/payroll-month-range'
 import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
+// B1.14: مبلغ اليوم التقديري جنب دقايقه (الميزة الفرعية مقفولة افتراضيًا: مفيش نداء ولا مبالغ)
+import { useFeatureEnabled } from '@/lib/modules'
+import { formatMoney } from '@/lib/money'
+import { fetchMyLiveSalary, myLiveDayDeduction, type MyLiveSalaryDay } from '@/lib/payroll-live-api'
+import { MY_LIVE_SALARY_FEATURE } from '@/components/payroll/MyLiveSalaryCard'
 
 const weekdayNames = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت']
 
@@ -69,6 +74,15 @@ export default function MyAttendancePage() {
   const [summary, setSummary] = useState<Record<string, number>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  // B1.14: مبالغ أيام الفترة الجارية التقديرية (يوم عليه خصم أو إضافي)، بالتاريخ
+  const liveMoneyOn = useFeatureEnabled(MY_LIVE_SALARY_FEATURE)
+  const [liveDays, setLiveDays] = useState<Map<string, MyLiveSalaryDay>>(new Map())
+  useEffect(() => {
+    if (!liveMoneyOn) { setLiveDays(new Map()); return }
+    let cancelled = false
+    fetchMyLiveSalary().then(result => { if (!cancelled) setLiveDays(new Map((result?.days ?? []).map(day => [day.date, day]))) }).catch(() => undefined)
+    return () => { cancelled = true }
+  }, [liveMoneyOn])
 
   // هوية الموظف من الجلسة — بعد الـ mount
   useEffect(() => {
@@ -312,6 +326,17 @@ export default function MyAttendancePage() {
                                     {deductibleMinutes} د بخصم
                                   </p>
                                 )}
+                                {(() => {
+                                  const live = liveDays.get(String(row.date).slice(0, 10))
+                                  if (!live) return null
+                                  const deduction = myLiveDayDeduction(live)
+                                  return <>
+                                    {deduction > 0 && <p className="text-xs text-red-700 mt-1 font-medium" title="خصم اليوم التقديري — النهائي في القسيمة بعد الاعتماد" data-my-live-day>
+                                      خصم تقديري: <span dir="ltr">{formatMoney(deduction)}</span></p>}
+                                    {live.overtime > 0 && <p className="text-xs text-success-700 mt-1 font-medium" title="إضافي اليوم المعتمد — تقديري">
+                                      إضافي: <span dir="ltr">{formatMoney(live.overtime)}</span></p>}
+                                  </>
+                                })()}
                               </td>
                               <td className="table-cell text-center">
                                 {Number(row.earlyLeaveMinutes ?? 0) > 0 ? (

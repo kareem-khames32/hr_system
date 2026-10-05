@@ -297,6 +297,10 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'payroll.daily_accrual_enabled', value: 'true' },
   // ساعة تشغيل جار التراكم الليلي (0..23) — بعد تجسيد الغياب ومزامنة الأجهزة
   { key: 'payroll.daily_accrual_hour', value: '2' },
+  // B1.14 (الراتب الحي): مهمة الليل بتحسب لكل الموظفين النشطين عشان معاينة الفترة ماتستناش مسير — false = موظفو المسيرات المفتوحة بس زي الأول
+  { key: 'payroll.live_accrual_all', value: 'true' },
+  // B1.14: تنبيه قبل الاعتماد لو صافي الموظف اتغيّر عن آخر مسير بالنسبة دي أو أكتر (0 = التنبيه مقفول)
+  { key: 'payroll.approval.net_change_alert_percent', value: '20' },
   { key: 'payroll.shortfall_mode', value: 'MINUTES' },
   { key: 'payroll.shortfall_value', value: '1' },
   { key: 'payroll.attendance_overlap_policy', value: 'NET_OF_LATENESS' },

@@ -61,6 +61,9 @@ import { PayrollAllowancesService } from './allowances-grants.service'
 // تراكم المسير يومًا بيوم: جدول الأيام المتراكمة، وخدمتها، والجار الليلي، وشاشة «آخر يوم محسوب»
 import { PayrollDailyAccrual } from './payroll-daily-accrual.entities'
 import { PayrollDailyAccrualService } from './payroll-daily-accrual.service'
+// B1.14: معاينة الفترة الجارية من التراكم اليومي (الراتب الحي)
+import { PayrollLiveController } from './payroll-live.controller'
+import { PayrollLiveService } from './payroll-live.service'
 import { PayrollDailyAccrualScheduler } from './payroll-daily-accrual.scheduler'
 import { PayrollDailyAccrualController } from './payroll-daily-accrual.controller'
 // سلسلة اعتماد المسير (سلسلة الشركة + سلسلة خاصة بمسير دائم) وصرف المسير موظف بموظف
@@ -141,10 +144,10 @@ import { HiddenRunPeriodsInterceptor } from './hidden-run-periods.interceptor'
   ],
   controllers: [PayrollController, ObligationsController, PayrollRulesController, PayrollPolicyController, PayrollSalaryHistoryController, TypedDeductionsController, BonusesController,
     FinancialExemptionsController, PayrollCorrectionsController, SocialInsuranceController, PayrollBankSheetController, PayrollOverviewController, PayrollAllowancesController,
-    PayrollDailyAccrualController, PayrollApprovalChainController, PayrollDisbursementController],
+    PayrollDailyAccrualController, PayrollApprovalChainController, PayrollDisbursementController, PayrollLiveController],
   providers: [PayrollService, ObligationsService, PayrollRulesService, PayrollPolicyService, PayrollSalaryHistoryService, TypedDeductionsService, TypedDeductionsScheduler, BonusesService,
     FinancialExemptionsService, PayrollCorrectionsService, SocialInsuranceService, PayrollOverviewService, PayrollAllowancesService,
-    PayrollDailyAccrualService, PayrollDailyAccrualScheduler, PayrollApprovalChainService, PayrollDisbursementService,
+    PayrollDailyAccrualService, PayrollDailyAccrualScheduler, PayrollApprovalChainService, PayrollDisbursementService, PayrollLiveService,
     // CR40: شبكة أمان على كل رد JSON لحساب فرع — فترة مسير مخفي له في أي نص بتتحجب (hidden-run-periods.interceptor.ts)
     { provide: APP_INTERCEPTOR, useClass: HiddenRunPeriodsInterceptor }],
 })

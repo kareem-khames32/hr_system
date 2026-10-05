@@ -4,6 +4,7 @@
 //  PF-02) رد تفاصيل المسير للشاشة (?view=screen) أقل من 2 ميجا وفيه اللي الشاشة بتقراه، والرد الكامل والقسيمة بالتفصيل كله.
 //  PF-03) حدث «محسوب» من غير تفصيل البنود، وبصمة كل تفصيل مطابقة للمخزن.
 //  PF-04) الحضور اليومي (النهارده، فيه حساب الغياب اللحظي) أقل من 3 ثواني.
+//  PF-05) (B1.14) معاينة الفترة الجارية لحد امبارح لـ500 موظف من التراكم المخزّن أقل من 3 ثواني، ومجموعها = مجموع صفوف التراكم.
 // Run (من api/): node --test test/payroll-performance.integration.cjs
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
@@ -194,4 +195,48 @@ test('PF-04: الحضور اليومي (النهارده بالغياب اللح
   }
   assert.ok(daily.ms < 3000, `الحضور اليومي خد ${daily.ms} مللي`)
   assert.ok(past.ms < 3000, `يوم فات خد ${past.ms} مللي`)
+})
+
+test('PF-05 (B1.14): معاينة الفترة الجارية لحد امبارح لـ500 موظف أقل من 3 ثواني، ومجموعها = مجموع صفوف التراكم', { timeout: 1800000 }, async t => {
+  // قبل أي حساب: المعاينة بترد بسرعة برضه (الموظفين «لسه ماتحسبش»)
+  const empty = ok(await request(users.admin, 'GET', '/payroll/live'), 200)
+  assert.equal(empty.body.rows.length, STAFF)
+  // حساب أيام الفترة الجارية (شغل مهمة الليل — مش هو المقاس): كل موظف من أول الفترة لحد امبارح. الطلب الواحد بيحسب لحد 20 ثانية
+  // ويقول الباقي، والشاشة بتكمّل — نفس الحلقة هنا
+  const window = empty.body
+  const days = Math.max(0, Math.round((Date.parse(`${window.upTo}T12:00:00Z`) - Date.parse(`${window.startDate}T12:00:00Z`)) / 86400000) + 1)
+  const refreshed = { ms: 0, rounds: 0, longestMs: 0, employees: 0, computed: 0 }
+  for (;;) {
+    const round = ok(await request(users.admin, 'POST', '/payroll/live/refresh'), 201)
+    assert.equal(round.body.disabled, false)
+    refreshed.ms += round.ms; refreshed.rounds += 1; refreshed.longestMs = Math.max(refreshed.longestMs, round.ms)
+    refreshed.employees += round.body.employees; refreshed.computed += round.body.computed
+    if (!(round.body.remaining > 0)) break
+    assert.ok(round.body.computed > 0, 'كل جولة بتحسب حاجة')
+    assert.ok(refreshed.rounds < 200)
+  }
+  assert.deepEqual([refreshed.employees, refreshed.computed], [days ? STAFF : 0, STAFF * days])
+  // الطلب الواحد مابيطولش: الميزانية 20 ثانية + آخر موظف + المعاينتين
+  assert.ok(refreshed.longestMs < 45000, `أطول طلب «حدّث الحساب» خد ${refreshed.longestMs} مللي`)
+  const preview = ok(await request(users.admin, 'GET', '/payroll/live'), 200)
+  const again = ok(await request(users.admin, 'GET', '/payroll/live'), 200)
+  t.diagnostic(JSON.stringify({ staff: STAFF, windowDays: days, emptyMs: empty.ms, refreshMs: refreshed.ms, refreshRounds: refreshed.rounds, refreshLongestMs: refreshed.longestMs,
+    previewMs: preview.ms, previewAgainMs: again.ms, previewBytes: preview.bytes }))
+  assert.deepEqual(preview.body.counts, { employees: STAFF, complete: days ? STAFF : 0, pending: days ? 0 : STAFF })
+  // المجموع اليدوي من الجدول نفسه بالقرش
+  const [sums] = await ds.query(`SELECT CONVERT(varchar(40), ISNULL(SUM([latenessAmount] + [shortfallAmount] + [absenceAmount] + [leaveAmount] + [suspensionAmount]), 0)) AS [deductions],
+      CONVERT(varchar(40), ISNULL(SUM([overtimeAmount]), 0)) AS [overtime], COUNT(*) AS [n]
+    FROM [payroll_daily_accrual] WHERE [period] = @0 AND [date] >= @1 AND [date] <= @2`, [window.period, window.startDate, window.upTo])
+  assert.equal(Number(sums.n), STAFF * days)
+  const cents = value => Math.round(Number(value) * 100)
+  assert.equal(preview.body.rows.reduce((total, row) => total + cents(row.deductions), 0), cents(sums.deductions))
+  assert.equal(preview.body.byCurrency.reduce((total, group) => total + cents(group.totals.deductions), 0), cents(sums.deductions))
+  assert.equal(preview.body.rows.reduce((total, row) => total + cents(row.overtime), 0), cents(sums.overtime))
+  assert.ok(preview.ms < 3000, `المعاينة خدت ${preview.ms} مللي`)
+  assert.ok(empty.ms < 3000, `المعاينة قبل الحساب خدت ${empty.ms} مللي`)
+  // «حدّث الحساب» تاني: كله جاهز، فمفيش موظف يتحسب له حاجة والرد سريع
+  const second = ok(await request(users.admin, 'POST', '/payroll/live/refresh'), 201)
+  t.diagnostic(JSON.stringify({ refreshAgainMs: second.ms }))
+  assert.deepEqual([second.body.employees, second.body.computed, second.body.remaining], [0, 0, 0])
+  assert.ok(second.ms < 3000, `«حدّث الحساب» وكله جاهز خد ${second.ms} مللي`)
 })

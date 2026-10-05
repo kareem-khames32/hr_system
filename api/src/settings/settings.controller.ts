@@ -610,6 +610,8 @@ export class SettingsController {
     'attendance.sync_interval_minutes': 0,
     // ساعة تشغيل جار التراكم اليومي (0..23)
     'payroll.daily_accrual_hour': 0,
+    // B1.14: نسبة تغيّر الصافي عن آخر مسير اللي بتطلّع تنبيه قبل الاعتماد (0 = مقفول)
+    'payroll.approval.net_change_alert_percent': 0,
     'attendance.flex.shortfall_grace_minutes': 0,
     'attendance.flex.unpaid_break_minutes': 0,
     'attendance.flex.max_session_minutes': 1,
@@ -678,6 +680,8 @@ export class SettingsController {
     'payroll.shortfall_enabled': ['true', 'false'],
     // مفتاح إيقاف تراكم المسير اليومي (صمام الأمان الموثق في payroll-daily-accrual.ts)
     'payroll.daily_accrual_enabled': ['true', 'false'],
+    // B1.14: مهمة الليل تحسب لكل الموظفين النشطين (الراتب الحي) ولا لموظفي المسيرات المفتوحة بس
+    'payroll.live_accrual_all': ['true', 'false'],
     'payroll.shortfall_mode': ['MINUTES', 'MULTIPLIER', 'FRACTION'],
     'payroll.attendance_overlap_policy': ['CUMULATIVE', 'MAX_OF_BOTH', 'NET_OF_LATENESS'],
     'payroll.late_deduction_enabled': ['true', 'false'],
@@ -807,6 +811,10 @@ export class SettingsController {
           ? 'ساعة تشغيل التراكم اليومي عدد صحيح من 0 إلى 23'
           : 'فاصل مزامنة أجهزة البصمة عدد صحيح من 0 إلى 1440 دقيقة (0 = متوقفة)')
       }
+    }
+    if (dto.key === 'payroll.approval.net_change_alert_percent') {
+      const n = Number(dto.value)
+      if (!Number.isInteger(n) || n > 1000) throw new BadRequestException('نسبة تنبيه تغيّر الصافي عدد صحيح من 0 إلى 1000 (0 = التنبيه مقفول)')
     }
     // دولة النظام الافتراضية للعطلات الرسمية: رمز الدولة أو فارغ = كل الدول
     if (dto.key === 'system.country') {

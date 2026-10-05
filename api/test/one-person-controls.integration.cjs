@@ -89,9 +89,13 @@ async function acknowledge(runId) {
   const report = expectStatus(await request(U.admin, 'GET', `/payroll/runs/${runId}/unassigned`), 200)
   expectStatus(await request(U.admin, 'POST', `/payroll/runs/${runId}/unassigned-ack`, { reportHash: report.reportHash }), 201)
 }
+// وقت الاعتماد بيتخزن بالثانية (من غير أجزائها)، فتغيير في نفس ثانية الاعتماد وقبله بيتحسب «بعد آخر مسير» (الناحية الأأمن: تغيير زيادة يبان،
+// مش تغيير يستخبى). من B1.12 الحساب والاعتماد بقوا أسرع من ثانية، فالمساعد بيستنى بداية الثانية اللي بعدها قبل الاعتماد: كل تغيير قبله = قبل المسير
+const nextSecond = () => new Promise(resolve => setTimeout(resolve, 1050 - (Date.now() % 1000)))
 async function approved(period, people, name, approver = U.boss) {
   const run = await calculate(period, people, name)
   await acknowledge(run.id)
+  await nextSecond()
   expectStatus(await request(approver, 'POST', `/payroll/runs/${run.id}/approve`), 201)
   return run
 }
@@ -300,9 +304,6 @@ test('OP-2c (CRP1-B01): مسير أحدث في فرع تاني وأقدم في �
   // راح فرع ب واتعمد له مسير هناك براتب تاني، وبعدين رجع فرع أ براتب تالت
   await moveFrom(back, B.b, `${away}-01`)
   expectStatus(await monthlyHistory(U.admin, back, [['2026-01', monthBefore(away), '5000.00'], [away, null, '7000.00']]), 201)
-  // وقت الاعتماد بيتخزن بالثانية (من غير أجزائها)، فتغيير في نفس ثانية الاعتماد وقبله بيتحسب «بعد آخر مسير» (الناحية الأأمن: تغيير زيادة يبان،
-  // مش تغيير يستخبى). من B1.12 الاعتماد بقى أسرع من ثانية، فالاختبار بيفصل بين تغيير الأجر والاعتماد بثانية كاملة
-  await new Promise(resolve => setTimeout(resolve, 1050 - (Date.now() % 1000)))
   const foreign = await approved(away, [back], `${series} ب`)
   await moveFrom(back, B.a, '2026-05-01')
   expectStatus(await monthlyHistory(U.admin, back, [['2026-01', monthBefore(away), '5000.00'], [away, away, '7000.00'], ['2026-05', null, '8000.00']]), 201)
@@ -380,6 +381,83 @@ test('OP-2e (CRP1R-N01): مسيرات مخفية كتير بنفس اسم الس
   assert.deepEqual([legacy.previousSeriesPeriod, legacy.leavers], ['2019-06', []])
   // حساب الشركة: آخر مسير بالاسم زي ما هو (آخر الستين)
   assert.equal((await changesOf(U.admin, current)).previousSeriesPeriod, '2024-12')
+})
+
+test('OP-2f (B1.14): تنبيهات قبل الاعتماد — الصافي اتغيّر بالنسبة أو أكتر ببنوده، وتحت النسبة لأ، والنسبة 0 بتقفله، والصافي صفر أو سالب، وبمسير مقارنة القارئ', async () => {
+  // مسيرات مزروعة بأرقام معروفة (صف المسير وعضويته وبنده) من غير حساب: الحالة عن القراءة بس
+  const series = `مسير التنبيهات ${crypto.randomUUID().slice(0, 6)}`, ALERT = 'payroll.approval.net_change_alert_percent'
+  const plant = async (name, period, branch, status, rows) => {
+    const run = await repo('PayrollRun').save({ name, period, startDate: `${period}-01`, endDate: `${period}-28`, branchId: branch.id, scopeType: 'BRANCH', status,
+      totalNet: rows.reduce((sum, [, item]) => sum + item.netPay, 0), approvedAt: status === 'APPROVED' ? new Date(`${period}-28T10:00:00Z`) : null })
+    for (const [emp, item] of rows) {
+      await repo('PayrollRunMember').save({ runId: run.id, employeeId: emp.id, membershipStatus: 'INCLUDED', snapshot: { branchId: branch.id, employeeCode: emp.employeeCode, fullName: emp.fullName } })
+      await repo('PayrollItem').save({ runId: run.id, employeeId: emp.id, absenceDays: 0, unpaidLeaveDays: 0, payMethod: 'cash', breakdown: JSON.stringify({ gross: item.basicSalary }), ...item })
+    }
+    return run
+  }
+  const P = {}
+  for (const key of ['up', 'down', 'edge', 'small', 'steady', 'zero', 'fromZero', 'newbie', 'mover']) P[key] = await employee(B.a)
+  const plain = { basicSalary: 9000, netPay: 9000 }
+  await plant(series, '2033-01', B.a, 'APPROVED', [[P.up, plain], [P.down, plain], [P.edge, { basicSalary: 10000, netPay: 10000 }], [P.small, plain], [P.steady, plain], [P.zero, plain],
+    [P.fromZero, { basicSalary: 9000, absenceDeduction: 9000, netPay: 0 }]])
+  // مسير المنقول اللي فات اتعمل في فرع ب (لقطة عضويته هناك فرع ب) براتب تاني
+  const foreign = await plant(`${series} ب`, '2033-01', B.b, 'APPROVED', [[P.mover, { basicSalary: 6123.45, netPay: 6123.45 }]])
+  const run = await plant(series, '2033-02', B.a, 'CALCULATED', [[P.up, { basicSalary: 12000, netPay: 12000 }], [P.down, { basicSalary: 9000, absenceDeduction: 2400, latenessDeduction: 300, netPay: 6300 }],
+    [P.edge, { basicSalary: 10000, loanInstallments: 2000, netPay: 8000 }], [P.small, { basicSalary: 9500, netPay: 9500 }], [P.steady, plain],
+    [P.zero, { basicSalary: 9000, absenceDeduction: 9000, netPay: 0 }], [P.fromZero, plain], [P.newbie, { basicSalary: 4000, otherDeductions: 4150, netPay: -150 }], [P.mover, plain]])
+  expectStatus(await request(U.hrA, 'GET', `/payroll/runs/${foreign.id}`), 403)
+  const shape = alerts => alerts.netChanges.map(row => [row.employeeId, row.employeeCode, row.previousPeriod, row.previousNet, row.currentNet, row.percent])
+  const who = (emp, ...rest) => [emp.id, emp.employeeCode, ...rest]
+  const linesOf = (alerts, emp) => alerts.netChanges.find(row => row.employeeId === emp.id).lines.map(line => [line.label, line.previous, line.current])
+  const nonPositive = alerts => alerts.zeroOrNegativeNet.map(row => [row.employeeId, row.fullName, row.netPay]).sort((a, b) => a[0] - b[0])
+
+  // حساب الشركة: النسبة الافتراضية 20 — الأكبر الأول، واللي سابقه صفر (من غير نسبة) قبلهم، واللي تحت النسبة والثابت والجديد مش فيهم
+  const company = await changesOf(U.admin, run)
+  assert.equal(company.alerts.thresholdPercent, 20)
+  assert.deepEqual(shape(company.alerts), [who(P.fromZero, '2033-01', 0, 9000, null), who(P.zero, '2033-01', 9000, 0, 100), who(P.mover, '2033-01', 6123.45, 9000, 47),
+    who(P.up, '2033-01', 9000, 12000, 33.3), who(P.down, '2033-01', 9000, 6300, 30), who(P.edge, '2033-01', 10000, 8000, 20)])
+  // سبب التغيير: البنود اللي فرقت بس
+  assert.deepEqual(linesOf(company.alerts, P.up), [['الأساسي', 9000, 12000]])
+  assert.deepEqual(linesOf(company.alerts, P.down), [['التأخير', 0, 300], ['الغياب', 0, 2400]])
+  assert.deepEqual(linesOf(company.alerts, P.edge), [['السلف', 0, 2000]])
+  assert.deepEqual(linesOf(company.alerts, P.zero), [['الغياب', 0, 9000]])
+  assert.deepEqual(linesOf(company.alerts, P.fromZero), [['الغياب', 9000, 0]])
+  assert.equal(company.alerts.netChanges.find(row => row.employeeId === P.up.id).fullName, P.up.fullName)
+  // الصافي صفر أو سالب (منهم الجديد اللي مالوش مسير مقارنة)
+  assert.deepEqual(nonPositive(company.alerts), [[P.zero.id, P.zero.fullName, 0], [P.newbie.id, P.newbie.fullName, -150]].sort((a, b) => a[0] - b[0]))
+  // العدّادات القديمة زي ما هي (التنبيهات في مفتاح لوحدها)
+  assert.deepEqual(company.counts, { changed: 3, new: 1, leavers: 0 })
+
+  // قارئ فرع أ: مسير فرع ب كأنه مش موجود — المنقول من غير تنبيه ولا رقم من هناك، والباقي زي حساب الشركة
+  const view = await changesOf(U.hrA, run), text = JSON.stringify(view)
+  assert.equal(view.scoped, true)
+  assert.ok(!text.includes('6123'), `صافي مسير الفرع التاني مش في رد قارئ الفرع: ${text}`)
+  assert.deepEqual(shape(view.alerts), shape(company.alerts).filter(row => row[0] !== P.mover.id))
+  assert.deepEqual(nonPositive(view.alerts), nonPositive(company.alerts))
+  assert.deepEqual(view.counts, { changed: 2, new: 2, leavers: 0 })
+  // من غير صلاحية عرض الرواتب مفيش تنبيهات خالص
+  expectStatus(await request(U.finA, 'GET', `/payroll/runs/${run.id}/changes`), 403)
+
+  try {
+    // نسبة أقل بتطلّع اللي كان تحتها (5.6%)
+    expectStatus(await request(U.admin, 'PATCH', '/settings/config', { key: ALERT, value: '5' }), 200)
+    const lower = await changesOf(U.admin, run)
+    assert.equal(lower.alerts.thresholdPercent, 5)
+    assert.deepEqual(shape(lower.alerts).at(-1), who(P.small, '2033-01', 9000, 9500, 5.6))
+    assert.equal(lower.alerts.netChanges.length, 7)
+    // 0 = تنبيه تغيّر الصافي مقفول، وتنبيه الصافي صفر أو سالب شغال
+    expectStatus(await request(U.admin, 'PATCH', '/settings/config', { key: ALERT, value: '0' }), 200)
+    const off = await changesOf(U.admin, run)
+    assert.deepEqual([off.alerts.thresholdPercent, off.alerts.netChanges], [0, []])
+    assert.deepEqual(nonPositive(off.alerts), nonPositive(company.alerts))
+    // قيمة غلط في الإعدادات مرفوضة، والمحفوظ مابيتغيرش
+    for (const value of ['-1', '1001', '12.5', 'كتير', '']) expectStatus(await request(U.admin, 'PATCH', '/settings/config', { key: ALERT, value }), 400)
+    assert.equal((await repo('RequestsConfig').findOneByOrFail({ key: ALERT })).value, '0')
+    // قيمة تالفة في القاعدة مباشرة = الافتراضي 20 (التنبيه مايتقفلش بالغلط)
+    await repo('RequestsConfig').update({ key: ALERT }, { value: 'تالف' })
+    assert.equal((await changesOf(U.admin, run)).alerts.thresholdPercent, 20)
+  } finally { await repo('RequestsConfig').update({ key: ALERT }, { value: '20' }) }
+  assert.deepEqual(shape((await changesOf(U.admin, run)).alerts), shape(company.alerts))
 })
 
 test('OP-3: «اللي غيّر مايعتمدش لوحده» — مقفول زي النهارده؛ مفتوح رفض برسالة، وحد تاني بيعتمد، ومدير النظام بسبب بيعدّي ويتسجل', async () => {

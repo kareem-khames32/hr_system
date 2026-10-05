@@ -54,6 +54,7 @@ import { PayrollConflictResolution } from '@/components/payroll/PayrollConflictR
 import { PayrollOverviewTabs, type PayrollOverviewTab } from '@/components/payroll/PayrollOverviewTabs'
 // «تابة البدلات»: صرف بدل لشهر على استهداف (يدخل إضافات المسير باسمه)
 import { PayrollAllowancesTab } from '@/components/payroll/PayrollAllowancesTab'
+import { PayrollLivePreviewTab } from '@/components/payroll/PayrollLivePreviewTab'
 import { useOrgFilter } from '@/components/OrgFilter'
 import { defaultPayRecord, PayrollPayRecordForm, PayrollPayRecordSummary, payRecordReady, type PayRecordDraft } from '@/components/payroll/PayrollPayRecordForm'
 // قرار المالك (22 سبتمبر): سلسلة اعتماد المسير — مين اعتمد ومين عليه الدور، و«اعتمد خطوتي» / «ارفض بسبب» لصاحب الخطوة
@@ -142,9 +143,11 @@ const SNAPSHOT_MISSING_MESSAGE = 'هذا المسير محسوب بإصدار س
 
 // قائمة المسيرات: المسيرات الشهرية العادية غير الملغاة فقط — مسيرات العكس والتكميلي تصحيح لمسير مصروف،
 // والملغى محفوظ للمراجعة. الرابط «?run=ID» يظل يفتح أي مسير قديم ويبقيه معروضًا في القائمة.
-type PayrollPageTab = 'runs' | PayrollOverviewTab | 'allowances'
+type PayrollPageTab = 'runs' | PayrollOverviewTab | 'allowances' | 'live'
 const PAYROLL_PAGE_TABS: Array<[PayrollPageTab, string]> = [
   ['runs', 'المسيرات'],
+  // B1.14 (الراتب الحي): الفترة الجارية لحد امبارح من التراكم اليومي، من غير مسير
+  ['live', 'لحد امبارح'],
   // قرار المالك (20 سبتمبر): جدول واحد لكل موظفي الشهر بعمود «المسير» — التبويبات القديمة باقية زي ما هي
   ['roster', 'كل الموظفين والمسير'],
   ['included', 'المدرجين بالمسير'],
@@ -1409,7 +1412,9 @@ export default function PayrollPage() {
           </div>
           )}
         </div>
-        </>) : tab === 'allowances' ? (
+        </>) : tab === 'live' ? (
+          <PayrollLivePreviewTab />
+        ) : tab === 'allowances' ? (
           <PayrollAllowancesTab branches={branches} departments={departments} teams={teams} org={org} employees={employees}
             onOpenRun={(id) => { setTab('runs'); loadDetail(id) }} />
         ) : (

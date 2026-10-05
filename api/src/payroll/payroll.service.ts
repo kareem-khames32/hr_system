@@ -119,7 +119,8 @@ import { hiddenRunPeriodsByEmployee, scopePayrollRunRefBlockers, scrubRunPeriods
 import { explainPayrollNegativeNet, payrollNegativeNetMessage, type PayrollNegativeNetRow } from './payroll-negative-net'
 import { claimPayrollApproval } from './payroll-approval-lock'
 // B1.7: اتغيّر إيه من آخر مسير، وضابط الشخص الواحد في الاعتماد (مقفول افتراضيًا)
-import { collectPayrollRunMemberChanges, payrollItemMonthlyGross, payrollRunChangeItems, payrollRunLeavers } from './payroll-run-changes'
+import { collectPayrollRunMemberChanges, PAYROLL_NET_CHANGE_ALERT_KEY, PAYROLL_RUN_CHANGE_ITEM_COLUMNS, payrollItemMonthlyGross, payrollNetChange, payrollNetChangeAlertPercent,
+  payrollRunChangeItems, payrollRunLeavers } from './payroll-run-changes'
 // B1.12: عرض شاشة المسير الخفيف، وبند حدث الحساب من غير التفصيل
 import { payrollEventItem, payrollRunScreenBreakdown, payrollRunScreenMember } from './payroll-run-screen-view'
 import { onePersonControlEnabled } from './one-person-controls'
@@ -1480,7 +1481,7 @@ export class PayrollService {
       await this.assertRunAccess(user, run, em)
       const members = await em.getRepository(PayrollRunMember).find({ where: { runId }, select: { id: true, employeeId: true, membershipStatus: true, snapshot: true } })
       const included = members.filter(member => member.membershipStatus === 'INCLUDED' || member.membershipStatus == null)
-      const items = await em.getRepository(PayrollItem).find({ where: { runId }, select: { id: true, runId: true, employeeId: true, breakdown: true, payMethod: true } })
+      const items = await em.getRepository(PayrollItem).find({ where: { runId }, select: PAYROLL_RUN_CHANGE_ITEM_COLUMNS })
       const ids = [...new Set([...included.map(member => member.employeeId), ...items.map(item => item.employeeId)])]
       const viewer = { scope: branchScopeOf(user), selfEmployeeId: user.employeeId ?? null }
       const changes = await collectPayrollRunMemberChanges(em, run, ids, viewer)
@@ -1499,7 +1500,20 @@ export class PayrollService {
           changes: entry.changes.map(change => ({ ...change, changedByName: change.changedByUserId != null ? names.get(change.changedByUserId) ?? null : null })) }
       }).filter(row => row.isNew || row.salary || row.payMethod || row.changes.length)
       const { previousPeriod, leavers } = await payrollRunLeavers(em, run, new Set(ids), viewer.scope)
+      // B1.14: تنبيهات قبل الاعتماد — صافي اتغيّر عن مسير المقارنة بالنسبة المضبوطة أو أكتر (بالبنود اللي فرقت)، وصافي صفر أو سالب.
+      // مسير المقارنة هو نفسه بتاع التاب (آخر مسير القارئ يشوفه للموظف — CRP1)، فمفيش رقم من مسير مخفي
+      const thresholdPercent = payrollNetChangeAlertPercent(await this.cfg(PAYROLL_NET_CHANGE_ALERT_KEY, ''))
+      const person = (employeeId: number) => ({ employeeId, employeeCode: identity.get(employeeId)?.employeeCode ?? null, fullName: identity.get(employeeId)?.fullName ?? null })
+      const netChanges = items.flatMap(item => {
+        const entry = changes.get(item.employeeId)
+        const previous = entry?.previousRunId ? previousItems.find(row => row.runId === entry.previousRunId && row.employeeId === item.employeeId) : undefined
+        const change = payrollNetChange(previous, item, thresholdPercent)
+        return change ? [{ ...person(item.employeeId), previousPeriod: entry!.previousPeriod, ...change }] : []
+      }).sort((a, b) => (b.percent ?? Infinity) - (a.percent ?? Infinity) || a.employeeId - b.employeeId)
+      const zeroOrNegativeNet = items.filter(item => Math.round(Number(item.netPay) * 100) <= 0)
+        .map(item => ({ ...person(item.employeeId), netPay: Math.round(Number(item.netPay) * 100) / 100 }))
       return { runId: run.id, period: run.period, scoped: viewer.scope !== null, previousSeriesPeriod: previousPeriod, rows, leavers,
+        alerts: { thresholdPercent, netChanges, zeroOrNegativeNet },
         counts: { changed: rows.filter(row => !row.isNew).length, new: rows.filter(row => row.isNew).length, leavers: leavers.length } }
     })
   }

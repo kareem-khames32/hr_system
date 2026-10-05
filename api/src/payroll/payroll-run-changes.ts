@@ -8,6 +8,7 @@ import { EmployeeSalaryHistoryVersion } from './payroll-salary-history.entities'
 import { PayrollItem, PayrollRun, PayrollRunMember } from './payroll.entities'
 import { payrollRunSeriesName } from './payroll-run-membership-moves'
 import { payrollRunRefVisibility } from './payroll-run-visibility'
+import { PAYROLL_LINE_NAMES } from './payroll-item-lines'
 
 // B1.7 (R10): «اتغيّر إيه من آخر مسير» — لكل موظف في المسير: الراتب والحساب البنكي وطريقة الصرف، ومين غيّر وإمتى، من بعد آخر مسير
 // معتمد أو مصروف ليه. المصدر: تاريخ الراتب الشهري (مين وإمتى)، وسجل تغييرات الصرف (ترحيل 081)، وقبله أو قبل أول صف فيه سجل تغييرات
@@ -209,6 +210,43 @@ export function payrollItemMonthlyGross(item: Pick<PayrollItem, 'breakdown'> | n
   } catch { return null }
 }
 
+// أعمدة البند اللي المقارنة بتقراها: الراتب الشهري من التفصيل، وطريقة الصرف، ومبالغ البنود والصافي (تنبيه تغيّر الصافي — B1.14)
+export const PAYROLL_RUN_CHANGE_ITEM_COLUMNS = { id: true, runId: true, employeeId: true, breakdown: true, payMethod: true, basicSalary: true, allowances: true,
+  overtimeAmount: true, otherAdditions: true, latenessDeduction: true, shortfallDeduction: true, absenceDeduction: true, unpaidLeaveDeduction: true,
+  loanInstallments: true, otherDeductions: true, socialInsuranceDeduction: true, netPay: true } as const
+
 export const payrollRunChangeItems = (em: EntityManager, runIds: number[], employeeIds: number[]) =>
   runIds.length && employeeIds.length ? em.getRepository(PayrollItem).find({ where: { runId: In(runIds), employeeId: In(employeeIds) },
-    select: { id: true, runId: true, employeeId: true, breakdown: true, payMethod: true } }) : Promise.resolve([] as PayrollItem[])
+    select: PAYROLL_RUN_CHANGE_ITEM_COLUMNS }) : Promise.resolve([] as PayrollItem[])
+
+// ===== B1.14: تنبيه «الصافي اتغيّر» قبل الاعتماد =====
+export const PAYROLL_NET_CHANGE_ALERT_KEY = 'payroll.approval.net_change_alert_percent'
+export const PAYROLL_NET_CHANGE_ALERT_DEFAULT = 20
+/** نسبة التنبيه من الإعداد: عدد صحيح من 0 لـ1000 (0 = مقفول)، وأي قيمة تانية = الافتراضي */
+export function payrollNetChangeAlertPercent(value: unknown): number {
+  const percent = Number(value)
+  return value !== null && value !== undefined && String(value).trim() !== '' && Number.isInteger(percent) && percent >= 0 && percent <= 1000 ? percent : PAYROLL_NET_CHANGE_ALERT_DEFAULT
+}
+const NET_CHANGE_LINES: ReadonlyArray<[keyof PayrollItem, string]> = [
+  ['basicSalary', PAYROLL_LINE_NAMES.BASIC], ['allowances', PAYROLL_LINE_NAMES.SALARY_ALLOWANCES], ['overtimeAmount', PAYROLL_LINE_NAMES.OVERTIME],
+  ['otherAdditions', PAYROLL_LINE_NAMES.OTHER_ADDITIONS], ['latenessDeduction', PAYROLL_LINE_NAMES.LATENESS], ['shortfallDeduction', PAYROLL_LINE_NAMES.SHORTFALL],
+  ['absenceDeduction', PAYROLL_LINE_NAMES.ABSENCE], ['unpaidLeaveDeduction', PAYROLL_LINE_NAMES.UNPAID_LEAVE], ['loanInstallments', PAYROLL_LINE_NAMES.LOAN],
+  ['otherDeductions', PAYROLL_LINE_NAMES.OTHER_DEDUCTIONS], ['socialInsuranceDeduction', PAYROLL_LINE_NAMES.SOCIAL_INSURANCE],
+]
+const centsOf = (value: unknown) => Math.round((Number(value) || 0) * 100)
+
+export interface PayrollNetChange { previousNet: number; currentNet: number; percent: number | null; lines: Array<{ label: string; previous: number; current: number }> }
+/**
+ * صافي الموظف في المسير ده قدام صافيه في مسير المقارنة: لو الفرق قد النسبة أو أكتر بيرجّع الصافيين والنسبة والبنود اللي فرقت (سبب التغيير).
+ * الصافي السابق صفر أو سالب: مفيش نسبة تتحسب، فأي فرق تنبيه (percent = null). النسبة 0 = التنبيه مقفول. قراءة بس من أعمدة البندين.
+ */
+export function payrollNetChange(previous: Partial<PayrollItem> | null | undefined, current: Partial<PayrollItem> | null | undefined, thresholdPercent: number): PayrollNetChange | null {
+  if (!(thresholdPercent > 0) || !previous || !current) return null
+  const before = centsOf(previous.netPay), after = centsOf(current.netPay)
+  if (before === after) return null
+  const percent = before > 0 ? Math.round(Math.abs(after - before) / before * 1000) / 10 : null
+  if (percent !== null && percent < thresholdPercent) return null
+  const lines = NET_CHANGE_LINES.map(([column, label]) => ({ label, previous: centsOf(previous[column]) / 100, current: centsOf(current[column]) / 100 }))
+    .filter(line => line.previous !== line.current)
+  return { previousNet: before / 100, currentNet: after / 100, percent, lines }
+}

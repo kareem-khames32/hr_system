@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { EntityManager } from 'typeorm'
+import { enqueueQueueJob } from '../queue/outbox'
 
 // أدوات تراكم المسير اليومي — بلا أي اعتماد على خدمات Nest، عشان خدمات الحضور والطلبات
 // تقدر تعلّم أيام «متسخة» من غير ما تستورد موديول المسير (ولا حلقة اعتماد).
@@ -7,6 +8,38 @@ import type { EntityManager } from 'typeorm'
 // كل يوم-موظف مخزّن، متسخ يعني: المدخلات اتغيرت بعد ما اليوم اتحسب، فالجار الليلي يعيده.
 export const PAYROLL_ACCRUAL_ENABLED_KEY = 'payroll.daily_accrual_enabled'
 export const PAYROLL_ACCRUAL_HOUR_KEY = 'payroll.daily_accrual_hour'
+// B1.14 (الراتب الحي): مهمة الليل بتحسب لكل الموظفين النشطين، مش بس اللي في مسير مفتوح (false = زي الأول: موظفو المسيرات المفتوحة بس)
+export const PAYROLL_LIVE_ACCRUAL_ALL_KEY = 'payroll.live_accrual_all'
+// B1.14: اليوم اللي اتعلّم متسخ بيتعاد حسابه على طول بمهمة في الطابور (B2.3) بدل ما يستنى مهمة الليل
+export const PAYROLL_ACCRUAL_REFRESH_JOB = 'payroll.accrual-refresh'
+// تعديلات متتالية على نفس الموظف جوه النافذة دي = مهمة واحدة، وبتتنفذ بعد ما النافذة تخلص فبتشوفهم كلهم
+export const PAYROLL_ACCRUAL_REFRESH_WINDOW_MS = 20_000
+
+// علامة على معاملة التراكم نفسها (QueryRunner.data): حساب اليوم جوه التراكم بيعلّم صفه متسخ وبعدها التراكم بيكتبه نضيف في نفس المعاملة،
+// فمهمة إعادة حساب ليه شغل على الفاضي (حساب مسير 500 موظف كان هيسجّل 500 مهمة مابتعملش حاجة)
+const ACCRUAL_RUNNING = 'payrollAccrualRunning'
+export async function withoutPayrollAccrualRefresh<T>(em: EntityManager, work: () => Promise<T>): Promise<T> {
+  const data = em.queryRunner?.data as Record<string, unknown> | undefined
+  if (!data) return work()
+  const previous = data[ACCRUAL_RUNNING]
+  data[ACCRUAL_RUNNING] = true
+  try { return await work() } finally { data[ACCRUAL_RUNNING] = previous }
+}
+
+/**
+ * B1.14: طلب إعادة حساب أيام الموظف المتسخة (مهمة في الطابور في نفس معاملة em). لا ترمي أبدًا — زي التعليم نفسه.
+ * قبل ترحيل الطابور (086) مفيش مهمة (false) والأيام بتستنى مهمة الليل أو زرار «حدّث الحساب» زي الأول.
+ */
+export async function requestPayrollAccrualRefresh(em: EntityManager, employeeId: number, now: Date = new Date()): Promise<boolean> {
+  if ((em.queryRunner?.data as Record<string, unknown> | undefined)?.[ACCRUAL_RUNNING]) return false
+  try {
+    const window = Math.floor(now.getTime() / PAYROLL_ACCRUAL_REFRESH_WINDOW_MS)
+    return await enqueueQueueJob(em, { jobType: PAYROLL_ACCRUAL_REFRESH_JOB, payload: { employeeId }, key: `${PAYROLL_ACCRUAL_REFRESH_JOB}:${employeeId}:${window}`,
+      runAfter: new Date((window + 1) * PAYROLL_ACCRUAL_REFRESH_WINDOW_MS + 1000), lockFree: true })
+  } catch {
+    return false
+  }
+}
 // حالات المسير اللي بيتراكم لها: المسودة والمحسوب بس؛ المعتمد والمصروف ما بيتلمسوش أبدًا
 export const PAYROLL_ACCRUAL_OPEN_STATUSES = ['DRAFT', 'CALCULATED'] as const
 
@@ -100,6 +133,8 @@ export async function markPayrollDaysDirty(
       )
       marked += Number(result?.[0]?.marked ?? 0)
     }
+    // B1.14: يوم محسوب اتعلّم متسخ = مهمة تعيد حسابه دلوقتي (اليوم اللي لسه مالوش صف تراكم مش محتاج: هيتحسب لأول مرة بالليل)
+    if (marked > 0) await requestPayrollAccrualRefresh(em, Number(employeeId))
     return marked
   } catch {
     // الجدول لسه ما اتعملش (ترحيل مش متطبق) أو قفل مؤقت — التراكم تحسين، مش شرط صحة
@@ -125,7 +160,9 @@ export async function markPayrollRangeDirty(
        SELECT @@ROWCOUNT AS [marked];`,
       [Number(employeeId), from, to, String(reason).slice(0, 200)]
     )
-    return Number(result?.[0]?.marked ?? 0)
+    const marked = Number(result?.[0]?.marked ?? 0)
+    if (marked > 0) await requestPayrollAccrualRefresh(em, Number(employeeId))
+    return marked
   } catch {
     return 0
   }

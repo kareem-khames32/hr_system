@@ -38,6 +38,7 @@ import {
   type RequestStatus,
 } from '@/data/requestsCatalog'
 import { useModuleEnabled } from '@/lib/modules'
+import { MyLiveSalaryCard } from '@/components/payroll/MyLiveSalaryCard'
 
 // حالة يوم الحضور كما يحسبها السيرفر
 const dayStatusLabels: Record<string, string> = {
@@ -381,6 +382,8 @@ export default function EmployeeHome() {
             </div>
 
             <div className="space-y-6">
+              {/* B1.14: مستحق الموظف التقديري لحد امبارح — البطاقة بتظهر لما الميزة الفرعية تتفعّل بس */}
+              <MyLiveSalaryCard />
               {/* أرصدتي — محسوبة من السيرفر بطبقاتها */}
               {leaveOn && <div className="card p-6">
                 <div className="flex items-center justify-between mb-4">
