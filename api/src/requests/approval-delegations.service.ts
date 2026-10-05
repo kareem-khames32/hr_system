@@ -86,7 +86,8 @@ export class ApprovalDelegationsService {
       const shown = (employee: Employee | undefined) => !!employee && (party || inBranchScope(scope, employee.branchId))
       const state = this.state(row, today, !!delegator?.isActive)
       return {
-        id: Number(row.id), delegatorEmployeeId: Number(row.delegatorEmployeeId), delegateEmployeeId: Number(row.delegateEmployeeId),
+        // CRP2I: رقم البديل زي اسمه — لطرفي التفويض ولموظفي نطاق القارئ بس (المفوِّض في القوايم التلاتة طرف أو في النطاق)
+        id: Number(row.id), delegatorEmployeeId: Number(row.delegatorEmployeeId), delegateEmployeeId: shown(delegate) ? delegate!.id : null,
         delegatorName: shown(delegator) ? delegator!.fullName : null, delegateName: shown(delegate) ? delegate!.fullName : null,
         startDate: row.startDate, endDate: row.endDate, categories: delegationCategories(row.categories), reason: row.reason ?? null,
         createdAt: row.createdAt, revokedAt: row.revokedAt ?? null, state,

@@ -10,7 +10,8 @@ export const DELEGATION_DAYS_MAX = 366
 export interface ApiDelegation {
   id: number
   delegatorEmployeeId: number
-  delegateEmployeeId: number
+  /** رقم البديل واسمه لطرفي التفويض ولموظفي نطاق القارئ — غير كده null */
+  delegateEmployeeId: number | null
   /** الاسم لطرفي التفويض ولموظفي نطاق القارئ — غير كده null */
   delegatorName: string | null
   delegateName: string | null

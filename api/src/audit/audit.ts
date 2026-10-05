@@ -11,6 +11,13 @@ export const AUDIT_CATEGORY_LABELS: Record<AuditCategory, string> = {
   LOGIN: 'الدخول', PERMISSIONS: 'الصلاحيات والنطاق', SETTINGS: 'الإعدادات والموديولات', BANK_PAYROLL: 'البيانات البنكية والرواتب',
   EXPORT: 'التصدير', PAYROLL: 'إجراءات المسير',
 }
+/**
+ * CRP2I: مفاتيح في تفاصيل الحدث (before/after) قيمتها رقم موظف، لكل نوع كيان بيعلن عنها. القارئ اللي فرع الموظف ده برّه نطاقه بياخدها فاضية
+ * في رد البحث. السجل المخزن زي ما هو.
+ */
+export const AUDIT_EMPLOYEE_KEYS: Readonly<Record<string, readonly string[]>> = {
+  approval_delegation: ['delegatorEmployeeId', 'delegateEmployeeId'],
+}
 export const AUDIT_RETENTION_KEY = 'audit.retention_months'
 export const AUDIT_RETENTION_DEFAULT = 24
 export const AUDIT_RETENTION_MIN = 12

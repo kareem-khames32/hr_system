@@ -171,6 +171,7 @@ before(async () => {
   users.chainsB = await account('chains-b', 'employee', ['approval_chains.manage'], { branchId: org.branchB.id })
   users.console = await account('console', 'employee', ['requests.view_all'])
   users.unlinked = await account('unlinked', 'employee', [])
+  users.auditorA = await account('auditor-a', 'employee', ['audit.view'])
   users.hr = await account('hr', 'employee', ['approve.hr'])
   users.finance = await account('finance', 'employee', ['approve.finance'])
 
@@ -615,6 +616,10 @@ test('DG-07: النطاق — بديل فرع الطلب برّه نطاقه م�
   assert.deepEqual((({ delegatorName, delegateName }) => [delegatorName, delegateName])(await nameFor(users.chainsA, 'others')), [emps.manager.fullName, null])
   assert.deepEqual((({ delegatorName, delegateName }) => [delegatorName, delegateName])(await nameFor(users.admin, 'others')), [emps.manager.fullName, emps.remote.fullName])
   assert.equal((await nameFor(users.manager, 'mine')).delegateName, emps.remote.fullName)
+  // والرقم زي الاسم (CRP2I): رقم البديل اللي من فرع تاني فاضي لصاحب صلاحية الفرع (مش طرف)، وموجود لصاحب كل الفروع وللطرفين؛ ورقم المفوِّض موجود
+  const numbersFor = async (user, list) => (({ delegatorEmployeeId, delegateEmployeeId }) => [delegatorEmployeeId, delegateEmployeeId])(await nameFor(user, list))
+  assert.deepEqual([await numbersFor(users.chainsA, 'others'), await numbersFor(users.admin, 'others'), await numbersFor(users.manager, 'mine'), await numbersFor(users.remote, 'toMe')],
+    [[emps.manager.id, null], [emps.manager.id, emps.remote.id], [emps.manager.id, emps.remote.id], [emps.manager.id, emps.remote.id]])
   // وسجل التدقيق بيتقري بفرع المفوِّض: اسم البديل اللي من فرع تاني مش في الملخص (رقمه في التفاصيل)
   const [crossAudit] = await query(`SELECT [summary], [branchId], [after] FROM [audit_log] WHERE [action] = N'APPROVAL_DELEGATION_CREATED' AND [entityId] = @0`, [String(crossBranch.id)])
   assert.deepEqual([crossAudit.summary, crossAudit.branchId, JSON.parse(crossAudit.after).delegateEmployeeId],
@@ -634,6 +639,18 @@ test('DG-07: النطاق — بديل فرع الطلب برّه نطاقه م�
   assert.deepEqual((await history(req.id)).map(row => [row.approverId, row.onBehalfOfEmployeeId]), [[users.remote.id, emps.manager.id]])
   await repo('User').update({ id: users.remote.id }, { scopeAllBranches: false })
   users.remote = await repo('User').findOneByOrFail({ id: users.remote.id })
+  // ورد سجل التدقيق (CRP2I): لقارئ فرع المفوِّض رقم البديل الأجنبي فاضي في حدثي الإنشاء والإلغاء ورقم المفوِّض موجود؛ ولصاحب كل الفروع
+  // الرقمين موجودين؛ والمخزن زي ما هو
+  expectStatus(await revoke(users.admin, crossBranch.id), 201)
+  const auditOf = async user => {
+    const rows = expectStatus(await request(user, 'GET', `/audit?entityType=approval_delegation&entityId=${crossBranch.id}`), 200).rows
+    const numbers = side => [side.delegatorEmployeeId, side.delegateEmployeeId]
+    return [numbers(rows.find(row => row.action === 'APPROVAL_DELEGATION_CREATED').after), numbers(rows.find(row => row.action === 'APPROVAL_DELEGATION_REVOKED').before)]
+  }
+  assert.deepEqual(await auditOf(users.auditorA), [[emps.manager.id, null], [emps.manager.id, null]])
+  assert.deepEqual(await auditOf(users.admin), [[emps.manager.id, emps.remote.id], [emps.manager.id, emps.remote.id]])
+  const storedAudit = await query(`SELECT [before], [after] FROM [audit_log] WHERE [entityType] = N'approval_delegation' AND [entityId] = @0 ORDER BY [id]`, [String(crossBranch.id)])
+  assert.deepEqual(storedAudit.map(row => JSON.parse(row.after ?? row.before).delegateEmployeeId), [emps.remote.id, emps.remote.id])
   await clearDelegations()
 })
 

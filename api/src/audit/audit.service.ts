@@ -2,8 +2,8 @@ import { BadRequestException, ConflictException, Injectable } from '@nestjs/comm
 import { InjectDataSource } from '@nestjs/typeorm'
 import type { DataSource } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, branchScopeSql } from '../auth/guards'
-import { AUDIT_CATEGORIES, AUDIT_CATEGORY_LABELS, AUDIT_MIGRATION_MISSING, AUDIT_RETENTION_DEFAULT, AUDIT_RETENTION_KEY, AUDIT_RETENTION_MIN,
+import { branchScopeOf, branchScopeSql, inBranchScope, type BranchScope } from '../auth/guards'
+import { AUDIT_CATEGORIES, AUDIT_CATEGORY_LABELS, AUDIT_EMPLOYEE_KEYS, AUDIT_MIGRATION_MISSING, AUDIT_RETENTION_DEFAULT, AUDIT_RETENTION_KEY, AUDIT_RETENTION_MIN,
   auditTableReady, recordAudit, type AuditCategory } from './audit'
 
 export interface AuditSearchQuery {
@@ -64,10 +64,34 @@ export class AuditService {
       FROM [audit_log] a LEFT JOIN [users] u ON u.[id] = a.[actorUserId] ${filter}
       ORDER BY a.[at] DESC, a.[id] DESC OFFSET ${(page - 1) * pageSize} ROWS FETCH NEXT ${pageSize} ROWS ONLY`, params)
     const parse = (value: string | null) => { try { return value == null ? null : JSON.parse(value) } catch { return value } }
-    return {
-      retentionMonths: months, expired: query.expired === true, page, pageSize, total: Number(total),
-      rows: rows.map(row => ({ ...row, id: String(row.id), categoryLabel: AUDIT_CATEGORY_LABELS[row.category as AuditCategory] ?? row.category,
-        before: parse(row.before), after: parse(row.after) })),
+    const out = rows.map(row => ({ ...row, id: String(row.id), categoryLabel: AUDIT_CATEGORY_LABELS[row.category as AuditCategory] ?? row.category,
+      before: parse(row.before), after: parse(row.after) }))
+    await this.hideForeignEmployees(scope, out)
+    return { retentionMonths: months, expired: query.expired === true, page, pageSize, total: Number(total), rows: out }
+  }
+
+  /**
+   * CRP2I: رقم موظف في تفاصيل الحدث (للأنواع اللي بتعلن مفاتيحه في AUDIT_EMPLOYEE_KEYS) فرعه برّه نطاق القارئ بيرجع فاضي في الرد. حساب كل
+   * الفروع بياخده، والسجل المخزن زي ما هو.
+   */
+  private async hideForeignEmployees(scope: BranchScope, rows: Array<{ entityType: string | null; before: unknown; after: unknown }>) {
+    if (scope === null) return
+    const sides = rows.flatMap(row => [row.before, row.after]
+      .filter((side): side is Record<string, unknown> => !!side && typeof side === 'object')
+      .map(side => ({ side, keys: AUDIT_EMPLOYEE_KEYS[row.entityType ?? ''] ?? [] })))
+    const ids = [...new Set(sides.flatMap(({ side, keys }) => keys.map(key => Number(side[key]))).filter(id => Number.isSafeInteger(id) && id > 0))]
+    if (!ids.length) return
+    const visible = new Set<number>()
+    for (let offset = 0; offset < ids.length; offset += 1000) {
+      const part = ids.slice(offset, offset + 1000)
+      const found: Array<{ id: number; branchId: number | null }> = await this.ds.query(
+        `SELECT [id], [branchId] FROM [employees] WHERE [id] IN (${part.map((_, index) => `@${index}`).join(', ')})`, part)
+      for (const employee of found) {
+        if (inBranchScope(scope, employee.branchId)) visible.add(Number(employee.id))
+      }
+    }
+    for (const { side, keys } of sides) {
+      for (const key of keys) if (side[key] != null && !visible.has(Number(side[key]))) side[key] = null
     }
   }
 
