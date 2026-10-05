@@ -204,6 +204,10 @@ test('RM-2: من غير الأعمدة الإعداد مرفوض برسالة و
   const waiting = expectStatus(await request(users.console, 'GET', '/requests/all?execution=pending'), 200)
   assert.deepEqual(waiting.map(row => [row.id, row.status, row.executionTask, !!row.approvedAt]), [[before.id, 'IN_EXECUTION', null, true]])
   expectStatus(await request(users.it, 'GET', `/requests/${before.id}`), 403)
+  // ورفض التنفيذ زي الأول (للمعتمد اللي تعذّر تنفيذه بس)، والتشغيل المجدول مابيقراش عمود المهمة
+  const rejectedEarly = await request(users.admin, 'POST', `/requests/${before.id}/reject-execution`, { comment: 'قبل الترحيل' })
+  assert.deepEqual([rejectedEarly.status, messageOf(rejectedEarly)], [400, 'الرفض هنا للطلب المعتمد اللي تعذّر تنفيذه بس'])
+  assert.deepEqual([...await execution.executionRequestsWithTask(ds.manager, [before.id])], [])
   await ds.query(`UPDATE [requests] SET [status] = N'COMPLETED', [completedAt] = GETDATE() WHERE [id] = @0`, [before.id])
   // والمهمة العادية بتتكلّف وتظهر وتتقفل من غير ما تتحسب مهمة تنفيذ
   const task = expectStatus(await request(users.tasksAdmin, 'POST', '/tasks', { title: 'مهمة عادية قبل الترحيل', assigneeEmployeeId: made.worker.id }), 201)
@@ -244,6 +248,7 @@ test('RM-2: من غير الأعمدة الإعداد مرفوض برسالة و
   const inbox = expectStatus(await request(users.it, 'GET', '/tasks/mine'), 200).tasks.find(row => row.id === executionTaskId)
   assert.deepEqual([inbox.execution, inbox.requestId, inbox.canWork], [true, after.id, true])
   assert.deepEqual(expectStatus(await request(users.console, 'GET', '/requests/all?execution=pending'), 200).map(row => row.id), [after.id])
+  assert.deepEqual([...await execution.executionRequestsWithTask(ds.manager, [before.id, after.id])], [after.id])
   assert.equal(expectStatus(await request(users.it, 'POST', `/tasks/${executionTaskId}/status`, { status: 'DONE' }), 201).status, 'DONE')
   assert.equal((await ds.query('SELECT [status] FROM [requests] WHERE [id] = @0', [after.id]))[0].status, 'COMPLETED')
   made.executed = after.id

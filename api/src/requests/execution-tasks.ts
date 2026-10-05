@@ -193,10 +193,25 @@ export async function executionTaskOfRequest(em: EntityManager, requestId: numbe
   return row?.taskId ? em.getRepository(Task).findOne({ where: { id: Number(row.taskId) } }) : null
 }
 
-/** الطلب مستني الحساب ده ينفّذه؟ مهمة تنفيذه مفتوحة وعلى الحساب بحكم محرك المهام (taskAwaitsAccount) */
+/** الطلبات (من المجموعة دي) اللي مستنية الحساب ده ينفّذها: مهمة تنفيذها مفتوحة وعلى الحساب بحكم محرك المهام (taskAwaitsAccount) */
+export async function executionAwaitedRequestIds(em: EntityManager, user: JwtPayload, requestIds: readonly number[]): Promise<Set<number>> {
+  const out = new Set<number>()
+  if (!requestIds.length || !(await executionSchemaReady(em))) return out
+  for (let offset = 0; offset < requestIds.length; offset += 1000) {
+    const part = requestIds.slice(offset, offset + 1000)
+    const rows: Array<{ requestId: number; assigneeEmployeeId: number | null; assigneeRole: string | null; branchId: number; status: string }> = await em.query(
+      `SELECT r.[id] AS [requestId], t.[assigneeEmployeeId], t.[assigneeRole], t.[branchId], t.[status]
+         FROM [requests] r INNER JOIN [tasks] t ON t.[id] = r.[executionTaskId] WHERE r.[id] IN (${part.map((_, index) => `@${index}`).join(', ')})`, [...part])
+    for (const row of rows) {
+      if ((TASK_OPEN_STATUSES as readonly string[]).includes(row.status) && taskAwaitsAccount(user, row)) out.add(Number(row.requestId))
+    }
+  }
+  return out
+}
+
+/** الطلب مستني الحساب ده ينفّذه؟ (طرف فيه زي المعتمد: في تفاصيله، وصفه في لوحة الطلبات، ورفض تنفيذه) */
 export async function executionAwaitsAccount(em: EntityManager, user: JwtPayload, requestId: number): Promise<boolean> {
-  const task = await executionTaskOfRequest(em, requestId)
-  return !!task && (TASK_OPEN_STATUSES as readonly string[]).includes(task.status) && taskAwaitsAccount(user, task)
+  return (await executionAwaitedRequestIds(em, user, [requestId])).has(requestId)
 }
 
 /**

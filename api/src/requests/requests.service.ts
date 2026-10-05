@@ -62,7 +62,8 @@ import { ApprovalStep } from './entities/approval-step.entity'
 import { ApprovalAction, RequestApproval } from './entities/request-approval.entity'
 import { normalizeApprovalAction } from './approval-actions'
 import {
-  cancelExecutionTask, executionAwaitsAccount, executionInfoOf, executionPending, executionRequestsWithTask, openExecutionTask, EXECUTION_CONFIDENTIAL_REJECT_BLOCKED,
+  cancelExecutionTask, executionAwaitedRequestIds, executionAwaitsAccount, executionInfoOf, executionPending, executionRequestsWithTask, openExecutionTask,
+  EXECUTION_CONFIDENTIAL_REJECT_BLOCKED,
 } from './execution-tasks'
 import { RequestType } from './entities/request-type.entity'
 import { Request, RequestStatus } from './entities/request.entity'
@@ -1670,9 +1671,12 @@ export class RequestsService {
       const scheduledSalary = req.status === 'IN_EXECUTION' && salary
       // B2.6: طلب مستني مهمة تنفيذه (مهمته لسه مفتوحة) بيترفض تنفيذه من هنا، ومهمته بتتلغي معاه
       const awaitingTask = !scheduledSalary && (await executionPending(em, req))
-      // طلب سري مستني مهمته: اللي بيرفض تنفيذه اسمه بيتكتب في سجله فيبقى طرف فيه ويقراه — لأطرافه بس (مدير النظام منهم)
+      // طلب سري مستني مهمته: اللي بيرفض تنفيذه اسمه بيتكتب في سجله فيبقى طرف فيه ويقراه — لأطرافه بس (مدير النظام منهم، واللي مهمة
+      // التنفيذ مفتوحة عليه: طرف في تفاصيل الطلب أصلًا)
       if (awaitingTask && type?.isConfidential && !this.seesConfidential(user, req, true,
-        (await em.getRepository(RequestApproval).count({ where: { requestId: req.id, approverId: user.sub } })) > 0)) throw new ForbiddenException(EXECUTION_CONFIDENTIAL_REJECT_BLOCKED)
+        (await em.getRepository(RequestApproval).count({ where: { requestId: req.id, approverId: user.sub } })) > 0 || (await executionAwaitsAccount(em, user, req.id)))) {
+        throw new ForbiddenException(EXECUTION_CONFIDENTIAL_REJECT_BLOCKED)
+      }
       if (req.status !== 'APPROVED' && !scheduledSalary && !awaitingTask) {
         throw new BadRequestException('الرفض هنا للطلب المعتمد اللي تعذّر تنفيذه بس')
       }
@@ -1959,9 +1963,11 @@ export class RequestsService {
         })
       ).map((a) => a.requestId)
     )
+    // CRP2H: واللي مهمة تنفيذ الطلب مفتوحة عليه طرف فيه هنا كمان (نفس حكم التفاصيل)
+    const executing = await executionAwaitedRequestIds(this.ds.manager, user, confIds)
     return this.withExecutionInfo(rows.map((r) =>
       !confidential.has(definitionCodeOf(r)) ||
-      this.seesConfidential(user, r, true, acted.has(r.id))
+      this.seesConfidential(user, r, true, acted.has(r.id) || executing.has(r.id))
         ? this.withCanonicalStepActions(r)
         : this.maskConfidential(r)
     ))
