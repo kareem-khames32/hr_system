@@ -5,6 +5,8 @@ import * as dotenv from 'dotenv'
 dotenv.config()
 
 import { DataSource } from 'typeorm'
+// نفس تصليح دقة الأعمدة العشرية اللي التطبيق بيحمّله (الكائن بعد save يفضل بكسوره)
+import '../common/typeorm-mssql-output-precision'
 import * as bcrypt from 'bcryptjs'
 import { ROLE_PRESETS } from '../auth/permissions'
 import { Role, UserPermissionOverride } from '../auth/role.entity'

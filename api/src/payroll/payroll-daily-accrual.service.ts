@@ -31,9 +31,13 @@ import { attendanceDeductionDay, type AttendanceDeductionPolicy } from './attend
 import { payrollLatenessTierDeduction } from './payroll-lateness-tiers'
 import { roundPayrollMoney as round2 } from './payroll-money'
 import { payrollPeriodBounds, payrollPeriodOfDate } from './payroll-period'
+import { lockPayrollEmployees } from './payroll-settlement-boundary'
 
 // نتيجة تراكم مدى لموظف واحد
 export interface PayrollAccrualRangeResult { computed: number; reused: number }
+// شغل الخلفية بيستنى قفل الموظف المالي المدة دي بس: عملية مالية طويلة على الموظف (حساب مسير كبير) مابتوقّفش مهمة الليل —
+// الموظف بيتخطّى (مهمة الليل والزرار) أو المهمة بتتعاد بعد مهلة (الطابور)
+export const PAYROLL_ACCRUAL_LOCK_WAIT_MS = 2000
 
 // ساعات الإضافي المعتمدة لليوم: المستحق للصرف أولًا، ثم الفعلي، ثم المطلوب (نفس ترتيب المسير)
 function accrualOvertimeHours(entry: OvertimeEntry): number {
@@ -183,17 +187,40 @@ export class PayrollDailyAccrualService implements OnModuleInit {
     today?: string; basis?: Awaited<ReturnType<PayrollDailyAccrualService['deductionBasis']>>
     // لو اتبعت، بتتنادى لكل يوم اتحسب فعلًا (المسير بيستخدمها لعدّ الغياب المُجسَّد)
     onComputed?: (date: string, day: AttendanceDay | null) => void
+    // مسارات الخلفية (مهمة الليل، «حدّث الحساب»، مهمة إعادة الحساب): قفل الموظف المالي وإعادة فحص الإقفال قبل أي كتابة (CRP2B-C-B02).
+    // حساب المسير نفسه مابيبعتهاش: هو ماسك قفل موظفيه وبيحسب مسيره المفتوح
+    background?: boolean
   }): Promise<PayrollAccrualRangeResult> {
     // B1.14: التراكم بيكتب صف اليوم نضيف في نفس المعاملة، فتعليم «متسخ» اللي جوه حساب اليوم مايسجّلش مهمة إعادة حساب
     return withoutPayrollAccrualRefresh(em, () => this.accrueEmployeeRangeIn(em, input))
+  }
+
+  /**
+   * CRP2B-C-B02 (مراجعة Codex): أيام الموظف دي مقفولة؟ الفحص ده بيتعمل **جوه المعاملة وتحت قفل الموظف المالي** — نفس القفل اللي حساب
+   * المسير واعتماده بياخدوه — فالاعتماد اللي سبق باين هنا، والاعتماد اللي لسه جاي بيستنى لحد ما الكتابة تخلص.
+   * مسير الصف نفسه (runId): لازم لسه مفتوح. ومن غير مسير: مفيش مسير عادي معتمد أو مصروف للموظف في الفترة.
+   */
+  private async accrualClosed(em: EntityManager, employeeId: number, period: string, runId: number | null): Promise<boolean> {
+    if (runId != null) {
+      const [run]: Array<{ status: string }> = await em.query('SELECT [status] FROM [payroll_runs] WHERE [id] = @0', [runId])
+      return !run || !(PAYROLL_ACCRUAL_OPEN_STATUSES as readonly string[]).includes(run.status)
+    }
+    const closed: unknown[] = await em.query(`SELECT TOP (1) 1 AS [closed] FROM [payroll_items] i INNER JOIN [payroll_runs] c ON c.[id] = i.[runId]
+      WHERE i.[employeeId] = @0 AND c.[period] = @1 AND c.[status] IN ('APPROVED', 'PAID') AND (c.[runType] IS NULL OR c.[runType] = 'REGULAR')`, [employeeId, period])
+    return closed.length > 0
   }
 
   private async accrueEmployeeRangeIn(em: EntityManager, input: {
     employeeId: number; period: string; runId: number | null; from: string; to: string
     today?: string; basis?: Awaited<ReturnType<PayrollDailyAccrualService['deductionBasis']>>
     onComputed?: (date: string, day: AttendanceDay | null) => void
+    background?: boolean
   }): Promise<PayrollAccrualRangeResult> {
     const result: PayrollAccrualRangeResult = { computed: 0, reused: 0 }
+    if (input.background) {
+      await lockPayrollEmployees(em, [input.employeeId], PAYROLL_ACCRUAL_LOCK_WAIT_MS)
+      if (await this.accrualClosed(em, input.employeeId, input.period, input.runId)) return result
+    }
     const basis = input.basis ?? await this.deductionBasis(em)
     // الترحيل مش متطبق أو التراكم متوقف بالإعداد: المسار القديم بالحرف — تجسيد الغياب لكل يوم في المدى
     if (!basis.accrualEnabled || !await this.accrualTableReady(em)) {
@@ -395,7 +422,7 @@ export class PayrollDailyAccrualService implements OnModuleInit {
       // معاملة لكل موظف: قفل قصير، وفشل موظف ما بيوقفش الباقي
       try {
         const result = await withPayrollAccrualDeadlockRetry(() => this.runs.manager.transaction(em =>
-          this.accrueEmployeeRange(em, { employeeId, period: run.period, runId: run.id, from, to, today, basis })))
+          this.accrueEmployeeRange(em, { employeeId, period: run.period, runId: run.id, from, to, today, basis, background: true })))
         totals.computed += result.computed
         totals.reused += result.reused
         totals.days += result.computed + result.reused
@@ -463,7 +490,7 @@ export class PayrollDailyAccrualService implements OnModuleInit {
       // معاملة لكل موظف: قفل قصير، وفشل موظف ما بيوقفش الباقي
       try {
         const result = await withPayrollAccrualDeadlockRetry(() => this.runs.manager.transaction(em =>
-          this.accrueEmployeeRange(em, { employeeId, period: window.period, runId: null, from: window.startDate, to: window.upTo, today: window.today, basis })))
+          this.accrueEmployeeRange(em, { employeeId, period: window.period, runId: null, from: window.startDate, to: window.upTo, today: window.today, basis, background: true })))
         totals.employees++
         totals.computed += result.computed
         totals.reused += result.reused
@@ -519,7 +546,7 @@ export class PayrollDailyAccrualService implements OnModuleInit {
         // معاملة لكل موظف: قفل قصير، وفشل موظف ما بيوقفش الباقي
         try {
           const result = await withPayrollAccrualDeadlockRetry(() => this.runs.manager.transaction(em =>
-            this.accrueEmployeeRange(em, { ...item, today: window.today, basis })))
+            this.accrueEmployeeRange(em, { ...item, today: window.today, basis, background: true })))
           totals.employees++; totals.computed += result.computed; totals.reused += result.reused
         } catch (error) {
           this.logger.warn(`تعذر تراكم أيام الموظف ${item.employeeId} للفترة ${item.period}: ${(error as Error).message}`)
@@ -534,6 +561,8 @@ export class PayrollDailyAccrualService implements OnModuleInit {
    * إعادة حساب أيام الموظف المتسخة دلوقتي (مهمة الطابور بعد تعليم يوم متسخ). نفس دالة التراكم بالحرف، على الأيام المتسخة بس ولحد امبارح.
    * اليوم المقفول ما بيتلمسش: صف مسيره اتعتمد أو اتصرف، أو صف من غير مسير مفتوح (اتحسب قبل ما مسير فترته يتعمل، أو مسيره اتلغى) والموظف
    * ليه في فترته مسير عادي معتمد أو مصروف — نفس قاعدة مهمة الليل. آمنة للتكرار: مهمة اتعادت = الأيام نضيفة = مفيش حساب.
+   * القايمة هنا اختيار أولي بس: الحكم النهائي بيتعاد جوه معاملة كل يوم تحت قفل الموظف المالي (accrualClosed)، فمسير اتعتمد بين
+   * الاختيار والكتابة مابيتكتبش على أيامه.
    */
   async refreshEmployee(employeeId: number): Promise<PayrollAccrualRangeResult> {
     const totals: PayrollAccrualRangeResult = { computed: 0, reused: 0 }
@@ -557,7 +586,7 @@ export class PayrollDailyAccrualService implements OnModuleInit {
          ORDER BY a.[date]`, [employeeId, today])
       for (const row of dirty) {
         const result = await withPayrollAccrualDeadlockRetry(() => manager.transaction(em => this.accrueEmployeeRange(em, {
-          employeeId, period: row.period, runId: row.runId == null ? null : Number(row.runId), from: String(row.date), to: String(row.date), today, basis })))
+          employeeId, period: row.period, runId: row.runId == null ? null : Number(row.runId), from: String(row.date), to: String(row.date), today, basis, background: true })))
         totals.computed += result.computed
         totals.reused += result.reused
       }

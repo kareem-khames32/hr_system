@@ -26,15 +26,16 @@ export interface SettlementFinancialSnapshot {
 }
 
 // قفل تطبيقي داخل المعاملة فقط؛ لا يقفل صف الموظف الذي تقرؤه خدمة الحضور باتصال آخر.
-export async function lockPayrollEmployees(em: EntityManager, employeeIds: number[]) {
+// waitMs: مهلة انتظار القفل (الافتراضي 10 ثواني زي ما كان؛ شغل الخلفية بيبعت مهلة أقصر — CRP2B-C-B02).
+export async function lockPayrollEmployees(em: EntityManager, employeeIds: number[], waitMs = 10000) {
   if (!em.queryRunner?.isTransactionActive) throw new Error('Employee finance lock requires a transaction')
   const ids = [...new Set(employeeIds)].sort((a, b) => a - b)
   for (const id of ids) {
     if (!Number.isSafeInteger(id) || id < 1) throw new Error('Invalid employee finance lock identifier')
     const rows = await em.query(`DECLARE @result int;
       EXEC @result = sys.sp_getapplock @Resource = @0, @LockMode = 'Exclusive',
-        @LockOwner = 'Transaction', @LockTimeout = 10000;
-      SELECT @result AS lockResult;`, [`hr:employee-finance:${id}`])
+        @LockOwner = 'Transaction', @LockTimeout = @1;
+      SELECT @result AS lockResult;`, [`hr:employee-finance:${id}`, Math.max(0, Math.trunc(waitMs))])
     if (!rows.length || Number(rows[0].lockResult) < 0) {
       throw new ConflictException('توجد عملية مالية جارية للموظف؛ حاول مجددًا بعد انتهائها')
     }

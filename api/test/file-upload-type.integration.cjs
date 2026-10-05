@@ -72,6 +72,7 @@ const pdf = (padding = 0) => Buffer.concat([Buffer.from('%PDF-1.4\n1 0 obj<<>>en
 async function docx() {
   const zip = new JSZip()
   zip.file('[Content_Types].xml', '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+  zip.file('_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')
   zip.file('word/document.xml', '<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>عقد</w:t></w:r></w:p></w:body></w:document>')
   return zip.generateAsync({ type: 'nodebuffer' })
 }
@@ -237,6 +238,60 @@ test('FU-07 (CRP2A-B02): النوع من بنية الحاوية — ZIP بتع�
     assert.deepEqual([await rowCount(), diskFiles()], [rows, files])
     const word = await upload(users.me, oldWord(), 'old.doc')
     assert.equal(word.status, 201, JSON.stringify(word.body)); assert.equal(word.body.mime, 'application/msword')
+  } finally { await setConfig('files.allowed_types', 'jpeg,png,webp,pdf,doc,docx,xls,xlsx') }
+})
+
+test('FU-08 (CRP2B-A-B01): الرفع الفعلي — نوع ماكرو بتصريح Word جوه تعليق XML مش Word، ومجلد OLE اسمه WordDocument مش Word، والسليم لسه بيتقبل', async () => {
+  const { ole, officePackage, relationships, wordPackage, oldWord, WORD_MAIN, TYPES_OPEN } = require('./fixtures/office-containers.cjs')
+  const MACRO = 'application/vnd.ms-word.document.macroEnabled.main+xml', MAIN = 'word/document.xml'
+  const override = type => `<Override PartName="/${MAIN}" ContentType="${type}"/>`
+  const types = inner => `${TYPES_OPEN}${inner}</Types>`
+  const word = options => officePackage(MAIN, WORD_MAIN, { body: '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>', deflate: true, ...options })
+  await setConfig('files.allowed_types', 'docx')
+  try {
+    const [rows, files] = [await rowCount(), diskFiles()]
+    // الضابط: النوع الفعلي ماكرو = مرفوض. حالة المراجعة بالحرف: نفس الحزمة وتصريح Word جوه تعليق XML
+    const refused = [
+      ['macro.docx', word({ types: types(override(MACRO)) })],
+      ['commented-macro.docx', word({ types: types(override(MACRO) + `<!-- ${override(WORD_MAIN)} -->`) })],
+      // نفس الصنف: CDATA، وقيمة خاصية تانية، وتصريحين، والجزء الطُّعم (العلاقة على جزء ماكرو)، ومن غير علاقة مستند
+      ['cdata.docx', word({ types: types(override(MACRO) + `<![CDATA[${override(WORD_MAIN)}]]>`) })],
+      ['attribute.docx', word({ types: types(`<Override note=' ContentType="${WORD_MAIN}"' PartName="/${MAIN}" ContentType="${MACRO}"/>`) })],
+      ['twice.docx', word({ types: types(override(WORD_MAIN) + override(MACRO)) })],
+      ['decoy.docx', word({ types: types(override(WORD_MAIN) + `<Override PartName="/word/macro.xml" ContentType="${MACRO}"/>`), rels: relationships('word/macro.xml'), extra: [['word/macro.xml', '<w:document/>']] })],
+      ['no-rels.docx', word({ rels: null })],
+    ]
+    for (const [name, bytes] of refused) {
+      const response = await upload(users.me, bytes, name)
+      assert.equal(response.status, 400, `${name}: ${JSON.stringify(response.body)}`)
+      assert.match(messageOf(response), /محتوى الملف مش من الأنواع المسموحة \(Word\)/, name)
+    }
+    assert.deepEqual([await rowCount(), diskFiles()], [rows, files], 'ولا صف ولا ملف اتكتب')
+    // السليم: مبني بالبايت، ومن المكتبة، وبتعليق XML فيه نوع ماكرو (مالوش أثر)
+    for (const [name, bytes] of [['minimal.docx', wordPackage({ deflate: true })], ['library.docx', await docx()],
+      ['comment.docx', word({ types: types(override(WORD_MAIN) + `<!-- ${override(MACRO)} -->`) })]]) {
+      const response = await upload(users.me, bytes, name)
+      assert.equal(response.status, 201, `${name}: ${JSON.stringify(response.body)}`)
+      assert.equal(response.body.mime, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+    }
+  } finally { await setConfig('files.allowed_types', 'jpeg,png,webp,pdf,doc,docx,xls,xlsx') }
+  // Excel من المكتبة الحقيقية (ExcelJS) والمسموح Excel بس
+  await setConfig('files.allowed_types', 'xlsx')
+  try { assert.equal((await upload(users.me, await xlsx(), 'library.xlsx')).status, 201) } finally { await setConfig('files.allowed_types', 'jpeg,png,webp,pdf,doc,docx,xls,xlsx') }
+  await setConfig('files.allowed_types', 'doc')
+  try {
+    const [rows, files] = [await rowCount(), diskFiles()]
+    // حالة المراجعة بالحرف: مجلد (مش تيار) اسمه WordDocument. ونفس الصنف: تيار جوه مجلد، وتيار فاضي، وحاوية مقصوصة
+    for (const [name, bytes] of [['storage.doc', ole([{ name: 'WordDocument', kind: 'storage' }])],
+      ['nested.doc', ole([{ name: 'ObjectPool', kind: 'storage', children: ['WordDocument'] }])],
+      ['empty.doc', ole([{ name: 'WordDocument', size: 0 }])],
+      ['cut.doc', oldWord().subarray(0, oldWord().length - 1024)]]) {
+      const response = await upload(users.me, bytes, name)
+      assert.equal(response.status, 400, `${name}: ${JSON.stringify(response.body)}`)
+      assert.match(messageOf(response), /محتوى الملف مش من الأنواع المسموحة/, name)
+    }
+    assert.deepEqual([await rowCount(), diskFiles()], [rows, files])
+    assert.equal((await upload(users.me, oldWord(), 'old.doc')).status, 201)
   } finally { await setConfig('files.allowed_types', 'jpeg,png,webp,pdf,doc,docx,xls,xlsx') }
 })
 

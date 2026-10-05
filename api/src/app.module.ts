@@ -1,3 +1,5 @@
+// أول استيراد: تصليح دقة الأعمدة العشرية في متغير جدول الإخراج بتاع TypeORM على SQL Server — قبل أي استعلام
+import './common/typeorm-mssql-output-precision'
 import { Module } from '@nestjs/common'
 import { ConfigModule, ConfigService } from '@nestjs/config'
 import { ScheduleModule } from '@nestjs/schedule'

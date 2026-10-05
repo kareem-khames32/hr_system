@@ -41,9 +41,13 @@ test('LV-UI-02: تاب «لحد امبارح» في شاشة الرواتب — 
   assert.match(tab, /if \(!\(result\.remaining > 0\) \|\| result\.computed === 0\) break/)
   assert.match(read('api/src/payroll/payroll-live.service.ts'), /refreshLive\(pending, \{ budgetMs: PAYROLL_LIVE_REFRESH_BUDGET_MS \}\)/)
   assert.match(tab, /disabled=\{loading \|\| busy\}/)
-  // الموظف اللي لسه ماتحسبش أو عليه يوم محتاج إعادة حساب باين
+  // الموظف اللي لسه ماتحسبش أو عليه يوم محتاج إعادة حساب أو ناقصه أيام باين
   assert.match(tab, /لسه ماتحسبش/)
   assert.match(tab, /يوم محتاج إعادة حساب/)
+  assert.ok(tab.includes('ناقص ${row.missingDays} يوم'))
+  // CRP2B-C-B01: رد «حدّث الحساب» من غير معاينة لحساب من غير صلاحية العرض — الشاشة مابتبدّلش بياناتها بـnull، والخادم بيشترط الصلاحية
+  assert.match(tab, /if \(result\.preview\) setData\(result\.preview\)/)
+  assert.match(read('api/src/payroll/payroll-live.service.ts'), /preview: userHasPerm\(user, 'payroll\.view'\) \? await this\.preview\(user\) : null/)
   // الأرقام من الخادم زي ما هي: الشاشة مابتجمعش مبالغ
   assert.doesNotMatch(tab, /\.reduce\(/)
 })

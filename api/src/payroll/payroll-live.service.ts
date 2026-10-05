@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchIdIn, branchScopeOf } from '../auth/guards'
+import { branchIdIn, branchScopeOf, userHasPerm } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { grossMonthlySalary } from '../employees/compensation'
 import { readBranchCurrencyOf } from '../org/branch-currency-db'
@@ -24,11 +24,15 @@ interface AccrualSums {
   lateMinutes: number; shortfallMinutes: number; overtimeMinutes: number
   earnings: number; overtime: number; lateness: number; shortfall: number; absence: number; unpaidLeave: number; suspension: number
   dirtyDays: number; lastDate: string | null
+  /** صفوف التراكم من أول يوم مطلوب للموظف (تعيينه أو أول الفترة) */
+  dueDays: number
 }
-export interface PayrollLiveRow extends Omit<AccrualSums, 'earnings'> {
+export interface PayrollLiveRow extends Omit<AccrualSums, 'earnings' | 'dueDays'> {
   employeeCode: string; fullName: string; branchId: number | null; branchName: string | null; departmentName: string | null; currency: string
   earned: number; deductions: number; estimatedNet: number
-  /** أيامه محسوبة كلها لحد اليوم المطلوب ومن غير يوم محتاج إعادة حساب (واللي تعيينه بعد اليوم المطلوب مفيش عليه أيام تتحسب) */
+  /** أيام مطلوبة من الفترة لسه مالهاش صف تراكم (من تعيينه أو أول الفترة لحد اليوم المطلوب) */
+  missingDays: number
+  /** كل أيامه المطلوبة محسوبة ومن غير يوم محتاج إعادة حساب (CRP2B-C-B03: آخر يوم لوحده مش دليل؛ لازم كل يوم في المدى يبقى موجود) */
   complete: boolean
 }
 const MONEY = ['earned', 'overtime', 'lateness', 'shortfall', 'absence', 'unpaidLeave', 'suspension', 'deductions', 'estimatedNet'] as const
@@ -52,8 +56,9 @@ export class PayrollLiveService {
           CONVERT(varchar(40), SUM(a.[latenessAmount])) AS [lateness], CONVERT(varchar(40), SUM(a.[shortfallAmount])) AS [shortfall],
           CONVERT(varchar(40), SUM(a.[absenceAmount])) AS [absence], CONVERT(varchar(40), SUM(a.[leaveAmount])) AS [unpaidLeave],
           CONVERT(varchar(40), SUM(a.[suspensionAmount])) AS [suspension], SUM(CAST(a.[isDirty] AS int)) AS [dirtyDays],
-          CONVERT(varchar(10), MAX(CASE WHEN a.[isDirty] = 0 THEN a.[date] END), 23) AS [lastDate]
-        FROM [payroll_daily_accrual] a
+          CONVERT(varchar(10), MAX(CASE WHEN a.[isDirty] = 0 THEN a.[date] END), 23) AS [lastDate],
+          SUM(CASE WHEN a.[date] >= COALESCE(e.[actualStartDate], e.[joinDate], a.[date]) THEN 1 ELSE 0 END) AS [dueDays]
+        FROM [payroll_daily_accrual] a INNER JOIN [employees] e ON e.[id] = a.[employeeId]
         WHERE a.[period] = @0 AND a.[date] >= @1 AND a.[date] <= @2 AND a.[employeeId] IN (SELECT CAST([value] AS int) FROM OPENJSON(@3))
         GROUP BY a.[employeeId]`, [period, from, upTo, JSON.stringify(employeeIds.slice(offset, offset + 1000))])
       for (const row of rows) {
@@ -61,17 +66,23 @@ export class PayrollLiveService {
         result.set(Number(row.employeeId), { employeeId: Number(row.employeeId), days: number('days'), absentDays: number('absentDays'), unpaidLeaveDays: number('unpaidLeaveDays'),
           suspendedDays: number('suspendedDays'), lateMinutes: number('lateMinutes'), shortfallMinutes: number('shortfallMinutes'), overtimeMinutes: number('overtimeMinutes'),
           earnings: number('earnings'), overtime: number('overtime'), lateness: number('lateness'), shortfall: number('shortfall'), absence: number('absence'),
-          unpaidLeave: number('unpaidLeave'), suspension: number('suspension'), dirtyDays: number('dirtyDays'), lastDate: row.lastDate ? String(row.lastDate).slice(0, 10) : null })
+          unpaidLeave: number('unpaidLeave'), suspension: number('suspension'), dirtyDays: number('dirtyDays'), lastDate: row.lastDate ? String(row.lastDate).slice(0, 10) : null,
+          dueDays: number('dueDays') })
       }
     }
     return result
   }
 
-  private row(employee: Employee, sums: AccrualSums | undefined, upTo: string, names: { branch: (id: number | null) => string | null; department: (id: number | null) => string | null },
+  private row(employee: Employee, sums: AccrualSums | undefined, window: { startDate: string; upTo: string }, names: { branch: (id: number | null) => string | null; department: (id: number | null) => string | null },
     currency: string): PayrollLiveRow {
     const empty: AccrualSums = { employeeId: employee.id, days: 0, absentDays: 0, unpaidLeaveDays: 0, suspendedDays: 0, lateMinutes: 0, shortfallMinutes: 0, overtimeMinutes: 0,
-      earnings: 0, overtime: 0, lateness: 0, shortfall: 0, absence: 0, unpaidLeave: 0, suspension: 0, dirtyDays: 0, lastDate: null }
-    const { earnings, ...facts } = sums ?? empty
+      earnings: 0, overtime: 0, lateness: 0, shortfall: 0, absence: 0, unpaidLeave: 0, suspension: 0, dirtyDays: 0, lastDate: null, dueDays: 0 }
+    const { earnings, dueDays, ...facts } = sums ?? empty
+    // الأيام المطلوبة: من تعيينه (أو أول الفترة) لحد اليوم المطلوب — نفس حدود دالة التراكم. آخر يوم موجود لوحده مش دليل اكتمال
+    const hire = String(employee.actualStartDate || employee.joinDate || '').slice(0, 10)
+    const first = hire > window.startDate ? hire : window.startDate
+    const expectedDays = first > window.upTo ? 0 : Math.round((Date.parse(`${window.upTo}T12:00:00Z`) - Date.parse(`${first}T12:00:00Z`)) / 86_400_000) + 1
+    const missingDays = Math.max(0, expectedDays - dueDays)
     // الشهر 30 يوم مهما كان طوله (قاعدة المسير): استحقاق أيام الفترة مايعدّيش راتب الشهر
     const earned = round2(Math.min(earnings, grossMonthlySalary(employee)))
     const deductions = round2(facts.lateness + facts.shortfall + facts.absence + facts.unpaidLeave + facts.suspension)
@@ -79,8 +90,8 @@ export class PayrollLiveService {
       unpaidLeave: round2(facts.unpaidLeave), suspension: round2(facts.suspension),
       employeeCode: employee.employeeCode ?? '', fullName: employee.fullName ?? `#${employee.id}`, branchId: employee.branchId ?? null,
       branchName: names.branch(employee.branchId ?? null), departmentName: names.department(employee.departmentId ?? null), currency,
-      earned, deductions, estimatedNet: round2(earned + facts.overtime - deductions),
-      complete: facts.dirtyDays === 0 && (facts.lastDate === upTo || String(employee.actualStartDate || employee.joinDate || '').slice(0, 10) > upTo) }
+      earned, deductions, estimatedNet: round2(earned + facts.overtime - deductions), missingDays,
+      complete: facts.dirtyDays === 0 && missingDays === 0 }
   }
 
   private async names() {
@@ -107,7 +118,7 @@ export class PayrollLiveService {
     const started = window.startDate <= window.upTo
     const sums = started ? await this.sums(window.period, window.startDate, window.upTo, employees.map(employee => employee.id)) : new Map<number, AccrualSums>()
     const names = await this.names(), currencyOf = await readBranchCurrencyOf(this.ds.manager)
-    const rows = employees.map(employee => this.row(employee, sums.get(employee.id), window.upTo, names, currencyOf(employee.branchId ?? null)))
+    const rows = employees.map(employee => this.row(employee, sums.get(employee.id), window, names, currencyOf(employee.branchId ?? null)))
       .sort((a, b) => a.fullName.localeCompare(b.fullName, 'ar') || a.employeeId - b.employeeId)
     const branches = new Map<number | null, PayrollLiveRow[]>()
     for (const row of rows) branches.set(row.branchId, [...(branches.get(row.branchId) ?? []), row])
@@ -119,13 +130,15 @@ export class PayrollLiveService {
   }
 
   /**
-   * زرار «حدّث الحساب»: يحسب الناقص والمتسخ دلوقتي لموظفي نطاق القارئ اللي لسه مش جاهزين، ويرجّع المعاينة بعده.
+   * زرار «حدّث الحساب»: يحسب الناقص والمتسخ دلوقتي لموظفي نطاق الحساب اللي لسه مش جاهزين.
    * الطلب بيحسب لحد PAYROLL_LIVE_REFRESH_BUDGET_MS وبيرجّع `remaining`؛ الشاشة بتكمّل لحد ما يبقى صفر.
+   * CRP2B-C-B01 (مراجعة Codex): صلاحية الحساب لوحدها مش صلاحية عرض — المعاينة (أسماء ومبالغ) بترجع لقارئ الرواتب بس، وصاحب
+   * صلاحية الحساب من غيرها بياخد أعداد التحديث بس (preview = null).
    */
   async refresh(user: JwtPayload) {
     const pending = (await this.preview(user)).rows.filter(row => !row.complete).map(row => row.employeeId)
     const totals = await this.accrual.refreshLive(pending, { budgetMs: PAYROLL_LIVE_REFRESH_BUDGET_MS })
-    return { ...totals, preview: await this.preview(user) }
+    return { ...totals, preview: userHasPerm(user, 'payroll.view') ? await this.preview(user) : null }
   }
 
   /**
@@ -144,7 +157,7 @@ export class PayrollLiveService {
     }
     const currency = (await readBranchCurrencyOf(this.ds.manager))(employee.branchId ?? null)
     const sums = (await this.sums(window.period, window.startDate, window.upTo, [employee.id])).get(employee.id)
-    const row = this.row(employee, sums, window.upTo, { branch: () => null, department: () => null }, currency)
+    const row = this.row(employee, sums, window, { branch: () => null, department: () => null }, currency)
     const days: Array<Record<string, unknown>> = await this.ds.query(`SELECT CONVERT(varchar(10), a.[date], 23) AS [date], a.[attendanceStatus], a.[lateMinutes], a.[shortfallMinutes],
         a.[overtimeMinutes], CONVERT(varchar(40), a.[latenessAmount]) AS [lateness], CONVERT(varchar(40), a.[shortfallAmount]) AS [shortfall],
         CONVERT(varchar(40), a.[absenceAmount]) AS [absence], CONVERT(varchar(40), a.[leaveAmount]) AS [unpaidLeave],

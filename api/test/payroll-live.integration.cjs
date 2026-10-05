@@ -8,6 +8,9 @@
 //  LV-06) المهمة مابتعيدش حساب يوم مقفول: صف مسيره معتمد أو مصروف، أو صف من غير مسير مفتوح والموظف ليه في فترته مسير عادي معتمد. والمفتوح والملغى بيتعادوا.
 //  LV-08) «حدّث الحساب» بميزانية وقت: كل طلب بيحسب اللي يلحقه ويقول الباقي، وبيحسب الناقصين بس.
 //  LV-09) موديول الرواتب مقفول = مهمة إعادة الحساب مابتحسبش (زي مهمة الليل)، ولما يتفتح اليوم بيتحسب.
+//  LV-10) (CRP2B-C-B01) صلاحية الحساب من غير صلاحية العرض: «حدّث الحساب» بيشتغل وبيرجّع أعداد بس — لا أسماء ولا مبالغ.
+//  LV-11) (CRP2B-C-B03) «مكتمل» = كل أيام الفترة المطلوبة موجودة: آخر يوم لوحده أو يوم ناقص في النص = لسه محتاج حساب، وبتاريخ التعيين.
+//  LV-12) (CRP2B-C-B02) الإقفال بيتفحص جوه المعاملة تحت قفل الموظف المالي: مسير اتعتمد بين الاختيار والكتابة مابيتكتبش على أيامه.
 //  LV-07) سباق معاملتين على نفس مفتاح المهمة: التانية بتستنى وبترجع false ومعاملتها سليمة — بالعزل الافتراضي وبـRCSI (الفهرس الفريد هو الحكم).
 // الفترة الجارية من ساعة التشغيل (دورة 23)، فالتأكيدات نسبية ليها: مفيش تاريخ ثابت يبوظ مع الوقت.
 // Run (من api/): node --test test/payroll-live.integration.cjs
@@ -434,4 +437,150 @@ test('LV-09: موديول الرواتب مقفول = مهمة إعادة الح
   // مفتوح: مهمة جديدة بتحسبه
   await runJob(new Date(Date.now() + 14_400_000))
   assert.equal(await dirtyDays(), 0)
+})
+
+// فرع جديد بموظف ببصماته وحساب بالصلاحيات دي (الاختبارات اللي تحت مستقلة عن اللي فوق)
+async function isolated(code, permissions, extra = {}) {
+  const branch = await repo('Branch').save({ code, name: `فرع الراتب الحي ${code}` })
+  const emp = await employee(branch, extra)
+  await punches(emp)
+  const user = await repo('User').save({ email: `${code.toLowerCase()}-${crypto.randomUUID().slice(0, 6)}@payroll-live.invalid`, displayName: code, passwordHash: 'test-only', role: 'employee',
+    branchId: branch.id, employeeId: null, permissions: JSON.stringify(permissions) })
+  return { branch, emp, user }
+}
+const accrualRows = emp => query('SELECT * FROM [payroll_daily_accrual] WHERE [employeeId] = @0 AND [period] = @1 ORDER BY [date]', [emp.id, win.period])
+const markDirty = (emp, date) => query(`UPDATE [payroll_daily_accrual] SET [isDirty] = 1, [dirtyReason] = N'اختبار', [dirtyAt] = SYSUTCDATETIME()
+  WHERE [employeeId] = @0 AND CONVERT(varchar(10), [date], 23) = @1`, [emp.id, date])
+
+test('LV-10 (CRP2B-C-B01): صلاحية الحساب من غير صلاحية العرض — «حدّث الحساب» بيحسب وبيرجّع أعداد بس، من غير أسماء ولا مبالغ', async () => {
+  const { branch, emp, user } = await isolated('LVD', ['payroll.calculate'])
+  const totalDays = dates(win.startDate, win.upTo).length
+  assert.equal((await request(user, 'GET', '/payroll/live')).status, 403)
+  const refreshed = await request(user, 'POST', '/payroll/live/refresh')
+  assert.equal(refreshed.status, 201)
+  // الحساب اتعمل فعلًا، والرد أعداد بس
+  assert.deepEqual(refreshed.body, { employees: 1, computed: totalDays, reused: 0, disabled: false, remaining: 0, preview: null })
+  const text = JSON.stringify(refreshed.body)
+  for (const hidden of [emp.fullName, emp.employeeCode, branch.name, 'earned', 'estimatedNet', '11100', '370']) assert.equal(text.includes(hidden), false, hidden)
+  // قارئ الرواتب في نفس الفرع بيشوف اللي اتحسب، وبياخد المعاينة في رد التحديث
+  const viewer = await repo('User').save({ email: `lvd-view-${crypto.randomUUID().slice(0, 6)}@payroll-live.invalid`, displayName: 'lvd-view', passwordHash: 'test-only', role: 'employee',
+    branchId: branch.id, employeeId: null, permissions: JSON.stringify(['payroll.view', 'payroll.calculate']) })
+  const seen = ok(await request(viewer, 'POST', '/payroll/live/refresh'), 201)
+  assert.deepEqual([seen.computed, seen.preview.rows.map(row => [row.employeeId, row.days, row.complete])], [0, [[emp.id, totalDays, true]]])
+  // من غير أي صلاحية رواتب: 403 في الاتنين
+  assert.equal((await request(U.plain, 'POST', '/payroll/live/refresh')).status, 403)
+})
+
+test('LV-11 (CRP2B-C-B03): «مكتمل» = كل أيام الفترة المطلوبة موجودة — آخر يوم لوحده، ويوم ناقص في النص، وتاريخ التعيين', async t => {
+  const totalDays = dates(win.startDate, win.upTo).length
+  if (totalDays < 3) { t.skip('الفترة الجارية أقصر من 3 أيام'); return }
+  const { emp, user } = await isolated('LVE', ['payroll.view', 'payroll.calculate'])
+  // حالة المراجعة بالحرف: آخر يوم بس اتحسب (بنفس دالة التراكم)
+  const one = await ds.transaction(em => accrual.accrueEmployeeRange(em, { employeeId: emp.id, period: win.period, runId: null, from: win.upTo, to: win.upTo, today: win.today }))
+  assert.equal(one.computed, 1)
+  const partial = ok(await request(user, 'GET', '/payroll/live'))
+  const row = rowOf(partial, emp)
+  assert.deepEqual([row.days, row.lastDate, row.dirtyDays, row.missingDays, row.complete], [1, win.upTo, 0, totalDays - 1, false])
+  assert.deepEqual(partial.counts, { employees: 1, complete: 0, pending: 1 })
+  // «حدّث الحساب» بيكمّل الناقص بس
+  const filled = ok(await request(user, 'POST', '/payroll/live/refresh'), 201)
+  assert.deepEqual([filled.employees, filled.computed, filled.reused, filled.remaining], [1, totalDays - 1, 1, 0])
+  assert.deepEqual([rowOf(filled.preview, emp).days, rowOf(filled.preview, emp).missingDays, rowOf(filled.preview, emp).complete], [totalDays, 0, true])
+  assert.equal(cents(rowOf(filled.preview, emp).earned), Math.min(totalDays * 37000, 1110000), 'استحقاق كل الأيام')
+  // يوم ناقص في نص الفترة (أول يوم وآخر يوم موجودين)
+  const middle = dates(win.startDate, win.upTo)[1]
+  await query('DELETE FROM [payroll_daily_accrual] WHERE [employeeId] = @0 AND CONVERT(varchar(10), [date], 23) = @1', [emp.id, middle])
+  const hole = rowOf(ok(await request(user, 'GET', '/payroll/live')), emp)
+  assert.deepEqual([hole.days, hole.lastDate, hole.missingDays, hole.complete], [totalDays - 1, win.upTo, 1, false])
+  assert.equal(ok(await request(user, 'POST', '/payroll/live/refresh'), 201).computed, 1)
+  assert.equal(rowOf(ok(await request(user, 'GET', '/payroll/live')), emp).complete, true)
+  // موظف تعيينه جوه الفترة: المطلوب من يوم تعيينه بس
+  const hireDate = dates(win.startDate, win.upTo)[2]
+  const late = await isolated('LVF', ['payroll.view', 'payroll.calculate'], { joinDate: hireDate })
+  const before = rowOf(ok(await request(late.user, 'GET', '/payroll/live')), late.emp)
+  assert.deepEqual([before.days, before.missingDays, before.complete], [0, totalDays - 2, false])
+  const hired = ok(await request(late.user, 'POST', '/payroll/live/refresh'), 201)
+  assert.deepEqual([hired.computed, rowOf(hired.preview, late.emp).days, rowOf(hired.preview, late.emp).missingDays, rowOf(hired.preview, late.emp).complete], [totalDays - 2, totalDays - 2, 0, true])
+  // كارت الموظف نفسه بنفس الحكم
+  const self = await repo('User').save({ email: `lve-self-${crypto.randomUUID().slice(0, 6)}@payroll-live.invalid`, displayName: 'lve-self', passwordHash: 'test-only', role: 'employee',
+    branchId: emp.branchId, employeeId: emp.id, permissions: '[]' })
+  ok(await request(U.admin, 'PUT', '/modules/features/payroll.live_employee_view', { enabled: true }))
+  try {
+    await query('DELETE FROM [payroll_daily_accrual] WHERE [employeeId] = @0 AND CONVERT(varchar(10), [date], 23) = @1', [emp.id, middle])
+    assert.equal(ok(await request(self, 'GET', '/payroll/live/mine')).summary.complete, false)
+  } finally { ok(await request(U.admin, 'PUT', '/modules/features/payroll.live_employee_view', { enabled: false })) }
+})
+
+test('LV-12 (CRP2B-C-B02): الإقفال بيتفحص جوه المعاملة تحت قفل الموظف المالي — مسير اتعتمد بين الاختيار والكتابة مابيتكتبش على أيامه', async t => {
+  if (!D.late) { t.skip('الفترة الجارية لسه مفيهاش يوم شغل فات'); return }
+  const { branch, emp } = await isolated('LVG', [])
+  assert.equal((await accrual.refreshLive([emp.id])).computed, dates(win.startDate, win.upTo).length)
+  const original = accrual.accrueEmployeeRange
+  // حاجز بين اختيار اليوم وكتابته: الحدث ده بيحصل (ومتأكَّد عليه) قبل ما دالة التراكم تكمّل
+  const between = async (event, work) => {
+    let fired = 0
+    accrual.accrueEmployeeRange = async function (em, input) { if (input.employeeId === emp.id && !fired++) await event(); return original.call(this, em, input) }
+    try { return [await work(), fired] } finally { accrual.accrueEmployeeRange = original }
+  }
+  // (أ) صف من غير مسير: مسير عادي للموظف في الفترة اتعتمد بعد اختيار اليوم، وراتب الملف اتغيّر
+  await markDirty(emp, D.late)
+  let run
+  const beforeNoRun = await accrualRows(emp)
+  const [noRun, firedNoRun] = await between(async () => {
+    run = await repo('PayrollRun').save({ name: 'مسير اعتمد وسط التحديث', period: win.period, startDate: win.startDate, endDate: win.endDate, branchId: branch.id, scopeType: 'CUSTOM',
+      employeeIds: JSON.stringify([emp.id]), runType: 'REGULAR', status: 'APPROVED', totalNet: 11100, approvedAt: new Date() })
+    await repo('PayrollItem').save({ runId: run.id, employeeId: emp.id, basicSalary: 9000, netPay: 11100, absenceDays: 0, unpaidLeaveDays: 0, payMethod: 'cash' })
+    await repo('Employee').update({ id: emp.id }, { basicSalary: 12000 })
+  }, () => accrual.refreshEmployee(emp.id))
+  assert.equal(firedNoRun, 1, 'اليوم اتاختار قبل الاعتماد')
+  assert.deepEqual(noRun, { computed: 0, reused: 0 })
+  assert.deepEqual(await accrualRows(emp), beforeNoRun, 'صفوف الفترة المعتمدة زي ما هي بالحرف (ولسه اليوم متعلّم)')
+  // (ب) صف مسيره هو: المسير كان مفتوح وقت الاختيار واتعتمد قبل الكتابة — من مهمة إعادة الحساب، ومن تراكم المسير نفسه
+  await repo('PayrollRun').update({ id: run.id }, { status: 'CALCULATED', approvedAt: null })
+  await query('UPDATE [payroll_daily_accrual] SET [runId] = @1 WHERE [employeeId] = @0 AND [period] = @2', [emp.id, run.id, win.period])
+  const beforeOwn = await accrualRows(emp)
+  for (const work of [() => accrual.refreshEmployee(emp.id), () => accrual.accrueRun(run.id)]) {
+    await repo('PayrollRun').update({ id: run.id }, { status: 'CALCULATED', approvedAt: null })
+    const [, fired] = await between(() => repo('PayrollRun').update({ id: run.id }, { status: 'APPROVED', approvedAt: new Date() }), work)
+    assert.equal(fired, 1)
+    assert.deepEqual(await accrualRows(emp), beforeOwn, 'صفوف المسير المعتمد زي ما هي')
+  }
+  // الضابط: نفس اليوم والمسير لسه مفتوح = بيتحسب براتب الملف الجديد
+  await repo('PayrollRun').update({ id: run.id }, { status: 'CALCULATED', approvedAt: null })
+  assert.deepEqual(await accrual.refreshEmployee(emp.id), { computed: 1, reused: 0 })
+  const [after] = await query('SELECT [isDirty], [earningsAmount] FROM [payroll_daily_accrual] WHERE [employeeId] = @0 AND [period] = @1 AND CONVERT(varchar(10), [date], 23) = @2', [emp.id, win.period, D.late])
+  assert.equal(after.isDirty, false)
+  assert.equal(cents(after.earningsAmount), cents((12000 + 1500 + 600) / 30), 'اتحسب براتب الملف الحالي')
+  // (ج) نفس قفل الاعتماد: عملية مالية ماسكة قفل الموظف = التراكم بيستنى لحد ما تخلص
+  await markDirty(emp, D.late)
+  const holder = ds.createQueryRunner()
+  await holder.connect(); await holder.startTransaction()
+  let settled = false
+  try {
+    const [lock] = await holder.query(`DECLARE @result int; EXEC @result = sys.sp_getapplock @Resource = @0, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 0;
+      SELECT @result AS [lockResult];`, [`hr:employee-finance:${emp.id}`])
+    assert.ok(Number(lock.lockResult) >= 0)
+    const pending = accrual.refreshEmployee(emp.id).then(value => { settled = true; return value })
+    await new Promise(resolve => setTimeout(resolve, 700))
+    assert.equal(settled, false, 'التراكم مستني قفل الموظف المالي')
+    await holder.commitTransaction()
+    assert.deepEqual(await pending, { computed: 1, reused: 0 })
+    // عملية مالية طويلة (ماسكة القفل أكتر من مهلة شغل الخلفية): مهمة إعادة الحساب بتفشل بسرعة عشان الطابور يعيدها، و«حدّث الحساب»
+    // بيتخطّى الموظف من غير ما يقف — واليوم بيفضل متعلّم لحد ما العملية تخلص
+    await markDirty(emp, D.late)
+    await holder.startTransaction()
+    await holder.query(`DECLARE @result int; EXEC @result = sys.sp_getapplock @Resource = @0, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 0;
+      SELECT @result AS [lockResult];`, [`hr:employee-finance:${emp.id}`])
+    const started = Date.now()
+    await assert.rejects(accrual.refreshEmployee(emp.id), /عملية مالية جارية/)
+    const skipped = await accrual.refreshLive([emp.id])
+    assert.deepEqual([skipped.employees, skipped.computed, skipped.remaining], [0, 0, 0])
+    assert.ok(Date.now() - started < 9000, `شغل الخلفية مااستناش مهلة العمليات المالية الكاملة: ${Date.now() - started} مللي`)
+    assert.equal(Number((await accrualSums(emp)).dirtyDays), 1)
+    await holder.commitTransaction()
+    assert.deepEqual(await accrual.refreshEmployee(emp.id), { computed: 1, reused: 0 })
+  } finally {
+    if (holder.isTransactionActive) await holder.rollbackTransaction().catch(() => undefined)
+    await holder.release()
+  }
 })

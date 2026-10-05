@@ -9,7 +9,7 @@ export interface PayrollLiveTotals {
 export interface PayrollLiveRow extends Omit<PayrollLiveTotals, 'employees'> {
   employeeId: number; employeeCode: string; fullName: string; branchId: number | null; branchName: string | null; departmentName: string | null; currency: string
   days: number; absentDays: number; unpaidLeaveDays: number; suspendedDays: number; lateMinutes: number; shortfallMinutes: number; overtimeMinutes: number
-  dirtyDays: number; lastDate: string | null; complete: boolean
+  dirtyDays: number; lastDate: string | null; missingDays: number; complete: boolean
 }
 export interface PayrollLivePreview {
   available: boolean; period: string; startDate: string; endDate: string; upTo: string; estimated: true; note: string
@@ -19,9 +19,9 @@ export interface PayrollLivePreview {
   counts: { employees: number; complete: number; pending: number }
 }
 export const fetchPayrollLive = () => apiFetch<PayrollLivePreview>('/payroll/live')
-/** طلب واحد بيحسب لحد ~20 ثانية؛ remaining = موظفين لسه ماتحسبلهمش (الشاشة بتكمّل بطلب تاني) */
+/** طلب واحد بيحسب لحد ~20 ثانية؛ remaining = موظفين لسه ماتحسبلهمش (الشاشة بتكمّل بطلب تاني). preview = null لحساب من غير صلاحية عرض الرواتب */
 export const refreshPayrollLive = () =>
-  apiFetch<{ employees: number; computed: number; reused: number; disabled: boolean; remaining: number; preview: PayrollLivePreview }>('/payroll/live/refresh', { method: 'POST' })
+  apiFetch<{ employees: number; computed: number; reused: number; disabled: boolean; remaining: number; preview: PayrollLivePreview | null }>('/payroll/live/refresh', { method: 'POST' })
 
 export interface MyLiveSalaryDay {
   date: string; status: string | null; lateMinutes: number; shortfallMinutes: number; overtimeMinutes: number

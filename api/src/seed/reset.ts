@@ -7,6 +7,8 @@ import * as dotenv from 'dotenv'
 dotenv.config()
 
 import { DataSource } from 'typeorm'
+// نفس تصليح دقة الأعمدة العشرية اللي التطبيق بيحمّله (الكائن بعد save يفضل بكسوره)
+import '../common/typeorm-mssql-output-precision'
 import { seedPreflight } from './seed-guard'
 
 // الحارس قبل أي اتصال: التصفير يمسح الجداول، فمسموح لقاعدة اختبار مؤقتة فقط (لا تجاوز لقاعدة الشركة)
