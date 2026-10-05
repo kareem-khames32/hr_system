@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource, In, type EntityManager } from 'typeorm'
-import { recordAudit } from '../audit/audit'
+import { AUDIT_ACTOR_EMPLOYEE_KEY, recordAudit } from '../audit/audit'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, inBranchScope, userHasPerm } from '../auth/guards'
 import { User } from '../auth/user.entity'
@@ -136,10 +136,10 @@ export class ApprovalDelegationsService {
     return this.ds.transaction(async em => {
       if (!(await delegationSchemaReady(em))) throw new BadRequestException(DELEGATION_MIGRATION_MISSING)
       const employees = em.getRepository(Employee)
-      const delegator = await employees.findOne({ where: { id: delegatorId }, select: { id: true, fullName: true, branchId: true, isActive: true } })
+      const delegator = await employees.findOne({ where: { id: delegatorId }, select: { id: true, branchId: true, isActive: true } })
       // مفوِّض برّه نطاق صاحب الصلاحية = نفس رد الموظف اللي مش موجود
       if (!delegator || !delegator.isActive || (forOther && !inBranchScope(scope, delegator.branchId))) throw new NotFoundException(EMPLOYEE_NOT_FOUND)
-      const delegate = await employees.findOne({ where: { id: input.delegateEmployeeId }, select: { id: true, fullName: true, branchId: true, isActive: true } })
+      const delegate = await employees.findOne({ where: { id: input.delegateEmployeeId }, select: { id: true, branchId: true, isActive: true } })
       // نفس دليل الموظفين (/employees/directory): نشط وفي نطاق اللي بينشئ التفويض
       if (!delegate || !delegate.isActive || !inBranchScope(scope, delegate.branchId)) throw new NotFoundException(EMPLOYEE_NOT_FOUND)
       if (!(await em.getRepository(User).count({ where: { employeeId: delegate.id, isActive: true } }))) throw new BadRequestException('البديل مالوش حساب شغال في النظام')
@@ -157,9 +157,11 @@ export class ApprovalDelegationsService {
       // منح حق اعتماد لحد تاني: في سجل التدقيق مع التفويض نفسه
       await recordAudit(em, { category: 'PERMISSIONS', action: 'APPROVAL_DELEGATION_CREATED', entityType: 'approval_delegation', entityId: saved.id, actorUserId: user.sub,
         branchId: delegator.branchId ?? null,
-        // السجل بيتقري بفرع المفوِّض: اسم البديل بيتكتب لو من نفس الفرع بس (رقمه في التفاصيل)
-        summary: `تفويض اعتمادات ${delegator.fullName} لـ${delegate.branchId === delegator.branchId ? delegate.fullName : 'موظف من فرع تاني'} من ${input.startDate} لـ${input.endDate}`,
-        after: { delegatorEmployeeId: delegatorId, delegateEmployeeId: delegate.id, startDate: input.startDate, endDate: input.endDate, categories: categories.length ? categories : null } })
+        // الملخص من غير أسماء: المواضع بتتبدّل وقت القراءة باسم الموظف للي فرعه في نطاقه (audit.ts: AUDIT_EMPLOYEE_KEYS)
+        summary: `تفويض اعتمادات {delegatorEmployeeId} لـ{delegateEmployeeId} من ${input.startDate} لـ${input.endDate}`,
+        after: { delegatorEmployeeId: delegatorId, delegateEmployeeId: delegate.id, startDate: input.startDate, endDate: input.endDate, categories: categories.length ? categories : null,
+          // المفوِّض سجّل تفويضه بنفسه: رقمه كمنفّذ بيتسجّل مع الحدث، فحجب حسابه في سجل التدقيق مايعتمدش على ربط الحساب بعدين
+          ...(forOther ? {} : { [AUDIT_ACTOR_EMPLOYEE_KEY]: delegatorId }) } })
       return { id: saved.id }
     })
   }
@@ -169,7 +171,7 @@ export class ApprovalDelegationsService {
       if (!(await delegationSchemaReady(em))) throw new NotFoundException(DELEGATION_NOT_FOUND)
       const repo = em.getRepository(ApprovalDelegation)
       const row = await repo.findOne({ where: { id }, lock: { mode: 'pessimistic_write' } })
-      const delegator = row ? await em.getRepository(Employee).findOne({ where: { id: row.delegatorEmployeeId }, select: { id: true, fullName: true, branchId: true } }) : null
+      const delegator = row ? await em.getRepository(Employee).findOne({ where: { id: row.delegatorEmployeeId }, select: { id: true, branchId: true } }) : null
       // تفويض مش بتاعه ولا في نطاق صلاحيته = نفس رد التفويض اللي مش موجود
       if (!row || !this.mayRevoke(user, row, delegator?.branchId)) throw new NotFoundException(DELEGATION_NOT_FOUND)
       if (row.revokedAt) throw new BadRequestException('التفويض ملغي فعلًا')
@@ -177,8 +179,10 @@ export class ApprovalDelegationsService {
       if (dates.endDate < delegationLocalDate(new Date())) throw new BadRequestException('التفويض انتهى')
       await repo.update({ id }, { revokedAt: new Date(), revokedByUserId: user.sub })
       await recordAudit(em, { category: 'PERMISSIONS', action: 'APPROVAL_DELEGATION_REVOKED', entityType: 'approval_delegation', entityId: id, actorUserId: user.sub,
-        branchId: delegator?.branchId ?? null, summary: `إلغاء تفويض اعتمادات ${delegator?.fullName ?? ''}`.trim(),
-        before: { delegatorEmployeeId: row.delegatorEmployeeId, delegateEmployeeId: row.delegateEmployeeId } })
+        branchId: delegator?.branchId ?? null, summary: 'إلغاء تفويض اعتمادات {delegatorEmployeeId}',
+        // اللي لغى طرف في التفويض (المفوِّض، أو البديل وهو صاحب صلاحية): رقمه كمنفّذ بيتسجّل مع الحدث
+        before: { delegatorEmployeeId: row.delegatorEmployeeId, delegateEmployeeId: row.delegateEmployeeId,
+          ...([row.delegatorEmployeeId, row.delegateEmployeeId].includes(user.employeeId as number) ? { [AUDIT_ACTOR_EMPLOYEE_KEY]: user.employeeId } : {}) } })
       return { id }
     })
   }

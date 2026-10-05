@@ -9,7 +9,8 @@
 //  DG-06) فصل المهام: البديل مايعتمدش طلبه، ولا طلب المفوِّض نفسه أو اللي أنشأه، ولا طلب ليه هو خطوة لسه مستنية فيه (باسمه أو بدور وظيفي)،
 //         ولا طلب اعتمد فيه بصفة تانية (بنفسه أو عن مفوِّض تاني)، ولا خطوة بصفته بعد ما اعتمد بالنيابة؛ واللي اعتمده عن نفس المفوِّض
 //         مابيمنعش؛ وبديل البديل مش بديل.
-//  DG-07) النطاق: بديل فرع الطلب برّه نطاقه مابيشوفوش ومابيعتمدوش؛ واسم بديل من فرع تاني مابيظهرش لغير نطاقه (القايمة وسجل التدقيق).
+//  DG-07) النطاق: بديل فرع الطلب برّه نطاقه مابيشوفوش ومابيعتمدوش؛ وهوية موظف برّه نطاق القارئ (اسمه ورقمه) مابتظهرش في القايمة ولا في
+//         سجل التدقيق ولا في البحث فيه — بفرع الموظف دلوقتي.
 //  DG-08) السري: البديل بيقراه طول ما الخطوة الحالية مستنية المفوِّض بس (في التفاصيل وفي لوحة الطلبات)، ومابيوصلش للمدير المباشر لصاحبه بتفويض.
 //  DG-09) بريد «طلب بانتظارك» بيروح للبديل كمان، ومابيتبعتش لو التفويض اتلغى قبل الإرسال.
 //  DG-10) التصعيد لدور هيكلي بيحسب صاحب الدور الجديد بأحكام التقديم (السري مش للمدير المباشر، ومش لصاحب الطلب ولا منشئه ولا لتابع له)؛ ولو
@@ -79,10 +80,14 @@ const listed = async user => expectStatus(await request(user, 'GET', '/requests/
 // إلغاء كل التفويضات السارية جوه الاختبار (زي ما المفوِّض بيلغي)
 const clearDelegations = () => query('UPDATE [approval_delegations] SET [revokedAt] = GETDATE(), [revokedByUserId] = 0 WHERE [revokedAt] IS NULL')
 // كل اختبار بيبدأ نضيف: من غير أي تفويض (مسح في قاعدة الاختبار، عشان قاعدة «الملغي مش ساري» تتثبّت في اختبارها مش بالتنضيف)، ولا طلب
-// قيد المراجعة من اختبار قبله (اختبار وقع مايوقّعش اللي بعده)
+// قيد المراجعة من اختبار قبله، ولا موظف منقول لفرع تاني ولا حساب متغيّر ربطه أو صلاحيته (اختبار وقع مايوقّعش اللي بعده)
 async function fresh() {
   await query('DELETE FROM [approval_delegations]')
   await query(`UPDATE [requests] SET [status] = N'CANCELLED' WHERE [status] = N'UNDER_REVIEW'`)
+  await query('UPDATE [employees] SET [branchId] = @0 WHERE [id] IN (@1, @2)', [org.branchA.id, emps.manager.id, emps.deputy.id])
+  await query('UPDATE [users] SET [employeeId] = CASE [id] WHEN @0 THEN @1 WHEN @2 THEN @3 END WHERE [id] IN (@0, @2, @4)',
+    [users.manager.id, emps.manager.id, users.deputy.id, emps.deputy.id, users.chainsA.id])
+  await permit('deputy', [])
 }
 const permit = async (key, permissions) => {
   await repo('User').update({ id: users[key].id }, { permissions: JSON.stringify(permissions) })
@@ -277,8 +282,14 @@ test('DG-01: الإنشاء — الموظف لنفسه، ولغيره بصلا�
   // وفي سجل التدقيق (فئة الصلاحيات): مين فوّض مين ولحد إمتى
   const audit = await query(`SELECT [category], [action], [entityId], [actorUserId], [branchId], [summary], [after] FROM [audit_log] WHERE [entityType] = N'approval_delegation' ORDER BY [id]`)
   assert.deepEqual(audit.map(row => [row.category, row.action, row.entityId, row.actorUserId, row.branchId, row.summary]),
-    [['PERMISSIONS', 'APPROVAL_DELEGATION_CREATED', String(mine.id), users.manager.id, org.branchA.id, `تفويض اعتمادات ${emps.manager.fullName} لـ${emps.deputy.fullName} من ${day(0)} لـ${day(5)}`]])
-  assert.deepEqual(JSON.parse(audit[0].after), { delegatorEmployeeId: emps.manager.id, delegateEmployeeId: emps.deputy.id, startDate: day(0), endDate: day(5), categories: ['training'] })
+    [['PERMISSIONS', 'APPROVAL_DELEGATION_CREATED', String(mine.id), users.manager.id, org.branchA.id, `تفويض اعتمادات {delegatorEmployeeId} لـ{delegateEmployeeId} من ${day(0)} لـ${day(5)}`]])
+  // الملخص متخزن من غير أسماء (CRP2J)، والاسمين بيتحطوا في رد سجل التدقيق لقارئ الموظفين في نطاقه؛ والمنفّذ (المفوِّض نفسه) ظاهر بحسابه
+  const shownAudit = expectStatus(await request(users.auditorA, 'GET', `/audit?entityType=approval_delegation&entityId=${mine.id}`), 200).rows[0]
+  assert.deepEqual([shownAudit.summary, shownAudit.actorUserId, shownAudit.actorName, shownAudit.after.actorEmployeeId],
+    [`تفويض اعتمادات ${emps.manager.fullName} لـ${emps.deputy.fullName} من ${day(0)} لـ${day(5)}`, users.manager.id, users.manager.displayName, emps.manager.id])
+  // والحدث بيسجّل رقم المنفّذ لما يكون هو المفوِّض نفسه
+  assert.deepEqual(JSON.parse(audit[0].after), { delegatorEmployeeId: emps.manager.id, delegateEmployeeId: emps.deputy.id, startDate: day(0), endDate: day(5), categories: ['training'],
+    actorEmployeeId: emps.manager.id })
   // تفويض تاني متداخل لنفس المفوِّض مرفوض (حتى لبديل تاني)، وبعد نهايته مسموح
   const overlap = await delegate(users.manager, { delegateEmployeeId: emps.second.id, startDate: day(5), endDate: day(9) })
   assert.deepEqual([overlap.status, messageOf(overlap)], [409, 'للمفوِّض تفويض قايم في نفس الفترة — الغيه الأول أو اختار فترة تانية'])
@@ -300,6 +311,9 @@ test('DG-01: الإنشاء — الموظف لنفسه، ولغيره بصلا�
   await permit('second', [])
   const byAdmin = expectStatus(await delegate(users.chainsA, forOther), 201)
   assert.equal((await repo('ApprovalDelegation').findOneByOrFail({ id: byAdmin.id })).createdByUserId, users.chainsA.id)
+  // ومنفّذ مش طرف (صاحب صلاحية سجّل تفويض غيره): الحدث من غير رقم منفّذ
+  assert.deepEqual(JSON.parse((await query(`SELECT [after] FROM [audit_log] WHERE [action] = N'APPROVAL_DELEGATION_CREATED' AND [entityId] = @0`, [String(byAdmin.id)]))[0].after),
+    { delegatorEmployeeId: emps.head.id, delegateEmployeeId: emps.second.id, startDate: day(0), endDate: day(2), categories: null })
 
   // القايمة: تفويضاتي، واللي أنا بديل فيها، ولصاحب الصلاحية تفويضات نطاقه
   const managerList = await listed(users.manager)
@@ -420,8 +434,12 @@ test('DG-03: قبل البداية وبعد النهاية وبعد الإلغا
   expectStatus(await revoke(users.manager, active.id), 201)
   const stored = await repo('ApprovalDelegation').findOneByOrFail({ id: active.id })
   assert.deepEqual([!!stored.revokedAt, stored.revokedByUserId], [true, users.manager.id])
-  assert.deepEqual((await query(`SELECT [category], [actorUserId], [summary] FROM [audit_log] WHERE [action] = N'APPROVAL_DELEGATION_REVOKED' AND [entityId] = @0`, [String(active.id)]))
-    .map(row => [row.category, row.actorUserId, row.summary]), [['PERMISSIONS', users.manager.id, `إلغاء تفويض اعتمادات ${emps.manager.fullName}`]])
+  assert.deepEqual((await query(`SELECT [category], [actorUserId], [summary], [before] FROM [audit_log] WHERE [action] = N'APPROVAL_DELEGATION_REVOKED' AND [entityId] = @0`, [String(active.id)]))
+    .map(row => [row.category, row.actorUserId, row.summary, JSON.parse(row.before)]), [['PERMISSIONS', users.manager.id, 'إلغاء تفويض اعتمادات {delegatorEmployeeId}',
+    // المفوِّض لغى تفويضه بنفسه: رقمه كمنفّذ متسجّل مع الحدث
+    { delegatorEmployeeId: emps.manager.id, delegateEmployeeId: emps.deputy.id, actorEmployeeId: emps.manager.id }]])
+  assert.equal(expectStatus(await request(users.auditorA, 'GET', `/audit?entityType=approval_delegation&entityId=${active.id}`), 200).rows.find(row => row.action === 'APPROVAL_DELEGATION_REVOKED').summary,
+    `إلغاء تفويض اعتمادات ${emps.manager.fullName}`)
   assert.deepEqual(await inboxIds(users.deputy), [])
   expectStatus(await act(users.deputy, req.id), 403)
   const again = await revoke(users.manager, active.id)
@@ -431,6 +449,9 @@ test('DG-03: قبل البداية وبعد النهاية وبعد الإلغا
   const third = expectStatus(await delegate(users.manager, { delegateEmployeeId: emps.deputy.id, startDate: day(0), endDate: day(4) }), 201)
   expectStatus(await revoke(users.chainsA, third.id), 201)
   assert.equal((await repo('ApprovalDelegation').findOneByOrFail({ id: third.id })).revokedByUserId, users.chainsA.id)
+  // صاحب الصلاحية مش طرف: حدث الإلغاء من غير رقم منفّذ
+  assert.deepEqual(JSON.parse((await query(`SELECT [before] FROM [audit_log] WHERE [action] = N'APPROVAL_DELEGATION_REVOKED' AND [entityId] = @0`, [String(third.id)]))[0].before),
+    { delegatorEmployeeId: emps.manager.id, delegateEmployeeId: emps.deputy.id })
   // المفوِّض مابقاش موظف شغال: تفويضه وقف (خطوته بتتعامل «واقفة» زي الأول) وبيتعرض «انتهى»؛ ولما يرجع التفويض بيرجع
   const fourth = expectStatus(await delegate(users.manager, { delegateEmployeeId: emps.deputy.id, startDate: day(0), endDate: day(4) }), 201)
   assert.deepEqual(await inboxIds(users.deputy), [req.id])
@@ -620,10 +641,10 @@ test('DG-07: النطاق — بديل فرع الطلب برّه نطاقه م�
   const numbersFor = async (user, list) => (({ delegatorEmployeeId, delegateEmployeeId }) => [delegatorEmployeeId, delegateEmployeeId])(await nameFor(user, list))
   assert.deepEqual([await numbersFor(users.chainsA, 'others'), await numbersFor(users.admin, 'others'), await numbersFor(users.manager, 'mine'), await numbersFor(users.remote, 'toMe')],
     [[emps.manager.id, null], [emps.manager.id, emps.remote.id], [emps.manager.id, emps.remote.id], [emps.manager.id, emps.remote.id]])
-  // وسجل التدقيق بيتقري بفرع المفوِّض: اسم البديل اللي من فرع تاني مش في الملخص (رقمه في التفاصيل)
+  // وسجل التدقيق بيتقري بفرع المفوِّض: الملخص المخزن من غير أسماء، ورقم البديل في التفاصيل
   const [crossAudit] = await query(`SELECT [summary], [branchId], [after] FROM [audit_log] WHERE [action] = N'APPROVAL_DELEGATION_CREATED' AND [entityId] = @0`, [String(crossBranch.id)])
   assert.deepEqual([crossAudit.summary, crossAudit.branchId, JSON.parse(crossAudit.after).delegateEmployeeId],
-    [`تفويض اعتمادات ${emps.manager.fullName} لـموظف من فرع تاني من ${day(0)} لـ${day(2)}`, org.branchA.id, emps.remote.id])
+    [`تفويض اعتمادات {delegatorEmployeeId} لـ{delegateEmployeeId} من ${day(0)} لـ${day(2)}`, org.branchA.id, emps.remote.id])
   const req = await submit(users.worker, types.plain)
   assert.deepEqual(await inboxIds(users.remote), [])
   const refused = await act(users.remote, req.id)
@@ -649,8 +670,117 @@ test('DG-07: النطاق — بديل فرع الطلب برّه نطاقه م�
   }
   assert.deepEqual(await auditOf(users.auditorA), [[emps.manager.id, null], [emps.manager.id, null]])
   assert.deepEqual(await auditOf(users.admin), [[emps.manager.id, emps.remote.id], [emps.manager.id, emps.remote.id]])
+  // والاسم زي الرقم (CRP2J): في ملخص الحدثين لقارئ الفرع «موظف برّه نطاقك» مكان البديل الأجنبي، ولصاحب كل الفروع اسمه
+  const summariesOf = async user => expectStatus(await request(user, 'GET', `/audit?entityType=approval_delegation&entityId=${crossBranch.id}`), 200).rows
+    .sort((a, b) => Number(a.id) - Number(b.id)).map(row => row.summary)
+  assert.deepEqual(await summariesOf(users.auditorA),
+    [`تفويض اعتمادات ${emps.manager.fullName} لـموظف برّه نطاقك من ${day(0)} لـ${day(2)}`, `إلغاء تفويض اعتمادات ${emps.manager.fullName}`])
+  assert.deepEqual(await summariesOf(users.admin),
+    [`تفويض اعتمادات ${emps.manager.fullName} لـ${emps.remote.fullName} من ${day(0)} لـ${day(2)}`, `إلغاء تفويض اعتمادات ${emps.manager.fullName}`])
+  // والبحث بنص: اسم البديل الأجنبي لقارئ الفرع زي اسم مش موجود؛ واسم موظف في نطاقه بيلاقي الحدثين؛ وصاحب كل الفروع بيلاقي بالاسمين
+  const found = async (user, id, text) => expectStatus(await request(user, 'GET', `/audit?entityType=approval_delegation&entityId=${id}&q=${encodeURIComponent(text)}`), 200).total
+  assert.deepEqual([await found(users.auditorA, crossBranch.id, emps.remote.fullName), await found(users.auditorA, crossBranch.id, 'اسم مش موجود خالص'),
+    await found(users.auditorA, crossBranch.id, emps.manager.fullName), await found(users.admin, crossBranch.id, emps.remote.fullName), await found(users.admin, crossBranch.id, 'إلغاء تفويض'),
+    // واسم موظف في نطاقه بس مش مذكور في الحدث مابيطابقش
+    await found(users.auditorA, crossBranch.id, emps.worker.fullName)],
+  [0, 0, 2, 2, 1, 0])
   const storedAudit = await query(`SELECT [before], [after] FROM [audit_log] WHERE [entityType] = N'approval_delegation' AND [entityId] = @0 ORDER BY [id]`, [String(crossBranch.id)])
   assert.deepEqual(storedAudit.map(row => JSON.parse(row.after ?? row.before).delegateEmployeeId), [emps.remote.id, emps.remote.id])
+  // والحكم بفرع الموظف دلوقتي: تفويض والطرفين في فرع أ، وبعدها البديل اتنقل لفرع ب — قارئ فرع أ مابيشوفش اسمه في الملخص ولا رقمه، والبحث
+  // باسمه زي اسم مش موجود. صاحب كل الفروع زي ما هو، والمخزن ماتغيّرش. ولما يرجع فرعه بيرجعوا
+  const local = expectStatus(await delegate(users.manager, { delegateEmployeeId: emps.deputy.id, startDate: day(0), endDate: day(1) }), 201)
+  const localAudit = async user => (({ summary, after }) => [summary, after.delegateEmployeeId])(expectStatus(await request(user, 'GET', `/audit?entityType=approval_delegation&entityId=${local.id}`), 200).rows[0])
+  const named = `تفويض اعتمادات ${emps.manager.fullName} لـ${emps.deputy.fullName} من ${day(0)} لـ${day(1)}`
+  const storedOf = () => query(`SELECT * FROM [audit_log] WHERE [entityType] = N'approval_delegation' AND [entityId] = @0`, [String(local.id)])
+  const storedBefore = await storedOf()
+  assert.deepEqual([await localAudit(users.auditorA), await found(users.auditorA, local.id, emps.deputy.fullName)], [[named, emps.deputy.id], 1])
+  await repo('Employee').update({ id: emps.deputy.id }, { branchId: org.branchB.id })
+  assert.deepEqual([await localAudit(users.auditorA), await found(users.auditorA, local.id, emps.deputy.fullName), await found(users.auditorA, local.id, 'اسم مش موجود خالص')],
+    [[`تفويض اعتمادات ${emps.manager.fullName} لـموظف برّه نطاقك من ${day(0)} لـ${day(1)}`, null], 0, 0])
+  assert.deepEqual([await localAudit(users.admin), await found(users.admin, local.id, emps.deputy.fullName), await storedOf()], [[named, emps.deputy.id], 1, storedBefore])
+  await repo('Employee').update({ id: emps.deputy.id }, { branchId: org.branchA.id })
+  assert.deepEqual([await localAudit(users.auditorA), await found(users.auditorA, local.id, emps.deputy.fullName)], [[named, emps.deputy.id], 1])
+  // والمنفّذ زي الطرف (CRP2J): المفوِّض سجّل تفويضين بنفسه ولغى الأول بنفسه، والتاني لغاه البديل (وهو صاحب صلاحية). الحدث بيسجّل رقم المنفّذ لما
+  // يكون طرف فيه. صف لكل حدث: الملخص، ورقم حساب المنفّذ واسمه، وفيه IP وجهاز ولا لأ، ورقم المنفّذ في التفاصيل
+  expectStatus(await revoke(users.manager, local.id), 201)
+  const handed = expectStatus(await delegate(users.manager, { delegateEmployeeId: emps.deputy.id, startDate: day(0), endDate: day(1) }), 201)
+  await permit('deputy', ['approval_chains.manage'])
+  expectStatus(await revoke(users.deputy, handed.id), 201)
+  await permit('deputy', [])
+  const events = [local.id, handed.id].map(String)
+  const storedEvents = () => query(`SELECT * FROM [audit_log] WHERE [entityType] = N'approval_delegation' AND [entityId] IN (@0, @1) ORDER BY [id]`, events)
+  const storedActors = await storedEvents()
+  assert.deepEqual(storedActors.map(row => [row.action, row.actorUserId, JSON.parse(row.after ?? row.before).actorEmployeeId, row.ip != null, row.userAgent != null]), [
+    ['APPROVAL_DELEGATION_CREATED', users.manager.id, emps.manager.id, true, true], ['APPROVAL_DELEGATION_REVOKED', users.manager.id, emps.manager.id, true, true],
+    ['APPROVAL_DELEGATION_CREATED', users.manager.id, emps.manager.id, true, true], ['APPROVAL_DELEGATION_REVOKED', users.deputy.id, emps.deputy.id, true, true]])
+  const actorsOf = async reader => {
+    const rows = []
+    for (const id of events) rows.push(...expectStatus(await request(reader, 'GET', `/audit?entityType=approval_delegation&entityId=${id}`), 200).rows)
+    return rows.sort((a, b) => Number(a.id) - Number(b.id)).map(row => [row.summary, row.actorUserId, row.actorName, row.ip != null, row.userAgent != null, (row.after ?? row.before).actorEmployeeId])
+  }
+  const byActor = async (reader, actorUserId) => {
+    let total = 0
+    for (const id of events) total += expectStatus(await request(reader, 'GET', `/audit?entityType=approval_delegation&entityId=${id}&actorUserId=${actorUserId}`), 200).total
+    return total
+  }
+  const OUT = 'موظف برّه نطاقك', M = emps.manager.fullName, D = emps.deputy.fullName
+  const shownActor = account => [account.id, account.displayName, true, true, account.employeeId], hiddenActor = [null, OUT, false, false, null]
+  const view = (delegator, delegate, managerActor, deputyActor) => [
+    [`تفويض اعتمادات ${delegator} لـ${delegate} من ${day(0)} لـ${day(1)}`, ...managerActor], [`إلغاء تفويض اعتمادات ${delegator}`, ...managerActor],
+    [`تفويض اعتمادات ${delegator} لـ${delegate} من ${day(0)} لـ${day(1)}`, ...managerActor], [`إلغاء تفويض اعتمادات ${delegator}`, ...deputyActor]]
+  const everyone = view(M, D, shownActor(users.manager), shownActor(users.deputy))
+  const setLink = (account, employeeId) => query('UPDATE [users] SET [employeeId] = @1 WHERE [id] = @0', [account.id, employeeId])
+  const setBranch = (employeeRow, branch) => query('UPDATE [employees] SET [branchId] = @1 WHERE [id] = @0', [employeeRow.id, branch.id])
+  assert.deepEqual([await actorsOf(users.auditorA), await byActor(users.auditorA, users.manager.id), await byActor(users.auditorA, users.deputy.id)], [everyone, 3, 1])
+  // المفوِّض اتنقل لفرع ب: قارئ فرع أ مابيشوفش حسابه (الرقم والاسم) ولا جهازه ولا رقمه في الأحداث اللي نفّذها، والفلتر برقم حسابه زي رقم حساب
+  // مش موجود. حدث البديل (لسه في فرع أ) منفّذه ظاهر. صاحب كل الفروع زي ما هو، والمخزن ماتغيّرش
+  await setBranch(emps.manager, org.branchB)
+  const managerGone = view(OUT, D, hiddenActor, shownActor(users.deputy))
+  assert.deepEqual([await actorsOf(users.auditorA), await byActor(users.auditorA, users.manager.id), await byActor(users.auditorA, users.deputy.id), await byActor(users.auditorA, 999999)],
+    [managerGone, 0, 1, 0])
+  assert.deepEqual([await actorsOf(users.admin), await byActor(users.admin, users.manager.id), await storedEvents()], [everyone, 3, storedActors])
+  // وحسابه اتفك ربطه بالموظف (أو اتربط بموظف تاني) بعد الحدث: لسه محجوب، برقمه المتسجّل مع الحدث
+  await setLink(users.manager, null)
+  assert.deepEqual([await actorsOf(users.auditorA), await byActor(users.auditorA, users.manager.id)], [managerGone, 0])
+  await setLink(users.manager, emps.noAccount.id)
+  assert.deepEqual([await actorsOf(users.auditorA), await byActor(users.auditorA, users.manager.id)], [managerGone, 0])
+  await setLink(users.manager, emps.manager.id)
+  // والبديل اللي لغى (طرف هو كمان) اتنقل وحسابه اتفك ربطه: حدثه محجوب زيه
+  await setBranch(emps.deputy, org.branchB)
+  await setLink(users.deputy, null)
+  assert.deepEqual([await actorsOf(users.auditorA), await byActor(users.auditorA, users.deputy.id)], [view(OUT, OUT, hiddenActor, hiddenActor), 0])
+  assert.deepEqual([await actorsOf(users.admin), await byActor(users.admin, users.deputy.id), await storedEvents()], [everyone, 1, storedActors])
+  await setLink(users.deputy, emps.deputy.id)
+  await setBranch(emps.deputy, org.branchA)
+  // ولما المفوِّض يرجع فرعه بيرجعوا
+  await setBranch(emps.manager, org.branchA)
+  assert.deepEqual([await actorsOf(users.auditorA), await byActor(users.auditorA, users.manager.id), await byActor(users.auditorA, users.deputy.id)], [everyone, 3, 1])
+  // وبربط الحساب دلوقتي كمان: حساب سجّل تفويض غيره (مش طرف وقتها، فالحدث من غير رقم منفّذ)، وبعدها الحساب اتربط بالمفوِّض نفسه والمفوِّض اتنقل
+  const lateDelegator = await employee(), lateDelegate = await employee()
+  await account('late-delegate', 'employee', [], { employeeId: lateDelegate.id })
+  const late = expectStatus(await delegate(users.chainsA, { delegatorEmployeeId: lateDelegator.id, delegateEmployeeId: lateDelegate.id, startDate: day(0), endDate: day(1) }), 201)
+  const lateEvent = async (reader, filter = '') => (({ total, rows }) => [total, rows.map(row => [row.actorUserId, row.actorName, row.ip != null])])(
+    expectStatus(await request(reader, 'GET', `/audit?entityType=approval_delegation&entityId=${late.id}${filter}`), 200))
+  const byChains = `&actorUserId=${users.chainsA.id}`, chainsShown = [1, [[users.chainsA.id, users.chainsA.displayName, true]]]
+  assert.deepEqual([await lateEvent(users.auditorA), await lateEvent(users.auditorA, byChains)], [chainsShown, chainsShown])
+  await setLink(users.chainsA, lateDelegator.id)
+  await setBranch(lateDelegator, org.branchB)
+  assert.deepEqual([await lateEvent(users.auditorA), await lateEvent(users.auditorA, byChains)], [[1, [[null, OUT, false]]], [0, []]])
+  assert.deepEqual([await lateEvent(users.admin), await lateEvent(users.admin, byChains)], [chainsShown, chainsShown])
+  await setLink(users.chainsA, null)
+  assert.deepEqual([await lateEvent(users.auditorA), await lateEvent(users.auditorA, byChains)], [chainsShown, chainsShown])
+  // ومنفّذ مش طرف في التفويض بيفضل ظاهر زي باقي أحداث السجل، حتى لو ملف موظفه في فرع برّه نطاق القارئ: صاحب صلاحية على كل الفروع وملفه في فرع ب
+  const officerFile = await employee({ branchId: org.branchB.id })
+  const officer = await account('officer', 'employee', ['approval_chains.manage'], { employeeId: officerFile.id, branchId: org.branchB.id, scopeAllBranches: true })
+  const byOfficer = expectStatus(await delegate(officer, { delegatorEmployeeId: emps.head.id, delegateEmployeeId: emps.second.id, startDate: day(0), endDate: day(1) }), 201)
+  const officerEvent = expectStatus(await request(users.auditorA, 'GET', `/audit?entityType=approval_delegation&entityId=${byOfficer.id}&actorUserId=${officer.id}`), 200)
+  assert.deepEqual([officerEvent.total, officerEvent.rows.map(row => [row.summary, row.actorUserId, row.actorName, row.ip != null])],
+    [1, [[`تفويض اعتمادات ${emps.head.fullName} لـ${emps.second.fullName} من ${day(0)} لـ${day(1)}`, officer.id, officer.displayName, true]]])
+  await repo('User').update({ id: officer.id }, { isActive: false })
+  // وحدث نوع كيانه اسم من أسماء Object (constructor): مش من الأنواع المعلَنة، فصفحة السجل بترجع عادي
+  await query(`INSERT [audit_log]([at], [category], [action], [entityType], [entityId], [branchId], [summary]) VALUES (GETDATE(), N'EXPORT', N'SCREEN_EXPORT', N'constructor', N'x', @0, N'حدث للاختبار')`,
+    [org.branchA.id])
+  assert.deepEqual((({ total, rows }) => [total, rows.map(row => row.summary)])(expectStatus(await request(users.auditorA, 'GET', '/audit?entityType=constructor'), 200)), [1, ['حدث للاختبار']])
   await clearDelegations()
 })
 
