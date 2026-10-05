@@ -157,35 +157,47 @@ export async function collectPayrollRunMemberChanges(em: EntityManager, run: Pic
   return result
 }
 
-// CRP1-B01: أقصى عدد مسيرات من السلسلة بندوّر فيها عن آخر مسير مرئي لحساب فروع (نفس الاسم ممكن يتكرر في فروع تانية)
-const SERIES_SCAN_LIMIT = 50
+// مسيرات السلسلة المرشحة بتتقري صفحة صفحة لحد أول مسير مرئي
+const SERIES_PAGE = 20
 
 /**
  * الخارجين: أعضاء آخر مسير معتمد أو مصروف من نفس السلسلة (نفس الاسم) قبل الشهر ده ومش في المسير ده — بنطاق القارئ (لقطة العضوية).
  * CRP1-B01: لحساب فروع، «آخر مسير في السلسلة» هو آخر واحد فيه عضو واحد على الأقل يشوفه (لقطة فرعه في نطاقه، أو مسير قديم من غير أعضاء
  * وفرعه في نطاقه). المسير اللي كله برّه نطاقه بيتعدّى كأنه مش موجود، فشهره مابيطلعش. حساب الشركة: آخر مسير في السلسلة زي ما هو.
+ * CRP1R-N01: المسيرات المخفية بتتفلتر في الاستعلام نفسه قبل أي حد، فعددها مهما كان مابيزاحمش المسير المرئي (كان الحد 50 بيتطبق قبل
+ * فحص النطاق، فخمسين مسير مخفي أحدث كانوا بيسقّطوا تنبيه الخارجين). الحكم النهائي لقاعدة الرؤية نفسها (payrollRunRefVisibility).
  */
 export async function payrollRunLeavers(em: EntityManager, run: Pick<PayrollRun, 'id' | 'period' | 'name'>, memberIds: ReadonlySet<number>, scope: BranchScope) {
   const none = { previousPeriod: null as string | null, leavers: [] as Array<{ employeeId: number; employeeCode: string | null; fullName: string | null }> }
   const series = payrollRunSeriesName(run.name)
   if (!series) return none
-  const candidates: Array<{ id: number; period: string }> = await em.query(`SELECT TOP (${scope === null ? 1 : SERIES_SCAN_LIMIT}) [id], [period] FROM [payroll_runs]
-    WHERE LTRIM(RTRIM([name])) = @0 AND [status] IN ('APPROVED', 'PAID')
-    AND ([runType] IS NULL OR [runType] <> 'REVERSAL') AND [period] < @1 AND [id] <> @2 ORDER BY [period] DESC, [id] DESC`, [series, run.period, run.id])
-  for (const candidate of candidates) {
-    const previousId = Number(candidate.id)
-    const members = await em.getRepository(PayrollRunMember).find({ where: { runId: previousId }, select: { id: true, employeeId: true, membershipStatus: true, snapshot: true } })
-    if (scope !== null) {
-      // من غير استثناء «الموظف نفسه»: المطلوب هنا عضو من نطاق القارئ، مش قسيمته هو
-      const shown = await payrollRunRefVisibility(em, scope, [previousId], members.map(member => member.employeeId))
-      if (!(members.length ? members.some(member => shown(previousId, member.employeeId)) : shown(previousId, 0))) continue
+  // نفس قاعدة الرؤية في الاستعلام: عضو لقطة فرعه في النطاق، أو مسير من غير أعضاء خالص وفرعه في النطاق
+  const inScope = scope === null ? '' : ` AND (EXISTS (SELECT 1 FROM [payroll_run_members] m WHERE m.[runId] = r.[id]
+        AND TRY_CAST(JSON_VALUE(CAST(m.[snapshot] AS nvarchar(max)), '$.branchId') AS int) IN (SELECT CAST([value] AS int) FROM OPENJSON(@5)))
+      OR (NOT EXISTS (SELECT 1 FROM [payroll_run_members] m WHERE m.[runId] = r.[id]) AND r.[branchId] IN (SELECT CAST([value] AS int) FROM OPENJSON(@5))))`
+  const pageSize = scope === null ? 1 : SERIES_PAGE
+  for (let offset = 0; ; offset += pageSize) {
+    const candidates: Array<{ id: number; period: string }> = await em.query(`SELECT r.[id], r.[period] FROM [payroll_runs] r
+      WHERE LTRIM(RTRIM(r.[name])) = @0 AND r.[status] IN ('APPROVED', 'PAID')
+      AND (r.[runType] IS NULL OR r.[runType] <> 'REVERSAL') AND r.[period] < @1 AND r.[id] <> @2${inScope}
+      ORDER BY r.[period] DESC, r.[id] DESC OFFSET @3 ROWS FETCH NEXT @4 ROWS ONLY`,
+    [series, run.period, run.id, offset, pageSize, ...(scope === null ? [] : [JSON.stringify(scope)])])
+    for (const candidate of candidates) {
+      const previousId = Number(candidate.id)
+      const members = await em.getRepository(PayrollRunMember).find({ where: { runId: previousId }, select: { id: true, employeeId: true, membershipStatus: true, snapshot: true } })
+      if (scope !== null) {
+        // من غير استثناء «الموظف نفسه»: المطلوب هنا عضو من نطاق القارئ، مش قسيمته هو
+        const shown = await payrollRunRefVisibility(em, scope, [previousId], members.map(member => member.employeeId))
+        if (!(members.length ? members.some(member => shown(previousId, member.employeeId)) : shown(previousId, 0))) continue
+      }
+      const leavers = members.filter(member => (member.membershipStatus === 'INCLUDED' || member.membershipStatus == null) && !memberIds.has(member.employeeId)
+        && inBranchScope(scope, member.snapshot?.branchId ?? null))
+        .map(member => ({ employeeId: member.employeeId, employeeCode: member.snapshot?.employeeCode ?? null, fullName: member.snapshot?.fullName ?? null }))
+      return { previousPeriod: String(candidate.period), leavers }
     }
-    const leavers = members.filter(member => (member.membershipStatus === 'INCLUDED' || member.membershipStatus == null) && !memberIds.has(member.employeeId)
-      && inBranchScope(scope, member.snapshot?.branchId ?? null))
-      .map(member => ({ employeeId: member.employeeId, employeeCode: member.snapshot?.employeeCode ?? null, fullName: member.snapshot?.fullName ?? null }))
-    return { previousPeriod: String(candidate.period), leavers }
+    // حساب الشركة: أول مسير بس (زي ما كان). حساب الفروع: نكمّل لو الصفحة كاملة ومفيش فيها مرئي
+    if (scope === null || candidates.length < pageSize) return none
   }
-  return none
 }
 
 /** الراتب الشهري (المكونات الست) في بند المسير — للمقارنة بين آخر مسير والمسير ده */

@@ -154,3 +154,41 @@ test('AU-04: البحث بصلاحية «سجل التدقيق» وبنطاق ا
   assert.deepEqual([expired.total, expired.expired, expired.retentionMonths], [1, true, 36])
   assert.equal((await request(U.admin, 'GET', '/audit?category=NOPE')).status, 400)
 })
+
+// CRP2A-B01 (مراجعة Codex لدفعات المرحلة 2): التغيير وإبطال الجلسات وسطر التدقيق في معاملة واحدة. مشغّل SQL مؤقت بيرفض سطر تدقيق بعينه
+// (حقن فشل تخزين متعمد)، فالعملية بترجع 500 — ولازم مايفضلش منها أي أثر.
+test('AU-05 (CRP2A-B01): فشل سطر التدقيق بيرجّع التغيير نفسه — منح الحساب وتعديل الدور، ومعاهم إبطال الجلسات', async () => {
+  const user = (email, role) => repo('User').save({ email: `${email}-${crypto.randomBytes(3).toString('hex')}@audit-log.invalid`, displayName: email, passwordHash: 'test-only',
+    role, branchId: B.a.id, permissions: '[]' })
+  const versionOf = async id => (await repo('User').findOneByOrFail({ id })).tokenVersion ?? 0
+  const failingAudit = async (action, work) => {
+    await ds.query(`CREATE TRIGGER [au05_fail_audit] ON [audit_log] AFTER INSERT AS BEGIN SET NOCOUNT ON;
+      IF EXISTS (SELECT 1 FROM inserted WHERE [action] = N'${action}') THROW 59001, N'AU-05 deliberate audit failure', 1; END`)
+    try { return await work() } finally { await ds.query('DROP TRIGGER [au05_fail_audit]') }
+  }
+  const permissionsOf = async id => { const view = ok(await request(U.admin, 'GET', `/users/${id}/permissions`), 200); return [view.grants, view.revokes, view.effective.includes('payroll.view')] }
+  const auditRows = async (action, entityId) => (await rows(`[action] = @0 AND [entityId] = @1`, [action, String(entityId)])).length
+
+  // (1) منح صلاحية لحساب: الفشل مايسيبش منح ولا إبطال جلسة ولا سطر
+  const target = await user('atomic-target', 'employee'), before = await versionOf(target.id)
+  const failed = await failingAudit('USER_PERMISSIONS_SET', () => request(U.admin, 'PUT', `/users/${target.id}/permissions`, { grants: ['payroll.view'], revokes: [] }))
+  assert.equal(failed.status, 500)
+  assert.deepEqual([await permissionsOf(target.id), await versionOf(target.id), await auditRows('USER_PERMISSIONS_SET', target.id)], [[[], [], false], before, 0])
+  // من غير الفشل: المنح والإبطال والسطر التلاتة مع بعض
+  ok(await request(U.admin, 'PUT', `/users/${target.id}/permissions`, { grants: ['payroll.view'], revokes: [] }), 200)
+  assert.deepEqual([await permissionsOf(target.id), await versionOf(target.id), await auditRows('USER_PERMISSIONS_SET', target.id)], [[['payroll.view'], [], true], before + 1, 1])
+  // تعديل تاني فشل تدقيقه: المنح القديم يفضل زي ما هو (حذف القديم وإضافة الجديد رجعوا)
+  const again = await failingAudit('USER_PERMISSIONS_SET', () => request(U.admin, 'PUT', `/users/${target.id}/permissions`, { grants: [], revokes: ['employees.view'] }))
+  assert.equal(again.status, 500)
+  assert.deepEqual([await permissionsOf(target.id), await versionOf(target.id), await auditRows('USER_PERMISSIONS_SET', target.id)], [[['payroll.view'], [], true], before + 1, 1])
+
+  // (2) تعديل دور: حزمة الدور وجلسات أصحابه مع سطر تدقيقه
+  const role = await repo('Role').save({ code: 'au_atomic_' + crypto.randomBytes(3).toString('hex'), nameAr: 'دور ذري', permissions: JSON.stringify(['employees.view']), isActive: true })
+  const holder = await user('atomic-holder', role.code), holderBefore = await versionOf(holder.id)
+  const permissionsOfRole = async () => JSON.parse((await repo('Role').findOneByOrFail({ id: role.id })).permissions)
+  const roleFailed = await failingAudit('ROLE_UPDATED', () => request(U.admin, 'PATCH', `/roles/${role.id}`, { permissions: ['employees.view', 'payroll.view'] }))
+  assert.equal(roleFailed.status, 500)
+  assert.deepEqual([await permissionsOfRole(), await versionOf(holder.id), await auditRows('ROLE_UPDATED', role.code)], [['employees.view'], holderBefore, 0])
+  ok(await request(U.admin, 'PATCH', `/roles/${role.id}`, { permissions: ['employees.view', 'payroll.view'] }), 200)
+  assert.deepEqual([await permissionsOfRole(), await versionOf(holder.id), await auditRows('ROLE_UPDATED', role.code)], [['employees.view', 'payroll.view'], holderBefore + 1, 1])
+})

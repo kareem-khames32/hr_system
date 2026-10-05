@@ -300,6 +300,9 @@ test('OP-2c (CRP1-B01): مسير أحدث في فرع تاني وأقدم في �
   // راح فرع ب واتعمد له مسير هناك براتب تاني، وبعدين رجع فرع أ براتب تالت
   await moveFrom(back, B.b, `${away}-01`)
   expectStatus(await monthlyHistory(U.admin, back, [['2026-01', monthBefore(away), '5000.00'], [away, null, '7000.00']]), 201)
+  // وقت الاعتماد بيتخزن بالثانية (من غير أجزائها)، فتغيير في نفس ثانية الاعتماد وقبله بيتحسب «بعد آخر مسير» (الناحية الأأمن: تغيير زيادة يبان،
+  // مش تغيير يستخبى). من B1.12 الاعتماد بقى أسرع من ثانية، فالاختبار بيفصل بين تغيير الأجر والاعتماد بثانية كاملة
+  await new Promise(resolve => setTimeout(resolve, 1050 - (Date.now() % 1000)))
   const foreign = await approved(away, [back], `${series} ب`)
   await moveFrom(back, B.a, '2026-05-01')
   expectStatus(await monthlyHistory(U.admin, back, [['2026-01', monthBefore(away), '5000.00'], [away, away, '7000.00'], ['2026-05', null, '8000.00']]), 201)
@@ -309,7 +312,9 @@ test('OP-2c (CRP1-B01): مسير أحدث في فرع تاني وأقدم في �
   // حساب الشركة: آخر مسير هو بتاع فرع ب
   const full = (await changesOf(U.admin, run)).rows.find(item => item.employeeId === back.id)
   assert.deepEqual([full.isNew, full.previousPeriod, full.salary], [false, away, { previous: 7000, current: 8000 }])
-  assert.equal(full.changes.filter(change => change.kind === 'SALARY').length, 1, 'من بعد اعتماد مسير فرع ب: تغيير واحد')
+  const foreignApprovedAt = (await repo('PayrollRun').findOneByOrFail({ id: foreign.id })).approvedAt
+  assert.equal(full.changes.filter(change => change.kind === 'SALARY').length, 1,
+    `من بعد اعتماد مسير فرع ب (${foreignApprovedAt.toISOString()}): تغيير واحد — ${JSON.stringify(full.changes.map(change => [change.kind, change.changedAt]))}`)
   // قارئ فرع أ: مسير فرع ب كأنه مش موجود — المقارنة بمسير مارس، والتغييرات من بعد اعتماده هو
   const view = await changesOf(U.hrA, run), row = view.rows.find(item => item.employeeId === back.id)
   const text = JSON.stringify(view)
@@ -345,6 +350,36 @@ test('OP-2d (CRP1-B01): نفس اسم السلسلة في فرعين — قار�
   assert.deepEqual([viewB.previousSeriesPeriod, viewB.leavers], ['2026-04', []])
   // حساب الشركة زي ما هو: آخر مسير في السلسلة بالاسم
   assert.equal((await changesOf(U.admin, run)).previousSeriesPeriod, '2026-04')
+})
+
+test('OP-2e (CRP1R-N01): مسيرات مخفية كتير بنفس اسم السلسلة ماتزاحمش المسير المرئي — 60 مسير أحدث في فرع تاني والخارج لسه ظاهر', async () => {
+  // مسيرات تاريخية مزروعة (صف المسير وعضويته وبنده) من غير حساب: الحالة عن القراءة بس
+  const series = `مسير أرشيف ${crypto.randomUUID().slice(0, 6)}`
+  const historical = async (period, people, branch, status = 'APPROVED') => {
+    const run = await repo('PayrollRun').save({ name: series, period, startDate: `${period}-01`, endDate: `${period}-28`, branchId: branch.id, scopeType: 'BRANCH', status,
+      totalNet: people.length * 9000, approvedAt: status === 'APPROVED' ? new Date(`${period}-28T10:00:00Z`) : null })
+    for (const emp of people) {
+      await repo('PayrollRunMember').save({ runId: run.id, employeeId: emp.id, membershipStatus: 'INCLUDED', snapshot: { branchId: branch.id, employeeCode: emp.employeeCode, fullName: emp.fullName } })
+      await repo('PayrollItem').save({ runId: run.id, employeeId: emp.id, basicSalary: 9000, netPay: 9000, absenceDays: 0, unpaidLeaveDays: 0, payMethod: 'cash', breakdown: JSON.stringify({ gross: 9000 }) })
+    }
+    return run
+  }
+  const inside = await employee(B.a), left = await employee(B.a), outside = await employee(B.b)
+  await historical('2019-01', [inside, left], B.a)
+  const current = await historical('2031-01', [inside], B.a, 'CALCULATED')
+  const before = await changesOf(U.hrA, current)
+  assert.deepEqual([before.previousSeriesPeriod, before.leavers.map(row => row.employeeId), before.counts.leavers], ['2019-01', [left.id], 1])
+  // 60 مسير أحدث في فرع ب بنفس الاسم (أكتر من أي صفحة بحث): رد قارئ فرع أ مايتغيرش بالحرف
+  let foreign
+  for (let index = 0; index < 60; index++) foreign = await historical(`${2020 + Math.floor(index / 12)}-${String(index % 12 + 1).padStart(2, '0')}`, [outside], B.b)
+  expectStatus(await request(U.hrA, 'GET', `/payroll/runs/${foreign.id}`), 403)
+  assert.deepEqual(await changesOf(U.hrA, current), before)
+  // مسير قديم من غير أعضاء خالص (قبل لقطات العضوية) وفرعه في النطاق بيتحسب مرئي، وهو أحدث من 2019 فبقى هو مرجع السلسلة ومن غير خارجين
+  await repo('PayrollRun').save({ name: series, period: '2019-06', startDate: '2019-06-01', endDate: '2019-06-28', branchId: B.a.id, scopeType: 'BRANCH', status: 'PAID', totalNet: 0 })
+  const legacy = await changesOf(U.hrA, current)
+  assert.deepEqual([legacy.previousSeriesPeriod, legacy.leavers], ['2019-06', []])
+  // حساب الشركة: آخر مسير بالاسم زي ما هو (آخر الستين)
+  assert.equal((await changesOf(U.admin, current)).previousSeriesPeriod, '2024-12')
 })
 
 test('OP-3: «اللي غيّر مايعتمدش لوحده» — مقفول زي النهارده؛ مفتوح رفض برسالة، وحد تاني بيعتمد، ومدير النظام بسبب بيعدّي ويتسجل', async () => {

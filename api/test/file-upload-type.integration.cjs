@@ -210,6 +210,36 @@ test('FU-06: صورة الموظف وشعار الشركة لازم صورة ح�
   assert.equal((await upload(users.admin, png(), 'logo.png', { query: 'entityType=company_logo' })).status, 201)
 })
 
+test('FU-07 (CRP2A-B02): النوع من بنية الحاوية — ZIP بتعليق «word/document.xml» مش Word، وExcel قديم متسمي .doc مش Word، ومفيش حاجة اتكتبت', async () => {
+  const { zip, oldExcel, oldWord, wordPackage } = require('./fixtures/office-containers.cjs')
+  await setConfig('files.allowed_types', 'docx')
+  try {
+    const [rows, files] = [await rowCount(), diskFiles()]
+    // حالة المراجعة بالحرف: أرشيف صحيح فيه readme.txt وتعليقه اسم جزء Word، باسم not-word.docx
+    const archive = new JSZip(); archive.file('readme.txt', 'Harmless non-Office archive; no document part.'); archive.comment = 'word/document.xml'
+    const commented = await upload(users.me, await archive.generateAsync({ type: 'nodebuffer' }), 'not-word.docx', { type: 'application/zip' })
+    assert.equal(commented.status, 400); assert.match(messageOf(commented), /محتوى الملف مش من الأنواع المسموحة \(Word\)/)
+    const handmade = await upload(users.me, zip([['readme.txt', 'word/document.xml']], { comment: '[Content_Types].xml word/document.xml' }), 'not-word.docx')
+    assert.equal(handmade.status, 400)
+    assert.deepEqual([await rowCount(), diskFiles()], [rows, files])
+    // Word الحقيقي (من مكتبة، ومبني بالبايت) لسه بيتقبل
+    assert.equal((await upload(users.me, await docx(), 'real.docx')).status, 201)
+    assert.equal((await upload(users.me, wordPackage({ deflate: true }), 'minimal.docx')).status, 201)
+  } finally { await setConfig('files.allowed_types', 'jpeg,png,webp,pdf,doc,docx,xls,xlsx') }
+  // Word القديم بس مسموح: Excel قديم متسمي .doc نوعه الحقيقي Excel (مقفول)، وحاوية OLE تانية مش من الأنواع
+  await setConfig('files.allowed_types', 'doc')
+  try {
+    const [rows, files] = [await rowCount(), diskFiles()]
+    const sheet = await upload(users.me, oldExcel(), 'renamed.doc')
+    assert.equal(sheet.status, 400); assert.match(messageOf(sheet), /نوع الملف \(Excel قديم \(\.xls\)\) مش مسموح — المسموح: Word قديم \(\.doc\)/)
+    const installer = await upload(users.me, require('./fixtures/office-containers.cjs').ole(['!_StringPool', '!_Tables']), 'setup.doc')
+    assert.equal(installer.status, 400); assert.match(messageOf(installer), /محتوى الملف مش من الأنواع المسموحة/)
+    assert.deepEqual([await rowCount(), diskFiles()], [rows, files])
+    const word = await upload(users.me, oldWord(), 'old.doc')
+    assert.equal(word.status, 201, JSON.stringify(word.body)); assert.equal(word.body.mime, 'application/msword')
+  } finally { await setConfig('files.allowed_types', 'jpeg,png,webp,pdf,doc,docx,xls,xlsx') }
+})
+
 function expectOk(response) {
   assert.ok(response.status >= 200 && response.status < 300, JSON.stringify(response.body))
   return response.body ?? {}

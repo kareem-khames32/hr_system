@@ -257,16 +257,20 @@ export class RolesController {
       }
       role.isActive = dto.isActive
     }
-    const saved = await this.roles.save(role)
+    // CRP2A-B01 (مسح الصنف): حفظ الدور (وسطر تدقيقه من المستمع) وإبطال الجلسات في معاملة واحدة — فشل أي واحد بيرجّع الكل.
     // الصلاحيات داخل الـJWT (8 ساعات) → تغيير حزمة الدور أو تفعيله يُبطل فوراً
     // جلسات كل من عليه الدور (تغيير الاسم وحده لا يؤثر)
-    if (permsChanged || saved.isActive !== wasActive) {
-      await this.users.increment(
-        { role: role.code as User['role'] },
-        'tokenVersion',
-        1
-      )
-    }
+    const saved = await this.roles.manager.transaction(async (em) => {
+      const row = await em.getRepository(Role).save(role)
+      if (permsChanged || row.isActive !== wasActive) {
+        await em.getRepository(User).increment(
+          { role: role.code as User['role'] },
+          'tokenVersion',
+          1
+        )
+      }
+      return row
+    })
     return { ...saved, permissions: JSON.parse(saved.permissions) }
   }
 
@@ -349,21 +353,25 @@ export class RolesController {
       )
       if (violation) throw new ForbiddenException(violation)
     }
-    // B2.1: المنح والسحب قبل وبعد في سجل التدقيق (الحذف والإضافة مابيوصلوش للمستمع)
-    const previous = await this.overrides.find({ where: { userId: id } })
-    await this.overrides.delete({ userId: id })
+    // B2.1: المنح والسحب قبل وبعد في سجل التدقيق (الحذف والإضافة مابيوصلوش للمستمع).
+    // CRP2A-B01 (مراجعة Codex): التجاوزات وإبطال الجلسات وسطر التدقيق في معاملة واحدة — لو التدقيق فشل، المنح نفسه بيرجع
+    // (كان بيتحفظ ويفضل نافذ والرد 500 ومن غير أي سطر في السجل).
     const rows = [
       ...grants.map((p) => ({ userId: id, permission: p, effect: 'GRANT' as const })),
       ...revokes.map((p) => ({ userId: id, permission: p, effect: 'REVOKE' as const })),
     ]
-    if (rows.length > 0) await this.overrides.save(this.overrides.create(rows))
-    // تغيّرت الصلاحيات الفعلية → أبطِل التوكنات القائمة فوراً
-    user.tokenVersion = (user.tokenVersion ?? 0) + 1
-    await this.users.save(user)
     const list = (effect: string, from: Array<{ permission: string; effect: string }>) => from.filter(row => row.effect === effect).map(row => row.permission).sort()
-    await recordAudit(this.overrides.manager, { category: 'PERMISSIONS', action: 'USER_PERMISSIONS_SET', entityType: 'user', entityId: id, actorUserId: actor.sub,
-      branchId: user.branchId ?? null, summary: `تعديل صلاحيات الحساب ${user.email}`,
-      before: { grants: list('GRANT', previous), revokes: list('REVOKE', previous) }, after: { grants: [...grants].sort(), revokes: [...revokes].sort() } })
+    await this.overrides.manager.transaction(async (em) => {
+      const overrides = em.getRepository(UserPermissionOverride)
+      const previous = await overrides.find({ where: { userId: id } })
+      await overrides.delete({ userId: id })
+      if (rows.length > 0) await overrides.save(overrides.create(rows))
+      // تغيّرت الصلاحيات الفعلية → أبطِل التوكنات القائمة فوراً
+      await em.createQueryBuilder().update(User).set({ tokenVersion: () => 'tokenVersion + 1' }).where('id = :id', { id }).execute()
+      await recordAudit(em, { category: 'PERMISSIONS', action: 'USER_PERMISSIONS_SET', entityType: 'user', entityId: id, actorUserId: actor.sub,
+        branchId: user.branchId ?? null, summary: `تعديل صلاحيات الحساب ${user.email}`,
+        before: { grants: list('GRANT', previous), revokes: list('REVOKE', previous) }, after: { grants: [...grants].sort(), revokes: [...revokes].sort() } })
+    })
     return this.userPermissions(actor, id)
   }
 }
