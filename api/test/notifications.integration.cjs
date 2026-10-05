@@ -4,7 +4,7 @@
 //  NT-01) البريد مقفول افتراضيًا: ولا رسالة ولا صف، والطلب ماشي عادي.
 //  NT-02) «طلب مستني اعتمادك»: المستلمين هم بالظبط اللي الطلب في صندوقهم (هيكلي، ووظيفي بنطاق الفرع)، من غير مدير النظام ولا صاحب الطلب،
 //         بلينك مباشر، وعنوان بريد العمل لو بريد الحساب مش عنوان.
-//  NT-03) حدث اتوزع مرتين، ومهمة بريد اتعادت، ومهمتين لنفس الرسالة في نفس اللحظة = إشعار واحد وبريد واحد.
+//  NT-03) حدث اتوزع مرتين، ومهمة بريد اتعادت، ومهمتين لنفس الرسالة في نفس اللحظة أو والأولى لسه عند خادم البريد = إشعار واحد وبريد واحد.
 //  NT-04) «قرار طلبك» (اعتماد، رفض، إرجاع) لصاحب الطلب بالبريد من غير تعليق المعتمد، والقايمة داخل النظام بعنصرها المحسوب بس. و«أُعيد طلبك»
 //         مابتتكتبش لو صاحبه قدّمه تاني قبل ما الحدث يتوزع.
 //  NT-05) التصعيد بيوصل للي الخطوة بقت عليهم — وفي مجموعة متوازية لحاملي الدور اللي اتصعّد له بس.
@@ -20,6 +20,8 @@
 //  NT-11) القوالب وسجل الإرسال لحساب الشركة بس: تعديل بمتغيرات الحدث، ورجوع للافتراضي، وسطر تدقيق، والعنوان متخفي.
 //  NT-12) حدود الإعدادات التلاتة، ومسح مهام الطابور المنتهية القديمة.
 //  NT-13) دفعة كبيرة (قسايم مسير) بتتوزع على دقايق، ورسالة «مستنية» مهمتها وقفت بتتسجل «فشل».
+//  NT-14) (Codex P2E) حق المستلم بيتفحص وقت الإرسال: حساب اتربط بموظف تاني مابيوصلوش قرار طلب الموظف القديم، وموديول اتقفل للمستلم
+//         بعد التوزيع مابيوصلوش بريده، وإرجاع الطلب السري بيبطل بإعادة التقديم زي العادي — في الفوري والملخص.
 // Run (من api/): node --test test/notifications.integration.cjs
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
@@ -302,11 +304,22 @@ test('NT-03: حدث اتوزع مرتين، ومهمة بريد اتعادت، �
   mailbox.hold = new Promise(resolve => { release = resolve })
   const finished = []
   const runs = [1, 2].map(run => notifications.sendEmail(String(pending.id), { attempt: 1, maxAttempts: 10 }).then(() => finished.push(run)))
-  // اللي ماحجزتش المحاولة بتخلص من غير إرسال، والتانية واقفة عند خادم البريد
-  for (let waited = 0; waited < 5000 && !(finished.length === 1 && mailbox.attempts.length >= 1); waited += 20) await new Promise(resolve => setTimeout(resolve, 20))
-  release()
-  mailbox.hold = null
-  await Promise.all(runs)
+  const until = async (done, limit = 5000) => { for (let waited = 0; waited < limit && !done(); waited += 20) await new Promise(resolve => setTimeout(resolve, 20)) }
+  try {
+    // اللي مامسكتش قفل التوصيل بتخلص من غير إرسال، والتانية واقفة عند خادم البريد
+    await until(() => finished.length === 1 && mailbox.attempts.length >= 1)
+    assert.deepEqual([finished.length, mailbox.attempts.length], [1, 1])
+    // ومهمة تالتة بتبدأ والأولى لسه واقفة عند خادم البريد (Codex CRP2E-N01): القفل ممسوك طول المحاولة، فبترجع من غير إرسال
+    runs.push(notifications.sendEmail(String(pending.id), { attempt: 1, maxAttempts: 10 }).then(() => finished.push(3)))
+    await until(() => finished.length === 2, 3000)
+    assert.deepEqual([finished.length, mailbox.attempts.length], [2, 1], 'التالتة رجعت من غير إرسال والأولى لسه شغالة')
+    assert.deepEqual([(await deliveriesOf('request', twice.id))[0].status, (await deliveriesOf('request', twice.id))[0].attempts], ['PENDING', 0])
+  } finally {
+    // لو القفل وقع، النداءات واقفة عند بديل البريد: بتتساب عشان الاختبار يقع من غير ما يعلّق
+    release()
+    mailbox.hold = null
+    await Promise.all(runs.map(run => run.catch(() => undefined)))
+  }
   assert.equal(mailbox.attempts.length, 1, 'رسالة واحدة من المهمتين')
   const [once] = await deliveriesOf('request', twice.id)
   assert.deepEqual([once.status, once.attempts], ['SENT', 1])
@@ -667,6 +680,62 @@ test('NT-08: التفضيلات — مقفول = مفيش بريد، وملخص 
   }
   await act(users.admin, shared.id, 'REJECT', 'تنضيف')
   await drain()
+  // (Codex CRP2E-N02) ميعاد الملخص جه في ساعات الهدوء: مابيطلعش، وبيتأجل لآخرها بمهمة واحدة في الطابور
+  const digestJobs = () => query(`SELECT [id], [status], [idempotencyKey], DATEDIFF(second, SYSUTCDATETIME(), [runAfter]) AS [delay] FROM [jobs_queue]
+    WHERE [jobType] = N'notifications.digest-send' ORDER BY [id]`)
+  const held = await submit(users.requester, types.general)
+  await drain()
+  assert.equal((await deliveriesOf('request', held.id))[0].status, 'DIGEST')
+  clearMailbox()
+  const pad = value => String(value).padStart(2, '0')
+  await setting('notifications.quiet_hours', '08:00-10:00')
+  assert.equal(await notifications.digestHourlyWork(at(9)), 0)
+  assert.equal(await notifications.digestHourlyWork(at(9)), 0)
+  assert.deepEqual([mailbox.attempts.length, (await deliveriesOf('request', held.id))[0].status], [0, 'DIGEST'])
+  let deferred = await digestJobs()
+  const quietEnd = new Date(); quietEnd.setHours(10, 0, 0, 0)
+  assert.deepEqual(deferred.map(job => [job.status, job.idempotencyKey]), [['PENDING', `notifications.digest-send:${quietEnd.getTime()}`]], 'مهمة واحدة لآخر ساعات الهدوء (10:00)')
+  assert.ok(Math.abs(deferred[0].delay - Math.round((quietEnd.getTime() + 1000 - Date.now()) / 1000)) <= 90, `المهمة متأجلة ${deferred[0].delay} ثانية`)
+  // المهمة اتسحبت وساعات الهدوء لسه شغالة دلوقتي (النافذة اتمدّت): مهمة جديدة لآخرها ومن غير إرسال
+  const nowMinute = new Date().getHours() * 60 + new Date().getMinutes()
+  const around = offset => { const minute = (((nowMinute + offset) % 1440) + 1440) % 1440; return `${pad(Math.floor(minute / 60))}:${pad(minute % 60)}` }
+  await setting('notifications.quiet_hours', `${around(-60)}-${around(120)}`)
+  await query(`UPDATE [jobs_queue] SET [runAfter] = DATEADD(second, -1, SYSUTCDATETIME()) WHERE [jobType] = N'notifications.digest-send' AND [status] = N'PENDING'`)
+  await drain()
+  deferred = await digestJobs()
+  assert.deepEqual([deferred.map(job => job.status), mailbox.attempts.length], [['DONE', 'PENDING'], 0])
+  assert.ok(deferred[1].delay > 3600 && deferred[1].delay <= 2 * 3600 + 90)
+  // آخر ساعات الهدوء جه: الملخص بيطلع من مهمة التأجيل
+  await setting('notifications.quiet_hours', '')
+  await query(`UPDATE [jobs_queue] SET [runAfter] = DATEADD(second, -1, SYSUTCDATETIME()) WHERE [jobType] = N'notifications.digest-send' AND [status] = N'PENDING'`)
+  await drain()
+  assert.deepEqual(mailbox.sent.map(message => [message.to, message.subject]), [['manager@notify.invalid', 'ملخص إشعاراتك (1)']])
+  assert.deepEqual([(await deliveriesOf('request', held.id))[0].status, (await digestJobs()).map(job => job.status)], ['SENT', ['DONE', 'DONE']])
+  // تشغيلين للملخص في نفس اللحظة (الموعد ومهمة التأجيل، أو نسختين من الخادم): رسالة واحدة
+  const twin = await submit(users.requester, types.general)
+  await drain()
+  clearMailbox()
+  let letGo
+  mailbox.hold = new Promise(resolve => { letGo = resolve })
+  const results = []
+  const start = () => notifications.sendDigests().then(sent => { results.push(sent) })
+  const runs = [start(), start()]
+  const until = async (done, limit = 5000) => { for (let waited = 0; waited < limit && !done(); waited += 20) await new Promise(resolve => setTimeout(resolve, 20)) }
+  try {
+    // واحد ماسك قفل الملخص وواقف عند خادم البريد، والتاني رجع من غير إرسال
+    await until(() => results.length === 1 && mailbox.attempts.length >= 1)
+    assert.deepEqual([results, mailbox.attempts.length], [[0], 1])
+    // وتشغيل تالت والأول لسه عند خادم البريد
+    runs.push(start())
+    await until(() => results.length === 2, 3000)
+    assert.deepEqual([results, mailbox.attempts.length], [[0, 0], 1])
+  } finally {
+    letGo()
+    mailbox.hold = null
+    await Promise.all(runs.map(run => run.catch(() => undefined)))
+  }
+  assert.deepEqual([...results].sort(), [0, 0, 1])
+  assert.deepEqual([mailbox.attempts.length, (await deliveriesOf('request', twin.id))[0].status], [1, 'SENT'])
   // البريد اتقفل من الإعدادات واللي متجمّع للملخص لسه مستني: بيتسجل «اتخطّى» في ميعاد الملخص، مايفضلش لحد ما البريد يتفتح بعد أسابيع
   const parked = await submit(users.requester, types.general)
   await drain()
@@ -1032,5 +1101,143 @@ test('NT-13: دفعة كبيرة (قسايم مسير) بتتوزع على دق�
   expectStatus(await request(users.admin, 'POST', `/queue/jobs/${stuckJob.id}/retry`), 201)
   await drain()
   assert.deepEqual([(await deliveriesOf('request', req.id))[0].status, (await deliveriesOf('request', live.id))[0].status], ['SENT', 'SENT'])
+  await setting('notifications.email.enabled', 'false')
+})
+
+test('NT-14: (Codex P2E) حق المستلم بيتفحص وقت الإرسال — حساب اتربط بموظف تاني، وموديول اتقفل بعد التوزيع، وإرجاع الطلب السري', async () => {
+  await setting('notifications.email.enabled', 'true')
+  const minuteNow = new Date().getHours() * 60 + new Date().getMinutes()
+  const clock = offset => { const minute = (((minuteNow + offset) % 1440) + 1440) % 1440; return `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}` }
+  const quiet = on => setting('notifications.quiet_hours', on ? `${clock(-60)}-${clock(120)}` : '')
+  // آخر ساعات الهدوء: المتأجل كله بيتسحب
+  const release = async () => { await quiet(false); await query(`UPDATE [jobs_queue] SET [runAfter] = DATEADD(second, -1, SYSUTCDATETIME()) WHERE [jobType] = N'notifications.email' AND [status] = N'PENDING'`); await drain() }
+  const mode = (user, category, value) => request(user, 'PATCH', '/notifications/preferences', { category, channel: 'EMAIL', mode: value })
+  const mineOf = async (entityType, entityId, user) => (await deliveriesOf(entityType, entityId)).filter(row => row.recipientUserId === user.id)
+
+  // ===== CRP2E-B01: قرار طلب موظف مابيوصلش لحساب اتربط بموظف تاني بعد التوزيع =====
+  const spare = await employee({ branchId: org.branchB.id })
+  // بالنيابة: الطلب قدّمه حساب تاني للموظف، فالحساب بعد تغيير ربطه مابقاش يقراه خالص (404). ومن نفسه: الحساب لسه منشئ الطلب، بس مابقاش صاحبه
+  for (const [digest, onBehalf] of [[false, true], [true, true], [false, false]]) {
+    if (digest) expectStatus(await mode(users.requester, 'request', 'DIGEST'), 200); else await quiet(true)
+    const req = onBehalf
+      ? expectStatus(await request(users.admin, 'POST', '/requests', { typeCode: types.general.code, payload: { reason: 'طلب بالنيابة' }, submit: true, onBehalfEmployeeId: emps.requester.id }), 201)
+      : await submit(users.requester, types.general)
+    await drain()
+    if ((await repo('Request').findOneByOrFail({ id: req.id })).status === 'UNDER_REVIEW') {
+      await act(users.manager, req.id, 'REJECT', 'رفض قبل تغيير ربط الحساب')
+      await drain()
+    }
+    assert.equal((await repo('Request').findOneByOrFail({ id: req.id })).createdByUserId, onBehalf ? users.admin.id : users.requester.id)
+    const [waiting] = await mineOf('request', req.id, users.requester)
+    assert.deepEqual([waiting.eventCode, waiting.status], ['request.decided', digest ? 'DIGEST' : 'PENDING'])
+    // الحساب اتربط بموظف تاني في فرع تاني (المسار الفعلي): الطلب مابقاش يتقري بالحساب ده
+    expectStatus(await request(users.admin, 'PATCH', `/users/${users.requester.id}`, { employeeId: spare.id, branchId: org.branchB.id }), 200)
+    const moved = await repo('User').findOneByOrFail({ id: users.requester.id })
+    try {
+      expectStatus(await request(moved, 'GET', `/requests/${req.id}`), onBehalf ? 404 : 200)
+      clearMailbox()
+      if (digest) assert.equal(await notifications.sendDigests(), 0); else await release()
+      assert.equal(mailbox.sent.some(message => message.to === 'requester@notify.invalid'), false, 'ولا رسالة عن طلب الموظف القديم')
+      const [gone] = await mineOf('request', req.id, users.requester)
+      assert.deepEqual([gone.status, gone.detail, gone.body], ['SKIPPED', 'الحساب مابقاش حساب صاحب الطلب', null])
+    } finally {
+      await repo('User').update({ id: users.requester.id }, { employeeId: emps.requester.id, branchId: org.branchA.id, tokenVersion: users.requester.tokenVersion ?? 0 })
+      await quiet(false)
+      await mode(users.requester, 'request', 'ON')
+    }
+  }
+  // ومن غير تغيير الربط: نفس المسارين بيبعتوا (الفحص مابيمنعش صاحب الطلب نفسه)
+  await quiet(true)
+  const kept = await submit(users.requester, types.general)
+  await drain()
+  await act(users.manager, kept.id, 'REJECT', 'رفض عادي')
+  await drain()
+  clearMailbox()
+  await release()
+  assert.deepEqual(mailbox.sent.filter(message => message.to === 'requester@notify.invalid').map(message => message.subject), ['تم رفض طلبك: طلب إشعارات عام'])
+
+  // ===== CRP2E-B02: بريد القسيمة مابيطلعش لو موديول الرواتب اتقفل للمستلم بعد التوزيع =====
+  const paid = await employee()
+  const paidUser = await account('paid', 'employee', [], { employeeId: paid.id })
+  const run = await repo('PayrollRun').save({ name: 'مسير قفل الموديول', period: '2026-06', startDate: '2026-05-23', endDate: '2026-06-22', branchId: org.branchA.id,
+    status: 'APPROVED', totalNet: 0, approvedAt: new Date() })
+  await repo('PayrollItem').save({ runId: run.id, employeeId: paid.id, basicSalary: 6000, netPay: 6000, absenceDays: 0, unpaidLeaveDays: 0, payMethod: 'cash' })
+  const modules = app.get(require('../src/modules-registry/modules.service').ModulesService)
+  const payroll = async enabled => {
+    if (enabled) await repo('SystemModule').delete({ key: 'payroll' })
+    else await repo('SystemModule').save({ key: 'payroll', enabled: false, enabledAt: new Date(), enabledBy: users.admin.id, audience: null })
+    modules.invalidate()
+  }
+  let eventId = 992000
+  for (const digest of [false, true]) {
+    if (digest) expectStatus(await mode(paidUser, 'payroll', 'DIGEST'), 200); else await quiet(true)
+    assert.equal(await notifications.dispatch({ id: String(++eventId), type: 'PAYROLL_RUN_APPROVED', entityType: 'payroll_run', entityId: String(run.id), payload: { runId: run.id } }), 1)
+    const waiting = (await mineOf('payroll_run', run.id, paidUser)).pop()
+    assert.equal(waiting.status, digest ? 'DIGEST' : 'PENDING')
+    await payroll(false)
+    try {
+      expectStatus(await request(paidUser, 'GET', '/payroll/my-payslips'), 404)
+      clearMailbox()
+      if (digest) assert.equal(await notifications.sendDigests(), 0); else await release()
+      assert.equal(mailbox.attempts.length, 0, 'ولا رسالة عن شاشة مقفولة للمستلم')
+      const closed = (await mineOf('payroll_run', run.id, paidUser)).pop()
+      assert.deepEqual([closed.status, closed.detail], ['SKIPPED', 'الشاشة اللي الإشعار بيودّي ليها مابقتش متاحة للمستلم'])
+    } finally {
+      await payroll(true)
+      await quiet(false)
+    }
+  }
+  // والموديول مفتوح: بيتبعت (الملخص هنا)
+  assert.equal(await notifications.dispatch({ id: String(++eventId), type: 'PAYROLL_RUN_APPROVED', entityType: 'payroll_run', entityId: String(run.id), payload: { runId: run.id } }), 1)
+  clearMailbox()
+  assert.equal(await notifications.sendDigests(), 1)
+  assert.deepEqual(to(mailbox.sent), ['paid@notify.invalid'])
+  await mode(paidUser, 'payroll', 'ON')
+
+  // ===== CRP2E-N03: إرجاع الطلب السري بيبطل بإعادة التقديم زي العادي =====
+  await quiet(true)
+  const hidden = await submit(users.requester, types.secret, 'تفاصيل حساسة')
+  await drain()
+  await act(users.hrA, hidden.id, 'RETURN', 'استكمال')
+  await drain()
+  expectStatus(await request(users.requester, 'POST', `/requests/${hidden.id}/resubmit`, { payload: { reason: 'بعد الاستكمال' } }), 201)
+  await drain()
+  // وطلب سري تاني اترفض (قرار مش إرجاع): رسالته لسه صحيحة
+  const refused = await submit(users.requester, types.secret, 'تفاصيل تانية')
+  await drain()
+  await act(users.hrA, refused.id, 'REJECT', 'رفض')
+  await drain()
+  clearMailbox()
+  await release()
+  const back = await mineOf('request', hidden.id, users.requester)
+  assert.deepEqual(back.map(row => [row.eventCode, row.status, row.detail]), [['request.confidential', 'SKIPPED', 'الطلب اتقدّم تاني أو اتحسم']])
+  const decided = await mineOf('request', refused.id, users.requester)
+  assert.deepEqual(decided.map(row => [row.eventCode, row.status]), [['request.confidential', 'SENT']])
+  assert.deepEqual(mailbox.sent.filter(message => message.to === 'requester@notify.invalid').map(message => message.subject), ['تحديث على طلب سري'])
+  for (const id of [hidden.id]) await act(users.admin, id, 'REJECT', 'تنضيف')
+  await drain()
+
+  // ===== نفس الصنف: نوع الطلب بقى سري بعد ما الرسالة اتجهّزت بنوعه واسم صاحبه (فوري وملخص) =====
+  for (const digest of [false, true]) {
+    if (digest) expectStatus(await mode(users.manager, 'approval', 'DIGEST'), 200); else await quiet(true)
+    const plain = await submit(users.requester, types.general)
+    await drain()
+    const [ready] = await mineOf('request', plain.id, users.manager)
+    assert.equal(ready.status, digest ? 'DIGEST' : 'PENDING')
+    await repo('RequestType').update({ id: types.general.id }, { isConfidential: true })
+    try {
+      clearMailbox()
+      if (digest) assert.equal(await notifications.sendDigests(), 0); else await release()
+      assert.equal(mailbox.sent.some(message => `${message.subject}\n${message.text}`.includes('طلب إشعارات عام')), false, 'نوع الطلب السري مابيطلعش في رسالة اتجهّزت قبل كده')
+      const [sealed] = await mineOf('request', plain.id, users.manager)
+      assert.deepEqual([sealed.status, sealed.detail], ['SKIPPED', 'نوع الطلب بقى سري بعد تجهيز الرسالة'])
+    } finally {
+      await repo('RequestType').update({ id: types.general.id }, { isConfidential: false })
+      await quiet(false)
+      await mode(users.manager, 'approval', 'ON')
+    }
+    await act(users.manager, plain.id, 'REJECT', 'تنضيف')
+    await drain()
+  }
   await setting('notifications.email.enabled', 'false')
 })

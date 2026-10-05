@@ -10,7 +10,7 @@ import { definitionCodeOf } from '../common/leave-contract'
 import { Employee } from '../employees/employee.entity'
 import { ModulesService } from '../modules-registry/modules.service'
 import { routeAvailable } from '../modules-registry/registry'
-import { enqueueQueueJob, type DomainEventType } from '../queue/outbox'
+import { enqueueQueueJob, queueTablesReady, type DomainEventType } from '../queue/outbox'
 import { QueueService } from '../queue/queue.service'
 import { FUNCTIONAL_APPROVER_ROLES } from '../requests/approver-resolver.service'
 import { RequestType } from '../requests/entities/request-type.entity'
@@ -34,6 +34,8 @@ import {
 export const NOTIFICATIONS_DISPATCH_JOB = 'notifications.dispatch'
 export const NOTIFICATIONS_EMAIL_JOB = 'notifications.email'
 export const NOTIFICATIONS_DIGEST_JOB = 'notifications.daily-digest'
+// الملخص اللي ميعاده جه في ساعات الهدوء: مهمة في الطابور بتبعته بعد آخرها
+export const NOTIFICATIONS_DIGEST_SEND_JOB = 'notifications.digest-send'
 export const NOTIFICATIONS_EMAIL_ENABLED_KEY = 'notifications.email.enabled'
 export const NOTIFICATIONS_QUIET_HOURS_KEY = 'notifications.quiet_hours'
 export const NOTIFICATIONS_DIGEST_HOUR_KEY = 'notifications.digest_hour'
@@ -80,7 +82,7 @@ interface DeliverInput {
   link: string
   values: Record<string, string>
 }
-type NotificationRef = Pick<Notification, 'id' | 'recipientUserId' | 'eventCode' | 'category' | 'entityType' | 'entityId'>
+type NotificationRef = Pick<Notification, 'id' | 'recipientUserId' | 'eventCode' | 'category' | 'entityType' | 'entityId' | 'link' | 'dedupeKey'>
 const sqlErrorNumber = (error: unknown) => Number((error as { number?: unknown; driverError?: { number?: unknown } })?.number
   ?? (error as { driverError?: { number?: unknown } })?.driverError?.number)
 
@@ -108,6 +110,9 @@ export class NotificationsService implements OnModuleInit {
     this.queue.registerHandler(NOTIFICATIONS_EMAIL_JOB, async (payload, context) => {
       await this.sendEmail(String((payload as { deliveryId?: unknown } | null)?.deliveryId ?? ''), context)
     }, { maxAttempts: NOTIFICATIONS_EMAIL_MAX_ATTEMPTS })
+    this.queue.registerHandler(NOTIFICATIONS_DIGEST_SEND_JOB, async () => {
+      await this.digestOrDefer(new Date(), true)
+    })
   }
 
   /** الجداول موجودة (ترحيل 087)؟ نفس فحص قايمة الإشعارات (notification-store) */
@@ -325,22 +330,42 @@ export class NotificationsService implements OnModuleInit {
     return pickNotificationAddress(user.email, employee?.email)
   }
 
+  /** نوع حدث المصدر اللي الإشعار اتعمل منه (مفتاح منع التكرار شايل رقم حدث الـoutbox) — دلالة الحدث بتفضل معروفة حتى لو القالب عام (الطلب السري) */
+  private async sourceEventType(notification: Pick<Notification, 'dedupeKey'>): Promise<string | null> {
+    const id = /^outbox:(\d+):/.exec(notification.dedupeKey ?? '')?.[1]
+    if (!id || !(await queueTablesReady(this.ds.manager))) return null
+    const [row]: Array<{ eventType: string }> = await this.ds.query('SELECT [eventType] FROM [outbox_events] WHERE [id] = @0', [id])
+    return row?.eventType ?? null
+  }
+
   /**
-   * الإشعار لسه صحيح وقت الإرسال؟ البريد ممكن يتبعت بعد الحدث بساعات (ساعات الهدوء، إعادة المحاولة، الملخص اليومي)، فبيتفحص تاني قبل ما يطلع:
-   * إشعار أحدث لنفس الحدث على نفس الكيان، و«طلب مستني اعتمادك» والطلب اتحسم أو اتحرك، و«أُعيد طلبك» والطلب اتقدّم تاني، و«قسيمتك ظهرت»
-   * والمسير اتفتح تاني أو الموظف مابقاش فيه. null = صحيح، وإلا سبب التخطّي.
+   * الإشعار لسه صحيح والمستلم لسه ليه حق فيه وقت الإرسال؟ البريد ممكن يتبعت بعد الحدث بساعات (ساعات الهدوء، إعادة المحاولة، الملخص
+   * اليومي)، فكل حاجة اتحكم بيها وقت التوزيع بتتحكم تاني بحالتها دلوقتي قبل ما الرسالة تطلع:
+   * إشعار أحدث لنفس الحدث على نفس الكيان؛ والشاشة اللي الإشعار بيودّي ليها لسه متاحة للمستلم (موديولها ماتقفلش له)؛ و«طلب مستني اعتمادك»
+   * والطلب لسه مستني الحساب ده؛ وإشعارات صاحب الطلب (قرار، إرجاع) والحساب لسه حساب صاحب الطلب، و«أُعيد طلبك» والطلب لسه مرتجع؛
+   * ونوع الطلب مابقاش سري بعد ما النص اتجهّز بنوعه واسم صاحبه؛
+   * و«قسيمتك ظهرت» والقسيمة لسه ظاهرة لموظف الحساب. null = صحيح، وإلا سبب التخطّي.
    */
   private async staleReason(notification: NotificationRef, user: User): Promise<string | null> {
     const [latest]: Array<{ id: string }> = await this.ds.query(`SELECT TOP (1) [id] FROM [notifications]
       WHERE [recipientUserId] = @0 AND [eventCode] = @1 AND [entityType] = @2 AND [entityId] = @3 ORDER BY [id] DESC`,
     [notification.recipientUserId, notification.eventCode, notification.entityType, notification.entityId])
     if (latest && String(latest.id) !== String(notification.id)) return 'فيه إشعار أحدث لنفس الحدث'
-    if (notification.entityType === 'request' && (notification.category === 'approval' || notification.eventCode === 'request.returned')) {
+    const [account] = await this.auth.accountPayloads([user])
+    // نفس فحص التوزيع: الموديول اتقفل للمستلم بعدها = مفيش رسالة عن شاشة مابقاش يقدر يفتحها
+    if (!routeAvailable(String(notification.link ?? '').split('?')[0], await this.modules.enabledFor(account))) return 'الشاشة اللي الإشعار بيودّي ليها مابقتش متاحة للمستلم'
+    if (notification.entityType === 'request') {
       const id = Number(notification.entityId)
       const req = Number.isSafeInteger(id) ? await this.ds.getRepository(Request).findOne({ where: { id } }) : null
-      if (notification.eventCode === 'request.returned') return req?.status === 'RETURNED_FOR_INFO' ? null : 'الطلب اتقدّم تاني أو اتحسم'
-      const [account] = await this.auth.accountPayloads([user])
-      return req && this.requests.stepAwaitsAccount(account, req) ? null : 'الطلب مابقاش مستني اعتماد الحساب ده'
+      // نوع الطلب بقى سري بعد ما الرسالة اتجهّزت بنوعه واسم صاحبه: النص المتخزن مابيطلعش (الإشعار السري قالبه عام من الأول)
+      if (req && notification.eventCode !== 'request.confidential' && (await this.requestFacts(req)).confidential) return 'نوع الطلب بقى سري بعد تجهيز الرسالة'
+      if (notification.category === 'approval') return req && this.requests.stepAwaitsAccount(account, req) ? null : 'الطلب مابقاش مستني اعتماد الحساب ده'
+      // إشعارات صاحب الطلب (قرار، إرجاع — والسري منهم): الحساب اتربط بموظف تاني بعدها = مابقاش حساب صاحب الطلب
+      if (!req || !user.employeeId || user.employeeId !== req.requesterId) return 'الحساب مابقاش حساب صاحب الطلب'
+      // «اترجع لاستكمال» بدلالة حدث المصدر مش بكود القالب: الطلب السري قالبه عام، وإرجاعه بياخد نفس الفحص
+      const returned = notification.eventCode === 'request.returned'
+        || (notification.eventCode === 'request.confidential' && (await this.sourceEventType(notification)) === 'REQUEST_RETURNED')
+      return returned && req.status !== 'RETURNED_FOR_INFO' ? 'الطلب اتقدّم تاني أو اتحسم' : null
     }
     if (notification.entityType === 'payroll_run') {
       // نفس شرط «قسائم راتبي»: مسير معتمد أو مصروف ليه بند لموظف الحساب
@@ -359,6 +384,28 @@ export class NotificationsService implements OnModuleInit {
    */
   async sendEmail(deliveryId: string, context: { attempt: number; maxAttempts: number }): Promise<void> {
     if (!/^\d+$/.test(deliveryId) || !(await this.ready())) return
+    // مهمتين لنفس الرسالة (مهمة اتعادت بعد عطل، أو نسختين من الخادم) مايبعتوش مع بعض ولا ورا بعض والأولى لسه عند خادم البريد:
+    // قفل التوصيل ممسوك طول المحاولة، والتانية بتلاقيه ممسوك فبتسيبها للأولى
+    await this.holding(`hr:notification-delivery:${deliveryId}`, () => this.attemptEmail(deliveryId, context))
+  }
+
+  /**
+   * قفل قاعدة باسم، ممسوك لحد ما الشغل يخلص (معاملة مفيهاش غير القفل؛ الشغل نفسه على اتصالات تانية). ممسوك من حد تاني = null من غير
+   * انتظار. الخطأ جوه الشغل بيتساب القفل وبيترمي زي ما هو.
+   */
+  private async holding<T>(resource: string, work: () => Promise<T>): Promise<T | null> {
+    return this.ds.transaction(async em => {
+      if (em.connection.options.type === 'mssql') {
+        const [row] = await em.query(`DECLARE @result int;
+          EXEC @result = sys.sp_getapplock @Resource = @0, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 0;
+          SELECT @result AS [lockResult];`, [resource])
+        if (!row || Number(row.lockResult) < 0) return null
+      }
+      return work()
+    })
+  }
+
+  private async attemptEmail(deliveryId: string, context: { attempt: number; maxAttempts: number }): Promise<void> {
     const deliveries = this.ds.getRepository(NotificationDelivery)
     const delivery = await deliveries.findOne({ where: { id: deliveryId } })
     // اتبعتت قبل كده (مهمة اتعادت) أو اتخطّت. «فشل» بييجي هنا لما المهمة الميتة تتعاد من شاشة الطابور
@@ -387,10 +434,6 @@ export class NotificationsService implements OnModuleInit {
       return
     }
     const attempts = delivery.attempts + 1
-    // مهمتين لنفس الرسالة في نفس اللحظة (مهمة اتعادت بعد عطل ونسختين من الخادم): اللي حجزت رقم المحاولة هي اللي بتبعت
-    const claimed: unknown[] = await this.ds.query(`UPDATE [notification_deliveries] SET [attempts] = @1 OUTPUT INSERTED.[id]
-      WHERE [id] = @0 AND [attempts] = @2 AND [status] IN (N'PENDING', N'FAILED')`, [delivery.id, attempts, delivery.attempts])
-    if (!claimed.length) return
     // المحاولة فشلت: آخر محاولة (أو عنوان مرفوض) = «فشل». الخطأ اللي بيترمي للطابور بنص الإشعارات ومن غير عناوين كاملة
     const failed = async (detail: string, rejected: boolean) => {
       await deliveries.update({ id: delivery.id }, { attempts, detail, status: rejected || context.attempt >= context.maxAttempts ? 'FAILED' : 'PENDING' })
@@ -416,7 +459,19 @@ export class NotificationsService implements OnModuleInit {
     await this.settleStuck(now)
     const configured = Number(await this.setting(NOTIFICATIONS_DIGEST_HOUR_KEY, String(NOTIFICATIONS_DIGEST_HOUR_DEFAULT)))
     const hour = Number.isInteger(configured) && configured >= 0 && configured <= 23 ? configured : NOTIFICATIONS_DIGEST_HOUR_DEFAULT
-    return now.getHours() === hour ? this.sendDigests() : 0
+    return now.getHours() === hour ? this.digestOrDefer(now) : 0
+  }
+
+  /**
+   * الملخص في ساعات الهدوء مابيطلعش: بيتأجل لآخرها بمهمة في الطابور (زي البريد الفوري)، فمضمون إنه يطلع بعدها. requeue: النداء من
+   * المهمة نفسها ولسه ساعات الهدوء شغالة (الساعتين مش ماشيين مع بعض، أو النافذة اتمدّت) = مهمة جديدة لآخرها.
+   */
+  async digestOrDefer(now: Date = new Date(), requeue = false): Promise<number> {
+    const quietEnd = quietHoursEnd(now, parseQuietHours(await this.setting(NOTIFICATIONS_QUIET_HOURS_KEY, '')))
+    if (!quietEnd) return this.sendDigests()
+    await enqueueQueueJob(this.ds.manager, { jobType: NOTIFICATIONS_DIGEST_SEND_JOB,
+      key: `${NOTIFICATIONS_DIGEST_SEND_JOB}:${quietEnd.getTime()}${requeue ? `:${Date.now()}` : ''}`, runAfter: new Date(quietEnd.getTime() + 1000) })
+    return 0
   }
 
   /**
@@ -431,9 +486,13 @@ export class NotificationsService implements OnModuleInit {
           AND JSON_VALUE(j.[payload], '$.deliveryId') = CAST(d.[id] AS nvarchar(30)))`, [new Date(now.getTime() - STUCK_AFTER_MS), NOTIFICATIONS_EMAIL_JOB])
   }
 
-  /** رسالة واحدة لكل مستخدم باللي اتجمع له في الملخص. بيرجّع عدد الرسائل اللي اتبعتت */
+  /** رسالة واحدة لكل مستخدم باللي اتجمع له في الملخص. بيرجّع عدد الرسائل اللي اتبعتت. تشغيلين في نفس اللحظة (الموعد ومهمة التأجيل): واحد بس */
   async sendDigests(): Promise<number> {
     if (!(await this.ready())) return 0
+    return (await this.holding('hr:notifications:digest', () => this.sendDigestsNow())) ?? 0
+  }
+
+  private async sendDigestsNow(): Promise<number> {
     const deliveries = this.ds.getRepository(NotificationDelivery)
     // البريد اتقفل: اللي متجمّع مايفضلش مستني لحد ما يتفتح تاني بعد أسابيع
     if (!(await this.emailRequested())) {
@@ -442,8 +501,9 @@ export class NotificationsService implements OnModuleInit {
     }
     if (!this.mail.isConfigured() || Date.now() < this.mailPausedUntil) return 0
     const rows: Array<{ id: string; userId: number; title: string; body: string; link: string; notificationId: string; eventCode: string; category: string;
-      entityType: string | null; entityId: string | null }> = await this.ds.query(
-      `SELECT d.[id], n.[recipientUserId] AS [userId], n.[title], n.[body], n.[link], n.[id] AS [notificationId], n.[eventCode], n.[category], n.[entityType], n.[entityId]
+      entityType: string | null; entityId: string | null; dedupeKey: string }> = await this.ds.query(
+      `SELECT d.[id], n.[recipientUserId] AS [userId], n.[title], n.[body], n.[link], n.[id] AS [notificationId], n.[eventCode], n.[category], n.[entityType], n.[entityId],
+         n.[dedupeKey]
        FROM [notification_deliveries] d INNER JOIN [notifications] n ON n.[id] = d.[notificationId]
        WHERE d.[channel] = N'EMAIL' AND d.[status] = N'DIGEST' ORDER BY n.[recipientUserId], d.[id]`)
     const byUser = new Map<number, typeof rows>()
@@ -464,7 +524,8 @@ export class NotificationsService implements OnModuleInit {
       for (const item of collected) {
         if (!modes.has(item.category)) modes.set(item.category, (await this.modesOf([userId], item.category)).get(`${userId}:EMAIL`) ?? 'ON')
         const reason = modes.get(item.category) === 'OFF' ? 'المستخدم قافل بريد الفئة دي'
-          : await this.staleReason({ id: item.notificationId, recipientUserId: userId, eventCode: item.eventCode, category: item.category, entityType: item.entityType, entityId: item.entityId }, user)
+          : await this.staleReason({ id: item.notificationId, recipientUserId: userId, eventCode: item.eventCode, category: item.category, entityType: item.entityType,
+            entityId: item.entityId, link: item.link, dedupeKey: item.dedupeKey }, user)
         if (reason) await deliveries.update({ id: String(item.id) }, { status: 'SKIPPED', detail: reason }); else items.push(item)
       }
       if (!items.length) continue
