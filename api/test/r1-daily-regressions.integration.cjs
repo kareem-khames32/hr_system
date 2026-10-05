@@ -352,6 +352,9 @@ test('S7 HRC-09 GET /employees runs a constant number of queries and returns the
     queries = 0; counting = true
     try { return { body: expectStatus(await request(user, 'GET', '/employees'), 200), queries } } finally { counting = false }
   }
+  // كاش حالة الموديولات بيتجدد كل 5 ثواني (3 استعلامات على أول طلب بعد التجديد)، ومالوش دعوة بعدد الموظفين: القياس مرتين ورا بعض
+  // والأقل هو المعتمد — التجديد مايقعش في الطلبين
+  const steady = async user => { const first = await measure(user), second = await measure(user); return second.queries < first.queries ? second : first }
   try {
     const addEmployees = async count => {
       for (let i = 0; i < count; i++) {
@@ -365,9 +368,9 @@ test('S7 HRC-09 GET /employees runs a constant number of queries and returns the
     await addEmployees(3)
     // فحص وجود جدول الإيقاف يتم مرة واحدة ويُحفظ؛ طلب تمهيدي يثبّت العدّ قبل المقارنة
     await measure(admin)
-    const small = await measure(admin), smallScoped = await measure(hr)
+    const small = await steady(admin), smallScoped = await steady(hr)
     await addEmployees(25)
-    const large = await measure(admin), largeScoped = await measure(hr)
+    const large = await steady(admin), largeScoped = await steady(hr)
     assert.equal(large.body.length, small.body.length + 25)
     assert.equal(large.queries, small.queries, `queries grew from ${small.queries} to ${large.queries}`)
     assert.equal(largeScoped.queries, smallScoped.queries, `scoped queries grew from ${smallScoped.queries} to ${largeScoped.queries}`)
