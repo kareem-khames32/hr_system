@@ -28,6 +28,7 @@ import { EmployeeExportService } from './employee-export.service'
 import { EmployeeCustomField, EmployeeCustomValue } from './employee-custom-fields.entities'
 import { EmployeeCustomFieldsController, EmployeeFieldsSettingsController } from './employee-custom-fields.controller'
 import { EmployeeCustomFieldsService } from './employee-custom-fields.service'
+import { EmploymentPeriod } from './employment-period.entity'
 
 @Module({
   imports: [
@@ -53,6 +54,8 @@ import { EmployeeCustomFieldsService } from './employee-custom-fields.service'
       // B2.9-ب: الحقول المخصصة على ملف الموظف (ترحيل 094)
       EmployeeCustomField,
       EmployeeCustomValue,
+      // B2.10: فترات الخدمة المقفولة (ترحيل 095)
+      EmploymentPeriod,
     ]),
     // ربط البصمات اليتيمة بأثر رجعي عند ضبط رقم البصمة/الكود
     AttendanceModule,

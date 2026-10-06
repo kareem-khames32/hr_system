@@ -209,8 +209,27 @@ export class EmployeesController {
   @Post(':id/reactivate')
   async reactivate(
     @Param('id', ParseIntPipe) id: number,
-    @CurrentUser() user: JwtPayload
+    @CurrentUser() user: JwtPayload,
+    @Body() body?: { reason?: string }
   ) {
-    return projectEmployee(await this.employees.reactivate(id, branchScopeOf(user), user.sub), user)
+    return projectEmployee(await this.employees.reactivate(id, branchScopeOf(user), user.sub, body?.reason), user)
+  }
+
+  // B2.10: فترات خدمة الموظف المقفولة وبداية الحالية، وهل «إعادة تعيين» متاحة له
+  @Perm('employees.view')
+  @Get(':id/employment-periods')
+  employmentPeriods(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: JwtPayload) {
+    return this.employees.employmentPeriods(id, branchScopeOf(user))
+  }
+
+  // B2.10: إعادة تعيين موظف خدمته انتهت واتصفّى — تعيين جديد بنفس الملف، فبصلاحية إنشاء موظف
+  @Perm('employees.create')
+  @Post(':id/rehire')
+  async rehire(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: JwtPayload,
+    @Body() body?: { startDate?: string; reason?: string }
+  ) {
+    return projectEmployee(await this.employees.rehire(id, body, branchScopeOf(user), user.sub), user)
   }
 }

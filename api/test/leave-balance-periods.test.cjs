@@ -133,6 +133,8 @@ function fakeDb(seed) {
   const manager = {
     getRepository: (E) => { if (!repos.has(E)) { const r = repoFor(E); r.manager = manager; repos.set(E, r) } return repos.get(E) },
     transaction: async (fn) => fn(manager),
+    // B2.10: فحص «جدول فترات الخدمة موجود؟» — مش موجود في التجهيزة دي، فإرجاع الرصيد زي ما كان
+    query: async () => [{ ready: 0 }],
   }
   for (const [E, list] of seed) for (const row of list) tables.set(E, [...(tables.get(E) ?? []), Object.assign(Object.create(E.prototype), row)])
   const service = new LeaveBalancesService(manager.getRepository(LeaveBalance), manager.getRepository(Employee), manager.getRepository(RequestsConfig))

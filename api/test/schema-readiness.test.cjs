@@ -20,6 +20,7 @@ const CHECKS = [
   ['092 إقرار المستندات', '../src/hr-documents/document-acknowledgements', 'documentAckSchemaReady', 'resetDocumentAckSchemaCache', flag],
   ['093 التعليقات', '../src/comments/comment-rules', 'commentsTableReady', 'resetCommentsTableCache', flag],
   ['094 الحقول المخصصة', '../src/employees/employee-custom-fields', 'customFieldsReady', 'resetCustomFieldsCache', flag],
+  ['095 فترات الخدمة', '../src/employees/employment-periods', 'employmentPeriodsReady', 'resetEmploymentPeriodsCache', flag],
 ]
 
 CHECKS.forEach(([name, file, check, reset, rows], index) => {

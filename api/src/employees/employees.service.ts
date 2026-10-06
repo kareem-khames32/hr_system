@@ -63,6 +63,9 @@ import { openCustodyStatuses } from '../requests/employment-destinations'
 import { readEmployeeSuspensions, readOpenSuspensions, suspensionTableReady, suspensionView } from './employee-suspensions'
 import type { CreateEmployeeSuspensionDto, EndEmployeeSuspensionDto } from './employees.dto'
 import { recordOutboxEvent } from '../queue/outbox'
+import { recordAudit } from '../audit/audit'
+import { EmploymentPeriod } from './employment-period.entity'
+import { EMPLOYMENT_PERIODS_MIGRATION_MISSING, REHIRE_REASON_MAX, REHIRE_REASON_MIN, employmentPeriodsReady, frozenBalanceKey, isoDay, rehireGate, rehireStartIssue } from './employment-periods'
 
 // حقول إجبارية عند الإضافة (قرار المالك 16 سبتمبر): في التعديل الغائب بلا تغيير، والمرسل فاضي = مسح مرفوض.
 // رقم الهوية / الجواز مش هنا: مسح واحد منهم مسموح لو التاني فاضل (employeeIdentityIssues في update)
@@ -92,6 +95,10 @@ function normalizeIdentityFields(dto: EmployeeIdentityValues) {
 
 /** مقارنة رقم هوية / جواز محفوظ بالقيمة المطبّعة — المحفوظ القديم بمسافات أو حروف صغيرة أو أرقام عربية بيتطابق كمان. */
 const sameIdentity = (value: string) => Raw(alias => `${identityKeySql(alias)} = :identity`, { identity: value })
+
+// B2.10a: الإرجاع من منتهي أو مؤرشف لموظف ملفه مُصفّى محتاج سبب مكتوب — الواجهة بتعرف الرد ده بكوده
+export const SETTLED_RETURN_REASON_REQUIRED = 'SETTLED_RETURN_REASON_REQUIRED'
+export const SETTLED_RETURN_MESSAGE = 'الموظف ده خدمته انتهت وملفه اتصفّى. الإرجاع بيكمّل مدة خدمته ورصيد إجازاته من تاريخ تعيينه القديم — اكتب سبب الإرجاع (5 حروف على الأقل)'
 
 @Injectable()
 export class EmployeesService {
@@ -940,11 +947,17 @@ export class EmployeesService {
     })
   }
 
-  async reactivate(id: number, branchScope: BranchScope, actorId?: number) {
+  async reactivate(id: number, branchScope: BranchScope, actorId?: number, reason?: unknown) {
     await this.findOne(id, branchScope)
     return this.employees.manager.transaction(async em => {
       const emp = await em.findOneOrFail(Employee, { where: { id }, lock: { mode: 'pessimistic_write' } })
       if (!['archived', 'terminated'].includes(emp.status)) throw new BadRequestException('الموظف ليس مؤرشفاً ولا منتهي الخدمة')
+      // B2.10a: موظف ملفه اتصفّى (مكافأته وبدل رصيده اتحسبوا) بيرجع بنفس تاريخ تعيينه — لازم سبب مكتوب، وبيتسجّل في سجله.
+      // الحكم وصف الموظف مقفول، فتصفية بتتقفل في نفس اللحظة مابتعدّيش من غير سبب
+      const note = typeof reason === 'string' ? reason.trim() : ''
+      if (note.length > 500) throw new BadRequestException('سبب الإرجاع بحد أقصى 500 حرف')
+      const settled = await em.findOne(OffboardingCase, { where: { employeeId: id, status: In(['SETTLED', 'CLOSED']) }, select: { id: true } })
+      if (settled && note.length < 5) throw new BadRequestException({ code: SETTLED_RETURN_REASON_REQUIRED, message: SETTLED_RETURN_MESSAGE })
       const oldStatus = emp.status
       emp.status = 'active'
       emp.isActive = true
@@ -952,10 +965,89 @@ export class EmployeesService {
       emp.archiveReason = null as any
       await em.save(Employee, emp)
       await em.update(User, { employeeId: id }, { isActive: true, tokenVersion: () => 'tokenVersion + 1' })
+      const base = oldStatus === 'terminated' ? 'عودة على رأس العمل بعد انتهاء خدمة' : 'إعادة تفعيل من الأرشيف'
       await recordEmployeeChange(em, { employeeId: id, fieldName: 'status', oldValue: oldStatus, newValue: 'active',
-        changedByUserId: actorId, reason: oldStatus === 'terminated' ? 'عودة على رأس العمل بعد انتهاء خدمة' : 'إعادة تفعيل من الأرشيف' })
+        changedByUserId: actorId, reason: note ? `${base} — ${note}` : base })
       return emp
     })
+  }
+
+  // ===== B2.10: فترات الخدمة وإعادة التعيين =====
+  // الفترة المفتوحة هي صف الموظف (تاريخ تعيينه)، والجدول فيه الفترات المقفولة. القراءة لملف الموظف ولنافذة «إعادة تعيين»:
+  // حالة الإتاحة هنا استشارية — التنفيذ بيعيد الحكم جوه معاملته
+  async employmentPeriods(id: number, branchScope: BranchScope) {
+    const emp = await this.findOne(id, branchScope)
+    const em = this.employees.manager
+    const day = (value: unknown) => value == null ? null : String(value).slice(0, 10)
+    if (!(await employmentPeriodsReady(em))) return { ready: false, periods: [], current: { periodNo: 1, startDate: day(emp.joinDate) }, rehire: null }
+    const periods = await em.find(EmploymentPeriod, { where: { employeeId: id }, order: { periodNo: 'ASC' } })
+    const status = (emp as Employee & { storedStatus?: Employee['status'] }).storedStatus ?? emp.status
+    const gate = ['terminated', 'archived'].includes(status)
+      ? await rehireGate(em, { id, status, joinDate: emp.joinDate, createdAt: emp.createdAt }, localDateOf(new Date())) : null
+    return {
+      ready: true,
+      periods: periods.map(period => ({ periodNo: period.periodNo, startDate: day(period.startDate), endDate: day(period.endDate), exitReason: period.exitReason ?? null,
+        rehireReason: period.rehireReason, rehiredAt: period.createdAt })),
+      current: { periodNo: (periods[periods.length - 1]?.periodNo ?? 0) + 1, startDate: day(emp.joinDate) },
+      rehire: gate ? { available: !gate.blocked, code: gate.blocked?.code ?? null, blocked: gate.blocked?.message ?? null,
+        lastWorkingDay: gate.lastWorkingDay, minStartDate: gate.blocked ? null : gate.minStartDate, maxStartDate: gate.maxStartDate } : null,
+    }
+  }
+
+  // إعادة تعيين موظف خدمته انتهت بملف إنهاء مقفول ومتصفّي: فترة خدمة جديدة من تاريخ مباشرة جديد، بنفس الملف والكود.
+  // نهاية الخدمة ورصيد الإجازات والمسير والحضور بيقروا تاريخ التعيين، فتحريكه هو اللي بيخلّيهم يبدأوا من الفترة الجديدة؛
+  // والفترة القديمة محفوظة في employment_periods، وصفوف رصيدها متجمّدة بمفتاحها
+  async rehire(id: number, dto: { startDate?: unknown; reason?: unknown } | undefined, branchScope: BranchScope, actorId: number) {
+    const startDate = isoDay(dto?.startDate)
+    if (!startDate) throw new BadRequestException('تاريخ المباشرة الجديد مطلوب (يوم صحيح بصيغة YYYY-MM-DD)')
+    const reason = typeof dto?.reason === 'string' ? dto.reason.trim() : ''
+    if (reason.length < REHIRE_REASON_MIN || reason.length > REHIRE_REASON_MAX) {
+      throw new BadRequestException(`سبب إعادة التعيين مطلوب (من ${REHIRE_REASON_MIN} لـ${REHIRE_REASON_MAX} حرف)`)
+    }
+    const saved = await this.employees.manager.transaction(async em => {
+      if (!(await employmentPeriodsReady(em))) throw new ConflictException({ code: 'EMPLOYMENT_PERIODS_MIGRATION_MISSING', message: EMPLOYMENT_PERIODS_MIGRATION_MISSING })
+      // القفل المالي المشترك مع حساب المسير والتصفية قبل قفل صف الموظف (نفس ترتيب الإيقاف والأجر): الحكم تحت على حالة مثبتة.
+      // النطاق بيتحكم على الصف المقفول نفسه (برّه النطاق = «غير موجود» زي الموظف اللي مش موجود)
+      await lockPayrollEmployees(em, [id])
+      const emp = await this.scopedEmployee(em, id, branchScope, true)
+      const gate = await rehireGate(em, emp, localDateOf(new Date()))
+      const issue = gate.blocked ?? rehireStartIssue(startDate, gate)
+      if (issue) throw new BadRequestException(issue)
+      await em.insert(EmploymentPeriod, { employeeId: id, periodNo: gate.periodNo, startDate: gate.currentStart!, endDate: gate.lastWorkingDay!,
+        exitReason: gate.exitReason, offboardingCaseId: gate.caseId, rehireReason: reason, rehiredByUserId: actorId, createdAt: new Date() })
+      // رصيد الفترة المقفولة (وسجل تعديلاته) بيتجمّد بمفتاح الفترة: مأخوذها ومُرحّلها وتعديلاتها مايدخلوش في رصيد الفترة الجديدة
+      for (const table of ['leave_balances', 'leave_balance_adjustments']) {
+        await em.query(`UPDATE dbo.[${table}] SET [period] = CONCAT(@1, [period]) WHERE [employeeId] = @0 AND [period] NOT LIKE N'P%:%'`, [id, frozenBalanceKey(gate.periodNo, '')])
+      }
+      const next = { joinDate: startDate, actualStartDate: null, salaryEntitlementStart: null, probationEndDate: null,
+        contractStart: null, contractEnd: null, contractNumber: null, contractDurationMonths: null } as const
+      const note = `إعادة تعيين — فترة خدمة رقم ${gate.periodNo + 1} من ${startDate} (السابقة ${gate.currentStart} → ${gate.lastWorkingDay}) — ${reason}`
+      for (const fieldName of Object.keys(next) as Array<keyof typeof next>) {
+        const stored = emp[fieldName] as unknown
+        const oldValue = stored == null ? null : fieldName === 'contractNumber' || fieldName === 'contractDurationMonths' ? stored : String(stored).slice(0, 10)
+        if (oldValue !== next[fieldName]) await recordEmployeeChange(em, { employeeId: id, fieldName, oldValue, newValue: next[fieldName], changedByUserId: actorId, reason: note })
+      }
+      await recordEmployeeChange(em, { employeeId: id, fieldName: 'status', oldValue: emp.status, newValue: 'active', changedByUserId: actorId, reason: note })
+      await em.update(Employee, { id }, { ...(next as unknown as Partial<Employee>), status: 'active', isActive: true, archivedAt: null as any, archiveReason: null as any })
+      // حساب الدخول بيرجع يشتغل (والجلسات القديمة بتتلغى) — بسطر تدقيق بالحالة قبل وبعد
+      const accounts: Array<{ id: number; email: string | null; wasActive: boolean | number | null }> = await em.query(
+        `DECLARE @changed TABLE ([id] int NOT NULL, [wasActive] bit NULL)
+         UPDATE [users] SET [isActive] = 1, [tokenVersion] = COALESCE([tokenVersion], 0) + 1
+           OUTPUT inserted.[id], deleted.[isActive] INTO @changed WHERE [employeeId] = @0
+         SELECT c.[id], c.[wasActive], u.[email] FROM @changed c INNER JOIN [users] u ON u.[id] = c.[id] ORDER BY c.[id]`, [id])
+      for (const account of accounts) {
+        if (account.wasActive === true || account.wasActive === 1) continue
+        await recordAudit(em, { category: 'PERMISSIONS', action: 'USER_UPDATED', entityType: 'user', entityId: account.id, branchId: emp.branchId,
+          actorUserId: actorId, summary: `تعديل الحساب ${account.email ?? ''}`, before: { isActive: false }, after: { isActive: true } })
+      }
+      // «تم التعيين» في نفس المعاملة (مرة واحدة لكل فترة) — نفس حدث إنشاء الموظف
+      await recordOutboxEvent(em, { type: 'EMPLOYEE_HIRED', entityType: 'employee', entityId: id, key: `employee-rehired:${id}:${gate.periodNo + 1}`,
+        payload: { employeeId: id, branchId: emp.branchId ?? null, joinDate: startDate, rehire: true } })
+      return em.findOneByOrFail(Employee, { id })
+    })
+    // رصيد السنة الحالية للفترة الجديدة — زي الموظف الجديد
+    await this.ensureCurrentYearBalances(id)
+    return saved
   }
 
   // ===== الإيقاف عن العمل لفترة (قرار المالك 16 سبتمبر) =====

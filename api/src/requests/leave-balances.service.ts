@@ -31,6 +31,7 @@ import {
 import { yearEndSplit } from './leave-year-end.math'
 import { branchIdIn, branchScopeQb, inBranchScope } from '../auth/guards'
 import type { BranchScope } from '../auth/guards'
+import { closedServiceThrough } from '../employees/employment-periods'
 
 // نطاق الفروع في خدمة الأرصدة: null = الشركة، مصفوفة = الفروع دي (branchScopeOf)، ورقم = فرع واحد (فرع مختار/نداء قديم)
 const asBranchScope = (scope: BranchScope | number): BranchScope => (typeof scope === 'number' ? [scope] : scope)
@@ -685,7 +686,10 @@ export class LeaveBalancesService {
     }
     const byYear = this.splitByYear(payload, leave.fromDate, Number(leave.days))
     const ctx = await this.accrualContext(leave.employeeId, em)
+    // B2.10: إجازة من فترة خدمة مقفولة (الموظف اتعيّن تاني بعدها): صف رصيد فترتها متجمّد على حاله، ورصيد الفترة الحالية مابيتزوّدش بيها
+    const closedThrough = await closedServiceThrough(em, leave.employeeId)
     for (const [year, d] of Object.entries(byYear)) {
+      if (closedThrough && this.leaveYearStart(year, String(leave.fromDate)) <= closedThrough) continue
       const { entry } = await this.resolveAt(
         em.getRepository(LeaveBalance),
         leave.employeeId,

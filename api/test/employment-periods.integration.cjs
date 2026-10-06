@@ -1,0 +1,572 @@
+'use strict'
+// B2.10: فترات الخدمة وإعادة التعيين، على قاعدة SQL مؤقتة معزولة بتتمسح في الآخر (hr_employment_periods_test_<16 hex>).
+//  EP-01) الإرجاع القديم («العودة على رأس العمل»): موظف ملفه مُصفّى بيرجع بسبب مكتوب بس (من 5 حروف لـ500) والسبب في سجله؛
+//         والمؤرشف أو المنتهي من غير تصفية زي ما هو؛ والحكم بالصلاحية والنطاق زي الأول.
+//  EP-02) «إعادة تعيين» بعد سنة: فترة الخدمة القديمة اتسجّلت، وتاريخ التعيين اتحرّك والعقد القديم اتفضّى والحساب اتفتح بسطر تدقيق؛ ومكافأته ورصيده
+//         ومعاينة تصفيته زي موظف جديد اتعيّن في نفس اليوم بالحرف، والمسير والحضور بيغطّوه من تاريخ المباشرة؛ ورصيد الفترة القديمة متجمّد بمفتاحها.
+//  EP-03) الرفض: مش منتهي، من غير ملف مقفول، ملف مفتوح أو مجهول الحالة، أكتر من نهاية، تاريخ أو سبب غلط، تاريخ بدري أو بعيد، ومن غير
+//         الصلاحية أو برّه النطاق — ومفيش حاجة بتتغيّر.
+//  EP-04) المسير: المباشرة بعد نهاية شهر الرواتب اللي فيه آخر يوم عمل (بالدورة وبنهاية المسير)، ومسير الشهر ده لازم يبقى معتمد والموظف فيه
+//         (وبنده مش معكوس)، ومسير قديم لسه مااتعتمدش وهو داخل فيه بيمنع.
+//  EP-05) رصيد الإجازات بعد إعادة التعيين: إجازة قديمة بتتلغى مابترجعش على الرصيد الجديد، والترحيل السنوي والإقفال والتجديد اليومي
+//         مابيشوفوش صفوف الفترة المقفولة (بأساس السنة وبأساس ذكرى التعيين) — والنتيجة زي موظف جديد بنفس التاريخ.
+//  EP-06) إعادة تعيين تانية بتقفل الفترة التانية بمفتاحها، وطلبين في نفس اللحظة واحد بس بينجح، وإعادة التعيين بتستنى قفل مالية الموظف.
+// Run (من api/): node --test test/employment-periods.integration.cjs
+const { test, before, after } = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto')
+const apiRoot = path.resolve(__dirname, '..')
+require('../node_modules/ts-node').register({ project: path.join(apiRoot, 'tsconfig.json'), transpileOnly: true })
+require('../node_modules/reflect-metadata')
+const sql = require('../node_modules/mssql')
+const env = require('../node_modules/dotenv').parse(fs.readFileSync(path.join(apiRoot, '.env')))
+
+const database = `hr_employment_periods_test_${crypto.randomBytes(8).toString('hex')}`
+const secret = crypto.randomBytes(48).toString('hex')
+const jwt = new (require('../node_modules/@nestjs/jwt').JwtService)({ secret })
+let app, master, ds, base, created = false, employeeNumber = 0
+const org = {}, users = {}
+const NEEDS_REASON = [400, 'الموظف ده خدمته انتهت وملفه اتصفّى. الإرجاع بيكمّل مدة خدمته ورصيد إجازاته من تاريخ تعيينه القديم — اكتب سبب الإرجاع (5 حروف على الأقل)']
+
+function assertDisposable() {
+  assert.match(database, /^hr_employment_periods_test_[a-f0-9]{16}$/)
+  assert.notEqual(database, env.DB_DATABASE)
+  if (ds) assert.equal(ds.options.database, database)
+}
+const repo = name => { assertDisposable(); return ds.getRepository(name) }
+const query = (text, params = []) => { assertDisposable(); return ds.query(text, params) }
+const payloadOf = user => ({ sub: user.id, email: user.email, role: user.role, branchId: user.branchId ?? null, employeeId: user.employeeId ?? null,
+  tokenVersion: user.tokenVersion ?? 0, scopeAllBranches: user.scopeAllBranches ?? false,
+  permissions: user.role === 'super_admin' ? ['*'] : JSON.parse(user.permissions || '[]') })
+async function request(user, method, route, body) {
+  const response = await fetch(base + route, { method, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jwt.sign(payloadOf(user))}` },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
+  const text = await response.text()
+  let parsed = null
+  try { parsed = text ? JSON.parse(text) : null } catch { parsed = text }
+  return { status: response.status, body: parsed }
+}
+function expectStatus(response, status) {
+  assert.equal(response.status, status, JSON.stringify(response.body))
+  return response.body
+}
+const answer = response => [response.status, [].concat(response.body?.message ?? []).join('، ')]
+const employee = (extra = {}) => {
+  const number = ++employeeNumber
+  return repo('Employee').save({ employeeCode: `EP${String(number).padStart(3, '0')}`, fullName: `موظف الفترات ${number}`, branchId: org.branchA.id, joinDate: '2020-01-01',
+    basicSalary: 6000, housingAllowance: 0, transportAllowance: 0, otherAllowance: 0, currency: 'SAR', status: 'active', isActive: true, payMethod: 'transfer', ...extra })
+}
+const account = (label, role, permissions, extra = {}) => repo('User').save({ email: `${label}@employment-periods.invalid`, displayName: `حساب ${label}`, passwordHash: 'test-only',
+  role, branchId: org.branchA.id, permissions: JSON.stringify(permissions), isActive: true, ...extra })
+// موظف خدمته انتهت: منتهي وحسابه مقفول، وملف إنهاء بالحالة المطلوبة (أو من غير ملف)
+async function ended(caseStatus, extra = {}) {
+  const emp = await employee({ status: 'terminated', isActive: false, archivedAt: new Date(), ...extra })
+  const login = await account(`ended${emp.id}`, 'employee', [], { employeeId: emp.id, isActive: false })
+  const kase = caseStatus ? await repo('OffboardingCase').save({ employeeId: emp.id, lastWorkingDay: '2025-06-30', status: caseStatus, terminationReason: 'resignation' }) : null
+  return { emp, login, kase }
+}
+const reactivate = (user, emp, body) => request(user, 'POST', `/employees/${emp.id}/reactivate`, body)
+const stateOf = async ({ emp, login }) => {
+  const [row, user] = [await repo('Employee').findOneByOrFail({ id: emp.id }), await repo('User').findOneByOrFail({ id: login.id })]
+  return [row.status, row.isActive, user.isActive, user.tokenVersion]
+}
+const historyOf = emp => query(`SELECT [oldStatus], [newStatus], [reason], [changedByUserId] FROM [employee_status_history] WHERE [employeeId] = @0 ORDER BY [id]`, [emp.id])
+
+// ===== «إعادة تعيين» =====
+const TODAY = (() => { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}` })()
+const YEAR = TODAY.slice(0, 4), LAST_YEAR = String(Number(YEAR) - 1), NEXT_YEAR = String(Number(YEAR) + 1)
+const plusDays = (day, days) => new Date(Date.parse(`${day}T00:00:00Z`) + days * 86400000).toISOString().slice(0, 10)
+// موظف خدمته انتهت بملف إنهاء مقفول (آخر يوم عمل قابل للتغيير) وحسابه مقفول
+async function settled(lastWorkingDay = `${LAST_YEAR}-06-30`, extra = {}) {
+  const emp = await employee({ status: 'terminated', isActive: false, archivedAt: new Date(), archiveReason: 'انتهاء خدمة', ...extra })
+  const login = await account(`settled${emp.id}`, 'employee', [], { employeeId: emp.id, isActive: false })
+  const kase = await repo('OffboardingCase').save({ employeeId: emp.id, lastWorkingDay, status: 'CLOSED', terminationReason: 'resignation' })
+  return { emp, login, kase }
+}
+const rehire = (user, emp, body) => request(user, 'POST', `/employees/${emp.id}/rehire`, body)
+const periodsOf = (user, emp) => request(user, 'GET', `/employees/${emp.id}/employment-periods`)
+const periodRows = emp => query(`SELECT [periodNo], CONVERT(varchar(10), [startDate], 23) AS [startDate], CONVERT(varchar(10), [endDate], 23) AS [endDate], [exitReason], [offboardingCaseId],
+  [rehireReason], [rehiredByUserId] FROM [employment_periods] WHERE [employeeId] = @0 ORDER BY [periodNo]`, [emp.id])
+const balanceRows = async emp => (await query(`SELECT [balanceType], [period], CAST([taken] AS float) AS [taken], CAST([openingDays] AS float) AS [openingDays],
+  CAST([openingTaken] AS float) AS [openingTaken], CAST([adjustmentDays] AS float) AS [adjustmentDays] FROM [leave_balances] WHERE [employeeId] = @0 ORDER BY [balanceType], [period]`, [emp.id]))
+  .map(row => [row.balanceType, row.period, row.taken, row.openingDays, row.openingTaken, row.adjustmentDays])
+const balance = (emp, type, period, extra = {}) => repo('LeaveBalance').save({ employeeId: emp.id, balanceType: type, period, entitled: type === 'annual' ? 21 : 180, taken: 0, openingDays: 0, openingTaken: 0, ...extra })
+// موظف جديد اتعيّن في التاريخ ده وله صفوف السنة الحالية — المرجع اللي المُعاد تعيينه لازم يطابقه
+async function hiredOn(joinDate) {
+  const emp = await employee({ joinDate })
+  await balance(emp, 'annual', YEAR); await balance(emp, 'sick', YEAR)
+  return emp
+}
+const withoutIdentity = views => views.map(({ employeeId, ...view }) => view)
+const balancesOf = async emp => withoutIdentity(expectStatus(await request(users.admin, 'GET', `/leaves/balances/${emp.id}`), 200))
+// معاينة تصفية الموظف لو خدمته انتهت في اليوم ده: مدة الخدمة، وشرائح المكافأة، وبنود التصفية (المكافأة وبدل الرصيد)
+async function settlementPreview(emp, lastWorkingDay) {
+  const body = expectStatus(await request(users.admin, 'GET', `/offboarding/preview?employeeId=${emp.id}&reason=termination&lastWorkingDay=${lastWorkingDay}`), 200)
+  return { serviceYears: body.serviceYears, eos: body.eos, lines: body.lines.map(line => [line.label, line.type, Number(line.amount)]) }
+}
+const refusal = response => [response.status, response.body?.code ?? null]
+const unchanged = async ({ emp, login }) => [await stateOf({ emp, login }), await periodRows(emp)]
+const NOT_ENDED = ['terminated', false, false, 0]
+let runNumber = 0
+const run = extra => repo('PayrollRun').save({ name: `مسير اختبار الفترات ${++runNumber}`, period: `${LAST_YEAR}-06`, startDate: `${LAST_YEAR}-06-01`, endDate: `${LAST_YEAR}-06-30`, status: 'PAID', runType: 'REGULAR', ...extra })
+const member = (payrollRun, emp, membershipStatus = 'INCLUDED') => repo('PayrollRunMember').save({ runId: payrollRun.id, employeeId: emp.id, membershipStatus })
+const item = (payrollRun, emp) => repo('PayrollItem').save({ runId: payrollRun.id, employeeId: emp.id, basicSalary: 1000, netPay: 1000, payMethod: 'transfer' })
+const setConfig = async (key, value) => {
+  await query(`DELETE FROM [requests_config] WHERE [key] = @0`, [key])
+  await query(`INSERT INTO [requests_config] ([key], [value]) VALUES (@0, @1)`, [key, value])
+}
+const leaves = () => app.get(require('../src/requests/leave-balances.service').LeaveBalancesService)
+
+before(async () => {
+  assert.equal(env.DB_TYPE || 'mssql', 'mssql')
+  assertDisposable()
+  master = await new sql.ConnectionPool({ server: env.DB_HOST || 'localhost', port: Number(env.DB_PORT || 1433), user: env.DB_USERNAME, password: env.DB_PASSWORD,
+    database: 'master', options: { encrypt: false, trustServerCertificate: true }, connectionTimeout: 5000 }).connect()
+  await master.request().query(`CREATE DATABASE [${database}]`); created = true
+  Object.assign(process.env, env, { DB_DATABASE: database, DB_SYNCHRONIZE: 'true', NODE_ENV: 'test', JWT_SECRET: secret })
+  app = await require('../node_modules/@nestjs/core').NestFactory.create(require('../src/app.module').AppModule, { logger: ['error'], abortOnError: false })
+  // مفيش رسالة بريد حقيقية بتطلع من الاختبار
+  const { MailService } = require('../src/auth/mail.service')
+  const mail = app.get(MailService)
+  mail.isConfigured = () => false
+  mail.send = async () => { throw new Error('no mail in tests') }
+  assert.notEqual(mail.send, MailService.prototype.send)
+  app.setGlobalPrefix('api')
+  app.useGlobalPipes(new (require('../node_modules/@nestjs/common').ValidationPipe)({ whitelist: true, transform: true }))
+  await app.listen(0, '127.0.0.1')
+  for (const job of app.get(require('../node_modules/@nestjs/schedule').SchedulerRegistry).getCronJobs().values()) job.stop()
+  app.get(require('../src/attendance/attendance-scheduler.service').AttendanceScheduler).runCatchUp = async () => undefined
+  app.get(require('../src/requests/requests-scheduler.service').RequestsScheduler).catchUp = async () => undefined
+  ds = app.get(require('../node_modules/typeorm').DataSource)
+  assertDisposable()
+  base = `http://127.0.0.1:${app.getHttpServer().address().port}/api`
+
+  org.branchA = await repo('Branch').save({ code: 'EP_A', name: 'فرع الفترات أ' })
+  org.branchB = await repo('Branch').save({ code: 'EP_B', name: 'فرع الفترات ب' })
+  users.admin = await account('admin', 'super_admin', [], { branchId: null, scopeAllBranches: true })
+  users.archiver = await account('archiver', 'employee', ['employees.view', 'employees.archive'])
+  users.viewer = await account('viewer', 'employee', ['employees.view', 'employees.edit'])
+  users.farArchiver = await account('fararchiver', 'employee', ['employees.view', 'employees.archive'], { branchId: org.branchB.id })
+  users.hirer = await account('hirer', 'employee', ['employees.view', 'employees.create'])
+  users.farHirer = await account('farhirer', 'employee', ['employees.view', 'employees.create'], { branchId: org.branchB.id })
+  users.creatorOnly = await account('creatoronly', 'employee', ['employees.create'])
+  // دورة الرواتب شهر ميلادي (الافتراضي في الاختبارات دي)، وسياسة الإجازات صريحة عشان الأرقام تبقى ثابتة
+  await setConfig('payroll.cycle_start_day', '1')
+  for (const [key, value] of [['leave.accrual_mode', 'monthly'], ['leave.probation_months', '0'], ['leave.annual_entitled', '21'], ['leave.sick_entitled', '180'],
+    ['leave.carryover_max_days', '10'], ['leave.carryover_expiry_months', '3']]) await setConfig(key, value)
+  const annual = await repo('LeaveType').findOneBy({ code: 'ANNUAL' })
+  org.annualType = await repo('LeaveType').save({ ...(annual ?? { code: 'ANNUAL', nameAr: 'إجازة سنوية' }), category: 'ANNUAL', balanceType: 'annual', isActive: true, annualDays: 21,
+    renewalBasis: 'YEAR_START', carryOverEnabled: true, carryOverMaxDays: 10, entitlementStartMonths: 0, firstYearProrated: true })
+}, { timeout: 180000 })
+
+after(async t => {
+  const errors = []
+  try { if (app) await app.close() } catch (error) { errors.push(error) }
+  try {
+    if (created && master) {
+      assertDisposable()
+      await master.request().query(`ALTER DATABASE [${database}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [${database}]`)
+      const found = await master.request().input('database', sql.NVarChar, database).query('SELECT name FROM sys.databases WHERE name = @database')
+      assert.equal(found.recordset.length, 0)
+      t.diagnostic(`Cleanup verified: ${database} is absent from sys.databases.`)
+    }
+  } catch (error) { errors.push(error) }
+  try { if (master) await master.close() } catch (error) { errors.push(error) }
+  if (errors.length) throw errors[0]
+})
+
+test('EP-01: الإرجاع القديم — موظف ملفه مُصفّى بيرجع بسبب مكتوب بس والسبب في سجله، ومن غير تصفية زي ما هو', async () => {
+  // من غير تصفية (منتهي من غير ملف، أو ملفه اتلغى، أو مؤرشف): زي الأول بالحرف، من غير سبب
+  for (const [caseStatus, extra, reason] of [[null, {}, 'عودة على رأس العمل بعد انتهاء خدمة'], ['CANCELLED', {}, 'عودة على رأس العمل بعد انتهاء خدمة'], [null, { status: 'archived' }, 'إعادة تفعيل من الأرشيف']]) {
+    const plain = await ended(caseStatus, extra)
+    expectStatus(await reactivate(users.archiver, plain.emp), 201)
+    assert.deepEqual([await stateOf(plain), (await historyOf(plain.emp)).map(row => [row.newStatus, row.reason, row.changedByUserId])],
+      [['active', true, true, 1], [['active', reason, users.archiver.id]]], String(caseStatus ?? extra.status ?? 'no case'))
+  }
+  // وسبب اختياري لو اتكتب بيتسجّل
+  const noted = await ended(null)
+  expectStatus(await reactivate(users.archiver, noted.emp, { reason: '  رجع بعد إجازة طويلة  ' }), 201)
+  assert.deepEqual((await historyOf(noted.emp)).map(row => row.reason), ['عودة على رأس العمل بعد انتهاء خدمة — رجع بعد إجازة طويلة'])
+
+  // ملف مُصفّى (مقفول، أو تصفيته معتمدة): من غير سبب مرفوض برسالته وكوده، ومفيش حاجة اتغيّرت
+  for (const caseStatus of ['CLOSED', 'SETTLED']) {
+    const settled = await ended(caseStatus)
+    for (const body of [undefined, {}, { reason: '' }, { reason: '    ' }, { reason: 'قصير' }, { reason: 5 }, { reason: null }]) {
+      const refused = await reactivate(users.archiver, settled.emp, body)
+      assert.deepEqual([answer(refused), refused.body.code], [NEEDS_REASON, 'SETTLED_RETURN_REASON_REQUIRED'], `${caseStatus} ${JSON.stringify(body)}`)
+    }
+    assert.deepEqual(answer(await reactivate(users.archiver, settled.emp, { reason: 'س'.repeat(501) })), [400, 'سبب الإرجاع بحد أقصى 500 حرف'])
+    assert.deepEqual([await stateOf(settled), await historyOf(settled.emp)], [['terminated', false, false, 0], []])
+    // بسبب مكتوب: بيرجع، والسبب في سطر سجله باسم اللي رجّعه، وحسابه اتفتح وجلساته القديمة اتبطّلت
+    const back = expectStatus(await reactivate(users.archiver, settled.emp, { reason: ' اتعيّن تاني بعقد جديد ' }), 201)
+    assert.deepEqual([back.status, await stateOf(settled)], ['active', ['active', true, true, 1]])
+    assert.deepEqual((await historyOf(settled.emp)).map(row => [row.oldStatus, row.newStatus, row.reason, row.changedByUserId]),
+      [['terminated', 'active', 'عودة على رأس العمل بعد انتهاء خدمة — اتعيّن تاني بعقد جديد', users.archiver.id]])
+    // ومؤرشف ملفه القديم مُصفّى: نفس الشرط
+    await repo('Employee').update({ id: settled.emp.id }, { status: 'archived', isActive: false })
+    assert.deepEqual(answer(await reactivate(users.archiver, settled.emp)), NEEDS_REASON)
+    expectStatus(await reactivate(users.archiver, settled.emp, { reason: 'إرجاع من الأرشيف' }), 201)
+  }
+  // الصلاحية والنطاق والحالة زي الأول: من غير «أرشفة» 403، وبرّه النطاق «غير موجود»، وموظف نشط مرفوض — قبل أي سؤال عن السبب
+  const guarded = await ended('CLOSED')
+  assert.equal((await reactivate(users.viewer, guarded.emp, { reason: 'سبب مكتوب' })).status, 403)
+  assert.deepEqual(answer(await reactivate(users.farArchiver, guarded.emp, { reason: 'سبب مكتوب' })), [404, 'الموظف غير موجود'])
+  assert.deepEqual(await stateOf(guarded), ['terminated', false, false, 0])
+  const working = await employee()
+  await repo('OffboardingCase').save({ employeeId: working.id, lastWorkingDay: '2025-06-30', status: 'CLOSED', terminationReason: 'resignation' })
+  assert.deepEqual(answer(await reactivate(users.archiver, working)), [400, 'الموظف ليس مؤرشفاً ولا منتهي الخدمة'])
+})
+
+test('EP-02: إعادة تعيين بعد سنة — الفترة القديمة اتسجّلت، والمكافأة والرصيد ومعاينة التصفية زي موظف جديد بنفس التاريخ، والمسير والحضور من تاريخ المباشرة', async () => {
+  const lastDay = `${LAST_YEAR}-06-30`, start = `${TODAY.slice(0, 7)}-01`, settleOn = `${YEAR}-12-31`
+  const old = await settled(lastDay, { actualStartDate: '2020-01-05', salaryEntitlementStart: '2020-01-05', probationEndDate: '2020-04-01', contractType: 'fixed_term',
+    contractStart: '2020-01-01', contractEnd: `${LAST_YEAR}-12-31`, contractNumber: 'C-77', contractDurationMonths: 72 })
+  // رصيد الفترة القديمة: صف السنة اللي فاتت بمأخوذ ومُرحّل وتعديل، وصف السنة دي اللي الترحيل السنوي عمله بعد ما مشي (بمُرحّل ساري)، ومرضي، وسجل تعديل
+  await balance(old.emp, 'annual', LAST_YEAR, { taken: 10, openingDays: 5, openingTaken: 5, adjustmentDays: 3 })
+  await balance(old.emp, 'annual', YEAR, { openingDays: 8, openingExpiry: '2099-12-31' })
+  await balance(old.emp, 'sick', LAST_YEAR, { taken: 4 })
+  await balance(old.emp, 'sick', YEAR, { taken: 7 })
+  await repo('LeaveBalanceAdjustment').save({ employeeId: old.emp.id, balanceType: 'annual', period: LAST_YEAR, idempotencyKey: crypto.randomUUID(), delta: 3, beforeAdjustment: 0, afterAdjustment: 3,
+    beforeRemaining: 10, afterRemaining: 13, reason: 'تعديل في الفترة القديمة', actorUserId: users.admin.id })
+  const bystander = await hiredOn('2021-01-01')
+  // قبل إعادة التعيين: القراءة بتقول متاحة ومن أي تاريخ، ومعاينة تصفيته لسه بمدة خدمته القديمة كلها
+  assert.deepEqual(expectStatus(await periodsOf(users.hirer, old.emp), 200), { ready: true, periods: [], current: { periodNo: 1, startDate: '2020-01-01' },
+    rehire: { available: true, code: null, blocked: null, lastWorkingDay: lastDay, minStartDate: `${LAST_YEAR}-07-01`, maxStartDate: plusDays(TODAY, 366) } })
+  assert.equal((await settlementPreview(old.emp, settleOn)).serviceYears, Number(YEAR) - 2020 + 1)
+
+  const back = expectStatus(await rehire(users.hirer, old.emp, { startDate: start, reason: '  رجع بعقد جديد بعد سنة  ' }), 201)
+  assert.deepEqual([back.id, back.employeeCode, back.status, String(back.joinDate).slice(0, 10)], [old.emp.id, old.emp.employeeCode, 'active', start])
+  // الفترة المقفولة: من تاريخ التعيين القديم لآخر يوم عمل، بسبب الخروج وملف الإنهاء، وباسم اللي أعاد التعيين وسببه
+  assert.deepEqual(await periodRows(old.emp), [{ periodNo: 1, startDate: '2020-01-01', endDate: lastDay, exitReason: 'resignation', offboardingCaseId: old.kase.id,
+    rehireReason: 'رجع بعقد جديد بعد سنة', rehiredByUserId: users.hirer.id }])
+  // ملف الموظف: تاريخ التعيين اتحرّك، وبدايات الفترة القديمة وعقدها اتفضّوا، ونوع العقد والكود زي ما هم، والحالة نشط
+  const row = await repo('Employee').findOneByOrFail({ id: old.emp.id })
+  assert.deepEqual([row.employeeCode, String(row.joinDate).slice(0, 10), row.actualStartDate, row.salaryEntitlementStart, row.probationEndDate, row.contractType, row.contractStart, row.contractEnd,
+    row.contractNumber, row.contractDurationMonths, row.status, row.isActive, row.archivedAt, row.archiveReason],
+    [old.emp.employeeCode, start, null, null, null, 'fixed_term', null, null, null, null, 'active', true, null, null])
+  // سجل الموظف: كل قيمة اتغيّرت بقيمتها القديمة، وسطر الحالة، بنفس الملاحظة وباسم المنفّذ
+  const note = `إعادة تعيين — فترة خدمة رقم 2 من ${start} (السابقة 2020-01-01 → ${lastDay}) — رجع بعقد جديد بعد سنة`
+  const history = await repo('EmployeeStatusHistory').find({ where: { employeeId: old.emp.id }, order: { id: 'ASC' } })
+  assert.deepEqual(history.map(change => [change.fieldName, change.oldValue, change.newValue, change.reason, change.changedByUserId]), [
+    ['joinDate', '2020-01-01', start, note, users.hirer.id], ['actualStartDate', '2020-01-05', null, note, users.hirer.id], ['salaryEntitlementStart', '2020-01-05', null, note, users.hirer.id],
+    ['probationEndDate', '2020-04-01', null, note, users.hirer.id], ['contractStart', '2020-01-01', null, note, users.hirer.id], ['contractEnd', `${LAST_YEAR}-12-31`, null, note, users.hirer.id],
+    ['contractNumber', 'C-77', null, note, users.hirer.id], ['contractDurationMonths', 72, null, note, users.hirer.id], ['status', 'terminated', 'active', note, users.hirer.id]])
+  // حساب الدخول اتفتح وجلساته القديمة اتبطّلت، بسطر تدقيق بالحالة قبل وبعد وباسم المنفّذ؛ وحدث «تم التعيين» اتسجّل مرة للفترة
+  assert.deepEqual(await stateOf(old), ['active', true, true, 1])
+  assert.deepEqual((await query(`SELECT [action], [actorUserId], [before], [after] FROM [audit_log] WHERE [entityType] = N'user' AND [action] = N'USER_UPDATED' AND [entityId] = @0`, [String(old.login.id)]))
+    .map(entry => [entry.action, entry.actorUserId, JSON.parse(entry.before), JSON.parse(entry.after)]), [['USER_UPDATED', users.hirer.id, { isActive: false }, { isActive: true }]])
+  assert.deepEqual((await query(`SELECT [eventType], [entityId], [payload] FROM [outbox_events] WHERE [eventKey] = @0`, [`employee-rehired:${old.emp.id}:2`]))
+    .map(event => [event.eventType, event.entityId, JSON.parse(event.payload)]), [['EMPLOYEE_HIRED', String(old.emp.id), { employeeId: old.emp.id, branchId: org.branchA.id, joinDate: start, rehire: true }]])
+
+  // رصيد الفترة القديمة وسجل تعديلاته متجمّدين بمفتاح الفترة بقيمهم، وصفوف السنة الحالية جديدة من صفر
+  assert.deepEqual(await balanceRows(old.emp), [
+    ['annual', YEAR, 0, 0, 0, 0], ['annual', `P1:${LAST_YEAR}`, 10, 5, 5, 3], ['annual', `P1:${YEAR}`, 0, 8, 0, 0],
+    ['sick', YEAR, 0, 0, 0, 0], ['sick', `P1:${LAST_YEAR}`, 4, 0, 0, 0], ['sick', `P1:${YEAR}`, 7, 0, 0, 0]])
+  assert.deepEqual((await query(`SELECT [period] FROM [leave_balance_adjustments] WHERE [employeeId] = @0`, [old.emp.id])).map(entry => entry.period), [`P1:${LAST_YEAR}`])
+  assert.deepEqual(await balanceRows(bystander), [['annual', YEAR, 0, 0, 0, 0], ['sick', YEAR, 0, 0, 0, 0]], 'رصيد موظف تاني زي ما هو')
+  // «زي موظف جديد اتعيّن في نفس اليوم» بالحرف: الرصيد المعروض، ومدة الخدمة وشرائح المكافأة وبنود التصفية (المكافأة وبدل الرصيد)
+  const fresh = await hiredOn(start)
+  assert.deepEqual(await balancesOf(old.emp), await balancesOf(fresh))
+  const [mine, reference] = [await settlementPreview(old.emp, settleOn), await settlementPreview(fresh, settleOn)]
+  assert.deepEqual(mine, reference)
+  assert.ok(mine.serviceYears > 0 && mine.serviceYears < 1, `مدة الخدمة من تاريخ المباشرة الجديد: ${mine.serviceYears}`)
+  assert.ok(mine.lines.some(([label]) => label.startsWith('بدل رصيد إجازات')) && mine.lines.every(([, , amount]) => amount > 0), JSON.stringify(mine.lines))
+
+  // المسير والحضور بيغطّوه من تاريخ المباشرة: ملف الإنهاء القديم قبل البداية الحالية فمابيقفلش الخدمة ولا بيخرّجه من المسير
+  const cases = await repo('OffboardingCase').find({ where: { employeeId: old.emp.id } })
+  const { payrollEmploymentCoverage } = require('../src/payroll/payroll-employment')
+  const monthEnd = plusDays(start, 27)
+  const coverage = payrollEmploymentCoverage(row, cases, start, monthEnd)
+  assert.deepEqual([coverage.coverFrom, coverage.coverTo, coverage.hireDate, coverage.leaveDate], [start, monthEnd, start, null])
+  assert.equal(payrollEmploymentCoverage(row, cases, plusDays(start, -28), plusDays(start, -1)), null)
+  const { employmentWindowOf } = require('../src/attendance/attendance-employment')
+  assert.deepEqual(employmentWindowOf(row, cases.map(kase => kase.lastWorkingDay)), { from: start, to: null, toSource: null })
+  // القراءة بعدها: فترة مقفولة، والحالية رقم 2، ومفيش «إعادة تعيين» لموظف على رأس العمل
+  const view = expectStatus(await periodsOf(users.hirer, old.emp), 200)
+  assert.deepEqual([view.periods.map(({ rehiredAt, ...period }) => period), view.periods.every(period => !Number.isNaN(Date.parse(period.rehiredAt))), view.current, view.rehire],
+    [[{ periodNo: 1, startDate: '2020-01-01', endDate: lastDay, exitReason: 'resignation', rehireReason: 'رجع بعقد جديد بعد سنة' }], true, { periodNo: 2, startDate: start }, null])
+  org.rehired = old
+})
+
+test('EP-03: الرفض — مش منتهي، من غير ملف مقفول، ملف مفتوح أو مجهول، أكتر من نهاية، تاريخ أو سبب غلط، بدري أو بعيد، ومن غير الصلاحية أو برّه النطاق', async () => {
+  const lastDay = `${LAST_YEAR}-06-10`, good = { startDate: `${LAST_YEAR}-07-01`, reason: 'سبب مكتوب' }
+  // الصلاحية والنطاق قبل أي حكم: من غير «إنشاء موظف» 403 (حتى بصلاحية الإرجاع القديم)، وبرّه النطاق «غير موجود»، والقراءة بصلاحية العرض وفي النطاق
+  const guarded = await settled(lastDay)
+  for (const user of [users.archiver, users.viewer]) assert.equal((await rehire(user, guarded.emp, good)).status, 403)
+  assert.deepEqual(answer(await rehire(users.farHirer, guarded.emp, good)), [404, 'الموظف غير موجود'])
+  assert.deepEqual(answer(await periodsOf(users.farHirer, guarded.emp)), [404, 'الموظف غير موجود'])
+  assert.equal((await periodsOf(users.creatorOnly, guarded.emp)).status, 403)
+  // المدخلات: تاريخ مش يوم حقيقي بالصيغة، وسبب ناقص أو طويل أو مش نص
+  for (const startDate of [undefined, null, '', '2026/07/01', `${LAST_YEAR}-02-30`, `${LAST_YEAR}-7-1`, 20260701, `${LAST_YEAR}-07-01T00:00:00Z`]) {
+    assert.deepEqual(answer(await rehire(users.hirer, guarded.emp, { ...good, startDate })), [400, 'تاريخ المباشرة الجديد مطلوب (يوم صحيح بصيغة YYYY-MM-DD)'], JSON.stringify(startDate))
+  }
+  for (const reason of [undefined, null, '', '    ', 'قصير', 5, 'س'.repeat(501)]) {
+    assert.deepEqual(answer(await rehire(users.hirer, guarded.emp, { ...good, reason })), [400, 'سبب إعادة التعيين مطلوب (من 5 لـ500 حرف)'], String(JSON.stringify(reason)).slice(0, 40))
+  }
+  assert.deepEqual(answer(await rehire(users.hirer, guarded.emp, undefined)), [400, 'تاريخ المباشرة الجديد مطلوب (يوم صحيح بصيغة YYYY-MM-DD)'])
+  // التاريخ: آخر يوم عمل نفسه، ويوم بعده جوه نفس شهر الرواتب (راتب الشهر ده اتحسب مع التصفية)، وآخر يوم في الشهر — مرفوضين برسالتهم؛ وأبعد من سنة قدام
+  for (const startDate of [lastDay, `${LAST_YEAR}-06-11`, `${LAST_YEAR}-06-30`, '2019-01-01']) {
+    const early = await rehire(users.hirer, guarded.emp, { ...good, startDate })
+    assert.deepEqual([answer(early), early.body.code], [[400, `تاريخ المباشرة الجديد من ${LAST_YEAR}-07-01 أو بعده: آخر يوم عمل في خدمته القديمة ${lastDay}، وراتب شهر الرواتب اللي فيه اليوم ده اتحسب مع التصفية`],
+      'REHIRE_START_TOO_EARLY'], startDate)
+  }
+  const late = await rehire(users.hirer, guarded.emp, { ...good, startDate: plusDays(TODAY, 367) })
+  assert.deepEqual([answer(late), late.body.code], [[400, `تاريخ المباشرة الجديد بحد أقصى سنة قدام (${plusDays(TODAY, 366)})`], 'REHIRE_START_TOO_LATE'])
+  assert.deepEqual(await unchanged(guarded), [NOT_ENDED, []])
+
+  // حالة الموظف وملفاته
+  const working = await employee()
+  await repo('OffboardingCase').save({ employeeId: working.id, lastWorkingDay: lastDay, status: 'CLOSED', terminationReason: 'resignation' })
+  assert.deepEqual(refusal(await rehire(users.hirer, working, good)), [400, 'REHIRE_NOT_ENDED'])
+  assert.equal(expectStatus(await periodsOf(users.hirer, working), 200).rehire, null)
+  // من غير ملف، أو ملفه اتلغى، أو مؤرشف من غير ملف: مفيش تصفية تثبت إن خدمته اتقفلت
+  for (const [caseStatus, extra] of [[null, {}], ['CANCELLED', {}], [null, { status: 'archived' }]]) {
+    const plain = await ended(caseStatus, extra)
+    const refused = await rehire(users.hirer, plain.emp, good)
+    assert.deepEqual([refusal(refused), /مالوش ملف إنهاء لفترة خدمته الحالية/.test(refused.body.message)], [[400, 'REHIRE_NO_CLOSED_CASE'], true], String(caseStatus ?? extra.status ?? 'no case'))
+    const view = expectStatus(await periodsOf(users.hirer, plain.emp), 200).rehire
+    assert.deepEqual([view.available, view.code, view.minStartDate], [false, 'REHIRE_NO_CLOSED_CASE', null])
+    assert.deepEqual(await unchanged(plain), [[plain.emp.status, false, false, 0], []])
+  }
+  // ملف قديم آخر يوم عمل فيه قبل بداية الفترة الحالية بتاع فترة أقدم: مش ملف الفترة دي
+  const older = await ended(null, { joinDate: `${LAST_YEAR}-08-01` })
+  await repo('OffboardingCase').save({ employeeId: older.emp.id, lastWorkingDay: lastDay, status: 'CLOSED', terminationReason: 'resignation' })
+  assert.deepEqual(refusal(await rehire(users.hirer, older.emp, { ...good, startDate: `${LAST_YEAR}-12-01` })), [400, 'REHIRE_NO_CLOSED_CASE'])
+  // ملف لسه مفتوح (إخلاء، تصفية، أو معتمدة مستنية آخر يوم)، أو حالته مش معروفة، أو آخر يوم عمل فيه مش صالح
+  for (const [caseStatus, code] of [['IN_CLEARANCE', 'REHIRE_OPEN_CASE'], ['IN_SETTLEMENT', 'REHIRE_OPEN_CASE'], ['SETTLED', 'REHIRE_OPEN_CASE'], ['ARCHIVED', 'REHIRE_CASE_UNKNOWN']]) {
+    const open = await ended(caseStatus)
+    const blocked = await rehire(users.hirer, open.emp, good)
+    assert.deepEqual(refusal(blocked), [400, code], caseStatus)
+    if (code === 'REHIRE_OPEN_CASE') assert.equal(blocked.body.message, 'للموظف ملف إنهاء خدمة لسه مفتوح — اقفله قبل إعادة التعيين')
+    // ومعاه ملف مقفول سليم لنفس الفترة: المفتوح أو المجهول لسه بيمنع
+    await repo('OffboardingCase').save({ employeeId: open.emp.id, lastWorkingDay: lastDay, status: 'CLOSED', terminationReason: 'resignation' })
+    assert.deepEqual(refusal(await rehire(users.hirer, open.emp, good)), [400, code], `${caseStatus} + CLOSED`)
+    assert.deepEqual(await unchanged(open), [NOT_ENDED, []])
+  }
+  // أكتر من ملف مقفول في نفس الفترة: نهاية الخدمة مش واحدة
+  const twice = await settled(lastDay)
+  await repo('OffboardingCase').save({ employeeId: twice.emp.id, lastWorkingDay: `${LAST_YEAR}-05-31`, status: 'CLOSED', terminationReason: 'termination' })
+  assert.deepEqual(refusal(await rehire(users.hirer, twice.emp, good)), [400, 'REHIRE_AMBIGUOUS_END'])
+  assert.deepEqual(await unchanged(twice), [NOT_ENDED, []])
+  // موظف من غير تاريخ تعيين: الفترة بتتحسب من تاريخ إنشاء ملفه (نفس أساس نهاية الخدمة) — ملف إنهاء قبله مش بتاع الفترة دي
+  const undated = await ended(null, { joinDate: null })
+  await repo('OffboardingCase').save({ employeeId: undated.emp.id, lastWorkingDay: lastDay, status: 'CLOSED', terminationReason: 'resignation' })
+  assert.deepEqual(refusal(await rehire(users.hirer, undated.emp, good)), [400, 'REHIRE_NO_CLOSED_CASE'])
+
+  // حدود التاريخ المقبولة: أول يوم بعد شهر الرواتب، وآخر يوم مسموح قدام (مباشرة مستقبلية)
+  const first = await settled(lastDay)
+  expectStatus(await rehire(users.hirer, first.emp, good), 201)
+  assert.deepEqual((await periodRows(first.emp)).map(period => [period.startDate, period.endDate]), [['2020-01-01', lastDay]])
+  const future = await settled(lastDay)
+  const ahead = expectStatus(await rehire(users.hirer, future.emp, { ...good, startDate: plusDays(TODAY, 366) }), 201)
+  assert.deepEqual([ahead.status, String(ahead.joinDate).slice(0, 10), expectStatus(await periodsOf(users.hirer, future.emp), 200).current], ['active', plusDays(TODAY, 366), { periodNo: 2, startDate: plusDays(TODAY, 366) }])
+})
+
+test('EP-04: المسير — المباشرة بعد شهر الرواتب اللي فيه آخر يوم عمل، ومسير الشهر ده معتمد والموظف فيه، ومسير قديم لسه مااتعتمدش بيمنع', async () => {
+  const lastDay = `${LAST_YEAR}-06-30`, good = { startDate: `${LAST_YEAR}-08-01`, reason: 'سبب مكتوب' }
+  let fallback
+  try {
+  const gate = async emp => { const view = expectStatus(await periodsOf(users.hirer, emp), 200).rehire; return [view.available, view.code, view.minStartDate] }
+  // النظام فيه مسير بدأ قبل آخر يوم عمل (لموظف تاني) والموظف ده مش في مسير معتمد لشهر آخر يوم عمل: راتب أيامه الأخيرة مش محسوم
+  const other = await employee()
+  const june = await run({ status: 'PAID' })
+  await member(june, other)
+  const open = await settled(lastDay)
+  const refused = await rehire(users.hirer, open.emp, good)
+  assert.deepEqual([refusal(refused), answer(refused)[1]], [[400, 'REHIRE_LAST_MONTH_OPEN'],
+    `مسير شهر آخر يوم عمل (${lastDay}) لسه مااتعتمدش أو الموظف مش فيه — راتب أيامه الأخيرة مصدره المسير ده؛ اعتمده قبل إعادة التعيين`])
+  assert.deepEqual(await gate(open.emp), [false, 'REHIRE_LAST_MONTH_OPEN', null])
+  // نفس المسير لسه محسوب (مش معتمد) والموظف داخل فيه: مرفوض بسبب المسير المعلّق، بشهره بس (من غير رقمه ولا اسمه)
+  const calculated = await run({ status: 'CALCULATED', name: 'مسير يونيو المعلّق' })
+  const pendingMember = await member(calculated, open.emp)
+  const pending = await rehire(users.hirer, open.emp, good)
+  assert.deepEqual([refusal(pending), answer(pending)[1]], [[400, 'REHIRE_PENDING_OLD_RUN'],
+    `الموظف داخل في مسير لسه مااتعتمدش بيغطّي أيام من خدمته القديمة (مسير شهر ${LAST_YEAR}-06) — اعتمده أو ألغيه قبل إعادة التعيين`])
+  // مستبعد منه (مش داخل): المسير المعلّق مابيمنعش، وشهر آخر يوم عمل لسه مش محسوم
+  await repo('PayrollRunMember').update({ id: pendingMember.id }, { membershipStatus: 'EXCLUDED' })
+  assert.deepEqual(refusal(await rehire(users.hirer, open.emp, good)), [400, 'REHIRE_LAST_MONTH_OPEN'])
+  // مسودة وله فيها بند: بيمنع؛ ومسير ملغي أو تكميلي معتمد مش مصدر راتب الشهر
+  const draft = await run({ status: 'DRAFT', name: null, period: `${LAST_YEAR}-05`, startDate: `${LAST_YEAR}-05-01`, endDate: `${LAST_YEAR}-05-31` })
+  await item(draft, open.emp)
+  assert.deepEqual([refusal(await rehire(users.hirer, open.emp, good)), (await rehire(users.hirer, open.emp, good)).body.message],
+    [[400, 'REHIRE_PENDING_OLD_RUN'], `الموظف داخل في مسير لسه مااتعتمدش بيغطّي أيام من خدمته القديمة (مسير شهر ${LAST_YEAR}-05) — اعتمده أو ألغيه قبل إعادة التعيين`])
+  await repo('PayrollRun').update({ id: draft.id }, { status: 'CANCELLED' })
+  await repo('PayrollRun').update({ id: calculated.id }, { status: 'CANCELLED' })
+  await repo('PayrollRunMember').update({ id: pendingMember.id }, { membershipStatus: 'INCLUDED' })
+  const supplementary = await run({ status: 'PAID', runType: 'SUPPLEMENTARY' })
+  await member(supplementary, open.emp)
+  assert.deepEqual(await gate(open.emp), [false, 'REHIRE_LAST_MONTH_OPEN', null])
+  const may = await run({ status: 'PAID', period: `${LAST_YEAR}-05`, startDate: `${LAST_YEAR}-05-01`, endDate: `${LAST_YEAR}-05-31` })
+  await member(may, open.emp)
+  assert.deepEqual(await gate(open.emp), [false, 'REHIRE_LAST_MONTH_OPEN', null], 'مسير شهر أقدم مصروف مش مسير شهر آخر يوم عمل')
+  // مسير الشهر المعتمد والموظف فيه (حتى مستبعد — قرار اتقفل): متاحة، من أول يوم بعد الشهر
+  const mine = await member(june, open.emp, 'EXCLUDED')
+  assert.deepEqual(await gate(open.emp), [true, null, `${LAST_YEAR}-07-01`])
+  // وبند الموظف في المسير ده اتعكس (مستني تصحيح): مش محسوم تاني؛ والعكس الملغي مابيمنعش
+  const paid = await item(june, open.emp)
+  const reversal = await repo('PayrollRunReversalLine').save({ reversalRunId: supplementary.id, originalRunId: june.id, originalItemId: paid.id, employeeId: open.emp.id, status: 'POSTED', netPay: 1000,
+    itemSnapshot: '{}', itemHash: 'x'.repeat(64), createdByUserId: users.admin.id })
+  assert.deepEqual(await gate(open.emp), [false, 'REHIRE_LAST_MONTH_OPEN', null])
+  await repo('PayrollRunReversalLine').update({ id: reversal.id }, { status: 'CANCELLED' })
+  assert.deepEqual(await gate(open.emp), [true, null, `${LAST_YEAR}-07-01`])
+  await repo('PayrollRunMember').delete({ id: mine.id })
+  assert.deepEqual(await gate(open.emp), [true, null, `${LAST_YEAR}-07-01`], 'بند من غير صف عضوية كفاية')
+  // مسير معتمد (مش مصروف) بيكفي، ومسير تاني بيغطّي آخر يوم عمل ونهايته أبعد: المباشرة بعد نهايته
+  await repo('PayrollRun').update({ id: june.id }, { status: 'APPROVED' })
+  const wide = await run({ status: 'PAID', period: `${LAST_YEAR}-07`, startDate: `${LAST_YEAR}-06-16`, endDate: `${LAST_YEAR}-07-15` })
+  assert.deepEqual(await gate(open.emp), [true, null, `${LAST_YEAR}-07-16`])
+  assert.deepEqual(refusal(await rehire(users.hirer, open.emp, { ...good, startDate: `${LAST_YEAR}-07-15` })), [400, 'REHIRE_START_TOO_EARLY'])
+  assert.deepEqual(await unchanged(open), [NOT_ENDED, []])
+  expectStatus(await rehire(users.hirer, open.emp, { ...good, startDate: `${LAST_YEAR}-07-16` }), 201)
+  // دورة رواتب من يوم 23: آخر يوم عمل 30 يونيو جوه شهر رواتب يوليو (23 يونيو → 22 يوليو)، فالمباشرة من 23 يوليو
+  await repo('PayrollRun').update({ id: wide.id }, { status: 'CANCELLED' })
+  await setConfig('payroll.cycle_start_day', '23')
+  const cycled = await settled(lastDay)
+  await member(june, cycled.emp)
+  assert.deepEqual(await gate(cycled.emp), [true, null, `${LAST_YEAR}-07-23`])
+  assert.deepEqual(refusal(await rehire(users.hirer, cycled.emp, { ...good, startDate: `${LAST_YEAR}-07-22` })), [400, 'REHIRE_START_TOO_EARLY'])
+  expectStatus(await rehire(users.hirer, cycled.emp, { ...good, startDate: `${LAST_YEAR}-07-23` }), 201)
+  // إعداد الدورة مش صالح: الافتراضي 23 (زي باقي النظام)
+  await setConfig('payroll.cycle_start_day', 'غلط')
+  fallback = await settled(lastDay)
+  await member(june, fallback.emp)
+  assert.deepEqual(await gate(fallback.emp), [true, null, `${LAST_YEAR}-07-23`])
+  await setConfig('payroll.cycle_start_day', '1')
+  // النظام مافيهوش مسير بدأ قبل آخر يوم عمل (ملف من قبل تشغيل الرواتب): متاحة من غير مسير
+  const early = await settled('2019-12-31', { joinDate: '2015-01-01' })
+  assert.deepEqual(await gate(early.emp), [true, null, '2020-01-01'])
+  } finally {
+    // تنضيف (حتى لو الاختبار وقف): مسيرات الاختبار ده ملغية ودورة الرواتب شهر ميلادي، فباقي الاختبارات على نظام من غير مسيرات
+    await query(`UPDATE [payroll_runs] SET [status] = 'CANCELLED'`)
+    await setConfig('payroll.cycle_start_day', '1')
+  }
+  const after = expectStatus(await periodsOf(users.hirer, fallback.emp), 200).rehire
+  assert.deepEqual([after.available, after.code, after.minStartDate], [true, null, `${LAST_YEAR}-07-01`])
+})
+
+test('EP-05: رصيد الإجازات بعد إعادة التعيين — إجازة قديمة بتتلغى مابترجعش على الرصيد الجديد، والترحيل والإقفال والتجديد مابيشوفوش صفوف الفترة المقفولة', async () => {
+  const lastDay = `${YEAR}-01-31`, start = `${YEAR}-02-01`, service = leaves()
+  // نفس السنة الميلادية: صف السنة دي كان فيه مأخوذ ومُرحّل وتعديل من الفترة القديمة
+  const old = await settled(lastDay)
+  await balance(old.emp, 'annual', LAST_YEAR, { taken: 21 })
+  await balance(old.emp, 'annual', YEAR, { taken: 6, openingDays: 5, openingTaken: 2, adjustmentDays: 3 })
+  await balance(old.emp, 'sick', YEAR, { taken: 9 })
+  const oldLeave = { employeeId: old.emp.id, fromDate: `${YEAR}-01-10`, days: 3, requestId: null }
+  expectStatus(await rehire(users.hirer, old.emp, { startDate: start, reason: 'رجع في نفس السنة' }), 201)
+  const frozen = [['annual', `P1:${LAST_YEAR}`, 21, 0, 0, 0], ['annual', `P1:${YEAR}`, 6, 5, 2, 3], ['sick', `P1:${YEAR}`, 9, 0, 0, 0]]
+  const rowsOf = async emp => (await balanceRows(emp)).filter(row => !row[1].startsWith('P'))
+  const frozenOf = async emp => (await balanceRows(emp)).filter(row => row[1].startsWith('P'))
+  assert.deepEqual([await rowsOf(old.emp), await frozenOf(old.emp)], [[['annual', YEAR, 0, 0, 0, 0], ['sick', YEAR, 0, 0, 0, 0]], frozen])
+  const fresh = await hiredOn(start)
+  assert.deepEqual(await balancesOf(old.emp), await balancesOf(fresh))
+
+  // رصيد جديد عليه تعديل وإجازة في الفترة الجديدة (نفس الحركات على المرجع)
+  for (const emp of [old.emp, fresh]) {
+    await repo('LeaveBalance').update({ employeeId: emp.id, balanceType: 'annual', period: YEAR }, { adjustmentDays: 5 })
+    await ds.transaction(em => service.deduct(em, emp.id, 'annual', 2, start))
+  }
+  assert.deepEqual(await rowsOf(old.emp), [['annual', YEAR, 2, 0, 0, 5], ['sick', YEAR, 0, 0, 0, 0]])
+  // إجازة من الفترة المقفولة بتتلغى: لا الرصيد الجديد بيتزوّد ولا الصف المتجمّد بيتغيّر
+  await ds.transaction(em => service.restoreLeave(em, oldLeave, 'annual'))
+  assert.deepEqual([await rowsOf(old.emp), await frozenOf(old.emp)], [[['annual', YEAR, 2, 0, 0, 5], ['sick', YEAR, 0, 0, 0, 0]], frozen])
+  // وإجازة آخر يوم في الفترة المقفولة كمان، وإجازة من الفترة الجديدة بترجع عادي
+  await ds.transaction(em => service.restoreLeave(em, { ...oldLeave, fromDate: lastDay, days: 1 }, 'annual'))
+  assert.deepEqual((await rowsOf(old.emp))[0], ['annual', YEAR, 2, 0, 0, 5])
+  await ds.transaction(em => service.restoreLeave(em, { ...oldLeave, fromDate: start, days: 1 }, 'annual'))
+  assert.deepEqual((await rowsOf(old.emp))[0], ['annual', YEAR, 1, 0, 0, 5])
+  await ds.transaction(em => service.restoreLeave(em, { employeeId: fresh.id, fromDate: start, days: 1, requestId: null }, 'annual'))
+  // موظف ماتعيّنش تاني: إرجاع إجازته زي الأول (مفيش فترة مقفولة)
+  const never = await hiredOn('2020-01-01')
+  await repo('LeaveBalance').update({ employeeId: never.id, balanceType: 'annual', period: YEAR }, { taken: 4 })
+  await ds.transaction(em => service.restoreLeave(em, { employeeId: never.id, fromDate: `${YEAR}-01-10`, days: 3, requestId: null }, 'annual'))
+  assert.deepEqual((await rowsOf(never))[0], ['annual', YEAR, 1, 0, 0, 0])
+
+  // القراءات الجماعية شغالة والصفوف المتجمّدة مش فيها: شاشة الأرصدة، ومعاينة إقفال السنة (السنة دي ليه صف، واللي فاتت لأ)
+  assert.deepEqual(await balancesOf(old.emp), await balancesOf(fresh))
+  const bulk = await service.bulkBalances(null)
+  const bulkOf = emp => withoutIdentity(bulk.find(entry => entry.employee.id === emp.id).balances)
+  assert.deepEqual([bulkOf(old.emp), bulkOf(old.emp).length], [bulkOf(fresh), 2])
+  const closing = async year => (await service.yearEndPreview(year, null)).rows
+  const figures = (rows, emp) => { const found = rows.find(entry => entry.employee.id === emp.id); if (!found) return null; const { employee: _employee, ...rest } = found; return rest }
+  const thisYear = await closing(YEAR)
+  assert.deepEqual(figures(thisYear, old.emp), figures(thisYear, fresh))
+  assert.deepEqual([figures(thisYear, old.emp).used, figures(thisYear, old.emp).opening, figures(thisYear, old.emp).adjustments], [1, 0, 5])
+  assert.equal(figures(await closing(LAST_YEAR), old.emp), null)
+  // الترحيل السنوي: السنة اللي فاتت مابترحّلش حاجة من صفها المتجمّد، والسنة دي بترحّل متبقي الصف الجديد بس — زي المرجع
+  await service.rollover(LAST_YEAR)
+  assert.deepEqual(await rowsOf(old.emp), [['annual', YEAR, 1, 0, 0, 5], ['sick', YEAR, 0, 0, 0, 0]])
+  await service.rollover(YEAR)
+  const nextOf = async emp => (await rowsOf(emp)).filter(row => row[1] === NEXT_YEAR)
+  assert.deepEqual(await nextOf(old.emp), await nextOf(fresh))
+  assert.deepEqual((await nextOf(old.emp)).filter(row => row[0] === 'annual').map(row => row[3]), [10], 'المُرحّل من متبقي الصف الجديد بس وبسقفه')
+  assert.deepEqual(await frozenOf(old.emp), frozen)
+
+  // أساس «ذكرى التعيين»: صف الفترة القديمة بمفتاح تاريخ — متجمّد، والتجديد اليومي مابيرحّلش منه، والنتيجة زي المرجع
+  await repo('LeaveType').update({ id: org.annualType.id }, { renewalBasis: 'HIRE_ANNIVERSARY' })
+  try {
+    const dated = await settled(lastDay, { joinDate: '2020-03-15' })
+    await balance(dated.emp, 'annual', `${LAST_YEAR}-03-15`, { taken: 4, adjustmentDays: 5 })
+    expectStatus(await rehire(users.hirer, dated.emp, { startDate: start, reason: 'رجع بأساس الذكرى' }), 201)
+    const reference = await hiredOn(start)
+    assert.deepEqual(await frozenOf(dated.emp), [['annual', `P1:${LAST_YEAR}-03-15`, 4, 0, 0, 5]])
+    assert.deepEqual(await balancesOf(dated.emp), await balancesOf(reference))
+    await service.renewBalancePeriods(TODAY)
+    assert.deepEqual([await balancesOf(dated.emp), await frozenOf(dated.emp)], [await balancesOf(reference), [['annual', `P1:${LAST_YEAR}-03-15`, 4, 0, 0, 5]]])
+    assert.deepEqual((await rowsOf(dated.emp)).map(row => row.slice(2)), (await rowsOf(reference)).map(row => row.slice(2)))
+  } finally {
+    await repo('LeaveType').update({ id: org.annualType.id }, { renewalBasis: 'YEAR_START' })
+  }
+})
+
+test('EP-06: إعادة تعيين تانية بتقفل الفترة التانية بمفتاحها، وطلبين في نفس اللحظة واحد بس بينجح', async () => {
+  // الموظف بتاع EP-02 (فترته التانية من أول الشهر ده) خدمته انتهت تاني بملف مقفول
+  const again = org.rehired, secondStart = `${TODAY.slice(0, 7)}-01`, secondEnd = plusDays(TODAY, 20), thirdStart = plusDays(TODAY, 60)
+  await repo('LeaveBalance').update({ employeeId: again.emp.id, balanceType: 'annual', period: YEAR }, { taken: 2 })
+  await repo('Employee').update({ id: again.emp.id }, { status: 'terminated', isActive: false, archivedAt: new Date() })
+  const second = await repo('OffboardingCase').save({ employeeId: again.emp.id, lastWorkingDay: secondEnd, status: 'CLOSED', terminationReason: 'contract_end' })
+  const before = (await balanceRows(again.emp)).filter(row => row[1].startsWith('P1:'))
+  expectStatus(await rehire(users.hirer, again.emp, { startDate: thirdStart, reason: 'عقد تالت' }), 201)
+  assert.deepEqual((await periodRows(again.emp)).map(period => [period.periodNo, period.startDate, period.endDate, period.exitReason, period.offboardingCaseId]),
+    [[1, '2020-01-01', `${LAST_YEAR}-06-30`, 'resignation', again.kase.id], [2, secondStart, secondEnd, 'contract_end', second.id]])
+  const rows = await balanceRows(again.emp)
+  assert.deepEqual(rows.filter(row => row[1].startsWith('P1:')), before, 'صفوف الفترة الأولى بمفتاحها زي ما هي')
+  // صفوف الفترة التانية كلها (ومعاها صف السنة الجاية اللي الترحيل عمله) اتجمّدت بمفتاحها
+  assert.deepEqual(rows.filter(row => row[1].startsWith('P2:')).map(row => [row[0], row[1], row[2]]),
+    [['annual', `P2:${YEAR}`, 2], ['annual', `P2:${NEXT_YEAR}`, 0], ['sick', `P2:${YEAR}`, 0], ['sick', `P2:${NEXT_YEAR}`, 0]])
+  assert.deepEqual(rows.filter(row => !row[1].startsWith('P')), [['annual', YEAR, 0, 0, 0, 0], ['sick', YEAR, 0, 0, 0, 0]])
+  assert.deepEqual(expectStatus(await periodsOf(users.hirer, again.emp), 200).current, { periodNo: 3, startDate: thirdStart })
+  // إجازة من الفترة التانية (بعد نهاية الأولى وقبل نهاية التانية) بتتلغى: آخر فترة مقفولة هي الحد، فرصيد الفترة التالتة مابيتغيّرش
+  await repo('LeaveBalance').update({ employeeId: again.emp.id, balanceType: 'annual', period: YEAR }, { taken: 1 })
+  await ds.transaction(em => leaves().restoreLeave(em, { employeeId: again.emp.id, fromDate: secondStart, days: 1, requestId: null }, 'annual'))
+  assert.deepEqual((await balanceRows(again.emp)).filter(row => !row[1].startsWith('P'))[0], ['annual', YEAR, 1, 0, 0, 0])
+
+  // طلبين في نفس اللحظة لنفس الموظف: واحد بينجح والتاني بيلاقيه على رأس العمل — فترة واحدة اتسجّلت
+  const raced = await settled(`${LAST_YEAR}-06-30`)
+  const answers = await Promise.all([1, 2].map(turn => rehire(users.hirer, raced.emp, { startDate: `${LAST_YEAR}-07-0${turn}`, reason: `محاولة ${turn}` })))
+  assert.deepEqual(answers.map(refusal).sort((a, b) => a[0] - b[0]), [[201, null], [400, 'REHIRE_NOT_ENDED']])
+  assert.equal((await periodRows(raced.emp)).length, 1)
+  assert.deepEqual(await stateOf(raced), ['active', true, true, 1])
+
+  // قفل مالية الموظف ممسوك (مسير بيتحسب أو تصفية شغالة عليه): إعادة التعيين بتستنى لحد ما يتفك، وبعدها بتحكم على الحالة المثبتة
+  const held = await settled(`${LAST_YEAR}-06-30`)
+  const holder = ds.createQueryRunner()
+  await holder.connect()
+  await holder.startTransaction()
+  try {
+    const [lock] = await holder.query(`DECLARE @result int; EXEC @result = sys.sp_getapplock @Resource = @0, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 0; SELECT @result AS [result]`,
+      [`hr:employee-finance:${held.emp.id}`])
+    assert.ok(Number(lock.result) >= 0, 'القفل اتمسك')
+    let finished = false
+    const waiting = rehire(users.hirer, held.emp, { startDate: `${LAST_YEAR}-07-01`, reason: 'مستني القفل' }).then(response => { finished = true; return response })
+    await new Promise(resolve => setTimeout(resolve, 1500))
+    assert.deepEqual([finished, await unchanged(held)], [false, [NOT_ENDED, []]], 'الطلب مستني القفل ومفيش حاجة اتكتبت')
+    // والقفل ممسوك: ملف إنهاء جديد اتفتح للموظف (الحالة اتغيّرت تحت القفل) — الحكم بعد القفل بيشوفه
+    await repo('OffboardingCase').save({ employeeId: held.emp.id, lastWorkingDay: `${LAST_YEAR}-06-30`, status: 'IN_SETTLEMENT', terminationReason: 'resignation' })
+    await holder.commitTransaction()
+    assert.deepEqual(refusal(await waiting), [400, 'REHIRE_OPEN_CASE'])
+    assert.deepEqual(await unchanged(held), [NOT_ENDED, []])
+  } finally {
+    if (holder.isTransactionActive) await holder.rollbackTransaction()
+    await holder.release()
+  }
+})

@@ -10,6 +10,7 @@ import {
   Calendar,
   Building2,
   RefreshCw,
+  UserPlus,
   Eye,
   Trash2,
   FileText,
@@ -22,8 +23,11 @@ import {
   fetchBranches,
   fetchDepartments,
   reactivateEmployee,
+  ApiError,
+  SETTLED_RETURN_REASON_REQUIRED,
 } from '@/lib/api'
 import { formatDate } from '@/lib/dates'
+import RehireDialog from '@/components/RehireDialog'
 import { DayRangeFilter, usePayrollMonthContext } from '@/components/DayRangeFilter'
 import { useOrgFilter } from '@/components/OrgFilter'
 import { dateInRange, validDayRange, type DayRange } from '@/lib/payroll-month-range'
@@ -71,6 +75,13 @@ export default function ArchivedEmployeesPage() {
   const [archivedEmployees, setArchivedEmployees] = useState<ArchivedEmployee[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  // B2.10a: موظف ملفه مُصفّى — الخادم بيطلب سبب الإرجاع، والنافذة دي بتعرض تحذيره وتاخد السبب
+  const [settledReturn, setSettledReturn] = useState<{ id: number; warning: string } | null>(null)
+  const [returnReason, setReturnReason] = useState('')
+  const [returning, setReturning] = useState(false)
+  const [returnError, setReturnError] = useState('')
+  // B2.10: «إعادة تعيين» (فترة خدمة جديدة) — الموظف المختار؛ النافذة والحكم في RehireDialog والخادم
+  const [rehireFor, setRehireFor] = useState<{ id: number; name: string } | null>(null)
 
   const loadData = async () => {
     setLoading(true)
@@ -127,7 +138,32 @@ export default function ArchivedEmployeesPage() {
       await reactivateEmployee(id)
       await loadData()
     } catch (err) {
+      if (err instanceof ApiError && err.details?.code === SETTLED_RETURN_REASON_REQUIRED) {
+        setReturnReason('')
+        setReturnError('')
+        setSettledReturn({ id, warning: err.message })
+        return
+      }
       setError(err instanceof Error ? err.message : 'تعذرت إعادة التفعيل')
+    }
+  }
+
+  const confirmSettledReturn = async () => {
+    if (!settledReturn || returning) return
+    if (returnReason.trim().length < 5) {
+      setReturnError('اكتب سبب الإرجاع (5 حروف على الأقل)')
+      return
+    }
+    setReturning(true)
+    setReturnError('')
+    try {
+      await reactivateEmployee(settledReturn.id, returnReason.trim())
+      setSettledReturn(null)
+      await loadData()
+    } catch (err) {
+      setReturnError(err instanceof Error ? err.message : 'تعذرت إعادة التفعيل')
+    } finally {
+      setReturning(false)
     }
   }
 
@@ -390,6 +426,17 @@ export default function ArchivedEmployeesPage() {
                           <RefreshCw size={16} className="text-gray-600 hover:text-success-600" />
                         </button>
                       )}
+                      {/* B2.10: إعادة تعيين (فترة خدمة جديدة) — تعيين جديد، فبصلاحية إنشاء موظف في الباك */}
+                      {can('employees.create') && (
+                        <button
+                          onClick={() => setRehireFor({ id: emp.id, name: emp.name })}
+                          className="p-2 bg-gray-100 rounded-lg hover:bg-primary-50"
+                          title="إعادة تعيين (فترة خدمة جديدة)"
+                          data-rehire-open
+                        >
+                          <UserPlus size={16} className="text-gray-600" />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -404,6 +451,33 @@ export default function ArchivedEmployeesPage() {
             </div>
           )}
         </div>
+        )}
+
+        {/* B2.10: إعادة تعيين موظف خدمته انتهت واتصفّى — فترة خدمة جديدة بنفس الملف */}
+        <RehireDialog target={rehireFor} onClose={() => setRehireFor(null)} onDone={async () => { setRehireFor(null); await loadData() }} />
+
+        {/* B2.10a: إرجاع موظف ملفه مُصفّى — تحذير وسبب مكتوب */}
+        {settledReturn && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" data-settled-return>
+            <div className="bg-white rounded-2xl w-full max-w-lg">
+              <div className="p-6 border-b border-gray-100">
+                <h2 className="text-xl font-bold text-gray-800">إرجاع موظف ملفه مُصفّى</h2>
+              </div>
+              <div className="p-6 space-y-4">
+                <div className="bg-amber-50 text-amber-800 rounded-xl p-4 text-sm">{settledReturn.warning}</div>
+                <p className="text-sm text-gray-600">لو راجع بعقد جديد: اقفل النافذة دي واستخدم «إعادة تعيين» — بتبدأ مدة خدمته ورصيده من تاريخ المباشرة الجديد.</p>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2" htmlFor="settled-return-reason">سبب الإرجاع *</label>
+                  <textarea id="settled-return-reason" value={returnReason} maxLength={500} rows={3} onChange={(event) => setReturnReason(event.target.value)} className="input w-full" />
+                </div>
+                {returnError && <p className="text-sm text-red-600" role="alert">{returnError}</p>}
+              </div>
+              <div className="p-6 border-t border-gray-100 flex items-center justify-end gap-3">
+                <button type="button" onClick={() => setSettledReturn(null)} disabled={returning} className="btn-secondary">إلغاء</button>
+                <button type="button" onClick={confirmSettledReturn} disabled={returning} className="btn-primary disabled:opacity-50">{returning ? 'جارٍ الإرجاع…' : 'إرجاع على رأس العمل'}</button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </MainLayout>

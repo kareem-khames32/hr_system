@@ -888,8 +888,27 @@ export const renewEmployeeContract = (id: number, data: {
 export const archiveEmployee = (id: number, reason?: string) =>
   post<ApiEmployee>(`/employees/${id}/archive`, reason ? { reason } : {})
 // العودة على رأس العمل — للمؤرشف والمنتهي خدمته (توثيق بالسجل الوظيفي)
-export const reactivateEmployee = (id: number) =>
-  post<ApiEmployee>(`/employees/${id}/reactivate`)
+// B2.10a: موظف ملفه مُصفّى بيرجع بسبب مكتوب — الخادم بيرد بالكود ده لو السبب ناقص
+export const SETTLED_RETURN_REASON_REQUIRED = 'SETTLED_RETURN_REASON_REQUIRED'
+export const reactivateEmployee = (id: number, reason?: string) =>
+  post<ApiEmployee>(`/employees/${id}/reactivate`, reason ? { reason } : undefined)
+// B2.10: فترات خدمة الموظف المقفولة وبداية الحالية، وهل «إعادة تعيين» متاحة له ومن أي تاريخ (الخادم هو الحكم)
+export interface ApiEmploymentPeriod {
+  periodNo: number; startDate: string | null; endDate: string | null; exitReason: string | null
+  rehireReason: string; rehiredAt: string
+}
+export interface ApiEmploymentPeriods {
+  // false = قبل ترحيل 095
+  ready: boolean
+  periods: ApiEmploymentPeriod[]
+  current: { periodNo: number; startDate: string | null }
+  // null = الموظف على رأس العمل (أو قبل الترحيل)
+  rehire: { available: boolean; code: string | null; blocked: string | null; lastWorkingDay: string | null; minStartDate: string | null; maxStartDate: string } | null
+}
+export const fetchEmploymentPeriods = (id: number) => get<ApiEmploymentPeriods>(`/employees/${id}/employment-periods`)
+// إعادة تعيين موظف خدمته انتهت واتصفّى: فترة خدمة جديدة من تاريخ المباشرة، بنفس الملف والكود
+export const rehireEmployee = (id: number, startDate: string, reason: string) =>
+  post<ApiEmployee>(`/employees/${id}/rehire`, { startDate, reason })
 // دليل مختصر للنشطين في النطاق (بلا employees.view) — لمنتقيات الشاشات غير الإدارية
 export interface ApiEmployeeDirectoryEntry { id: number; fullName: string; employeeCode: string }
 export const fetchEmployeeDirectory = () =>

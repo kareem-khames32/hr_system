@@ -76,6 +76,7 @@ import { loadCurrencyContext, currencyCodeFor, currencyLabel, useCurrency } from
 import { useModuleEnabled } from '@/lib/modules'
 import EmployeeSuspensionDialog from '@/components/EmployeeSuspensionDialog'
 import EmployeeCustomFieldsCard from '@/components/EmployeeCustomFieldsCard'
+import EmploymentPeriodsCard from '@/components/EmploymentPeriodsCard'
 import { EmployeePayrollRunsCard } from '@/components/payroll/PayrollRunMoveMemberModal'
 import { SUSPENSION_STATE_LABELS, suspensionHistoryNote, suspensionPeriodText, type EmployeeSuspension } from '@/lib/employee-suspensions-api'
 
@@ -1348,6 +1349,9 @@ export default function EmployeeProfilePage() {
                   <p className="font-bold text-gray-800 text-lg mt-1">{employee.recruitmentSource}</p>
                 </div>
               </div>
+
+              {/* B2.10: فترات الخدمة — لموظف اتعيّن تاني بس */}
+              <EmploymentPeriodsCard employeeId={employee.id} />
 
               <div className="grid grid-cols-2 gap-8">
                 <div className="space-y-4">
