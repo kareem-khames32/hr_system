@@ -28,9 +28,6 @@ export async function policySchemaReady(em: EntityManager): Promise<boolean> {
   return ready
 }
 
-/** آخر نتيجة معروفة من غير استعلام (null = لسه مااتفحصش) — لمسار الطلب العادي اللي ممنوع يزوّد استعلام */
-export const policySchemaKnown = (): boolean | null => ready
-
 /** للاختبارات: نسيان حالة الجداول */
 export function resetPolicySchemaCache() { ready = null; checkedAt = 0 }
 

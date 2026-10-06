@@ -35,6 +35,7 @@ import {
   JwtAuthGuard,
   Perm,
   RolesGuard,
+  userHasPerm,
 } from './guards'
 import { adminGrantViolation, ALL_PERMISSIONS, permissionRegistry, ROLE_PRESETS } from './permissions'
 import { Role, UserPermissionOverride } from './role.entity'
@@ -155,10 +156,20 @@ export class RolesController {
   }
 
   // ===== الأدوار =====
-  @Perm('roles.manage', 'users.manage')
+  // CRP2L: محرر جمهور السياسات («أدوار محددة») محتاج أسماء الأدوار — لصاحب «إدارة السياسات» بالأسماء والحالة بس، ولحساب نطاقه كل الفروع
+  // (إدارة السياسات نفسها لنطاق كل الفروع بس)
+  @Perm('roles.manage', 'users.manage', 'policies.manage')
   @Get('roles')
   async list(@CurrentUser() actor: JwtPayload) {
+    const namesOnly = !userHasPerm(actor, 'roles.manage') && !userHasPerm(actor, 'users.manage')
+    if (namesOnly && branchScopeOf(actor) !== null) {
+      throw new ForbiddenException('أسماء الأدوار لمدير السياسات اللي نطاقه كل الفروع')
+    }
     const rows = await this.roles.find({ order: { id: 'ASC' } })
+    // من غير إدارة الأدوار ولا الحسابات: من غير صلاحيات كل دور ولا عدد حساباته ولا فرقه عن القالب
+    if (namesOnly) {
+      return rows.map((r) => ({ id: r.id, code: r.code, nameAr: r.nameAr, isActive: !!r.isActive }))
+    }
     // عدد مستخدمي كل دور بنطاق فرع المنفّذ (كقائمة المستخدمين) — شاشة الأدوار
     // تعرضه دون GET /users (users.manage) فلا تسقط لمن يملك roles.manage وحدها
     const scope = branchScopeOf(actor)

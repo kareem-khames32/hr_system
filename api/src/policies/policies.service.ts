@@ -294,7 +294,7 @@ export class PoliciesService {
    */
   async update(user: JwtPayload, id: number, input: PolicyInput) {
     this.assertCompanyManager(user)
-    const changed = await this.ds.transaction(async em => {
+    await this.gate.write(() => this.ds.transaction(async em => {
       await this.assertReady(em)
       const repo = em.getRepository(Policy)
       const policy = await repo.findOne({ where: { id }, lock: { mode: 'pessimistic_write' } })
@@ -316,7 +316,7 @@ export class PoliciesService {
       if (input.isMandatory !== undefined) policy.isMandatory = input.isMandatory === true
       if (input.graceDays !== undefined) policy.graceDays = this.graceOf(input.graceDays)
       const after = { title: policy.title, category: policy.category ?? null, audience: parseRequestAudience(policy.audience), isMandatory: !!policy.isMandatory, graceDays: policy.graceDays }
-      if (JSON.stringify(before) === JSON.stringify(after)) return false
+      if (JSON.stringify(before) === JSON.stringify(after)) return
       // إلزام بدأ النهارده (السياسة بقت إلزامية، أو جمهورها اتغيّر): المهلة من النهارده، مش من سريان نسخة قديمة. (للمسودة مالوش أثر: أول
       // نسخة سريانها من النهارده أو بعده)
       if ((after.isMandatory && !before.isMandatory) || JSON.stringify(before.audience) !== JSON.stringify(after.audience)) {
@@ -325,9 +325,7 @@ export class PoliciesService {
       await repo.save(policy)
       await recordAudit(em, { category: 'SETTINGS', action: 'POLICY_UPDATED', entityType: 'policy', entityId: policy.id, actorUserId: user.sub,
         summary: `تعديل بيانات سياسة: ${policy.title}`, before, after })
-      return true
-    })
-    if (changed) await this.gate.changed()
+    }))
     return { id }
   }
 
@@ -343,7 +341,7 @@ export class PoliciesService {
     const fileId = input.fileId == null ? null : Number(input.fileId)
     if ((bodyText === null) === (fileId === null)) throw new BadRequestException('محتوى النسخة: نص، أو ملف PDF — واحد منهم بس')
     if (bodyText !== null && bodyText.length > POLICY_BODY_MAX) throw new BadRequestException(`نص السياسة بحد أقصى ${POLICY_BODY_MAX} حرف — الأطول يترفع ملف PDF`)
-    const saved = await this.ds.transaction(async em => {
+    const saved = await this.gate.write(() => this.ds.transaction(async em => {
       await this.assertReady(em)
       const policy = await em.getRepository(Policy).findOne({ where: { id }, lock: { mode: 'pessimistic_write' } })
       if (!policy) throw new NotFoundException(POLICY_NOT_FOUND)
@@ -361,8 +359,7 @@ export class PoliciesService {
         summary: `نشر النسخة ${version.versionNo} من سياسة: ${policy.title}`,
         after: { versionId: version.id, versionNo: version.versionNo, effectiveDate: input.effectiveDate, isMaterial: version.isMaterial, kind: fileId !== null ? 'FILE' : 'TEXT', contentHash } })
       return { id: version.id, versionNo: version.versionNo, contentHash }
-    })
-    await this.gate.changed()
+    }))
     return saved
   }
 
@@ -383,7 +380,7 @@ export class PoliciesService {
   /** سحب السياسة: مابتقفلش حد بعدها ومابتظهرش للموظفين، وإقراراتها ونسخها بتفضل */
   async withdraw(user: JwtPayload, id: number) {
     this.assertCompanyManager(user)
-    await this.ds.transaction(async em => {
+    await this.gate.write(() => this.ds.transaction(async em => {
       await this.assertReady(em)
       const repo = em.getRepository(Policy)
       const policy = await repo.findOne({ where: { id }, lock: { mode: 'pessimistic_write' } })
@@ -391,8 +388,7 @@ export class PoliciesService {
       if (policy.status === 'WITHDRAWN') throw new BadRequestException('السياسة مسحوبة فعلًا')
       await repo.update({ id }, { status: 'WITHDRAWN', withdrawnAt: new Date(), withdrawnByUserId: user.sub })
       await recordAudit(em, { category: 'SETTINGS', action: 'POLICY_WITHDRAWN', entityType: 'policy', entityId: id, actorUserId: user.sub, summary: `سحب سياسة: ${policy.title}` })
-    })
-    await this.gate.changed()
+    }))
     return { id }
   }
 

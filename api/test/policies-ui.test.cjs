@@ -85,7 +85,7 @@ test('PU-02: عميل الـAPI على مسارات الخادم نفسها وب
   assert.match(gate, /if \(user\?\.employeeId && !user\.mustChangePassword\n\s+&& !this\.reflector\.getAllAndOverride<boolean \| undefined>\(ALLOW_DURING_POLICY_GATE, \[ctx\.getHandler\(\), ctx\.getClass\(\)\]\)\n\s+&& await this\.gate\.blocks\(user\)\) \{\n\s+throw new ForbiddenException\(\{ statusCode: 403, code: POLICY_ACK_REQUIRED, message: POLICY_ACK_REQUIRED_MESSAGE \}\)/)
   assert.match(read('api/src/policies/policies.module.ts'), /\{ provide: APP_INTERCEPTOR, useClass: PolicyGateInterceptor \}/)
   // والعلامة بتتحدّث في الخلفية في التشغيل العادي (مش في الاختبارات، زي عامل الطابور)
-  assert.match(gate, /await this\.refresh\(\)\.catch\(\(\) => undefined\)\n\s+\/\/[^\n]*\n\s+if \(process\.env\.NODE_ENV !== 'test'\) this\.startBackgroundRefresh\(\)/)
+  assert.match(gate, /await this\.refresh\(\)\n\s+\/\/[^\n]*\n\s+if \(process\.env\.NODE_ENV !== 'test'\) this\.startBackgroundRefresh\(\)/)
   assert.equal(rules.POLICY_ACK_REQUIRED, 'POLICY_ACK_REQUIRED')
 })
 

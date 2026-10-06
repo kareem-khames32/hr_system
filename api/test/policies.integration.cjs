@@ -10,7 +10,9 @@
 //  PL-07) نسخة جديدة: غير الجوهرية مابتطلبش إقرار تاني، والجوهرية بتطلبه من الكل؛ والنسخة القديمة مابيتقرّش بيها.
 //  PL-08) التقرير: مطابق لجدول الإقرارات، ولموظفي نطاق القارئ بس، وبالحالات والعدّ.
 //  PL-09) قراءة النسخة وملفها: للجمهور ولصاحب الصلاحية؛ ولغيرهم نفس رد اللي مش موجودة.
-//  PL-10) من غير سياسة إلزامية منشورة: مسار الطلب العادي مابينادّيش فحص الإقرار خالص؛ ومعاها: الحساب «المش مقفول» بيتفحص مرة في المدة.
+//  PL-10) من غير سياسة إلزامية منشورة: مسار الطلب العادي مابينادّيش فحص الإقرار خالص؛ ومعاها: الحساب «المش مقفول» بيتفحص مرة في المدة،
+//         لنفس الموظف ونفس الجلسة بس (CRP2L)؛ والعلامة لو مااتعرفتش (قراءتها فشلت، أو كتابة على السياسات لسه قراءتها مارجعتش) البوابة
+//         بتقفل مش بتفتح (CRP2L).
 //  PL-11) سجل التدقيق: إنشاء وتعديل ونشر وسحب.
 // Run (من api/): node --test test/policies.integration.cjs
 const { test, before, after } = require('node:test')
@@ -261,6 +263,28 @@ test('PL-01: إنشاء السياسة وتعديل بياناتها — لصا�
   assert.equal(expectStatus(await request(users.reporterB, 'GET', `/policies/${created.id}`), 200).id, created.id)
   // والمسودة مابتظهرش للموظفين
   assert.deepEqual([await mine(users.remote), (await pending(users.remote)).policies], [[], []])
+
+  // CRP2L-N01: أسماء الأدوار لمحرر الجمهور («أدوار محددة») — لصاحب «إدارة السياسات» ونطاقه كل الفروع، بالأسماء والحالة بس؛ ولصاحب إدارة
+  // الأدوار أو الحسابات الرد الكامل زي ما هو؛ ولغيرهم مرفوض
+  await repo('Role').save([{ code: 'pl_clerk', nameAr: 'كاتب — اختبار', permissions: JSON.stringify(['employees.view']), isSystem: false, isActive: true },
+    { code: 'pl_retired', nameAr: 'دور موقوف — اختبار', permissions: JSON.stringify(['payroll.view']), isSystem: false, isActive: false }])
+  const full = expectStatus(await request(users.admin, 'GET', '/roles'), 200)
+  assert.deepEqual(full.map(role => [role.code, role.isActive, role.permissions, 'userCount' in role]), [['pl_clerk', true, ['employees.view'], true], ['pl_retired', false, ['payroll.view'], true]])
+  const names = expectStatus(await request(users.hrAll, 'GET', '/roles'), 200)
+  assert.deepEqual([...new Set(names.flatMap(role => Object.keys(role)))].sort(), ['code', 'id', 'isActive', 'nameAr'])
+  assert.deepEqual(names, full.map(role => ({ id: role.id, code: role.code, nameAr: role.nameAr, isActive: !!role.isActive })))
+  // وصاحب «إدارة السياسات» بنطاق فرع مابيديرش سياسات (إدارتها لنطاق كل الفروع)، فمالوش أسماء الأدوار
+  const branchNames = await request(users.hrBranch, 'GET', '/roles')
+  assert.deepEqual([branchNames.status, messageOf(branchNames)], [403, 'أسماء الأدوار لمدير السياسات اللي نطاقه كل الفروع'])
+  for (const [label, permission] of [['accounts-admin', 'users.manage'], ['roles-admin', 'roles.manage']]) {
+    const administrator = await account(label, 'employee', [permission])
+    assert.deepEqual(expectStatus(await request(administrator, 'GET', '/roles'), 200).map(role => [role.code, role.permissions, 'userCount' in role]),
+      [['pl_clerk', ['employees.view'], true], ['pl_retired', ['payroll.view'], true]], label)
+  }
+  for (const user of [users.staff, users.reporterA, users.reporterAll]) expectStatus(await request(user, 'GET', '/roles'), 403)
+  // وإدارة السياسات مابتدّيش إنشاء دور ولا تعديله
+  expectStatus(await request(users.hrAll, 'POST', '/roles', { code: 'policy_made', nameAr: 'دور من مدير السياسات', permissions: [] }), 403)
+  expectStatus(await request(users.hrAll, 'PATCH', `/roles/${full[0].id}`, { nameAr: 'اسم تاني' }), 403)
 })
 
 test('PL-02: نشر نسخة — نص أو ملف PDF، وبصمة المحتوى، وتاريخ السريان، وأول نسخة جوهرية، والترقيم؛ ورفع ملف السياسة', async () => {
@@ -731,10 +755,11 @@ test('PL-10: من غير سياسة إلزامية مسار الطلب العا�
     gate.overdueFor = counted
     // الخادم اتشغّل تاني وفيه سياسة إلزامية: العلامة بتتحسب عند الإقلاع، فالمقفول مقفول من أول نداء؛ وبعدها بتتحسب كل شوية من مؤقّت في الخلفية
     // (خادم تاني نشر أو سحب) مابيمسكش العملية شغالة
+    // قبل ما العلامة تتحسب الحالة «مش معروفة» (البوابة شغالة)، وعند الإقلاع بتتحسب
     gate.reset()
-    assert.equal(gate.active(), false)
+    assert.deepEqual([gate.mandatory, gate.active()], [null, true])
     await gate.onApplicationBootstrap()
-    assert.equal(gate.active(), true)
+    assert.deepEqual([gate.mandatory, gate.active()], [true, true])
     assert.equal((await request(users.other, 'GET', '/requests/mine')).status, 403)
     // المؤقّت مابيشتغلش في الاختبارات (زي عامل الطابور)؛ وفي التشغيل العادي مؤقّت مابيمسكش العملية، وبيتوقف مع قفل الخادم
     assert.equal(gate.timer, null)
@@ -750,26 +775,193 @@ test('PL-10: من غير سياسة إلزامية مسار الطلب العا�
     assert.equal(gate.mandatory, false)
     await gate.changed()
     assert.equal(gate.active(), true)
-    // قراءة العلامة فشلت بعد كتابة اتثبتت (القاعدة اتقطعت لحظة): الطلب مابيفشلش (كان هيتعاد وينشر نسخة تانية)، والبوابة شغالة احتياطي
-    const later = expectStatus(await createPolicy(users.admin, { title: 'وقت عطل القراءة' }), 201)
-    gate.mandatory = false
-    gate.refresh = async () => { throw new Error('database unavailable') }
+    // ===== CRP2L-B01: تعذّر معرفة الحالة مابيفتحش البوابة =====
+    const FLAG = 'SELECT TOP (1) p.[id] FROM [policies]', realQuery = ds.query
+    // قراءة العلامة بتفشل `times` مرة (القاعدة وقعت لحظة) وباقي الاستعلامات شغالة
+    const failFlag = times => { let left = times; ds.query = function (sql, ...args) { return String(sql).includes(FLAG) && left-- > 0 ? Promise.reject(new Error('database unavailable')) : realQuery.call(this, sql, ...args) } }
     try {
-      expectStatus(await publish(users.admin, later.id, { bodyText: 'نص', effectiveDate: day(0) }), 201)
+      // في الإقلاع: الحالة «مش معروفة»، فالمقفول مقفول، واللي مش مقفول بيعدّي بفحصه هو (مش بافتراض «مفيش سياسات»)
+      gate.reset(); failFlag(1)
+      await gate.onApplicationBootstrap()
+      assert.deepEqual([gate.mandatory, gate.active()], [null, true])
+      checks = 0
+      assert.equal((await request(users.other, 'GET', '/requests/mine')).status, 403)
+      expectStatus(await request(users.newHire, 'GET', '/requests/mine'), 200)
+      assert.equal(checks, 2)
+      // وقراءة ناجحة بعدها بترجّع الحالة المعروفة
+      await gate.refresh()
       assert.equal(gate.mandatory, true)
-    } finally { delete gate.refresh }
-    assert.equal(Number((await query('SELECT COUNT(*) AS [n] FROM [policy_versions] WHERE [policyId] = @0', [later.id]))[0].n), 1)
-    // وقراءة قديمة فشلت بعد كتابة أحدث منها: مابتكتبش فوق علامتها
-    let fail
-    gate.refresh = () => new Promise((_resolve, reject) => { fail = () => reject(new Error('late failure')) })
-    const older = gate.changed()
-    delete gate.refresh
-    gate.generation++
-    gate.mandatory = false
-    fail()
-    await older
-    assert.equal(gate.mandatory, false)
+      // في القراءة الدورية: آخر قيمة مابتفضلش بعد قراءة فشلت — «مش معروف» لحد قراءة ناجحة
+      gate.mandatory = false; failFlag(1)
+      await gate.refresh()
+      assert.deepEqual([gate.mandatory, gate.active()], [null, true])
+      assert.equal((await request(users.other, 'GET', '/requests/mine')).status, 403)
+      // وبعد كتابة اتثبتت: الطلب مابيفشلش (كان هيتعاد وينشر نسخة تانية)، والحالة «مش معروفة» فالبوابة شغالة
+      const later = expectStatus(await createPolicy(users.admin, { title: 'وقت عطل القراءة' }), 201)
+      gate.mandatory = false; failFlag(1)
+      expectStatus(await publish(users.admin, later.id, { bodyText: 'نص', effectiveDate: day(0) }), 201)
+      assert.deepEqual([gate.mandatory, gate.active()], [null, true])
+      assert.equal(Number((await query('SELECT COUNT(*) AS [n] FROM [policy_versions] WHERE [policyId] = @0', [later.id]))[0].n), 1)
+      // وقراءة قديمة فشلت بعد كتابة أحدث منها: مابتكتبش فوق علامتها
+      let fail
+      ds.query = function (sql, ...args) { return String(sql).includes(FLAG) ? new Promise((_resolve, reject) => { fail = () => reject(new Error('late failure')) }) : realQuery.call(this, sql, ...args) }
+      const older = gate.refresh()
+      for (let waited = 0; waited < 2000 && !fail; waited += 10) await new Promise(resolve => setTimeout(resolve, 10))
+      ds.query = realQuery
+      gate.generation++
+      gate.mandatory = false
+      fail()
+      await older
+      assert.equal(gate.mandatory, false)
+      // والحالة «مش معروفة» وفحص الحساب نفسه اتعذّر: النداء مابيعدّيش
+      gate.reset()
+      gate.overdueFor = async () => { throw new Error('check unavailable') }
+      assert.equal((await request(users.newHire, 'GET', '/requests/mine')).status, 500)
+      // والمسارات المسموحة والحساب من غير موظف مش محتاجين الفحص
+      expectStatus(await request(users.newHire, 'GET', '/auth/me'), 200)
+      expectStatus(await request(users.unlinked, 'GET', '/requests/mine'), 200)
+      gate.overdueFor = counted
+    } finally { ds.query = realQuery }
     await gate.changed()
+    assert.deepEqual([gate.mandatory, gate.active()], [true, true])
+
+    // ===== CRP2L-B02: «مش مقفول» المحفوظة لهوية وجلسة — الحساب بموظف تاني أو بجلسة جديدة بيتفحص من جديد =====
+    const lockedFile = await employee(), clearFile = await employee({ joinDate: day(0) })
+    const lockedAccount = await account('gate-locked', 'employee', [], { employeeId: lockedFile.id })
+    let roaming = await account('gate-roaming', 'employee', [], { employeeId: clearFile.id })
+    assert.equal((await request(lockedAccount, 'GET', '/requests/mine')).status, 403)
+    // نفس الحساب ونفس الموظف ونفس الجلسة: فحص واحد في المدة
+    checks = 0
+    for (let round = 0; round < 3; round++) expectStatus(await request(roaming, 'GET', '/requests/mine'), 200)
+    assert.equal(checks, 1)
+    // وبعد المدة (دقيقة) بيتفحص تاني
+    const clock = Date.now
+    Date.now = () => clock() + 61_000
+    try { expectStatus(await request(roaming, 'GET', '/requests/mine'), 200) } finally { Date.now = clock }
+    assert.equal(checks, 2)
+    checks = 1
+    // نفس الموظف بجلسة جديدة (إصدار الجلسة زاد: تغيير دور أو صلاحيات): فحص جديد، وبيتحفظ للجلسة الجديدة
+    await repo('User').update({ id: roaming.id }, { tokenVersion: (roaming.tokenVersion ?? 0) + 1 })
+    roaming = await repo('User').findOneByOrFail({ id: roaming.id })
+    for (let round = 0; round < 3; round++) expectStatus(await request(roaming, 'GET', '/requests/mine'), 200)
+    assert.equal(checks, 2)
+    // نفس الجلسة وموظف الحساب اتغيّر (ربط مباشر من غير إصدار جديد): نتيجة الموظف القديم مابتعدّيش الجديد
+    await repo('User').update({ id: lockedAccount.id }, { employeeId: null })
+    await repo('User').update({ id: roaming.id }, { employeeId: lockedFile.id })
+    assert.equal((await request({ ...roaming, employeeId: lockedFile.id }, 'GET', '/requests/mine')).status, 403)
+    await repo('User').update({ id: roaming.id }, { employeeId: clearFile.id })
+    await repo('User').update({ id: lockedAccount.id }, { employeeId: lockedFile.id })
+    for (let round = 0; round < 2; round++) expectStatus(await request(roaming, 'GET', '/requests/mine'), 200)
+    // وبالمسار الفعلي (فك ربط الموظف المقفول وربط الحساب بيه، وإصدار الجلسة بيزيد): مقفول من أول نداء
+    expectStatus(await request(users.admin, 'PATCH', `/users/${lockedAccount.id}`, { employeeId: null }), 200)
+    expectStatus(await request(users.admin, 'PATCH', `/users/${roaming.id}`, { employeeId: lockedFile.id }), 200)
+    const rebound = await repo('User').findOneByOrFail({ id: roaming.id })
+    assert.deepEqual([rebound.employeeId, rebound.tokenVersion > roaming.tokenVersion], [lockedFile.id, true])
+    assert.deepEqual([(await pending(rebound)).blocked, (await request(rebound, 'GET', '/requests/mine')).status], [true, 403])
+
+    // ومن غير أي سياسة إلزامية الحالة «لأ» معروفة: البوابة مش شغالة ومفيش فحص
+    await fresh()
+    checks = 0
+    assert.deepEqual([gate.mandatory, gate.active()], [false, false])
+    expectStatus(await request(rebound, 'GET', '/requests/mine'), 200)
+    assert.equal(checks, 0)
+
+    // ===== CRP2L (مراجعة التصليح): العلامة «مش معروفة» من قبل ما كتابة على السياسات تبدأ ولحد ما القراءة اللي بعدها ترجع =====
+    // أول سياسة إلزامية من غير مهلة بتتنشر، وقراءة العلامة اللي بعد النشر واقفة: النسخة اتثبتت، فالمقفول مقفول (مش بقيمة «لأ» اللي قبل النشر)
+    const first = expectStatus(await createPolicy(users.admin, { title: 'أول إلزامية من غير مهلة', isMandatory: true, graceDays: 0 }), 201)
+    assert.deepEqual([gate.mandatory, gate.active()], [false, false])
+    let land = null, publishing
+    ds.query = function (sql, ...args) {
+      return String(sql).includes(FLAG) && !land ? new Promise(resolve => { land = resolve }).then(() => realQuery.call(this, sql, ...args)) : realQuery.call(this, sql, ...args)
+    }
+    try {
+      publishing = publish(users.admin, first.id, { bodyText: 'نص', effectiveDate: day(0) })
+      for (let waited = 0; waited < 5000 && !land; waited += 10) await new Promise(resolve => setTimeout(resolve, 10))
+      assert.ok(land, 'قراءة العلامة اللي بعد النشر واقفة')
+      assert.equal(Number((await query('SELECT COUNT(*) AS [n] FROM [policy_versions] WHERE [policyId] = @0', [first.id]))[0].n), 1)
+      assert.deepEqual([gate.mandatory, gate.active()], [null, true])
+      assert.deepEqual((({ status, body }) => [status, body.code])(await request(users.other, 'GET', '/requests/mine')), [403, 'POLICY_ACK_REQUIRED'])
+      expectStatus(await request(users.unlinked, 'GET', '/requests/mine'), 200)
+    } finally { ds.query = realQuery; if (land) land() }
+    const made = expectStatus(await publishing, 201)
+    assert.deepEqual([gate.mandatory, gate.active()], [true, true])
+    // وكتابة لسه شغالة (حتى قبل ما تتثبت): العلامة «مش معروفة»، وقراءة دورية في وسطها مابتتسجّلش، و«مش مقفول» مابتتحفظش
+    expectStatus(await acknowledge(users.staff, made.id, made.contentHash), 201)
+    let finish = null
+    const writing = gate.write(() => new Promise(resolve => { finish = resolve }))
+    assert.deepEqual([gate.mandatory, gate.active()], [null, true])
+    await gate.refresh()
+    assert.equal(gate.mandatory, null)
+    checks = 0
+    for (let round = 0; round < 2; round++) expectStatus(await request(users.staff, 'GET', '/requests/mine'), 200)
+    assert.equal(checks, 2)
+    assert.equal((await request(users.other, 'GET', '/requests/mine')).status, 403)
+    finish('written')
+    assert.equal(await writing, 'written')
+    assert.deepEqual([gate.mandatory, gate.active()], [true, true])
+    // وبعد ما خلصت: «مش مقفول» بتتحفظ زي الأول
+    checks = 0
+    for (let round = 0; round < 2; round++) expectStatus(await request(users.staff, 'GET', '/requests/mine'), 200)
+    assert.equal(checks, 1)
+    // وفحص بدأ والكتابة شغالة ورجع بعد ما خلصت: نتيجته ممكن تكون من قبل ما الكتابة تتثبت، فماتتحفظش
+    const steady = gate.overdueFor
+    let releaseCheck = null, finishLate = null
+    gate.overdueFor = async user => { const overdue = await steady(user); await new Promise(resolve => { releaseCheck = resolve }); return overdue }
+    const late = gate.write(() => new Promise(resolve => { finishLate = resolve }))
+    const spanning = request(users.staff, 'GET', '/requests/mine')
+    for (let waited = 0; waited < 5000 && !releaseCheck; waited += 10) await new Promise(resolve => setTimeout(resolve, 10))
+    gate.overdueFor = steady
+    assert.ok(releaseCheck, 'الفحص واقف والكتابة شغالة')
+    finishLate()
+    await late
+    releaseCheck()
+    expectStatus(await spanning, 200)
+    checks = 0
+    expectStatus(await request(users.staff, 'GET', '/requests/mine'), 200)
+    assert.equal(checks, 1)
+    // وكتابتين شغالين مع بعض: الأولى خلصت والتانية لسه — العلامة لسه «مش معروفة»
+    let endFirst = null, endSecond = null
+    const firstWrite = gate.write(() => new Promise(resolve => { endFirst = resolve })), secondWrite = gate.write(() => new Promise(resolve => { endSecond = resolve }))
+    endFirst()
+    await firstWrite
+    assert.deepEqual([gate.mandatory, gate.active()], [null, true])
+    endSecond()
+    await secondWrite
+    assert.deepEqual([gate.mandatory, gate.active()], [true, true])
+    // وكتابة فشلت (ممكن تكون اتثبتت وردّها ضاع): الخطأ بيوصل زي ما هو، والعلامة بتتقرا من جديد
+    gate.mandatory = false
+    await assert.rejects(gate.write(async () => { throw new Error('reply lost') }), /reply lost/)
+    assert.deepEqual([gate.mandatory, gate.active()], [true, true])
+    // والخدمة بتنفّذ كتاباتها التلاتة (تعديل، نشر، سحب) من هنا: حتى الطلب اللي اترفض جوه المعاملة بيقرا العلامة من جديد
+    const withdrawn = await published({ title: 'مسحوبة', graceDays: 5 })
+    expectStatus(await request(users.admin, 'POST', `/policies/${withdrawn.id}/withdraw`), 201)
+    for (const [method, route, body] of [['PATCH', `/policies/${withdrawn.id}`, { graceDays: 2 }], ['POST', `/policies/${withdrawn.id}/versions`, { bodyText: 'نص', effectiveDate: day(0) }],
+      ['POST', `/policies/${withdrawn.id}/withdraw`]]) {
+      gate.mandatory = false
+      expectStatus(await request(users.admin, method, route, body), 400)
+      assert.deepEqual([gate.mandatory, gate.active()], [true, true], `${method} ${route}`)
+    }
+    // وقراءتين متداخلتين للعلامة (خادم تاني هو اللي كتب، فمفيش كتابة هنا تلغيهم): القديمة لو رجعت بعد الأحدث مابتكتبش فوقها
+    await query('UPDATE [policies] SET [isMandatory] = 0 WHERE [id] = @0', [first.id])
+    let deliver = null, read = null
+    ds.query = function (sql, ...args) {
+      if (!String(sql).includes(FLAG) || deliver) return realQuery.call(this, sql, ...args)
+      // القراءة القديمة بتقرا دلوقتي («لأ»)، ونتيجتها بتوصل متأخر
+      read = realQuery.call(this, sql, ...args)
+      return new Promise(resolve => { deliver = () => resolve(read) })
+    }
+    try {
+      const older = gate.refresh()
+      for (let waited = 0; waited < 5000 && !read; waited += 10) await new Promise(resolve => setTimeout(resolve, 10))
+      assert.deepEqual(await read, [])
+      await query('UPDATE [policies] SET [isMandatory] = 1 WHERE [id] = @0', [first.id])
+      await gate.refresh()
+      assert.equal(gate.mandatory, true)
+      deliver()
+      await older
+      assert.deepEqual([gate.mandatory, gate.active()], [true, true])
+      assert.equal((await request(users.other, 'GET', '/requests/mine')).status, 403)
+    } finally { ds.query = realQuery; if (deliver) deliver() }
   } finally { gate.overdueFor = original }
 })
 
