@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
-import { DataSource } from 'typeorm'
+import { DataSource, type EntityManager } from 'typeorm'
 import { recordAudit } from '../audit/audit'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, inBranchScope, userHasPerm } from '../auth/guards'
@@ -17,9 +17,14 @@ import {
 //  للي معاه «تعديل الموظفين» بس (الموظف نفسه مايشوفوش). التعديل بـ«تعديل الموظفين» في النطاق، والحكم بفرع الموظف وصفه مقفول.
 //  الإلزامي: أي حفظ لقيم موظف لازم يسيب كل حقل إلزامي نشط بقيمة؛ موظف محدش حفظ قيمه بيفضل زي ما هو.
 //  قبل ترحيل 094: القراءة «مش متاحة» والحفظ مرفوض برسالته.
+//  Codex CRP2T-B-B01: قراءة قيم الموظف وحفظها تحت قفل واحد باسم الموظف (القراءة مشتركة والحفظ حصري)، جوه معاملة واحدة على اتصال واحد.
+//  القيم اللي بترجع هي اللي كانت موجودة لحظة أخذ القفل، والحكم بفرع الموظف وبتقييد الحقل بيتاخد بعدها: مفيش قيمة بتتكتب في النص وترجع
+//  بحكم أقدم منها. ورد الحفظ بيتبني جوه معاملة الحفظ نفسها. واللي مايلاقيش القفل في المهلة بياخد «حاول تاني».
 
 export interface CustomFieldInput { fieldKey?: string; label?: string; type?: string; options?: unknown; required?: boolean; restricted?: boolean; sortOrder?: number; isActive?: boolean }
 const EMPLOYEE_NOT_FOUND = 'الموظف غير موجود'
+export const CUSTOM_VALUES_BUSY = 'بيانات الموظف الإضافية بتتعدّل دلوقتي — حاول تاني بعد لحظة'
+const CUSTOM_VALUES_LOCK_WAIT_MS = 10000
 
 @Injectable()
 export class EmployeeCustomFieldsService {
@@ -94,19 +99,33 @@ export class EmployeeCustomFieldsService {
   }
 
   // ===== قيم الموظف =====
+  /** قفل قيم الموظف جوه المعاملة: القراءة Shared والحفظ Exclusive */
+  private async lockValues(em: EntityManager, employeeId: number, mode: 'Shared' | 'Exclusive') {
+    const [row]: Array<{ result: number }> = await em.query(`DECLARE @result int
+      EXEC @result = sys.sp_getapplock @Resource = @0, @LockMode = '${mode}', @LockOwner = 'Transaction', @LockTimeout = ${CUSTOM_VALUES_LOCK_WAIT_MS}
+      SELECT @result AS [result]`, [`hr:employee-custom-values:${employeeId}`])
+    if (!(Number(row?.result) >= 0)) throw new ConflictException(CUSTOM_VALUES_BUSY)
+  }
+
+  /** الحقول النشطة بقيم الموظف — جوه معاملة ماسكة قفل قيمه. المقيّد للي يعدّل الملفات بس: لا تعريفه ولا قيمته بيرجعوا لغيره */
+  private async fieldsWithValues(em: EntityManager, employeeId: number, canEdit: boolean) {
+    const fields = (await em.getRepository(EmployeeCustomField).find({ where: { isActive: true }, order: { sortOrder: 'ASC', id: 'ASC' } }))
+      .filter(field => field.restricted !== true || canEdit)
+    const values = fields.length ? await em.getRepository(EmployeeCustomValue).find({ where: { employeeId } }) : []
+    const byField = new Map(values.map(row => [row.fieldId, row]))
+    return { available: true, canEdit, fields: fields.map(field => ({ ...this.view(field), value: customValueOf(field, byField.get(field.id)) })) }
+  }
+
   /** قيم حقول الموظف للقارئ ده — بقاعدة ملف الموظف نفسها: اللي مايشوفش الملف بياخد نفس رده */
   async valuesFor(user: JwtPayload, employeeId: number) {
     if (user.employeeId !== employeeId && !userHasPerm(user, 'employees.view')) throw new ForbiddenException('لا تملك صلاحية عرض الموظفين')
-    const employee = await this.ds.getRepository(Employee).findOne({ where: { id: employeeId }, select: { id: true, branchId: true } })
-    if (!employee || !inBranchScope(branchScopeOf(user), employee.branchId)) throw new NotFoundException(EMPLOYEE_NOT_FOUND)
-    if (!(await customFieldsReady(this.ds.manager))) return { available: false, canEdit: false, fields: [] }
-    const canEdit = userHasPerm(user, 'employees.edit')
-    const fields = (await this.ds.getRepository(EmployeeCustomField).find({ where: { isActive: true }, order: { sortOrder: 'ASC', id: 'ASC' } }))
-      // المقيّد للي يعدّل الملفات بس: لا تعريفه ولا قيمته بيرجعوا لغيره
-      .filter(field => field.restricted !== true || canEdit)
-    const values = fields.length ? await this.ds.getRepository(EmployeeCustomValue).find({ where: { employeeId } }) : []
-    const byField = new Map(values.map(row => [row.fieldId, row]))
-    return { available: true, canEdit, fields: fields.map(field => ({ ...this.view(field), value: customValueOf(field, byField.get(field.id)) })) }
+    return this.ds.transaction(async em => {
+      await this.lockValues(em, employeeId, 'Shared')
+      const employee = await em.getRepository(Employee).findOne({ where: { id: employeeId }, select: { id: true, branchId: true } })
+      if (!employee || !inBranchScope(branchScopeOf(user), employee.branchId)) throw new NotFoundException(EMPLOYEE_NOT_FOUND)
+      if (!(await customFieldsReady(em))) return { available: false, canEdit: false, fields: [] }
+      return this.fieldsWithValues(em, employeeId, userHasPerm(user, 'employees.edit'))
+    })
   }
 
   /** حفظ قيم (المفاتيح المبعوتة بس). null أو فاضي = من غير قيمة. وبعد الحفظ كل حقل إلزامي نشط لازم يبقى بقيمة */
@@ -114,8 +133,9 @@ export class EmployeeCustomFieldsService {
     if (!(await customFieldsReady(this.ds.manager))) throw new BadRequestException(CUSTOM_FIELDS_MIGRATION_MISSING)
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new BadRequestException('قيم الحقول بصيغة غير صحيحة')
     const input = Object.entries(raw as Record<string, unknown>)
-    await this.ds.transaction(async em => {
-      // صف الموظف مقفول: الحكم بفرعه دلوقتي، وحفظين لنفس الموظف ورا بعض
+    return this.ds.transaction(async em => {
+      await this.lockValues(em, employeeId, 'Exclusive')
+      // صف الموظف مقفول: الحكم بفرعه دلوقتي، ونقله مايتثبّتش قبل ما الحفظ يخلص
       const employee = await em.getRepository(Employee).findOne({ where: { id: employeeId }, select: { id: true, branchId: true }, lock: { mode: 'pessimistic_write' } })
       if (!employee || !inBranchScope(branchScopeOf(user), employee.branchId)) throw new NotFoundException(EMPLOYEE_NOT_FOUND)
       const fields = await em.getRepository(EmployeeCustomField).find({ where: { isActive: true }, order: { sortOrder: 'ASC', id: 'ASC' } })
@@ -137,7 +157,8 @@ export class EmployeeCustomFieldsService {
       }
       const missing = fields.find(field => field.required === true && !filled.has(field.id))
       if (missing) throw new BadRequestException(`«${missing.label}» حقل إلزامي`)
+      // الرد من نفس المعاملة وتحت نفس القفل، وللي حفظ («تعديل الموظفين») كل الحقول — من غير قراءة تانية بحق «العرض» بعد التثبيت (B-N01)
+      return this.fieldsWithValues(em, employeeId, true)
     })
-    return this.valuesFor(user, employeeId)
   }
 }

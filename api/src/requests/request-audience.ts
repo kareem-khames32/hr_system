@@ -97,27 +97,48 @@ function audienceConditionsOf(audience: RequestAudience | null | undefined): Aud
   return Array.isArray(conditions) ? conditions : [{}]
 }
 
-const audienceDay = (value: unknown): string | null => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value) ? value.slice(0, 10) : null
+// يوم حقيقي بصيغة YYYY-MM-DD بالحرف (من غير أي نص بعده)
+const audienceDay = (value: unknown): string | null => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
+  const parsed = new Date(`${value}T00:00:00Z`)
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value ? value : null
+}
+// تاريخ تعيين الموظف زي ما القاعدة بترجّعه (نص يوم، وممكن وراه وقت)
+const employeeDay = (value: unknown): string | null => typeof value === 'string' ? audienceDay(value.slice(0, 10)) : null
+// قيم الشرط: قايمة غير فاضية، وإلا الشرط تالف
+const audienceConditionValues = (condition: AudienceCondition): Array<number | string> | null =>
+  Array.isArray(condition.values) && condition.values.length > 0 ? condition.values : null
+const knownStrings = (values: Array<number | string> | null, known: readonly string[]): string[] | null =>
+  values && values.every((value) => typeof value === 'string' && known.includes(value)) ? values as string[] : null
 
+// Codex CRP2T-A-B02: الشرط المتخزّن بيتدقق كله وقت التقييم بقواعد الحفظ نفسها (ماعدا اللي محتاج قاعدة البيانات)، والتالف مابيتحققش لحد:
+// قيم من القايمة المعروفة بس (جنسية UNKNOWN كانت بتطابق موظف جنسيته فاضية)، ودرجات أرقام صحيحة موجبة، وتاريخ يوم حقيقي بالحرف وعملية معروفة.
 function audienceConditionAllows(condition: AudienceCondition, attributes: AudienceAttributes | null | undefined): boolean {
-  if (!condition || typeof condition !== 'object' || !attributes) return false
-  const values = Array.isArray(condition.values) ? condition.values : []
+  if (!condition || typeof condition !== 'object' || Array.isArray(condition) || !attributes) return false
+  const values = audienceConditionValues(condition)
   switch (condition.field) {
-    case 'nationality':
-      return values.map(String).includes(nationalityKind(attributes.nationality))
-    case 'contractType':
-      return !!attributes.contractType && values.map(String).includes(attributes.contractType)
-    case 'grade':
-      return attributes.gradeId != null && values.map(Number).includes(Number(attributes.gradeId))
+    case 'nationality': {
+      const kinds = knownStrings(values, AUDIENCE_NATIONALITY_KINDS)
+      return !!kinds && kinds.includes(nationalityKind(attributes.nationality))
+    }
+    case 'contractType': {
+      const types = knownStrings(values, AUDIENCE_CONTRACT_TYPES)
+      return !!types && !!attributes.contractType && types.includes(attributes.contractType)
+    }
+    case 'grade': {
+      if (!values || !values.every((value) => typeof value === 'number' && Number.isSafeInteger(value) && value > 0)) return false
+      return attributes.gradeId != null && (values as number[]).includes(Number(attributes.gradeId))
+    }
     case 'joinDate': {
-      const joined = audienceDay(attributes.joinDate), limit = audienceDay(condition.value)
-      if (!joined || !limit) return false
-      return condition.op === 'before' ? joined < limit : condition.op === 'from' && joined >= limit
+      const joined = employeeDay(attributes.joinDate), limit = audienceDay(condition.value)
+      if (!joined || !limit || (condition.op !== 'before' && condition.op !== 'from')) return false
+      return condition.op === 'before' ? joined < limit : joined >= limit
     }
     case 'custom': {
+      if (!values || !values.every((value) => typeof value === 'string') || typeof condition.key !== 'string' || !condition.key) return false
       const custom = attributes.customValues
-      const value = custom && typeof condition.key === 'string' && Object.prototype.hasOwnProperty.call(custom, condition.key) ? custom[condition.key] : null
-      return typeof value === 'string' && values.map(String).includes(value)
+      const value = custom && Object.prototype.hasOwnProperty.call(custom, condition.key) ? custom[condition.key] : null
+      return typeof value === 'string' && (values as string[]).includes(value)
     }
     default:
       return false

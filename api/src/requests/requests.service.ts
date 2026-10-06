@@ -457,7 +457,8 @@ export class RequestsService {
 
     if (dto.submit) {
       try {
-        return await this.submit(user, req.id)
+        // جمهور النوع اتحكم فوق في نفس النداء
+        return await this.submit(user, req.id, true)
       } catch (error) {
         // Failed direct submission must not leave an unusable draft. A request
         // that advanced concurrently is preserved by the status predicate.
@@ -469,14 +470,34 @@ export class RequestsService {
   }
 
   // ===== التقديم: حل السلسلة + الشروط + SLA =====
-  async submit(user: JwtPayload, id: number) {
-    const saved = await this.ds.transaction(em => this.submitLocked(user, id, em))
+  async submit(user: JwtPayload, id: number, audienceJudged = false) {
+    const saved = await this.ds.transaction(em => this.submitLocked(user, id, em, false, audienceJudged))
     return this.afterSubmission(saved)
+  }
+
+  // Codex CRP2T-A-B01: أول تقديم لمسودة بيتحكم بأحكام الإنشاء نفسها وبحالة صاحب الطلب دلوقتي — مسودة اتعملت وصاحبها من جمهور النوع
+  // مابتتقدمش بعد ما خرج منه (صفة اتغيّرت، أو حقل الشرط اتعطّل أو اتقيّد). اللي بيقدّم مسودة غيره (نيابةً) مابيحكموش جمهور النوع
+  // (القرار ج1)، بس لازم حق النيابة يكون لسه معاه والموظف في نطاقه. طلب اترجّع للاستكمال اتقدّم قبل كده فبيكمّل سلسلته.
+  private async assertFirstSubmission(user: JwtPayload, req: Request, type: RequestType, em: EntityManager) {
+    const requester = await em.getRepository(Employee).findOne({ where: { id: req.requesterId } })
+    if (!requester) throw new BadRequestException('الموظف المستهدف غير موجود')
+    if (!requester.isActive) throw new ForbiddenException('حساب الموظف غير نشط (منتهي/مؤرشف) — لا يقدّم طلبات جديدة')
+    if (!requestTypeInBranch(type, requester.branchId)) throw new ForbiddenException('هذا النوع من الطلبات خاص بفرع تاني، ومش متاح للموظف ده')
+    if (user.employeeId !== req.requesterId) {
+      const canOnBehalf = user.role === 'super_admin' || (user.permissions ?? []).includes('*') || (user.permissions ?? []).includes('requests.create_on_behalf')
+      if (!canOnBehalf) throw new ForbiddenException('لا تملك صلاحية التقديم نيابة عن الغير')
+      const scope = branchScopeOf(user)
+      if (!inBranchScope(scope, requester.branchId)) throw new ForbiddenException(`لا يمكنك تقديم طلب لموظف خارج نطاق ${scopeWord(scope)}`)
+      return
+    }
+    const positions = audienceNeedsPositions(type.visibleTo) ? await orgPositionsOf(em, req.requesterId) : null
+    const customValues = audienceNeedsCustomValues(type.visibleTo) ? await audienceCustomValuesOf(em, requester.id) : null
+    if (!this.audienceAllows(type, user, requester, 'submit', positions, customValues)) throw new ForbiddenException('هذا النوع من الطلبات غير متاح لك')
   }
 
   // Every transition reads the request after acquiring its transaction lock.
   // Re-submission uses this same manager so payload edits and execution roll back together.
-  private async submitLocked(user: JwtPayload, id: number, em: EntityManager, resubmission = false) {
+  private async submitLocked(user: JwtPayload, id: number, em: EntityManager, resubmission = false, audienceJudged = false) {
     const req = await this.owned(user, id, em)
     assertTransition(req.status, 'SUBMITTED')
 
@@ -485,6 +506,7 @@ export class RequestsService {
     // مسودة من نوع موديوله اتقفل مابتتقدمش؛ الطلب المرجّع للاستكمال مفتوح أصلًا فبيكمّل سلسلته
     if (!resubmission) await this.assertTypeModuleEnabled(type, user)
     if (!type.isActive) throw new BadRequestException('نوع الطلب معطّل')
+    if (!resubmission && !audienceJudged) await this.assertFirstSubmission(user, req, type, em)
     if (isLeaveDefinition(type)) {
       req.payload = JSON.stringify(this.leavePayload(type, JSON.parse(req.payload || '{}')))
       req.definitionCode = definitionCodeOf(req)

@@ -250,6 +250,8 @@ const conditionsText = (audience: StoredAudience | null, grade: (id: number) => 
   }).filter(Boolean)
   return parts.length ? ` — بشرط: ${parts.join('، ')}` : ''
 }
+// مفتاح الحقل المخصص ممكن يكون اسم من أسماء Object (constructor): القراءة من مفاتيح الخريطة المملوكة بس
+const customCondOf = (conds: Record<string, string[]>, key: string): string[] => (Object.prototype.hasOwnProperty.call(conds, key) ? conds[key] : [])
 // الشروط من النموذج (الفاضي مابيتبعتش)، ومن المتخزّن للنموذج
 const conditionsOfForm = (form: BuilderForm): AudienceCondition[] => [
   ...(form.natKinds.length ? [{ field: 'nationality', values: form.natKinds }] : []),
@@ -2072,8 +2074,8 @@ export default function RequestTypesPage() {
                           <div className="flex flex-wrap gap-x-4 gap-y-1">
                             {field.options.map((option) => (
                               <label key={option} className="flex items-center gap-1.5 text-sm text-gray-700">
-                                <input type="checkbox" checked={(form.customConds[field.fieldKey] ?? []).includes(option)}
-                                  onChange={() => setForm({ ...form, customConds: { ...form.customConds, [field.fieldKey]: toggleId(form.customConds[field.fieldKey] ?? [], option) } })}
+                                <input type="checkbox" checked={(customCondOf(form.customConds, field.fieldKey)).includes(option)}
+                                  onChange={() => setForm({ ...form, customConds: { ...form.customConds, [field.fieldKey]: toggleId(customCondOf(form.customConds, field.fieldKey), option) } })}
                                   className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
                                 {audienceValueLabel(field.type, option)}
                               </label>

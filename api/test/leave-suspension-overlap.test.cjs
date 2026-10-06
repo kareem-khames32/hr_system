@@ -135,6 +135,8 @@ function submitHarness({ suspensions = [], onBehalf = false } = {}) {
     LeaveType: [{ ...leaveType, category: 'ANNUAL', countingMode: 'WORKING_DAYS', noticeDays: 0, backdateAllowed: true, backdateMaxDays: null,
       halfDayAllowed: true, minDaysPerRequest: null, maxDays: null, oncePerService: false }],
     User: [{ id: 5, employeeId: 3 }, { id: 19, employeeId: 19 }],
+    // CRP2T: أول تقديم لمسودة بيقرا صاحب الطلب (نشط، وفرعه) قبل باقي الفحوصات
+    Employee: [{ id: 19, branchId: 1, isActive: true, status: 'active' }],
     Leave: [],
     EmployeeSuspension: suspensions,
   })

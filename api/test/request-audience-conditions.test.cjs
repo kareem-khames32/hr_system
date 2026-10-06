@@ -4,6 +4,8 @@
 //  AC-02) كل شرط لوحده: الجنسية بمصنّفها، ونوع العقد، والدرجة، وتاريخ التعيين (قبل / من).
 //  AC-03) الشرط قيد: موضوع من غير صفات، وشرط تالف أو مش معروف = مش من الجمهور؛ ومن غير شروط الشكل القديم زي ما هو.
 //  AC-04) الصفات بتتحط على الموضوع لما صف الموظف شايلها بس؛ و«مين» و«فين» لازم يتحققوا مع الشروط.
+//  AC-05) الشرط المتخزّن بيتدقق كله وقت التقييم (Codex CRP2T-A-B02): قيمة برّه القايمة المعروفة، أو درجة مش رقم صحيح موجب، أو تاريخ
+//         مش يوم حقيقي بالحرف، أو عملية مش معروفة = الشرط تالف ومابيتحققش لحد.
 // Run (من api/): node --test test/request-audience-conditions.test.cjs
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
@@ -36,7 +38,7 @@ test('AC-02: كل شرط لوحده — الجنسية، ونوع العقد، �
   assert.deepEqual(['سعودي', 'مصري', 'هندي', '', 'أخرى', null].map(nationality => allows(foreign, subject(person({ nationality })))), [false, true, true, false, false, false])
   const contract = only({ field: 'contractType', values: ['permanent', 'seasonal'] })
   assert.deepEqual(['permanent', 'seasonal', 'fixed_term', 'part_time', null].map(contractType => allows(contract, subject(person({ contractType })))), [true, true, false, false, false])
-  const grade = only({ field: 'grade', values: [3, '5'] })
+  const grade = only({ field: 'grade', values: [3, 5] })
   assert.deepEqual([3, 5, 4, null].map(gradeId => allows(grade, subject(person({ gradeId })))), [true, true, false, false])
   const before = only({ field: 'joinDate', op: 'before', value: '2024-06-15' }), from = only({ field: 'joinDate', op: 'from', value: '2024-06-15' })
   assert.deepEqual(['2024-06-14', '2024-06-15', '2024-06-16', null].map(joinDate => [allows(before, subject(person({ joinDate }))), allows(from, subject(person({ joinDate })))]),
@@ -76,4 +78,31 @@ test('AC-04: الصفات بتتحط على الموضوع لما صف المو�
   assert.deepEqual(subjects.map(one => allows(narrow, one)), [true, false, false, false])
   assert.deepEqual([[...audience.AUDIENCE_NATIONALITY_KINDS], [...audience.AUDIENCE_CONTRACT_TYPES], [...audience.AUDIENCE_JOIN_DATE_OPS]],
     [['SAUDI', 'EGYPTIAN', 'RESIDENT'], ['permanent', 'fixed_term', 'part_time', 'seasonal'], ['before', 'from']])
+})
+
+test('AC-05: الشرط المتخزّن بيتدقق كله وقت التقييم — التالف مابيتحققش لحد، حتى للي كان هيطابق جزءه السليم', () => {
+  // جنسية «غير معروف» كانت بتطابق موظف جنسيته فاضية أو «أخرى»
+  const unknown = only({ field: 'nationality', values: ['UNKNOWN'] })
+  assert.deepEqual([null, '', 'أخرى', 'سعودي'].map(nationality => allows(unknown, subject(person({ nationality })))), [false, false, false, false])
+  // قيمة واحدة برّه القايمة بتتلف الشرط كله
+  for (const values of [['SAUDI', 'UNKNOWN'], ['SAUDI', 'OTHER'], ['saudi'], ['SAUDI', 1], [true], []]) {
+    assert.equal(allows(only({ field: 'nationality', values }), subject(person())), false, json(values))
+  }
+  for (const values of [['fixed_term', 'forever'], ['FIXED_TERM'], ['fixed_term', null], []]) {
+    assert.equal(allows(only({ field: 'contractType', values }), subject(person())), false, json(values))
+  }
+  // الدرجة: أرقام صحيحة موجبة بس
+  for (const values of [['3'], [3, '5'], [3.5], [0], [-3], [3, null], [true], []]) assert.equal(allows(only({ field: 'grade', values }), subject(person())), false, json(values))
+  assert.equal(allows(only({ field: 'grade', values: [3] }), subject(person())), true)
+  // التاريخ: يوم حقيقي بصيغته بالحرف، والعملية «قبل» أو «من» بس
+  for (const value of ['2026-99-99', '2025-02-30', '2030-01-01T00:00:00', '2030-01-01 وزيادة', '2030-1-1', '01/01/2030', '', 20300101, null]) {
+    assert.deepEqual([allows(only({ field: 'joinDate', op: 'before', value }), subject(person())), allows(only({ field: 'joinDate', op: 'from', value }), subject(person({ joinDate: '2031-01-01' })))], [false, false], json(value))
+  }
+  for (const op of ['after', 'BEFORE', '', null, undefined, 5]) assert.equal(allows(only({ field: 'joinDate', op, value: '2030-01-01' }), subject(person())), false, json(op))
+  assert.equal(allows(only({ field: 'joinDate', op: 'before', value: '2030-01-01' }), subject(person())), true)
+  // تاريخ تعيين الموظف زي ما القاعدة بترجّعه (يوم، وممكن وراه وقت)؛ وتاريخ موظف تالف مابيطابقش
+  assert.deepEqual(['2024-06-15T00:00:00.000Z', '2024-06-15', '2024-13-40', 'x', 20240615].map(joinDate => allows(only({ field: 'joinDate', op: 'from', value: '2024-01-01' }), subject(person({ joinDate })))),
+    [true, true, false, false, false])
+  // شرط مش كائن عادي
+  for (const condition of [[], ['nationality'], 5, true]) assert.equal(allows(only(condition), subject(person())), false, json(condition))
 })

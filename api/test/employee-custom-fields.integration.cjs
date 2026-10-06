@@ -8,6 +8,8 @@
 //  EF-04) شرط الجمهور بالحقل المخصص: نوع الطلب بيظهر ويتقدّم للي قيمته من القايمة بس؛ والحفظ بيدقق الحقل والقيم؛ وحقل اتعطّل أو بقى
 //         مقيّد = مفيش حد من الجمهور؛ وشاشة الخصم بنفس المقيّم.
 //  EF-05) الحقول بحد أقصى 50، والمعطّل محسوب.
+//  EF-06) القراءة والحفظ تحت قفل واحد باسم الموظف (Codex CRP2T-B-B01): قيمة اتحفظت بعد ما القراءة بدأت مابترجعش فيها، والحفظ بيستنى
+//         القراءة، والقراءتين مابيوقفوش بعض، واللي مايلاقيش القفل «حاول تاني» من غير أي كتابة.
 // Run (من api/): node --test test/employee-custom-fields.integration.cjs
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
@@ -106,6 +108,7 @@ before(async () => {
   users.editor = await account('editor', 'employee', ['employees.view', 'employees.edit'])
   users.farEditor = await account('fareditor', 'employee', ['employees.view', 'employees.edit'], { branchId: org.branchB.id })
   users.builder = await account('builder', 'employee', ['request_types.manage'])
+  users.editOnly = await account('editonly', 'employee', ['employees.edit'])
   for (const key of ['manager', 'own', 'peer', 'third']) users[key] = await account(key, 'employee', [], { employeeId: emps[key].id })
   const chain = await repo('ApprovalChain').save({ code: 'EF_DIRECT', nameAr: 'سلسلة الحقول', isActive: true, autoApprove: false })
   await repo('ApprovalStep').save({ chainId: chain.id, stepOrder: 1, approverRole: 'direct_manager_of_requester' })
@@ -206,6 +209,9 @@ test('EF-03: الحفظ — «تعديل الموظفين» في النطاق، 
   const saved = expectStatus(await write(users.editor, emps.own, { nickname: ' أبو علي ', uniform_size: 'M', has_car: 'yes', shoe_size: '42.5', license_expiry: '2027-01-31', hr_note: 'ملاحظة داخلية', risk_band: 'ب' }), 200)
   assert.deepEqual(valuesOf(saved), { uniform_size: 'M', nickname: 'أبو علي', has_car: true, shoe_size: 42.5, license_expiry: '2027-01-31', hr_note: 'ملاحظة داخلية', risk_band: 'ب' })
   assert.ok((await stored(emps.own)).every(row => row.updatedByUserId === users.editor.id))
+  // «تعديل الموظفين» من غير «عرض الموظفين»: الحفظ بيرجّع رده (مفيش حفظ اتثبّت وبعده 403)، والقراءة لوحدها لسه محتاجة «العرض»
+  const blind = expectStatus(await write(users.editOnly, emps.own, { shoe_size: '42.5' }), 200)
+  assert.deepEqual([blind.canEdit, valuesOf(blind).hr_note, (await read(users.editOnly, emps.own)).status], [true, 'ملاحظة داخلية', 403])
   // صاحب الملف و«عرض الموظفين» بيشوفوا القيم غير المقيّدة بس
   const expected = { uniform_size: 'M', nickname: 'أبو علي', has_car: true, shoe_size: 42.5, license_expiry: '2027-01-31' }
   assert.deepEqual([valuesOf(expectStatus(await read(users.own, emps.own), 200)), valuesOf(expectStatus(await read(users.viewer, emps.own), 200))], [expected, expected])
@@ -278,6 +284,16 @@ test('EF-04: شرط الجمهور بالحقل المخصص — للي قيمت
   expectStatus(await submit(users.peer, types.sized), 201)
   expectStatus(await write(users.editor, emps.peer, { has_car: 'yes' }), 200)
   assert.deepEqual([await sees(users.peer, types.sized), answer(await submit(users.peer, types.sized))], [false, REFUSED])
+  // مسودة وصاحبها من الجمهور، وبعدها حقل الشرط اتقيّد أو قيمته اتغيّرت: أول تقديم مرفوض زي الإنشاء (Codex CRP2T-B-B02)، ولما يرجع بتتقدم
+  const draft = expectStatus(await request(users.own, 'POST', '/requests', { typeCode: types.sized.code, payload: { reason: 'مسودة للاختبار' }, submit: false }), 201)
+  const send = () => request(users.own, 'POST', `/requests/${draft.id}/submit`, {})
+  expectStatus(await redefine(users.settings, fields.car, { restricted: true }), 200)
+  assert.deepEqual([answer(await submit(users.own, types.sized)), answer(await send()), (await repo('Request').findOneByOrFail({ id: draft.id })).status], [REFUSED, REFUSED, 'DRAFT'])
+  expectStatus(await redefine(users.settings, fields.car, { restricted: false }), 200)
+  expectStatus(await write(users.editor, emps.own, { uniform_size: 'S' }), 200)
+  assert.deepEqual(answer(await send()), REFUSED)
+  expectStatus(await write(users.editor, emps.own, { uniform_size: 'M' }), 200)
+  assert.equal(expectStatus(await send(), 201).status, 'UNDER_REVIEW')
   // شاشة الخصم (نفس المقيّم) بتقرا قيم الحقول لما جمهور النوع فيه شرط عليها
   const money = app.get(require('../src/payroll/typed-deductions.service').TypedDeductionsService)
   const visible = async user => { try { await money.assertMoneyRequestVisible(ds.manager, payloadOf(user), 'PAYROLL_DEDUCTION', 'الخصم'); return true } catch (error) { return error.message } }
@@ -298,4 +314,80 @@ test('EF-05: الحقول بحد أقصى 50، والمعطّل محسوب', asy
     required: false, restricted: false, sortOrder: 100 + index, isActive: index % 2 === 0, createdAt: new Date() })))
   assert.deepEqual(answer(await define(users.settings, { fieldKey: 'one_too_many', label: 'حقل فوق الحد', type: 'TEXT' })), [400, 'الحقول المخصصة بحد أقصى 50'])
   assert.equal(await repo('EmployeeCustomField').count(), 50)
+})
+
+test('EF-06: القراءة والحفظ تحت قفل واحد باسم الموظف — قيمة اتحفظت بعد بداية القراءة مابترجعش فيها، واللي مايلاقيش القفل «حاول تاني»', async () => {
+  const { Repository } = require('../node_modules/typeorm')
+  const BUSY = [409, 'بيانات الموظف الإضافية بتتعدّل دلوقتي — حاول تاني بعد لحظة']
+  const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
+  const until = async (ready, label) => { for (let waited = 0; waited < 8000 && !(await ready()); waited += 50) await wait(50); assert.ok(await ready(), label) }
+  const blockedOnLock = async () => Number((await query(`SELECT COUNT(*) AS [n] FROM sys.dm_exec_requests WHERE [database_id] = DB_ID() AND [wait_type] LIKE N'LCK[_]M[_]%' AND [wait_resource] LIKE N'APPLICATION:%'`))[0].n)
+  const field = expectStatus(await redefine(users.settings, fields.nickname, { restricted: false }), 200)
+  expectStatus(await write(users.editor, emps.third, { uniform_size: 'S', nickname: 'قبل القراءة' }), 200)
+  // القراءة واقفة بعد ما قرت تعريف الحقول (غير مقيّد). في الوقت ده الحقل اتقيّد، وحفظ قيمة جديدة بدأ: الحفظ بيستنى القراءة
+  const find = Repository.prototype.find
+  let enter, release, hit = false, reader, writer, second
+  const entered = new Promise(resolve => { enter = resolve }), held = new Promise(resolve => { release = resolve })
+  Repository.prototype.find = async function (options) {
+    const rows = await find.call(this, options)
+    if (!hit && this.metadata.tableName === 'employee_custom_fields' && this.manager.queryRunner?.isTransactionActive) { hit = true; enter(); await held }
+    return rows
+  }
+  try {
+    reader = read(users.viewer, emps.third)
+    await entered
+    expectStatus(await redefine(users.settings, field, { restricted: true }), 200)
+    writer = write(users.editor, emps.third, { nickname: 'بعد التقييد' })
+    await until(async () => (await blockedOnLock()) === 1, 'الحفظ واقف على قفل قيم الموظف')
+    // قراءة موظف تاني مالهاش علاقة بالقفل ده
+    assert.equal((await read(users.viewer, emps.own)).status, 200)
+    assert.equal((await repo('EmployeeCustomValue').findOneByOrFail({ employeeId: emps.third.id, fieldId: field.id })).textValue, 'قبل القراءة', 'الحفظ لسه ماكتبش')
+    release()
+    const [seen, saved] = [await reader, await writer]
+    // القارئ قرا التعريف قبل التقييد: القيمة القديمة بس، والجديدة عمرها ما رجعتله
+    assert.deepEqual([seen.status, valuesOf(seen.body).nickname, JSON.stringify(seen.body).includes('بعد التقييد')], [200, 'قبل القراءة', false])
+    assert.deepEqual([saved.status, valuesOf(saved.body).nickname], [200, 'بعد التقييد'])
+  } finally {
+    release()
+    Repository.prototype.find = find
+    await Promise.allSettled([reader, writer, second].filter(Boolean))
+  }
+  // وبعدها العارض مايشوفش الحقل المقيّد ولا قيمته
+  const after = expectStatus(await read(users.viewer, emps.third), 200)
+  assert.deepEqual(['nickname' in valuesOf(after), JSON.stringify(after).includes('بعد التقييد')], [false, false])
+  // قراءتين مع بعض مابيوقفوش بعض (قفل القراءة مشترك)
+  hit = false
+  let both
+  const paused = new Promise(resolve => { enter = resolve }), gate = new Promise(resolve => { release = resolve })
+  Repository.prototype.find = async function (options) {
+    const rows = await find.call(this, options)
+    if (!hit && this.metadata.tableName === 'employee_custom_fields' && this.manager.queryRunner?.isTransactionActive) { hit = true; enter(); await gate }
+    return rows
+  }
+  try {
+    both = read(users.editor, emps.third)
+    await paused
+    assert.equal((await read(users.editor, emps.third)).status, 200, 'قراءة تانية خلصت والأولى لسه ماسكة القفل')
+    release()
+    assert.equal((await both).status, 200)
+  } finally { release(); Repository.prototype.find = find; await Promise.allSettled([both].filter(Boolean)) }
+  // القفل ممسوك من اتصال تاني (حصري): القراءة والحفظ «حاول تاني» بعد المهلة، ومن غير أي كتابة
+  const holder = ds.createQueryRunner()
+  await holder.connect()
+  await holder.startTransaction()
+  try {
+    const [taken] = await holder.query(`DECLARE @result int
+      EXEC @result = sys.sp_getapplock @Resource = @0, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 0
+      SELECT @result AS [result]`, [`hr:employee-custom-values:${emps.third.id}`])
+    assert.ok(Number(taken.result) >= 0)
+    const before = await stored(emps.third)
+    const [busyRead, busyWrite, other] = await Promise.all([read(users.editor, emps.third), write(users.editor, emps.third, { uniform_size: 'L' }), read(users.editor, emps.own)])
+    assert.deepEqual([answer(busyRead), answer(busyWrite), other.status], [BUSY, BUSY, 200])
+    assert.deepEqual(await stored(emps.third), before)
+  } finally {
+    if (holder.isTransactionActive) await holder.rollbackTransaction()
+    await holder.release()
+  }
+  assert.equal(valuesOf(expectStatus(await write(users.editor, emps.third, { uniform_size: 'L' }), 200)).uniform_size, 'L')
+  expectStatus(await redefine(users.settings, field, { restricted: false }), 200)
 })

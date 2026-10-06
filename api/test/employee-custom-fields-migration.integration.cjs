@@ -3,7 +3,8 @@
 //  CFM-1) فحص نصي: من غير BOM، وLF في المستودع، ومفيش عبارة ممنوعة، وأكواد THROW فريدة، ومتوافق مع SQL Server 2019، وقاعدة synchronize
 //         بنفس الشكل (الأعمدة والفهارس للجدولين) وفرقها صفر.
 //  CFM-2) من غير الجدولين: ملف الموظف شغال، والحقول «مش متاحة» من غير خطأ، والحفظ والتعريف مرفوضين برسالة الترحيل، وشرط الجمهور
-//         مابيلاقيش قيم؛ وجدول قديم بنفس الاسم وبشكل تاني = الترحيل بيقف من غير ما يلمسه؛ والمُرحّل (بروفة ثم تطبيق) بيعمل الجدولين
+//         مابيلاقيش قيم؛ وجدول أو فهرس قديم بنفس الاسم وبشكل تاني (عمود بنوع أو طول أو إلزام غلط، مفتاح باسم تاني، فهرس على عمود تاني
+//         أو مش فريد أو بترتيب معكوس) = الترحيل بيقف قبل أي تغيير (Codex CRP2T-B-B03)؛ والمُرحّل (بروفة ثم تطبيق) بيعمل الجدولين
 //         بنفس الشكل والفرق صفر، وبعده — من غير إعادة تشغيل ولا مهلة — الحقل بيتعرّف وقيمته بتتحفظ.
 //  CFM-3) آمن للتكرار.
 // Run (من api/): node --test test/employee-custom-fields-migration.integration.cjs
@@ -108,7 +109,7 @@ test('CFM-1: الملف LF من غير BOM ومن غير عبارة ممنوعة
   const text = content(FILE)
   assert.match(text, /^-- 20261006_094: /)
   assert.deepEqual(migrate.forbiddenStatements(text), [])
-  assert.deepEqual(migrate.throwCodes(text), [94001, 94002, 94003, 94004, 94005])
+  assert.deepEqual(migrate.throwCodes(text), [94001, 94002, 94003, 94004, 94005, 94006, 94007])
   const statements = migrate.stripComments(text)
   assert.doesNotMatch(statements, /\b(?:DROP|TRUNCATE|MERGE|INSERT|DELETE)\b|\bUPDATE\s+(?:dbo\.)?\[?\w/i, 'جداول جديدة بس')
   assert.doesNotMatch(statements, /\b(GREATEST|LEAST|GENERATE_SERIES|DATETRUNC|JSON_OBJECT|JSON_ARRAY)\s*\(|IS\s+(?:NOT\s+)?DISTINCT\s+FROM/i, 'SQL Server 2019')
@@ -125,6 +126,9 @@ test('CFM-1: الملف LF من غير BOM ومن غير عبارة ممنوعة
     ['numberValue', 'decimal', 9, true, false, 0], ['dateValue', 'date', 3, true, false, 0], ['updatedAt', 'datetime2', 8, false, false, 0], ['updatedByUserId', 'int', 4, true, false, 0]])
   assert.deepEqual(current.values.indexes, [['PK_employee_custom_values', 'id', true, false], ['UX_employee_custom_values_employee_field', 'employeeId,fieldId', true, false]])
   assert.deepEqual((await ds.driver.createSchemaBuilder().log()).upQueries.map(q => q.query), [])
+  // الجدولين اللي synchronize عملهم بيعدّوا تحقق الترحيل الكامل (قبل وبعد)، والترحيل مابيغيّرش فيهم حاجة
+  await runFile(FILE)
+  assert.deepEqual(await shape(), current)
 })
 
 test('CFM-2: من غير الجدولين الحقول «مش متاحة» والحفظ مرفوض برسالته؛ والمُرحّل بيعمل الجدولين بنفس الشكل والفرق صفر، وبعده الحقل بيتعرّف من غير إعادة تشغيل', async () => {
@@ -143,20 +147,49 @@ test('CFM-2: من غير الجدولين الحقول «مش متاحة» وا�
   await assert.rejects(service.save(made.hr, made.employee.id, { early: 'x' }), /ترحيل 20261006_094/)
   assert.deepEqual([await service.audienceOptions(), await rules.audienceCustomValuesOf(ds.manager, made.employee.id)], [[], {}])
 
-  // جدول قديم بنفس الاسم وبشكل تاني: الترحيل بيقف برسالته ومابيلمسوش
-  await pool.request().batch(`CREATE TABLE dbo.${FIELDS} ([id] int NOT NULL, [name] nvarchar(50) NULL);`)
-  await assert.rejects(runFile(FILE), /20261006_094: جدول employee_custom_fields موجود وأعمدته مش أعمدة تعريف الحقول الـ10/)
-  assert.deepEqual((await shapeOf(FIELDS)).columns.map(row => row[0]), ['id', 'name'])
-  assert.deepEqual((await shapeOf(VALUES)).columns, [], 'الترحيل وقف قبل ما يعمل الجدول التاني')
+  // جدول أو فهرس قديم بنفس الاسم وبشكل تاني: الترحيل بيقف برسالته قبل أي تغيير (Codex CRP2T-B-B03)
+  const objects = async () => ({ ...(await shape()), tables: (await ds.query(`SELECT [name] FROM sys.tables WHERE [name] LIKE N'employee[_]custom[_]%' ORDER BY [name]`)).map(row => row.name) })
+  const refused = async (setup, message) => {
+    await dropBoth()
+    for (const statement of [].concat(setup)) await pool.request().batch(statement)
+    const before = await objects()
+    await assert.rejects(runFile(FILE), message, [].concat(setup).join(' ').slice(0, 200))
+    assert.deepEqual(await objects(), before, `الترحيل المرفوض مالمسش حاجة: ${[].concat(setup).join(' ').slice(0, 160)}`)
+  }
+  const fieldsTable = (changes = {}) => `CREATE TABLE dbo.${FIELDS} ([id] int IDENTITY(1,1) NOT NULL CONSTRAINT [${changes.pk ?? 'PK_employee_custom_fields'}] PRIMARY KEY, [fieldKey] ${changes.fieldKey ?? 'nvarchar(40) NOT NULL'},
+    [label] nvarchar(100) NOT NULL, [type] nvarchar(10) NOT NULL, [options] ${changes.options ?? 'nvarchar(max) NULL'}, [required] ${changes.required ?? 'bit NOT NULL'}, [restricted] bit NOT NULL, [sortOrder] int NOT NULL,
+    [isActive] ${changes.isActive ?? 'bit NOT NULL'}, [createdAt] ${changes.createdAt ?? 'datetime2 NOT NULL'}${changes.extra ?? ''});`
+  const valuesTable = (changes = {}) => `CREATE TABLE dbo.${VALUES} ([id] ${changes.id ?? 'int IDENTITY(1,1) NOT NULL'} CONSTRAINT [PK_employee_custom_values] PRIMARY KEY, [employeeId] int NOT NULL, [fieldId] int NOT NULL,
+    [textValue] ${changes.textValue ?? 'nvarchar(500) NULL'}, [numberValue] ${changes.numberValue ?? 'decimal(18,4) NULL'}, [dateValue] ${changes.dateValue ?? 'date NULL'}, [updatedAt] datetime2 NOT NULL,
+    [updatedByUserId] ${changes.updatedByUserId ?? 'int NULL'});`
+  const FIELDS_SHAPE = /20261006_094: جدول employee_custom_fields موجود وشكله مش شكل تعريف الحقول/, VALUES_SHAPE = /20261006_094: جدول employee_custom_values موجود وشكله مش شكل قيم الحقول/
+  await refused(`CREATE TABLE dbo.${FIELDS} ([id] int NOT NULL, [name] nvarchar(50) NULL);`, FIELDS_SHAPE)
+  await refused(`CREATE TABLE dbo.${VALUES} ([id] int NOT NULL, [value] nvarchar(50) NULL);`, VALUES_SHAPE)
+  // نفس الأعمدة وعمود واحد بنوع أو طول أو دقة أو إلزام غلط، أو بافتراضي، أو عمود زيادة، أو المفتاح باسم تاني
+  for (const changes of [{ fieldKey: 'nvarchar(20) NOT NULL' }, { fieldKey: 'varchar(80) NOT NULL' }, { required: 'nvarchar(10) NOT NULL' }, { required: 'bit NULL' }, { options: 'nvarchar(400) NULL' }, { createdAt: 'datetime2(3) NOT NULL' },
+    { isActive: 'bit NOT NULL CONSTRAINT [DF_test_custom_active] DEFAULT 1' }, { extra: ', [note] nvarchar(50) NULL' }, { pk: 'PK_other_name' }]) {
+    await refused(fieldsTable(changes), FIELDS_SHAPE)
+  }
+  for (const changes of [{ numberValue: 'decimal(18,2) NULL' }, { numberValue: 'decimal(17,4) NULL' }, { numberValue: 'float NULL' }, { textValue: 'nvarchar(max) NULL' }, { dateValue: 'datetime2 NULL' }, { updatedByUserId: 'int NOT NULL' }, { id: 'int NOT NULL' }]) {
+    await refused(valuesTable(changes), VALUES_SHAPE)
+  }
+  // جدول سليم وفهرس بنفس الاسم: على عمود تاني، أو مش فريد، أو بعمود زيادة، أو بعمود مضمّن، أو بفلتر، أو بترتيب معكوس
+  const KEY_INDEX = /20261006_094: فهرس UX_employee_custom_fields_key موجود ومش فريد على مفتاح الحقل لوحده/
+  const PAIR_INDEX = /20261006_094: فهرس UX_employee_custom_values_employee_field موجود ومش فريد على الموظف والحقل بالترتيب/
+  for (const definition of ['UNIQUE INDEX [UX_employee_custom_fields_key] ON dbo.employee_custom_fields ([id])', 'INDEX [UX_employee_custom_fields_key] ON dbo.employee_custom_fields ([fieldKey])',
+    'UNIQUE INDEX [UX_employee_custom_fields_key] ON dbo.employee_custom_fields ([fieldKey], [type])', 'UNIQUE INDEX [UX_employee_custom_fields_key] ON dbo.employee_custom_fields ([fieldKey]) INCLUDE ([label])',
+    'UNIQUE INDEX [UX_employee_custom_fields_key] ON dbo.employee_custom_fields ([fieldKey]) WHERE [isActive] = 1']) {
+    await refused([fieldsTable(), `CREATE ${definition};`], KEY_INDEX)
+  }
+  for (const definition of ['UNIQUE INDEX [UX_employee_custom_values_employee_field] ON dbo.employee_custom_values ([fieldId], [employeeId])',
+    'UNIQUE INDEX [UX_employee_custom_values_employee_field] ON dbo.employee_custom_values ([employeeId])', 'INDEX [UX_employee_custom_values_employee_field] ON dbo.employee_custom_values ([employeeId], [fieldId])']) {
+    await refused([valuesTable(), `CREATE ${definition};`], PAIR_INDEX)
+  }
+  // وجدول سليم موجود من غير فهرسه ومن غير الجدول التاني: الترحيل بيكمّل الناقص بس
   await dropBoth()
-  await pool.request().batch(`CREATE TABLE dbo.${VALUES} ([id] int NOT NULL, [value] nvarchar(50) NULL);`)
-  await assert.rejects(runFile(FILE), /20261006_094: جدول employee_custom_values موجود وأعمدته مش أعمدة قيم الحقول الـ8/)
-  assert.deepEqual([(await shapeOf(VALUES)).columns.map(row => row[0]), (await shapeOf(FIELDS)).columns], [['id', 'value'], []])
-  await dropBoth()
-  // وجدول بعشر أعمدة وبنوع غلط: التحقق الأخير بيرفضه
-  await pool.request().batch(`CREATE TABLE dbo.${FIELDS} ([id] int IDENTITY(1,1) NOT NULL CONSTRAINT [PK_employee_custom_fields] PRIMARY KEY, [fieldKey] nvarchar(20) NOT NULL, [label] nvarchar(100) NOT NULL,
-    [type] nvarchar(10) NOT NULL, [options] nvarchar(max) NULL, [required] bit NOT NULL, [restricted] bit NOT NULL, [sortOrder] int NOT NULL, [isActive] bit NOT NULL, [createdAt] datetime2 NOT NULL);`)
-  await assert.rejects(runFile(FILE), /20261006_094: أعمدة جدول employee_custom_fields ناقصة أو بنوع غلط/)
+  await pool.request().batch(fieldsTable())
+  await runFile(FILE)
+  assert.deepEqual(await shape(), synchronized, 'الجدول السليم الموجود اتكمّل بفهرسه وبالجدول التاني')
   await dropBoth()
 
   const record = await migrate.apply({ database, base, trial: true, schemaDiff: false, quiet: true })

@@ -4,6 +4,8 @@
 //         نيابةً زي قواعدهم؛ والعضوية بصفات الموظف دلوقتي.
 //  AD-02) الحفظ: الشروط بتتدقق (صفة معروفة، قيم معروفة، درجة موجودة، تاريخ صحيح)، والشكل المتخزّن من غير شروط زي ما هو بالحرف.
 //  AD-03) الدرجة وتاريخ التعيين، وشاشة الخصم (نفس المقيّم) بتقرا صفات الموظف لما الجمهور فيه شروط.
+//  AD-04) أول تقديم لمسودة بيتحكم بجمهور النوع وبحالة صاحبها دلوقتي (Codex CRP2T-A-B01)؛ والنيابة زي الإنشاء (حقها لسه معاه وفي نطاقه)؛
+//         والطلب اللي اترجّع للاستكمال بيكمّل؛ وشرط متخزّن تالف بيقفل في الكتالوج والتقديم (CRP2T-A-B02).
 // Run (من api/): node --test test/request-audience-conditions.integration.cjs
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
@@ -184,4 +186,82 @@ test('AD-03: الدرجة وتاريخ التعيين، وشاشة الخصم ب
   expectStatus(await setAudience(types.deduction, { mode: 'all', ids: [], conditions: [{ field: 'nationality', values: ['SAUDI'] }] }), 200)
   assert.deepEqual(await Promise.all([users.saudiFixed, users.egyptFixed, users.blank, users.unlinked, users.admin].map(visible)),
     [true, 'طلب الخصم غير متاح لك', 'طلب الخصم غير متاح لك', 'طلب الخصم غير متاح لك', true])
+})
+
+test('AD-04: أول تقديم لمسودة بيتحكم بجمهور النوع دلوقتي — والنيابة زي الإنشاء، والمرجّع للاستكمال بيكمّل، والشرط التالف بيقفل', async () => {
+  const draft = async (user, type, extra = {}) => expectStatus(await request(user, 'POST', '/requests', { typeCode: type.code, payload: { reason: 'مسودة للاختبار' }, submit: false, ...extra }), 201)
+  const send = (user, id) => request(user, 'POST', `/requests/${id}/submit`, {})
+  const statusOf = async id => (await repo('Request').findOneByOrFail({ id })).status
+  const conditions = [{ field: 'nationality', values: ['SAUDI'] }, { field: 'contractType', values: ['fixed_term'] }]
+  expectStatus(await setAudience(types.saudiFixed, { mode: 'all', ids: [], conditions }), 200)
+  // مسودة وصاحبها من الجمهور، وبعدها عقده بقى دائم: التقديم مرفوض زي إنشاء طلب جديد، والمسودة زي ما هي؛ ولما يرجع من الجمهور بتتقدم
+  const own = await draft(users.saudiFixed, types.saudiFixed)
+  assert.equal(own.status, 'DRAFT')
+  try {
+    await repo('Employee').update({ id: emps.saudiFixed.id }, { contractType: 'permanent' })
+    assert.deepEqual([answer(await submit(users.saudiFixed, types.saudiFixed)), answer(await send(users.saudiFixed, own.id)), await statusOf(own.id)], [REFUSED, REFUSED, 'DRAFT'])
+  } finally { await repo('Employee').update({ id: emps.saudiFixed.id }, { contractType: 'fixed_term' }) }
+  assert.equal(expectStatus(await send(users.saudiFixed, own.id), 201).status, 'UNDER_REVIEW')
+  // ولما الجمهور نفسه يتغيّر والمسودة موجودة
+  const narrowed = await draft(users.saudiFixed, types.saudiFixed)
+  expectStatus(await setAudience(types.saudiFixed, { mode: 'all', ids: [], conditions: [{ field: 'nationality', values: ['EGYPTIAN'] }] }), 200)
+  assert.deepEqual([answer(await send(users.saudiFixed, narrowed.id)), await statusOf(narrowed.id)], [REFUSED, 'DRAFT'])
+  expectStatus(await setAudience(types.saudiFixed, { mode: 'all', ids: [], conditions }), 200)
+  // طلب اتقدّم واترجّع للاستكمال: بيكمّل سلسلته حتى لو صاحبه خرج من الجمهور
+  const returned = expectStatus(await submit(users.saudiFixed, types.saudiFixed), 201)
+  expectStatus(await request(users.manager, 'POST', `/requests/${returned.id}/act`, { action: 'RETURN', comment: 'استكمل البيانات' }), 201)
+  try {
+    await repo('Employee').update({ id: emps.saudiFixed.id }, { contractType: 'permanent' })
+    const again = await request(users.saudiFixed, 'POST', `/requests/${returned.id}/resubmit`, { payload: { reason: 'بعد الاستكمال' } })
+    assert.deepEqual([again.status, again.body.status], [201, 'UNDER_REVIEW'])
+  } finally { await repo('Employee').update({ id: emps.saudiFixed.id }, { contractType: 'fixed_term' }) }
+  // النيابة: مسودة لموظف برّه الجمهور بتتقدم (قرار المالك ج1)، طول ما حق النيابة لسه مع اللي عملها
+  const proxied = await draft(users.proxy, types.saudiFixed, { onBehalfEmployeeId: emps.egyptFixed.id })
+  assert.equal(expectStatus(await send(users.proxy, proxied.id), 201).requesterId, emps.egyptFixed.id)
+  const revoked = await draft(users.proxy, types.saudiFixed, { onBehalfEmployeeId: emps.egyptFixed.id })
+  try {
+    await repo('User').update({ id: users.proxy.id }, { permissions: '[]' })
+    assert.deepEqual([answer(await send({ ...users.proxy, permissions: '[]' }, revoked.id)), await statusOf(revoked.id)], [[403, 'لا تملك صلاحية التقديم نيابة عن الغير'], 'DRAFT'])
+  } finally { await repo('User').update({ id: users.proxy.id }, { permissions: users.proxy.permissions }) }
+  // وصاحب الطلب نفسه مايقدّمش مسودة اتعملت له نيابةً وهو برّه الجمهور
+  assert.deepEqual([answer(await send(users.egyptFixed, revoked.id)), await statusOf(revoked.id)], [REFUSED, 'DRAFT'])
+  // حساب اتغيّر ربطه بموظف تاني: مسودته القديمة بقت «طلب غيره»، ومن غير حق النيابة مابتتقدمش
+  const first = await employee({ managerEmployeeId: emps.manager.id, nationality: 'سعودي', contractType: 'fixed_term' }), second = await employee({ managerEmployeeId: emps.manager.id, nationality: 'سعودي', contractType: 'fixed_term' })
+  const relinked = await account('relinked', 'employee', [], { employeeId: first.id })
+  const stale = await draft(relinked, types.saudiFixed)
+  await repo('User').update({ id: relinked.id }, { employeeId: second.id })
+  assert.deepEqual([answer(await send({ ...relinked, employeeId: second.id }, stale.id)), await statusOf(stale.id)], [[403, 'لا تملك صلاحية التقديم نيابة عن الغير'], 'DRAFT'])
+  // النيابة برّه نطاق الفرع، وموظف بقى غير نشط، ونوع خاص بفرع والموظف اتنقل: نفس أحكام الإنشاء
+  const elsewhere = await repo('Branch').save({ code: 'AD_B', name: 'فرع تاني للجمهور' })
+  const scoped = await draft(users.proxy, types.open, { onBehalfEmployeeId: emps.egyptFixed.id })
+  try {
+    await repo('Employee').update({ id: emps.egyptFixed.id }, { branchId: elsewhere.id })
+    const outside = await send(users.proxy, scoped.id)
+    assert.equal(outside.status, 403)
+    assert.match(answer(outside)[1], /^لا يمكنك تقديم طلب لموظف خارج نطاق /)
+  } finally { await repo('Employee').update({ id: emps.egyptFixed.id }, { branchId: org.branch.id }) }
+  try {
+    await repo('Employee').update({ id: emps.egyptFixed.id }, { isActive: false })
+    assert.deepEqual(answer(await send(users.proxy, scoped.id)), [403, 'حساب الموظف غير نشط (منتهي/مؤرشف) — لا يقدّم طلبات جديدة'])
+  } finally { await repo('Employee').update({ id: emps.egyptFixed.id }, { isActive: true }) }
+  const local = await repo('RequestType').save({ code: 'AD_LOCAL', nameAr: 'طلب خاص بالفرع', category: 'personal_data', destinationHandler: 'none', approvalChainId: types.open.approvalChainId, isActive: true, branchId: org.branch.id })
+  const bound = await draft(users.saudiPermanent, local)
+  try {
+    await repo('Employee').update({ id: emps.saudiPermanent.id }, { branchId: elsewhere.id })
+    assert.deepEqual([answer(await send(users.saudiPermanent, bound.id)), await statusOf(bound.id)], [[403, 'هذا النوع من الطلبات خاص بفرع تاني، ومش متاح للموظف ده'], 'DRAFT'])
+  } finally { await repo('Employee').update({ id: emps.saudiPermanent.id }, { branchId: org.branch.id }) }
+  assert.equal(expectStatus(await send(users.saudiPermanent, bound.id), 201).status, 'UNDER_REVIEW')
+  expectStatus(await send(users.proxy, scoped.id), 201)
+  // شرط متخزّن تالف (مايتحفظش من الإعدادات): بيقفل في الكتالوج والتقديم، حتى للي جنسيته فاضية
+  const invalid = { mode: 'all', ids: [], conditions: [{ field: 'nationality', values: ['UNKNOWN'] }] }
+  assert.equal((await setAudience(types.graded, invalid)).status, 400)
+  const kept = await storedAudience(types.graded)
+  try {
+    for (const stored of [invalid, { mode: 'all', ids: [], conditions: [{ field: 'joinDate', op: 'from', value: '2026-99-99' }] }, { mode: 'all', ids: [], conditions: [{ field: 'joinDate', op: 'before', value: '2099-01-01 وزيادة' }] },
+      { mode: 'all', ids: [], conditions: [{ field: 'grade', values: [String(grades.senior.id)] }] }]) {
+      await repo('RequestType').update({ id: types.graded.id }, { visibleTo: JSON.stringify(stored) })
+      assert.deepEqual(await Promise.all(['blank', 'saudiFixed', 'egyptFixed'].map(key => sees(users[key], types.graded))), [false, false, false], JSON.stringify(stored))
+      assert.deepEqual([answer(await submit(users.blank, types.graded)), answer(await submit(users.saudiFixed, types.graded))], [REFUSED, REFUSED], JSON.stringify(stored))
+    }
+  } finally { await repo('RequestType').update({ id: types.graded.id }, { visibleTo: kept }) }
 })

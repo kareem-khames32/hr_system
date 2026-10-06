@@ -75,7 +75,11 @@ test('FU-04: محرر الجمهور — شرط الحقل المخصص للحق
   has(types, '    fetchAudienceFieldOptions().then((rows) => setCustomFields(Array.isArray(rows) ? rows : [])).catch(() => undefined)')
   const block = types.indexOf('<div data-audience-conditions>'), custom = types.indexOf('data-audience-custom={field.fieldKey}'), result = types.indexOf('<span className="font-medium">النتيجة: </span>')
   assert.ok(block > 0 && block < custom && custom < result)
-  has(types, 'onChange={() => setForm({ ...form, customConds: { ...form.customConds, [field.fieldKey]: toggleId(form.customConds[field.fieldKey] ?? [], option) } })}')
+  has(types, 'onChange={() => setForm({ ...form, customConds: { ...form.customConds, [field.fieldKey]: toggleId(customCondOf(form.customConds, field.fieldKey), option) } })}')
+  // مفتاح حقل من أسماء Object (constructor) مايتقراش من سلسلة الوراثة (Codex CRP2T-B-N02): القراءة بالمفاتيح المملوكة بس
+  has(types, "const customCondOf = (conds: Record<string, string[]>, key: string): string[] => (Object.prototype.hasOwnProperty.call(conds, key) ? conds[key] : [])")
+  has(types, '<input type="checkbox" checked={(customCondOf(form.customConds, field.fieldKey)).includes(option)}')
+  assert.equal(types.includes('form.customConds[field.fieldKey]'), false)
   // شرط متخزّن على حقل مابقاش متاح: ظاهر بمفتاحه، وزرار بيشيله
   has(types, '{Object.keys(form.customConds).filter((key) => form.customConds[key].length > 0 && !customFields.some((field) => field.fieldKey === key)).map((key) => (')
   has(types, 'onClick={() => setForm({ ...form, customConds: { ...form.customConds, [key]: [] } })}>إزالة الشرط</button>')

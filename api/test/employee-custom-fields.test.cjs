@@ -70,6 +70,9 @@ test('CF-04: شرط الجمهور بالحقل المخصص — قيمة الم
     { field: 'custom', key: 'constructor', values: ['function Object() { [native code] }'] }, { field: 'custom', key: '__proto__', values: ['[object Object]'] }, { field: 'custom', key: 'toString', values: ['x'] }]) {
     assert.equal(allows(JSON.stringify({ mode: 'all', ids: [], conditions: [condition] }), subject({ uniform_size: 'M' })), false, JSON.stringify(condition))
   }
+  // قيم الشرط نصوص بس، وقايمة غير فاضية (Codex CRP2T-A-B02: الشرط التالف مابيتحققش)
+  for (const values of [['M', 1], [true], [], [null]]) assert.equal(allows(sized(values), subject({ uniform_size: 'M' })), false, JSON.stringify(values))
+  assert.equal(allows(JSON.stringify({ mode: 'all', ids: [], conditions: [{ field: 'custom', key: '', values: ['M'] }] }), subject({ '': 'M' })), false)
   // قيمة متخزّنة مش نص مابتطابقش
   assert.equal(allows(sized(['1']), subject({ uniform_size: 1 })), false)
   // مع شرط تاني: الاتنين لازم يتحققوا
