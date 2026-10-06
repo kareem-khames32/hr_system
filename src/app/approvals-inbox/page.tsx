@@ -28,6 +28,7 @@ import ApprovalDelegations from '@/components/approvals/ApprovalDelegations'
 import RequestPayload from '@/components/RequestPayload'
 // بطاقة صاحب الطلب أعلى التفاصيل: الاسم والكود والمسمى والقسم والفرع والفريق والمدير المباشر
 import RequestEmployeeCard from '@/components/requests/RequestEmployeeCard'
+import CommentsThread from '@/components/comments/CommentsThread'
 import OvertimeRequestSummary, { overtimeApprovalLimit, overtimeComputedAtApproval } from '@/components/OvertimeRequestSummary'
 import { payloadSummary } from '@/lib/request-payload'
 import { useCurrency } from '@/lib/currency'
@@ -620,7 +621,9 @@ export default function ApprovalsInboxPage() {
               {detail && <><RequestEmployeeCard requester={detail.requester} submittedBy={detail.submittedBy} /><RequestPayload payload={detail.payload} />
                 {/* نوع السلفة: «سلفة استثنائية — N قسط» أو «سلفة (مرة واحدة)» */}
                 {detail.typeCode === 'LOAN' && loanRequestKindLabel(detail.payload) && <p className="text-sm font-medium text-gray-700 bg-gray-50 rounded-xl px-3 py-2" data-testid="loan-kind">{loanRequestKindLabel(detail.payload)}</p>}
-                <OvertimeRequestSummary overtime={detail.overtime ?? undefined} reviewRequired={detail.overtimeReviewRequired} /></>}
+                <OvertimeRequestSummary overtime={detail.overtime ?? undefined} reviewRequired={detail.overtimeReviewRequired} />
+                {/* B2.8: حوار الطلب */}
+                <CommentsThread kind="requests" id={detail.id} /></>}
             </div>
           </div>
         )}
@@ -663,6 +666,8 @@ export default function ApprovalsInboxPage() {
                   {/* الاعتماد بيعرض النوع في مراجعة السقف تحت؛ الرفض والإرجاع من الحمولة */}
                   {detail.typeCode === 'LOAN' && !isLoanApproval && loanRequestKindLabel(detail.payload) && <p className="text-sm font-medium text-gray-700 bg-gray-50 rounded-xl px-3 py-2" data-testid="loan-kind">{loanRequestKindLabel(detail.payload)}</p>}
                   <OvertimeRequestSummary overtime={detail.overtime ?? undefined} reviewRequired={detail.overtimeReviewRequired} />
+                  {/* B2.8: حوار الطلب قدام المعتمد وهو بيقرر */}
+                  <CommentsThread kind="requests" id={detail.id} />
                 </>}
                 {isLoanApproval && (
                   <div className="rounded-xl border border-gray-200 p-4 space-y-3">

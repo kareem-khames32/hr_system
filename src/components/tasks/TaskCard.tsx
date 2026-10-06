@@ -5,6 +5,8 @@
 import { useRef, useState } from 'react'
 import { AlertTriangle, CheckCircle2, Clock, Paperclip, Pencil, RotateCcw, XCircle } from 'lucide-react'
 import { fetchFileObjectUrl, uploadFile } from '../../lib/api'
+import { MessageSquare } from 'lucide-react'
+import CommentsThread from '../comments/CommentsThread'
 import { setTaskStatus, TASK_PRIORITY_LABELS, TASK_STATUS_LABELS, type ApiTask, type TaskStatus } from '../../lib/tasks-api'
 
 const STATUS_TONE: Record<TaskStatus, string> = {
@@ -30,6 +32,8 @@ export default function TaskCard({ task, onChanged, onEdit, highlighted }: Props
   const [file, setFile] = useState<File | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // B2.8: حوار المهمة — مقفول لحد ما يتفتح، ومفتوح لو المهمة جاية من لينك (إشعار إشارة)
+  const [talk, setTalk] = useState(!!highlighted)
   const fileInput = useRef<HTMLInputElement>(null)
   // الملف اللي اترفع فعلًا: لو الإقفال اترفض ومحاولة تانية بنفس الملف، مايترفعش تاني
   const uploaded = useRef<{ file: File; id: number } | null>(null)
@@ -121,6 +125,15 @@ export default function TaskCard({ task, onChanged, onEdit, highlighted }: Props
           <CheckCircle2 size={16} />
           {task.proofNote && <span className="break-words">{task.proofNote}</span>}
           {task.proofFileId && <button type="button" className="underline flex items-center gap-1" onClick={openProof}><Paperclip size={14} />ملف الإثبات</button>}
+        </div>
+      )}
+      {/* B2.8: مهمة تنفيذ طلب ومهمة إقرار مستند مالهمش حوار هنا (حوار الطلب على الطلب) */}
+      {!task.execution && !task.documentAck && (
+        <div className="mt-2" data-task-comments>
+          <button type="button" className="text-xs text-primary-700 underline flex items-center gap-1" onClick={() => setTalk(value => !value)} aria-expanded={talk}>
+            <MessageSquare size={14} />{talk ? 'إخفاء التعليقات' : 'التعليقات'}
+          </button>
+          {talk && <div className="mt-2"><CommentsThread kind="tasks" id={task.id} /></div>}
         </div>
       )}
       {error && <div role="alert" className="mt-2 bg-red-50 text-red-700 rounded-lg p-2 text-sm">{error}</div>}

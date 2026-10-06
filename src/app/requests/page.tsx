@@ -9,6 +9,7 @@ import BonusRequestForm from '@/components/requests/BonusRequestForm'
 import DeductionRequestForm from '@/components/requests/DeductionRequestForm'
 // بطاقة صاحب الطلب أعلى التفاصيل — وطلب الموارد البشرية نيابةً يقول اتقدّم لمين
 import RequestEmployeeCard from '@/components/requests/RequestEmployeeCard'
+import CommentsThread from '@/components/comments/CommentsThread'
 import OvertimePreview from '@/components/OvertimePreview'
 import OvertimeRequestSummary from '@/components/OvertimeRequestSummary'
 import TimeSelect, { normalizeTime, timeSpanMinutes } from '@/components/TimeSelect'
@@ -427,6 +428,13 @@ export default function MyRequestsPage() {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offboardingOn])
+
+  // B2.8: لينك إشعار «إشارة لك في تعليق» (/requests?request=رقم) بيفتح تفاصيل الطلب — أي طلب الحساب يشوفه، مش طلباته بس
+  useEffect(() => {
+    const linked = Number(new URLSearchParams(window.location.search).get('request'))
+    if (!Number.isSafeInteger(linked) || linked < 1) return
+    fetchRequest(linked).then(setRequestDetail).catch(() => setError('الطلب اللي في اللينك مش موجود أو مابقاش متاح لك'))
+  }, [])
 
   // فتح نموذج نوع بعينه من رابط (مثلاً «بصمة ناقصة» في كشف الحضور ← طلب تصحيح
   // بصمة معبّأ بالتاريخ والطرف الناقص): /requests?type=PUNCH_CORRECTION&date=…&punchType=OUT
@@ -1471,6 +1479,8 @@ export default function MyRequestsPage() {
             <h3 className="font-bold">تعليقات المعتمدين</h3>
             {(requestDetail.approvals ?? []).map(a => <div key={a.id} className="p-3 bg-gray-50 rounded-xl"><p className="text-sm font-medium">{({ APPROVE: 'اعتماد', APPROVED: 'اعتماد', REJECT: 'رفض', REJECTED: 'رفض', RETURN: 'إرجاع للاستكمال', RETURNED_FOR_INFO: 'إرجاع للاستكمال', ESCALATED: 'تصعيد', CANCELLED: 'إلغاء', EXECUTION_FAILED: 'تعذّر التنفيذ المجدول', EXECUTED: 'تنفيذ الطلب' } as Record<string, string>)[a.action] ?? a.action}</p>{onBehalfText(a) && <p className="text-xs text-amber-800" data-on-behalf>{onBehalfText(a)}</p>}<p className="text-sm whitespace-pre-wrap">{a.comment || 'بدون تعليق'}</p><time className="text-xs text-gray-400">{a.actedAt?.slice(0, 10)}</time></div>)}
             {!requestDetail.approvals?.length && <p className="text-gray-500 text-sm">لم تُسجّل تعليقات بعد</p>}
+            {/* B2.8: حوار الطلب (سؤال الموظف ورد المعتمد) — مش لطلب سري محجوب فتحه لينك */}
+            {!requestDetail.confidentialMasked && <CommentsThread kind="requests" id={requestDetail.id} />}
           </div></div>}
         {/* New Request Modal */}
         {showNewModal && (

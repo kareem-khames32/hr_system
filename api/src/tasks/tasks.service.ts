@@ -23,6 +23,7 @@ import {
   TASK_NOT_FOUND, TASK_ROLE_LABELS, TASKS_DAYS_MAX, TASKS_ESCALATION_DAYS_DEFAULT, TASKS_ESCALATION_DAYS_KEY, TASKS_MIGRATION_MISSING,
   TASKS_REMINDER_DAYS_DEFAULT, TASKS_REMINDER_DAYS_KEY,
   TASK_OFF_DUTY_STATUSES, TASK_STILL_OPENING,
+  TASK_COMMENTS_LINKED,
 } from './task-rules'
 
 // B2.5: محرك المهام.
@@ -300,6 +301,20 @@ export class TasksService {
 
   async detail(user: JwtPayload, id: number) {
     return (await this.views(user, [(await this.load(user, id)).task]))[0]
+  }
+
+  /**
+   * B2.8: المهمة اللي ليها حوار تعليقات للحساب ده — أي مهمة عادية يشوفها (برّه كده «غير موجودة»). مهمة تنفيذ طلب ومهمة إقرار مستند
+   * مالهمش حوار: تفاصيلهم تبع الطلب أو المستند، وشايفهم ناس مايشوفوش الطلب نفسه.
+   */
+  async commentable(user: JwtPayload, id: number, em: EntityManager = this.ds.manager, lock = false): Promise<Task> {
+    // كتابة التعليق بتنادي جوه معاملتها (em) وصف المهمة مقفول (lock): تحويل المهمة في نفس اللحظة يا إما قبل التعليق يا إما بعده.
+    // المهمة المربوطة مابتتقفلش من هنا (زي خطافي المهام): الربط بيتقري الأول، وبعد القفل بيتقري تاني من غير انتظار
+    const linked = !!(await executionRequestOfTask(em, id)) || !!(await documentOfAckTask(em, id))
+    const { task } = await this.load(user, id, em, lock && !linked)
+    if (linked) throw new BadRequestException(TASK_COMMENTS_LINKED)
+    if (lock && await this.linkedWhileWaiting(em, id, false)) throw new ConflictException(TASK_STILL_OPENING)
+    return task
   }
 
   /** تعديل المهمة المفتوحة: اللي بيديرها (taskManagedBy). تغيير المسؤول = تكليف جديد بنفس شروط التكليف، واللي حوّلها بيبقى هو اللي كلّف بيها */

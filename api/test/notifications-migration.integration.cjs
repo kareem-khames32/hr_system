@@ -140,7 +140,7 @@ test('NM-2: من غير الجداول الإشعارات المخزّنة وا�
   assert.equal(await notifications.dispatch(event), 0)
   assert.deepEqual(await store.storedInAppNotifications(ds.manager, user.id), [])
   const preferences = await notifications.preferences(payload)
-  assert.deepEqual([preferences.available, preferences.emailEnabled, preferences.categories.length], [false, false, 4])
+  assert.deepEqual([preferences.available, preferences.emailEnabled, preferences.categories.length], [false, false, 5])
   await assert.rejects(notifications.setPreference(payload, { category: 'payroll', channel: 'EMAIL', mode: 'OFF' }), /ترحيل 20261005_087/)
   await assert.rejects(notifications.saveTemplate(payload, 'request.decided', 'EMAIL', { title: 'عنوان', body: 'نص' }), /ترحيل 20261005_087/)
   assert.equal((await notifications.templatesAdmin()).available, false)

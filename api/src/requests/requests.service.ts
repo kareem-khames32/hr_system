@@ -2243,10 +2243,14 @@ export class RequestsService {
   // ===== تفاصيل طلب + سجل الموافقات =====
   // يراه: صاحبه، أو منشئه (نيابة)، أو معتمد فعلي عليه، أو صاحب requests.view_all
   // في نطاق فرعه — غيرهم 403 (SEC-REQ-1). والسرّي لصاحب view_all وحده محجوب
-  async detail(user: JwtPayload, id: number) {
-    const req = await this.requests.findOne({ where: { id } })
+  // B2.8: البوابة دي (readable) حكم واحد لتفاصيل الطلب ولحوار تعليقاته (CommentsService.access): بترجّع الطلب وسجل موافقاته وهل
+  // الحساب طرف فيه ونوعه، واللي مايشوفوش بياخد نفس الرفض. كتابة التعليق بتناديها جوه معاملتها (em) وصف الطلب مقفول (lock) بقفل القرار
+  // نفسه: قرار على الطلب في نفس اللحظة يا إما قبل التعليق يا إما بعده، وبيقفوا ورا بعض من أول سطر. (بقفل قراءة القرار كان بيكتب سطره
+  // في السجل ويقف على صف الطلب، والتعليق ماسك الصف وواقف على قراءة السجل: الاتنين مستنيين بعض، وواحد منهم بيرجع بخطأ)
+  async readable(user: JwtPayload, id: number, em: EntityManager = this.ds.manager, lock = false) {
+    const req = await em.getRepository(Request).findOne({ where: { id }, ...(lock ? { lock: { mode: 'pessimistic_write' as const } } : {}) })
     if (!req) throw new NotFoundException('الطلب غير موجود')
-    const approvals = await this.approvals.find({
+    const approvals = await em.getRepository(RequestApproval).find({
       where: { requestId: req.id },
       order: { actedAt: 'ASC' },
     })
@@ -2257,9 +2261,9 @@ export class RequestsService {
       req,
       inScope,
       // B2.6: واللي مهمة تنفيذ الطلب مفتوحة عليه (بحكم محرك المهام) طرف فيه زي المعتمد: محتاج حقوله عشان ينفّذ
-      approvals.some((a) => a.approverId === user.sub) || (await executionAwaitsAccount(this.ds.manager, user, req.id)),
+      approvals.some((a) => a.approverId === user.sub) || (await executionAwaitsAccount(em, user, req.id)),
       // B2.6-ب: والبديل طول ما الخطوة الحالية مستنية المفوِّض
-      (await this.delegationContext(user, [req]))?.(req)
+      (await this.delegationContext(user, [req], em))?.(req)
     )
     // طلب برّه النطاق ومش طرف فيه = نفس رد الرقم اللي مش موجود (فرق 403/404 كان بيكشف وجوده — مراجعة Codex الجولة 4)؛
     // جوه النطاق من غير صلاحية العرض: رفض صريح زي الأول
@@ -2267,7 +2271,22 @@ export class RequestsService {
     if (!party && !userHasPerm(user, 'requests.view_all')) {
       throw new ForbiddenException('لا تملك صلاحية عرض هذا الطلب')
     }
-    const type = await this.types.findOne({ where: { code: definitionCodeOf(req) } })
+    const type = await em.getRepository(RequestType).findOne({ where: { code: definitionCodeOf(req) } })
+    return { req, approvals, party, type }
+  }
+
+  /**
+   * B2.8: الحساب على «جانب الموظف» في الطلب (التعليق الداخلي مش ليه)؟ موظفه هو صاحب الطلب، أو هو الحساب اللي قدّم الطلب (لنفسه أو
+   * نيابةً) — أيًا كانت صلاحياته أو صفته التانية في الطلب. الطلب مابيسجّلش هل اللي قدّمه كان صاحبه ولا حد نيابةً عنه، فحساب صاحب
+   * الطلب لو اتفك ربطه أو اتربط بموظف تاني بعدها لسه «اللي قدّم»، ولسه على جانب الموظف. التمن: اللي قدّم نيابةً مابيشوفش الداخلي على
+   * الطلب ده (Q-025).
+   */
+  requesterSide(user: Pick<JwtPayload, 'sub' | 'employeeId'>, req: Pick<Request, 'requesterId' | 'createdByUserId'>): boolean {
+    return (!!user.employeeId && user.employeeId === req.requesterId) || req.createdByUserId === user.sub
+  }
+
+  async detail(user: JwtPayload, id: number) {
+    const { req, approvals, party, type } = await this.readable(user, id)
     // السرّي لغير أطرافه: لا بطاقة موظف ولا منشئ — نفس حجب الهوية في القائمة
     if (!party && type?.isConfidential) return { ...this.maskConfidential({ ...this.withCanonicalStepActions(req), approvals }), requester: null, submittedBy: null }
     // B2.6-ب: «بالنيابة عن» على سطور السجل اللي اتاخدت بتفويض — والأسماء لأطراف الطلب بس

@@ -33,6 +33,7 @@ import { documentAckRequest, sendVerifiedFile, verifiedDocumentFile } from '../h
 import { assertLetterFileAccess } from '../letters/letter-access'
 import { assertTaskFileAccess } from '../tasks/task-rules'
 import { assertExecutionProofAccess } from '../requests/execution-tasks'
+import { CommentsService } from '../comments/comments.service'
 import { RequireModule } from '../modules-registry/module.guard'
 import {
   classifyUpload, FILE_TYPE_EXTENSIONS, FILE_TYPE_MIME, FILES_ALLOWED_TYPES_KEY, FILES_MAX_SIZE_KEY, FILES_MAX_SIZE_LIMIT_MB,
@@ -57,7 +58,8 @@ export class FilesController {
     @InjectRepository(StoredFile)
     private readonly files: Repository<StoredFile>,
     private readonly ds: DataSource,
-    private readonly requests: RequestsService
+    private readonly requests: RequestsService,
+    private readonly comments: CommentsService
   ) {}
 
   // B2.2: الحد والأنواع من الإعدادات وقت الرفع (files.max_size_mb وfiles.allowed_types)
@@ -79,7 +81,7 @@ export class FilesController {
     @Query('employeeId') employeeId?: string
   ) {
     if (!file) throw new BadRequestException('لم يصل ملف — أرسل الحقل file')
-    if (entityType && !['request', 'employee_photo', 'company_logo', 'document', 'contract', 'policy', 'leave_attachment', 'task'].includes(entityType)) {
+    if (entityType && !['request', 'employee_photo', 'company_logo', 'document', 'contract', 'policy', 'comment', 'leave_attachment', 'task'].includes(entityType)) {
       throw new BadRequestException('تصنيف الملف غير صالح')
     }
     for (const value of [entityId, employeeId]) {
@@ -87,6 +89,8 @@ export class FilesController {
         throw new BadRequestException('معرّف الملف أو الموظف غير صالح')
       }
     }
+    // B2.8: مرفق التعليق بيتربط بتعليقه وقت كتابته (CommentsService.add) — العميل مايحددش رقم كيان ولا موظف
+    if (entityType === 'comment' && (entityId !== undefined || employeeId !== undefined)) throw new BadRequestException('مرفق التعليق بيترفع من غير رقم كيان أو موظف')
     const LOGO_RULE = 'رفع شعار الشركة يتطلب صلاحية الإعدادات وملف صورة'
     if (entityType === 'company_logo' && !userHasPerm(user, 'settings.manage')) throw new ForbiddenException(LOGO_RULE)
     // B2.7: ملف سياسة (PDF) — لمدير السياسات بس، ومش تبع موظف. قراءته من مسار السياسات بحق الجمهور، مش من هنا
@@ -167,6 +171,9 @@ export class FilesController {
       await assertTaskFileAccess(this.ds.manager, user, f)
       // B2.6: إثبات مهمة تنفيذ طلب تبع الطلب (ممكن يكون سري): لرافعه بس
       await assertExecutionProofAccess(this.ds.manager, user, f)
+    } else if (f.entityType === 'comment') {
+      // B2.8: مرفق تعليق — بحكم التعليق نفسه (حق الكيان، والداخلي مش لصاحب الطلب)، مش بملكية الرفع العامة
+      await this.comments.assertFileAccess(user, f)
     } else {
     const isOwner = (!!user.employeeId && f.employeeId === user.employeeId) || (!!user.sub && f.uploadedBy === user.sub)
     // صور الموظفين قابلة للعرض لأي مطّلع على الموظفين (ليست مستنداً حساساً)

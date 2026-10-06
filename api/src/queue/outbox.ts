@@ -20,6 +20,8 @@ export const DOMAIN_EVENTS = {
   TASK_ASSIGNED: 'مهمة اتكلّف بيها مسؤول',
   TASK_DUE_SOON: 'موعد المهمة قرّب',
   TASK_OVERDUE: 'المهمة اتأخرت',
+  // B2.8: تعليق فيه إشارة (لدور في الموضوع، أو رد على تعليق)
+  COMMENT_MENTION: 'إشارة في تعليق',
 } as const
 export type DomainEventType = keyof typeof DOMAIN_EVENTS
 export const QUEUE_MIGRATION_MISSING = 'الطابور والـoutbox محتاجين ترحيل 20261003_086 على قاعدة البيانات'

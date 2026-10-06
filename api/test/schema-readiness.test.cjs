@@ -18,6 +18,7 @@ const CHECKS = [
   ['090 التفويض', '../src/requests/approval-delegations', 'delegationSchemaReady', 'resetDelegationSchemaCache', flag],
   ['091 السياسات', '../src/policies/policy-rules', 'policySchemaReady', 'resetPolicySchemaCache', flag],
   ['092 إقرار المستندات', '../src/hr-documents/document-acknowledgements', 'documentAckSchemaReady', 'resetDocumentAckSchemaCache', flag],
+  ['093 التعليقات', '../src/comments/comment-rules', 'commentsTableReady', 'resetCommentsTableCache', flag],
 ]
 
 CHECKS.forEach(([name, file, check, reset, rows], index) => {

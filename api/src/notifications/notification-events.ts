@@ -21,6 +21,8 @@ export const NOTIFICATION_CATEGORIES = {
   payroll: 'الرواتب',
   // B2.5
   task: 'المهام',
+  // B2.8
+  comment: 'التعليقات والإشارات',
 } as const
 export type NotificationCategoryCode = keyof typeof NOTIFICATION_CATEGORIES
 export const isNotificationCategory = (value: unknown): value is NotificationCategoryCode =>
@@ -143,6 +145,16 @@ export const NOTIFICATION_EVENTS = {
       IN_APP: { title: 'مهمة متأخرة عن موعدها', body: '{{task.title}} — {{task.assignee}}' },
       EMAIL: { title: 'مهمة متأخرة: {{task.title}}',
         body: `${greeting}\n\nالمهمة «{{task.title}}» على {{task.assignee}} عدّت موعدها ({{task.due}}) ولسه مفتوحة.\n\nافتحها من هنا:\n{{link}}\n\n${closing}` },
+    },
+  },
+  // B2.8: إشارة في تعليق — من غير نص التعليق ولا اسم ولا نوع الطلب (الموضوع ممكن يكون سري): المستلم بيفتحه من اللينك
+  'comment.mentioned': {
+    label: 'إشارة لك في تعليق', category: 'comment', kind: 'info', storedInApp: true,
+    variables: [{ key: 'comment.where', label: 'مكان التعليق', sample: 'على طلب' }, ...COMMON],
+    templates: {
+      IN_APP: { title: 'إشارة لك في تعليق', body: '{{comment.where}}' },
+      EMAIL: { title: 'إشارة لك في تعليق',
+        body: `${greeting}\n\nتمت الإشارة إليك في تعليق {{comment.where}} في النظام. نص التعليق لا يُرسل بالبريد.\n\nافتحه من هنا:\n{{link}}\n\n${closing}` },
     },
   },
 } as const satisfies Record<string, NotificationEventDef>

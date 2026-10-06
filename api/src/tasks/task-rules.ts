@@ -20,6 +20,8 @@ export const TASKS_MIGRATION_MISSING = 'المهام العامة محتاجة �
 export const TASK_NOT_FOUND = 'المهمة غير موجودة'
 /** المهمة ربطها (بطلب تنفيذ أو بمستند إقرار) اتثبّت والنداء واقف على صفها: المحاولة الجاية بتقراه من الأول */
 export const TASK_STILL_OPENING = 'المهمة لسه بتتسجّل — حاول تاني بعد لحظة'
+/** B2.8: مهمة تنفيذ طلب أو إقرار مستند مالهاش حوار تعليقات — تفاصيلها تبع الطلب أو المستند */
+export const TASK_COMMENTS_LINKED = 'المهمة دي تبع طلب أو مستند — مفيش تعليقات عليها من هنا'
 export const TASK_FILE_NOT_FOUND = 'الملف غير موجود'
 export const TASKS_REMINDER_DAYS_KEY = 'tasks.reminder_days_before'
 export const TASKS_REMINDER_DAYS_DEFAULT = 1

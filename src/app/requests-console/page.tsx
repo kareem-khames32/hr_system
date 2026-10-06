@@ -3,6 +3,7 @@ import LetterDownloadButton from '@/components/LetterDownloadButton'
 import RequestPayload from '@/components/RequestPayload'
 // بطاقة صاحب الطلب أعلى التفاصيل (السرّي المحجوب يرجع بلا بيانات فمابتظهرش)
 import RequestEmployeeCard from '@/components/requests/RequestEmployeeCard'
+import CommentsThread from '@/components/comments/CommentsThread'
 import { downloadCsv, csvDateStamp } from '@/lib/csv'
 import { canCancelSalaryIncreaseExecution, cancelSalaryIncreaseExecution } from '@/lib/employee-salary-change-api'
 
@@ -739,6 +740,8 @@ export default function RequestsConsolePage() {
                       <p className="text-xs text-gray-400">لا توجد إجراءات مسجّلة بعد</p>
                     )}
                   </div>
+                  {/* B2.8: حوار الطلب — مش للطلب السري المحجوب (حواره لأطرافه بس، والخادم بيرفضه) */}
+                  {!detail.confidentialMasked && <CommentsThread kind="requests" id={detail.id} />}
                 </div>
               )}
             </div>

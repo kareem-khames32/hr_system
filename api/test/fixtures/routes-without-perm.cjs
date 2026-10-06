@@ -54,6 +54,12 @@ const EXCEPTIONS = {
   'TasksController.detail': 'SERVICE_CHECK', // GET /tasks/:id
   'TasksController.update': 'SERVICE_CHECK', // PATCH /tasks/:id
   'TasksController.setStatus': 'SERVICE_CHECK', // POST /tasks/:id/status
+  // B2.8: حوار التعليقات على الطلب والمهمة — الحق هو حق قراءة الكيان نفسه (طرف في الطلب أو «عرض كل الطلبات» في فرعه؛ واللي يشوف المهمة)،
+  // والفحص في الخدمة (CommentsService.access): مفيش مفتاح صلاحية واحد يعبّر عنه
+  'CommentsController.requestThread': 'SERVICE_CHECK', // GET /requests/:id/comments
+  'CommentsController.requestComment': 'SERVICE_CHECK', // POST /requests/:id/comments
+  'CommentsController.taskThread': 'SERVICE_CHECK', // GET /tasks/:id/comments
+  'CommentsController.taskComment': 'SERVICE_CHECK', // POST /tasks/:id/comments
   // B2.7: قراءة نسخة سياسة وملفها — لصاحب صلاحية السياسات، أو للموظف اللي السياسة في جمهوره (الحكم في الخدمة)
   'PoliciesController.version': 'SERVICE_CHECK', // GET /policies/versions/:versionId
   'PoliciesController.versionFile': 'SERVICE_CHECK', // GET /policies/versions/:versionId/file

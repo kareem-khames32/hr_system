@@ -6,6 +6,9 @@ import { recordAudit } from '../audit/audit'
 import { AuthService, type JwtPayload } from '../auth/auth.service'
 import { MailSendError, MailService, maskEmail } from '../auth/mail.service'
 import { User } from '../auth/user.entity'
+import { CommentsService } from '../comments/comments.service'
+import { isCommentEntity, parseCommentMentions } from '../comments/comment-rules'
+import type { Comment } from '../comments/comment.entity'
 import { definitionCodeOf } from '../common/leave-contract'
 import { Employee } from '../employees/employee.entity'
 import { ModulesService } from '../modules-registry/modules.service'
@@ -54,7 +57,9 @@ export const NOTIFICATION_SOURCE_EVENTS: readonly DomainEventType[] = ['REQUEST_
   // B2.5
   'TASK_ASSIGNED', 'TASK_DUE_SOON', 'TASK_OVERDUE',
   // B2.6
-  'REQUEST_EXECUTED']
+  'REQUEST_EXECUTED',
+  // B2.8
+  'COMMENT_MENTION']
 // الملخص اليومي اللي فشل إرساله بيتجرّب تاني اليوم اللي بعده لحد العدد ده
 const DIGEST_MAX_ATTEMPTS = 3
 // رسالة «مستنية» من غير مهمة شغالة أكتر من المدة دي = مهمتها وقفت من غير ما تسجّل نتيجة
@@ -109,7 +114,8 @@ export class NotificationsService implements OnModuleInit {
     private readonly requests: RequestsService,
     private readonly modules: ModulesService,
     private readonly config: ConfigService,
-    private readonly resolver: ApproverResolver
+    private readonly resolver: ApproverResolver,
+    private readonly comments: CommentsService
   ) {}
 
   onModuleInit() {
@@ -166,6 +172,7 @@ export class NotificationsService implements OnModuleInit {
       case 'TASK_ASSIGNED':
       case 'TASK_DUE_SOON':
       case 'TASK_OVERDUE': return this.onTask(event)
+      case 'COMMENT_MENTION': return this.onCommentMention(event)
       default: return 0
     }
   }
@@ -175,6 +182,28 @@ export class NotificationsService implements OnModuleInit {
     const requester = req.requesterId
       ? await this.ds.getRepository(Employee).findOne({ where: { id: req.requesterId }, select: { id: true, fullName: true } }) : null
     return { confidential: type?.isConfidential === true, typeName: type?.nameAr ?? 'طلب', requesterName: requester?.fullName ?? '' }
+  }
+
+  /**
+   * الحسابات اللي خطوة الطلب الحالية مستنياها (role: حاملي الدور اللي الخطوة اتصعّدت له بس). حساب «طلب بانتظار اعتمادك» نفسه، وبتستعمله
+   * إشارة «المعتمد الحالي» في التعليقات (B2.8).
+   */
+  private async stepAccounts(req: Request, role: string | null): Promise<JwtPayload[]> {
+    const waiting = this.requests.waitingSteps(req).filter(step => !role || step.role === role)
+    if (!waiting.length) return []
+    // خطوة وظيفية = أي حساب بيحملها؛ وكلها هيكلية = حسابات المعتمدين المسمّين بس
+    const functional = waiting.some(step => (FUNCTIONAL_APPROVER_ROLES as readonly string[]).includes(step.role))
+    const named = waiting.map(step => step.approverEmployeeId).filter((id): id is number => id != null)
+    if (!functional && !named.length) return []
+    // B2.6-ب: بدلاء المعتمدين المسمّين في تفويض ساري بيتبلّغوا كمان — الحكم النهائي لكل حساب في stepAwaitsAccount بسياق تفويضه
+    const delegates = new Set(named.length ? (await activeDelegationsFrom(this.ds.manager, named)).map(row => row.delegateEmployeeId) : [])
+    const users = await this.ds.getRepository(User).find({ where: functional ? { isActive: true } : { isActive: true, employeeId: In([...named, ...delegates]) } })
+    const recipients: JwtPayload[] = []
+    for (const account of await this.auth.accountPayloads(users)) {
+      const actingFor = account.employeeId != null && delegates.has(account.employeeId) ? (await this.requests.delegationContext(account, [req]))?.(req) : undefined
+      if (this.requests.stepAwaitsAccount(account, req, role, actingFor)) recipients.push(account)
+    }
+    return recipients
   }
 
   /** طلب وصل لخطوة مستنية معتمد (أو اتصعّد): للي الخطوة عليهم فعلًا. بريد بس — جوه التطبيق العدّاد المحسوب الموجود */
@@ -187,20 +216,7 @@ export class NotificationsService implements OnModuleInit {
     const escalated = event.payload?.escalated === true
     // التصعيد لحاملي الدور اللي الخطوة اتصعّدت له بس: باقي المجموعة المتوازية اتبلّغوا لما الطلب وصل لهم
     const role = escalated && typeof event.payload?.role === 'string' ? event.payload.role : null
-    const waiting = this.requests.waitingSteps(req).filter(step => !role || step.role === role)
-    if (!waiting.length) return 0
-    // خطوة وظيفية = أي حساب بيحملها؛ وكلها هيكلية = حسابات المعتمدين المسمّين بس
-    const functional = waiting.some(step => (FUNCTIONAL_APPROVER_ROLES as readonly string[]).includes(step.role))
-    const named = waiting.map(step => step.approverEmployeeId).filter((id): id is number => id != null)
-    if (!functional && !named.length) return 0
-    // B2.6-ب: بدلاء المعتمدين المسمّين في تفويض ساري بيتبلّغوا كمان — الحكم النهائي لكل حساب في stepAwaitsAccount بسياق تفويضه
-    const delegates = new Set(named.length ? (await activeDelegationsFrom(this.ds.manager, named)).map(row => row.delegateEmployeeId) : [])
-    const users = await this.ds.getRepository(User).find({ where: functional ? { isActive: true } : { isActive: true, employeeId: In([...named, ...delegates]) } })
-    const recipients: JwtPayload[] = []
-    for (const account of await this.auth.accountPayloads(users)) {
-      const actingFor = account.employeeId != null && delegates.has(account.employeeId) ? (await this.requests.delegationContext(account, [req]))?.(req) : undefined
-      if (this.requests.stepAwaitsAccount(account, req, role, actingFor)) recipients.push(account)
-    }
+    const recipients = await this.stepAccounts(req, role)
     const facts = await this.requestFacts(req)
     return this.deliver({
       event, code: facts.confidential ? 'request.confidential' : escalated ? 'request.escalated' : 'request.pending_approval',
@@ -297,6 +313,64 @@ export class NotificationsService implements OnModuleInit {
       recipients, entityType: 'task', entityId: task.id, link: `/my/tasks?task=${task.id}`,
       values: { 'task.title': task.title, 'task.due': task.dueDate ?? 'من غير موعد', ...(overdue ? { 'task.assignee': await this.taskAssigneeName(task) } : {}) },
     })
+  }
+
+  // ===== B2.8: إشارة في تعليق =====
+  /**
+   * إشارة في تعليق: لدور في الموضوع (صاحب الطلب، المعتمد الحالي، مسؤول المهمة، اللي كلّف بيها) أو لكاتب تعليق مردود عليه. المستلم لازم
+   * يقرا التعليق نفسه دلوقتي (حق الكيان، والداخلي مش لصاحب الطلب)، والكاتب مابيتبعتلوش. النص من غير محتوى: «على طلب» أو «على مهمة»
+   * ولينك يفتحه.
+   */
+  private async onCommentMention(event: SourceEvent): Promise<number> {
+    const commentId = Number(event.payload?.commentId)
+    const comment = Number.isSafeInteger(commentId) ? await this.comments.byId(commentId) : null
+    if (!comment || !isCommentEntity(comment.entityType)) return 0
+    const mentions = parseCommentMentions(comment.mentions)
+    const users = this.ds.getRepository(User)
+    const accounts = new Map<number, JwtPayload>()
+    const add = (rows: JwtPayload[]) => { for (const row of rows) accounts.set(row.sub, row) }
+    if (comment.entityType === 'request') {
+      const req = await this.ds.getRepository(Request).findOne({ where: { id: comment.entityId } })
+      if (!req) return 0
+      if (mentions.targets.includes('REQUESTER') && req.requesterId) add(await this.auth.accountPayloads(await users.find({ where: { isActive: true, employeeId: req.requesterId } })))
+      // الطلب اتحسم أو اتحرك قبل ما مهمة التوزيع تشتغل: المعتمد الحالي هو اللي الخطوة عليه دلوقتي
+      if (mentions.targets.includes('CURRENT_APPROVERS') && req.status === 'UNDER_REVIEW') add(await this.stepAccounts(req, null))
+    } else {
+      const task = (await tasksTableReady(this.ds.manager)) ? await this.ds.getRepository(Task).findOne({ where: { id: comment.entityId } }) : null
+      if (!task) return 0
+      if (mentions.targets.includes('ASSIGNEE')) add(await this.taskAssigneeAccounts(task))
+      if (mentions.targets.includes('CREATOR')) add(await this.auth.accountPayloads(await users.find({ where: { isActive: true, id: task.createdByUserId } })))
+    }
+    const authors = await this.comments.authorAccountsOf(comment, mentions.replyTo)
+    if (authors.length) add(await this.auth.accountPayloads(await users.find({ where: { isActive: true, id: In(authors) } })))
+    const recipients: JwtPayload[] = []
+    for (const account of accounts.values()) {
+      if (account.sub !== comment.authorUserId && await this.comments.readableBy(account, comment)) recipients.push(account)
+    }
+    return this.deliver({
+      event, code: 'comment.mentioned', category: 'comment', kind: 'info', recipients, entityType: 'comment', entityId: comment.id,
+      link: comment.entityType === 'request' ? `/requests?request=${comment.entityId}` : `/my/tasks?task=${comment.entityId}`,
+      values: { 'comment.where': comment.entityType === 'request' ? 'على طلب' : 'على مهمة' },
+    })
+  }
+
+  /**
+   * الحساب لسه مقصود بالإشارة؟ في واحد من الأدوار المشار لها دلوقتي، أو هو كاتب تعليق مردود عليه. حساب صاحب الطلب اللي اتربط بموظف تاني،
+   * ومعتمد الخطوة اللي اتحسمت، ومسؤول المهمة اللي اتحوّلت: مابقوش في الدور.
+   */
+  private async mentionHolds(comment: Pick<Comment, 'entityType' | 'entityId' | 'mentions'>, account: JwtPayload): Promise<boolean> {
+    const mentions = parseCommentMentions(comment.mentions)
+    if ((await this.comments.authorAccountsOf(comment, mentions.replyTo)).includes(account.sub)) return true
+    if (comment.entityType === 'request') {
+      const req = await this.ds.getRepository(Request).findOne({ where: { id: comment.entityId } })
+      if (!req) return false
+      if (mentions.targets.includes('REQUESTER') && !!account.employeeId && account.employeeId === req.requesterId) return true
+      return mentions.targets.includes('CURRENT_APPROVERS')
+        && this.requests.stepAwaitsAccount(account, req, null, (await this.requests.delegationContext(account, [req]))?.(req))
+    }
+    const task = (await tasksTableReady(this.ds.manager)) ? await this.ds.getRepository(Task).findOne({ where: { id: comment.entityId } }) : null
+    if (!task) return false
+    return (mentions.targets.includes('ASSIGNEE') && taskAwaitsAccount(account, task)) || (mentions.targets.includes('CREATOR') && task.createdByUserId === account.sub)
   }
 
   private async templatesOf(code: NotificationEventCode): Promise<Record<NotificationChannelCode, NotificationText>> {
@@ -467,6 +541,12 @@ export class NotificationsService implements OnModuleInit {
       // «موعدها قرّب» اتجهّزت بموعد: صالحة طول ما ختم التذكير هو ختم حدثها (نفس القاعدة)
       return notification.eventCode === 'task.due_soon' && (!task.dueDate || !taskStampCurrent(await this.sourcePayload(notification), task.remindedAt))
         ? 'موعد المهمة اتغيّر بعد تجهيز الرسالة' : null
+    }
+    if (notification.entityType === 'comment') {
+      // B2.8: إشارة في تعليق — المستلم لسه يقرا التعليق نفسه (حق الكيان دلوقتي، والداخلي مش لجانب الموظف)، ولسه في الدور اللي اتشاور له
+      const comment = await this.comments.byId(Number(notification.entityId))
+      if (!comment || !(await this.comments.readableBy(account, comment))) return 'التعليق مابقاش ظاهر للحساب ده'
+      return (await this.mentionHolds(comment, account)) ? null : 'الحساب مابقاش في الدور اللي اتشاور له'
     }
     if (notification.entityType === 'payroll_run') {
       // نفس شرط «قسائم راتبي»: مسير معتمد أو مصروف ليه بند لموظف الحساب

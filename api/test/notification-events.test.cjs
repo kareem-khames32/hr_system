@@ -18,9 +18,9 @@ const used = text => [...text.matchAll(TOKEN)].map(match => match[1])
 
 test('NE-01: الكتالوج متسق — فئة معروفة، وقالب لكل قناة، والنص الافتراضي بمتغيرات الحدث بس', () => {
   assert.deepEqual(events.NOTIFICATION_EVENT_CODES, ['request.pending_approval', 'request.escalated', 'request.decided', 'request.returned', 'request.confidential', 'payroll.payslip_available',
-    'task.assigned', 'task.due_soon', 'task.overdue'])
+    'task.assigned', 'task.due_soon', 'task.overdue', 'comment.mentioned'])
   assert.deepEqual([...events.NOTIFICATION_CHANNELS], ['IN_APP', 'EMAIL'])
-  assert.deepEqual(Object.keys(events.NOTIFICATION_CATEGORIES), ['approval', 'request', 'payroll', 'task'])
+  assert.deepEqual(Object.keys(events.NOTIFICATION_CATEGORIES), ['approval', 'request', 'payroll', 'task', 'comment'])
   for (const code of events.NOTIFICATION_EVENT_CODES) {
     const def = events.notificationEventDef(code)
     assert.ok(events.isNotificationCategory(def.category), code)
@@ -38,8 +38,8 @@ test('NE-01: الكتالوج متسق — فئة معروفة، وقالب لك
     // البريد دايمًا بلينك الفتح
     assert.ok(used(def.templates.EMAIL.body).includes('link'), `${code}: بريد من غير لينك`)
   }
-  // الأحداث اللي ليها عنصر محسوب في القايمة (العدّاد وقرار طلبك) مابتتخزنش للقايمة؛ القسيمة بس
-  assert.deepEqual(events.NOTIFICATION_EVENT_CODES.filter(code => events.notificationEventDef(code).storedInApp), ['payroll.payslip_available'])
+  // الأحداث اللي ليها عنصر محسوب في القايمة (العدّاد وقرار طلبك) مابتتخزنش للقايمة؛ القسيمة، وإشارة التعليق (B2.8)
+  assert.deepEqual(events.NOTIFICATION_EVENT_CODES.filter(code => events.notificationEventDef(code).storedInApp), ['payroll.payslip_available', 'comment.mentioned'])
   assert.equal(events.isNotificationEvent('request.unknown'), false)
   assert.equal(events.isNotificationEvent('toString'), false)
   assert.equal(events.isNotificationCategory('constructor'), false)

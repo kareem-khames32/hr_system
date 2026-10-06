@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
+import { MessageSquare } from 'lucide-react'
 import {
   Bell,
   Calendar,
@@ -61,6 +62,8 @@ const CATEGORY_META: Record<string, { label: string; icon: typeof Bell }> = {
   document: { label: 'المستندات', icon: FileText },
   // B2.4: الإشعارات المخزّنة من محرك الإشعارات (قسيمتك ظهرت)
   payroll: { label: 'الرواتب', icon: Wallet },
+  // B2.8: إشارة لك في تعليق
+  comment: { label: 'التعليقات', icon: MessageSquare },
 }
 const CATEGORY_ORDER = Object.keys(CATEGORY_META)
 // تصنيف جديد من السيرفر لم تُعرَّف تسميته هنا بعد

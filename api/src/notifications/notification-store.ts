@@ -50,7 +50,8 @@ export async function storedInAppNotifications(em: EntityManager, userId: number
     const key = `${row.eventCode}:${row.entityType}:${row.entityId}`
     if (seen.has(key)) continue
     seen.add(key)
-    out.push({ id: `n-${row.id}`, kind: row.kind, category: row.category, title: row.title, body: row.body, at: row.createdAt, link: String(row.link).split('?')[0] })
+    out.push({ id: `n-${row.id}`, kind: row.kind, category: row.category, title: row.title, body: row.body, at: row.createdAt,
+      link: row.eventCode === 'comment.mentioned' ? String(row.link) : String(row.link).split('?')[0] })
     if (out.length >= IN_APP_LIMIT) break
   }
   return out

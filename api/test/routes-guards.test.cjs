@@ -60,6 +60,8 @@ const byId = new Map(handlers.map(handler => [handler.id, handler]))
 // كل مسار عليه وسم موديول خاص بيه (بيكسب على وسم الكنترولر)، بالاسم — RG-04
 const HANDLER_TAGS = {
   AttendanceController: { assignScheduleRange: ['shifts'], calendarContext: ['platform'], clearWeekSchedule: ['shifts'], confirmCalendarContext: ['platform'], confirmOvertime: ['overtime'], createOvertimePeriod: ['overtime'], createScheduleRule: ['platform'], deleteOvertimePeriod: ['overtime'], deleteScheduleRule: ['platform'], employmentWindows: ['platform'], listOvertimePeriods: ['overtime'], listScheduleRules: ['platform'], overtimeLog: ['overtime'], overtimePreview: ['overtime'], payrollMonth: ['platform'], pendingOvertime: ['overtime'], setDayOverride: ['shifts'], setDayOverridesBulk: ['shifts'], updateOvertimePeriod: ['overtime'], updateScheduleRule: ['platform'], upsertSchedule: ['shifts'], weekDayOverrides: ['shifts'], weekSchedule: ['shifts'], workingDays: ['platform'] },
+  // B2.8: حوار الطلب بموديول الطلبات، وحوار المهمة بموديول المهام
+  CommentsController: { requestComment: ['requests'], requestThread: ['requests'], taskComment: ['tasks'], taskThread: ['tasks'] },
   DashboardController: { attendanceTrend: ['attendance'], departmentStats: ['attendance'] },
   EmployeeExtrasController: { listLoans: ['loans'] },
   FinancialReportController: { loans: ['loans'], overtime: ['payroll','overtime'] },
@@ -122,8 +124,9 @@ test('RG-03: قايمة الاستثناءات من غير بنود قديمة،
   // B2.6-ب: +3 SERVICE_CHECK (تفويض الاعتمادات: قايمة، إنشاء، إلغاء — صاحب التفويض أو صاحب الصلاحية في نطاقه)
   // B2.7-أ: +3 SELF («سياساتي» و«اللي مستنيني» والإقرار) و+2 SERVICE_CHECK (قراءة نسخة سياسة وملفها — صاحب الصلاحية أو الجمهور)
   // B2.7-ب: +3 SELF (مستندات الموظف اللي مستنية إقراره، وقراءة مستنده قبل الإقرار، والإقرار بيه — لصاحب المستند بس)
-  assert.deepEqual(counts, { PUBLIC_OK: 9, SELF: 36, AUTH_ANY_OK: 11, SERVICE_CHECK: 84 })
-  assert.equal(handlers.filter(handler => handler.perms.length === 0).length, 140)
+  // B2.8: +4 SERVICE_CHECK (حوار التعليقات على الطلب والمهمة: قراءة وكتابة — الحق حق الكيان نفسه، والفحص في الخدمة)
+  assert.deepEqual(counts, { PUBLIC_OK: 9, SELF: 36, AUTH_ANY_OK: 11, SERVICE_CHECK: 88 })
+  assert.equal(handlers.filter(handler => handler.perms.length === 0).length, 144)
   // من غير حارس دخول = العام بس
   const open = handlers.filter(handler => !guarded(handler, JwtAuthGuard)).map(handler => handler.id).sort()
   assert.deepEqual(open, Object.keys(EXCEPTIONS).filter(id => EXCEPTIONS[id] === 'PUBLIC_OK').sort())
@@ -205,7 +208,8 @@ test('RG-04: المسارات اللي بتخدم أكتر من موديول م�
   const tagged = {}
   for (const handler of handlers.filter(item => item.ownModules)) (tagged[handler.controller] ??= {})[handler.name] = handler.ownModules
   assert.deepEqual(tagged, HANDLER_TAGS)
-  assert.equal(Object.values(tagged).reduce((sum, own) => sum + Object.keys(own).length, 0), 67)
+  // B2.8: +4 (حوار الطلب بموديول الطلبات، وحوار المهمة بموديول المهام)
+  assert.equal(Object.values(tagged).reduce((sum, own) => sum + Object.keys(own).length, 0), 71)
   // ووسم الـhandler دايمًا غير وسم الكنترولر (وسم مكرر مالوش معنى وبيخبّي غلطة)
   for (const handler of handlers.filter(item => item.ownModules)) assert.notDeepEqual(handler.ownModules, handler.classModules, handler.id)
 

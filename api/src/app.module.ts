@@ -34,6 +34,7 @@ import { QueueModule } from './queue/queue.module'
 import { NotificationsModule } from './notifications/notifications.module'
 import { TasksModule } from './tasks/tasks.module'
 import { PoliciesModule } from './policies/policies.module'
+import { CommentsModule } from './comments/comments.module'
 import { StatutoryModule } from './statutory/statutory.module'
 import { validateEnv } from './auth/jwt-secret'
 import { dbPacketSize } from './common/sql-packet-size'
@@ -121,6 +122,7 @@ import { dbPacketSize } from './common/sql-packet-size'
     TasksModule,
     // B2.7: مكتبة السياسات وبوابة الإقرار
     PoliciesModule,
+    CommentsModule,
   ],
   controllers: [HealthController, DashboardController, ReportsController, CostCenterReportController],
   providers: [CostCenterReportService],
