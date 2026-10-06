@@ -2,7 +2,7 @@ import type { JwtPayload } from '../auth/auth.service'
 import { userHasPerm } from '../auth/guards'
 import type { EmployeeStatusHistory } from '../requests/entities/employment.entities'
 import type { Employee } from './employee.entity'
-import { historyWithLegacyLabels, FINANCIAL_CHANGE_FIELDS } from './employee-change-log'
+import { historyWithLegacyLabels, FINANCIAL_CHANGE_FIELDS, LOGIN_ACCOUNT_FIELD } from './employee-change-log'
 
 /** يشوف الراتب والبدلات والبنك لكل الموظفين في نطاقه (مش ملفه هو بس) — نفس القاعدة للقراءة والتصدير. */
 export function canSeeEmployeesFinance(user: JwtPayload) {
@@ -28,6 +28,8 @@ export function projectEmployee(employee: Employee, user: JwtPayload): Partial<E
 }
 
 export function projectEmployeeHistory(rows: EmployeeStatusHistory[], user: JwtPayload, employeeId: number) {
+  // سطر ربط حساب الدخول القديم داخلي (فيه رقم حساب): مابيرجعش في سجل الموظف لحد
+  rows = rows.filter(row => row.fieldName !== LOGIN_ACCOUNT_FIELD)
   const compatible = rows.map(historyWithLegacyLabels)
   if (canReadEmployeeFinance(user, employeeId)) return compatible
   const financial = /^(salary|basicSalary|housingAllowance|transportAllowance|phoneAllowance|workNatureAllowance|otherAllowance|workPressureAllowance|iban|bankName|bankBranch|gosiBaseSalary|payMethod|salaryCycle):/i

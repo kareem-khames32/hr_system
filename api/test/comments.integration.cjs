@@ -432,6 +432,30 @@ test('CM-03: «داخلي» — مابيرجعش لصاحب الطلب، وصا�
     const view = await shown(staff, 'requests', handover.id)
     assert.deepEqual([view.comments.length, view.canInternal], [3, true], staff.email)
   }
+  // حساب صاحب طلب اتقدّم له نيابةً، ومعاه «عرض كل الطلبات»، ربطه اتغيّر من شاشة الحسابات (اتفك، وبعدها اتربط بموظف تاني): الربط القديم
+  // بيتسجّل قبل ما يتغيّر، فالحساب لسه على جانب الموظف في طلبات الموظف ده (Codex CRP2P-B03)
+  const behalf = expectStatus(await request(users.proxy, 'POST', '/requests', { typeCode: types.plain.code, payload: { reason: 'نيابة عن موظف الموارد البشرية' }, submit: true, onBehalfEmployeeId: emps.hrPerson.id }), 201)
+  const hush = await said(users.manager, 'requests', behalf.id, { body: 'داخلي عن طلب اتقدّم نيابةً', internal: true })
+  assert.deepEqual([(await shown(powerful, 'requests', behalf.id)).comments.map(row => row.id), (await shown(users.consoleA, 'requests', behalf.id)).comments.map(row => row.id)], [[], [hush.id]])
+  const spare = await employee()
+  try {
+    let version = 0
+    for (const employeeId of [null, spare.id]) {
+      expectStatus(await request(users.admin, 'PATCH', `/users/${users.hrA.id}`, { employeeId }), 200)
+      const changed = { ...powerful, employeeId, tokenVersion: ++version }
+      const view = await shown(changed, 'requests', behalf.id)
+      assert.deepEqual([view.comments.map(row => row.id), view.canInternal], [[], false], String(employeeId))
+      assert.deepEqual(answer(await comment(changed, 'requests', behalf.id, { body: 'نص', internal: true })), [400, 'التعليق الداخلي لغير صاحب الطلب'], String(employeeId))
+      // والربط القديم بيخص طلبات الموظف القديم وحسابه هو بس: طلب موظف تاني بيتقري بداخليه، وقارئ تاني بيقرا داخلي الطلب ده
+      assert.deepEqual([(await shown(changed, 'requests', req.id)).comments.some(row => row.id === inner.id), (await shown(users.consoleA, 'requests', behalf.id)).comments.map(row => row.id)],
+        [true, [hush.id]], String(employeeId))
+    }
+    // والسطر داخلي (فيه رقم حساب): متسجّل مرة واحدة على الموظف القديم، ومابيرجعش في سجل الموظف
+    const history = expectStatus(await request(users.admin, 'GET', `/employees/${emps.hrPerson.id}/history`), 200)
+    assert.deepEqual([history.some(row => row.fieldName === 'loginAccount'),
+      await query(`SELECT [oldValue], [changedByUserId] FROM [employee_status_history] WHERE [employeeId] = @0 AND [fieldName] = N'loginAccount'`, [emps.hrPerson.id])],
+    [false, [{ oldValue: String(users.hrA.id), changedByUserId: users.admin.id }]])
+  } finally { await repo('User').update({ id: users.hrA.id }, { employeeId: emps.hrPerson.id, tokenVersion: 0 }) }
 })
 
 test('CM-04: الطلب السري — حواره لأطرافه بس، وغيرهم 403 من غير أي أثر', async () => {
@@ -568,6 +592,17 @@ test('CM-07: الإشعار — للدور المشار له وكاتب التع
   // وفي قايمة إشعاراته بلينك يفتح الطلب نفسه
   const listed = expectStatus(await request(users.manager, 'GET', '/notifications'), 200).find(item => item.title === 'إشارة لك في تعليق')
   assert.deepEqual([listed.link, listed.category, listed.body], [`/requests?request=${req.id}`, 'comment', 'على طلب'])
+  // والإشعار ولينكه (فيه رقم الطلب) بيظهروا طول ما الحساب لسه يقرا التعليق بهويته دلوقتي: حساب اتربط بموظف فرع تاني مابقاش يشوف الطلب
+  // ولا إشعاره، ولما يرجع يرجعوا (Codex CRP2P-B02)
+  const mentionsOf = async user => expectStatus(await request(user, 'GET', '/notifications'), 200).filter(item => item.title === 'إشارة لك في تعليق').length
+  const mentions = await mentionsOf(users.manager)
+  assert.ok(mentions >= 1)
+  try {
+    await repo('User').update({ id: users.manager.id }, { employeeId: emps.far.id, branchId: org.branchB.id })
+    const moved = { ...users.manager, employeeId: emps.far.id, branchId: org.branchB.id }
+    assert.deepEqual([answer(await thread(moved, 'requests', req.id)), await mentionsOf(moved)], [[404, 'الطلب غير موجود'], 0])
+  } finally { await repo('User').update({ id: users.manager.id }, { employeeId: emps.manager.id, branchId: org.branchA.id }) }
+  assert.equal(await mentionsOf(users.manager), mentions)
   // رد المعتمد: صاحب الطلب مشار له بالدور وبالرد — إشعار واحد
   mailbox.sent.length = 0
   const answered = await said(users.manager, 'requests', req.id, { body: 'رد', targets: ['REQUESTER'], replyTo: [asked.id] })
@@ -706,6 +741,14 @@ test('CM-08: المرفقات — بتترفع بتصنيف «تعليق» من 
   const inner = await said(users.manager, 'requests', req.id, { body: 'داخلي بمرفق', internal: true, fileIds: [theirs] })
   assert.deepEqual([await download(users.worker, theirs), await download(users.consoleA, theirs), await download(users.manager, theirs)], [[404, 'الملف غير موجود'], [200, ''], [200, '']])
   assert.equal(inner.files.length, 1)
+  // والمرفق المربوط حقه حق تعليقه حتى لرافعه: حساب كاتب الداخلي اتربط بصاحب الطلب بعد ما كتب، فالتعليق مابقاش ليه ولا مرفقه؛ ولما
+  // يرجع يرجعوا (Codex CRP2P-B01)
+  try {
+    await repo('User').update({ id: users.manager.id }, { employeeId: emps.worker.id })
+    const turned = { ...users.manager, employeeId: emps.worker.id }
+    assert.deepEqual([(await shown(turned, 'requests', req.id)).comments.some(row => row.id === inner.id), await download(turned, theirs)], [false, [404, 'الملف غير موجود']])
+  } finally { await repo('User').update({ id: users.manager.id }, { employeeId: emps.manager.id }) }
+  assert.deepEqual(await download(users.manager, theirs), [200, ''])
   // تلات مرفقات بحدهم
   const three = [await uploaded(users.worker, undefined, 'a.png'), await uploaded(users.worker, undefined, 'b.png'), await uploaded(users.worker, undefined, 'c.png')]
   assert.deepEqual((await said(users.worker, 'requests', req.id, { body: 'تلاتة', fileIds: three })).files.map(row => row.name), ['a.png', 'b.png', 'c.png'])

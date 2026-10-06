@@ -142,9 +142,10 @@ test('CMM-2: من غير الجدول الحوار «مش متاح» والتع�
   assert.deepEqual(await comments.list(made.worker, 'task', task.id + 9000), UNAVAILABLE)
   await assert.rejects(comments.add(made.worker, 'task', task.id, { body: 'قبل الترحيل' }), /ترحيل 20261006_093/)
   assert.equal(await comments.byId(1), null)
-  // مرفق تعليق: لرافعه، ولغيره «غير موجود»
-  await comments.assertFileAccess(made.worker, { id: 1, uploadedBy: made.worker.sub, entityId: 1 })
-  await assert.rejects(comments.assertFileAccess(made.manager, { id: 1, uploadedBy: made.worker.sub, entityId: 1 }), /الملف غير موجود/)
+  // مرفق تعليق قبل الترحيل: اللي لسه مش مربوط لرافعه بس؛ والمربوط حقه حق تعليقه حتى لرافعه (CRP2P-B01)، ومفيش تعليق يتقري
+  await comments.assertFileAccess(made.worker, { id: 1, uploadedBy: made.worker.sub, entityId: null })
+  await assert.rejects(comments.assertFileAccess(made.manager, { id: 1, uploadedBy: made.worker.sub, entityId: null }), /الملف غير موجود/)
+  await assert.rejects(comments.assertFileAccess(made.worker, { id: 1, uploadedBy: made.worker.sub, entityId: 1 }), /الملف غير موجود/)
   // حدث إشارة من غير الجدول: ولا حاجة ومن غير خطأ
   assert.equal(await notifications.dispatch({ id: '1', type: 'COMMENT_MENTION', entityType: 'comment', entityId: '1', payload: { commentId: 1 } }), 0)
 

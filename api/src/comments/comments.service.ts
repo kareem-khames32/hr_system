@@ -5,6 +5,7 @@ import { withDeadlockRetry } from '../attendance/device-sync.service'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, inBranchScope } from '../auth/guards'
 import { User } from '../auth/user.entity'
+import { wasLoginAccountOf } from '../employees/employee-change-log'
 import { Employee } from '../employees/employee.entity'
 import { StoredFile } from '../files/stored-file.entity'
 import { recordOutboxEvent } from '../queue/outbox'
@@ -21,7 +22,8 @@ import {
 //  الحق: حق الكيان بالحرف. الطلب: كل اللي يشوف تفاصيله من غير حجب (بوابة RequestsService.readable نفسها)، والسري لأطرافه بس.
 //  المهمة: كل اللي يشوفها (TasksService.commentable) — ومهمة تنفيذ طلب أو إقرار مستند مالهاش حوار (تفاصيلها تبع الطلب أو المستند).
 //  «داخلي» (على الطلب بس): مابيرجعش لـ«جانب الموظف» في أي رد ولا عدّ ومايكتبوش — صاحب الطلب، والحساب اللي قدّم الطلب
-//  (RequestsService.requesterSide)، واللي رفض استلام عهدة الطلب (طرف فيه بسطر رفضه، ومش جهة اعتماد).
+//  (RequestsService.requesterSide)، واللي رفض استلام عهدة الطلب (طرف فيه بسطر رفضه، ومش جهة اعتماد)، وحساب كان مربوط بصاحب الطلب
+//  وربطه اتغيّر (الربط القديم بيتسجّل وقت تغييره).
 //  الرد مافيهوش رقم تعليق: مرجع (commentRef) — الأرقام من عدّاد واحد، ورقمين ورا بعض كانوا هيقولوا إن فيه تعليق مخفي بينهم.
 //  الكتابة: الحق بيتحكم جوه معاملة التعليق وصف الطلب أو المهمة مقفول بقفل القرار أو التحويل نفسه، فتغيير في نفس اللحظة يا إما قبل
 //  التعليق يا إما بعده. كاتب مابياخدش صف الطلب الأول (رفض استلام العهدة) بيتقاطع مع قراءات التعليق: القاعدة بتوقّع التعليق (ماكتبش
@@ -72,6 +74,8 @@ export class CommentsService {
       // سطر في السلسلة نفسها (معتمد أو منفّذ) جهة اعتماد حتى لو رفض الاستلام
       const mine = approvals.filter(row => row.approverId === user.sub)
       const subject = this.requests.requesterSide(user, req) || (mine.some(row => row.action === 'REJECTED') && mine.every(row => row.step === 0))
+        // حساب كان مربوط بصاحب الطلب وربطه اتغيّر: لسه على جانب الموظف (Codex CRP2P-B03)
+        || await wasLoginAccountOf(em, user.sub, req.requesterId)
       const requester = !!user.employeeId && user.employeeId === req.requesterId
       const waiting = req.status === 'UNDER_REVIEW' && this.requests.waitingSteps(req).length > 0
       return { subject, party, internal: true, subjectEmployeeId: req.requesterId ?? null,
@@ -93,6 +97,15 @@ export class CommentsService {
       if (error instanceof HttpException) return false
       throw error
     }
+  }
+
+  /** التعليقات اللي الحساب يقراها دلوقتي من الأرقام دي — قايمة الإشعارات بتسأل بيها قبل ما تعرض إشعار الإشارة ولينكه (Codex CRP2P-B02) */
+  async readableComments(account: JwtPayload, ids: number[]): Promise<Set<number>> {
+    const readable = new Set<number>()
+    if (!ids.length || !(await commentsTableReady(this.ds.manager))) return readable
+    const rows = await this.ds.getRepository(Comment).find({ where: { id: In(ids) }, select: { id: true, entityType: true, entityId: true, internal: true } })
+    for (const row of rows) if (await this.readableBy(account, row)) readable.add(row.id)
+    return readable
   }
 
   async byId(id: number): Promise<Comment | null> {
@@ -222,10 +235,16 @@ export class CommentsService {
   }
 
   // ===== مرفق التعليق =====
-  /** تحميل مرفق تعليق (/files/:id) بحكم التعليق نفسه: رافعه، وكل اللي يقرا التعليق. برّه كده نفس رد الملف الغايب */
+  /**
+   * تحميل مرفق تعليق (/files/:id). قبل الربط: لرافعه بس. وبعد الربط بحكم التعليق نفسه دايمًا، حتى لرافعه: حسابه ممكن يكون اتغيّر ربطه
+   * بعد ما كتب، فمايقراش مرفق تعليق مابقاش يقراه (Codex CRP2P-B01). برّه كده نفس رد الملف الغايب
+   */
   async assertFileAccess(user: JwtPayload, file: Pick<StoredFile, 'id' | 'uploadedBy' | 'entityId'>) {
-    if (!!user.sub && file.uploadedBy === user.sub) return
-    const comment = file.entityId ? await this.byId(file.entityId) : null
+    if (!file.entityId) {
+      if (!!user.sub && file.uploadedBy === user.sub) return
+      throw new NotFoundException(COMMENT_FILE_NOT_FOUND)
+    }
+    const comment = await this.byId(file.entityId)
     if (!comment || !(await this.readableBy(user, comment))) throw new NotFoundException(COMMENT_FILE_NOT_FOUND)
   }
 }

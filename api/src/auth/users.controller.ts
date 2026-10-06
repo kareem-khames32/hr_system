@@ -60,6 +60,7 @@ import {
 import { Role } from './role.entity'
 import { User, UserRole } from './user.entity'
 import { Employee } from '../employees/employee.entity'
+import { recordLoginAccountUnlinked } from '../employees/employee-change-log'
 import { Branch } from '../org/entities/branch.entity'
 import { DomainSyncService } from './domain-sync.service'
 import { legacyUnusablePasswordUserIds, needsPasswordFromLegacy } from './legacy-password-marker'
@@ -718,6 +719,11 @@ export class UsersController {
       // إعادة التعيين من المدير = كلمة مؤقتة افتراضيًا (إلا حسابك إنت)
       user.mustChangePassword = dto.mustChangePassword ?? actor.sub !== id
       user.passwordChangedAt = new Date()
+    }
+    // B2.8 (Codex CRP2P-B03): حساب مربوط بموظف وربطه بيتغيّر: الربط القديم بيتسجّل على الموظف قبل الحفظ (مفيش لحظة الحساب فيها اتغيّر
+    // ربطه من غير سجل). حوار الطلبات بيقراه عشان الحساب يفضل على جانب الموظف في طلبات الموظف ده
+    if (employeeChanged && user.employeeId != null) {
+      await recordLoginAccountUnlinked(this.users.manager, { employeeId: user.employeeId, userId: user.id, changedByUserId: actor.sub })
     }
     if (dto.role !== undefined) user.role = dto.role as UserRole
     if (dto.isActive !== undefined) user.isActive = dto.isActive

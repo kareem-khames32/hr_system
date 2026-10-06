@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { RequestsModule } from '../requests/requests.module'
+import { CommentsModule } from '../comments/comments.module'
 import { AttendanceModule } from '../attendance/attendance.module'
 import { AttendanceDay, AttendancePunch, PermissionType } from '../attendance/attendance.entities'
 import { Employee } from '../employees/employee.entity'
@@ -47,6 +48,7 @@ import { HiringDocumentsController } from './hiring-documents.controller'
   imports: [
     EmployeesModule,
     RequestsModule,
+    CommentsModule, // B2.8: قايمة الإشعارات بتحكم إشعار الإشارة بحق قراءة تعليقه
     AttendanceModule, // لإعادة حساب الأيام بعد تعديل وردية في الكتالوج
     TypeOrmModule.forFeature([
       Asset,

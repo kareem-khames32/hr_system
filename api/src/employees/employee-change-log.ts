@@ -80,3 +80,16 @@ export function historyWithLegacyLabels(row: EmployeeStatusHistory) {
   }
   return safe
 }
+
+// B2.8 (Codex CRP2P-B03): حساب دخول كان مربوط بالموظف وربطه اتغيّر (PATCH /users/:id). السطر بيتكتب قبل حفظ التغيير، وحوار الطلبات
+// بيقراه: الحساب بيفضل على «جانب الموظف» في طلبات الموظف القديم، فتغيير ربطه مايفتحلوش التعليق الداخلي عن طلبه. سطر داخلي: مابيرجعش
+// في سجل الموظف (projectEmployeeHistory) عشان فيه رقم حساب.
+export const LOGIN_ACCOUNT_FIELD = 'loginAccount'
+export const recordLoginAccountUnlinked = (em: EntityManager, input: { employeeId: number; userId: number; changedByUserId: number | null }) =>
+  recordEmployeeChange(em, { employeeId: input.employeeId, fieldName: LOGIN_ACCOUNT_FIELD, oldValue: input.userId, newValue: null, changeType: 'DATA', changedByUserId: input.changedByUserId })
+/** الحساب ده كان مربوط بالموظف ده وربطه اتغيّر؟ */
+export async function wasLoginAccountOf(em: EntityManager, userId: number, employeeId: number | null | undefined): Promise<boolean> {
+  if (!employeeId) return false
+  const rows = await em.getRepository(EmployeeStatusHistory).find({ where: { employeeId, fieldName: LOGIN_ACCOUNT_FIELD }, select: { id: true, oldValue: true } })
+  return rows.some(row => Number(row.oldValue) === userId)
+}

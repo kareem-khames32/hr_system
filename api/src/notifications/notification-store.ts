@@ -33,8 +33,10 @@ export interface StoredNotificationItem { id: string; kind: string; category: st
  * اللينك مسار الشاشة من غير استعلام: القايمة بتفحص بيه إن الشاشة متاحة للمستخدم (routeAvailable).
  * الإشعار بيظهر طول ما اللي بيقوله لسه صحيح: «قسيمتك ظهرت» طول ما القسيمة نفسها ظاهرة (مسير معتمد أو مصروف ليه بند لموظف الحساب — نفس شرط
  * «قسائم راتبي»)، فمسير اتفتح تاني أو موظف اتشال منه إشعاره بيختفي. ونفس الحدث على نفس الكيان أكتر من مرة (اتفتح واتعتمد تاني) = الأحدث بس.
+ * و«إشارة لك في تعليق» (لينكه فيه رقم الموضوع) طول ما الحساب لسه يقرا التعليق بهويته دلوقتي: المنادي بيدّي الحكم (readableComments)،
+ * ومن غيره إشعارات الإشارة مابتظهرش (Codex CRP2P-B02).
  */
-export async function storedInAppNotifications(em: EntityManager, userId: number): Promise<StoredNotificationItem[]> {
+export async function storedInAppNotifications(em: EntityManager, userId: number, readableComments?: (ids: number[]) => Promise<Set<number>>): Promise<StoredNotificationItem[]> {
   if (!(await notificationTablesReady(em))) return []
   const rows: Array<{ id: string; eventCode: string; entityType: string | null; entityId: string | null; kind: string; category: string; title: string; body: string;
     createdAt: Date; link: string }> = await em.query(
@@ -45,8 +47,11 @@ export async function storedInAppNotifications(em: EntityManager, userId: number
          SELECT 1 FROM [payroll_runs] r INNER JOIN [payroll_items] i ON i.[runId] = r.[id] INNER JOIN [users] u ON u.[employeeId] = i.[employeeId]
          WHERE u.[id] = n.[recipientUserId] AND r.[id] = TRY_CAST(n.[entityId] AS int) AND r.[status] IN (N'APPROVED', N'PAID')))
      ORDER BY n.[id] DESC`, [userId, new Date(Date.now() - IN_APP_KEEP_DAYS * 86_400_000)])
+  const mentioned = rows.filter(row => row.eventCode === 'comment.mentioned').map(row => Number(row.entityId))
+  const readable = mentioned.length && readableComments ? await readableComments(mentioned) : new Set<number>()
   const seen = new Set<string>(), out: StoredNotificationItem[] = []
   for (const row of rows) {
+    if (row.eventCode === 'comment.mentioned' && !readable.has(Number(row.entityId))) continue
     const key = `${row.eventCode}:${row.entityType}:${row.entityId}`
     if (seen.has(key)) continue
     seen.add(key)
