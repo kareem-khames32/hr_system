@@ -620,12 +620,9 @@ export class DestinationsService {
     if (emp.branchId !== department.branchId) {
       await appendEmployeeOrgCalendar(em, { employeeId: emp.id, beforeBranchId: emp.branchId, branchId: department.branchId,
         effectiveFrom: transfer.effectiveDate, reason: `نقل معتمد بطلب ${req.id} بتاريخ السريان`, actorUserId: calendarActor! })
-      const users = await em.getRepository(User).find({ where: { employeeId: emp.id } })
-      for (const user of users) {
-        user.branchId = department.branchId
-        user.tokenVersion = (user.tokenVersion || 0) + 1
-        await em.getRepository(User).save(user)
-      }
+      // تحديث فرع حسابات الموظف وإبطال جلساتها بعمودين بس، مش حفظ كيان الحساب كله: حفظ الكيان بقيم اتقرت قبل لحظة كان ممكن يرجّع
+      // ربط الحساب بموظف اتغيّر في نفس اللحظة من غير سجل (Codex CRP2Q-B01)
+      await em.getRepository(User).update({ employeeId: emp.id }, { branchId: department.branchId, tokenVersion: () => 'COALESCE([tokenVersion], 0) + 1' })
     }
     transfer.status = 'EXECUTED'
     transfer.executedAt = new Date()

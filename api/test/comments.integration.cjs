@@ -13,7 +13,8 @@
 //  CM-08) المرفقات: بتترفع بتصنيف «تعليق» من غير رقم، وبتتربط مرة واحدة برافعها، وقراءتها بحكم التعليق (والداخلي مش لصاحب الطلب).
 //  CM-09) التعليق والتغيير في نفس اللحظة: الحق بيتحكم وصف الطلب أو المهمة مقفول، فالقرار أو التحويل بيستنى التعليق؛ والقرار بيقف على
 //         صف الطلب نفسه (التعليق ماسكه بقفل القرار) فمايتقاطعوش على سجل الاعتماد؛ وكاتب مابياخدش صف الطلب الأول بيتقاطع مع التعليق
-//         فالتعليق بيتعاد لوحده؛ ومهمة ربطها اتثبّت والتعليق واقف على صفها مابتاخدش تعليق.
+//         فالتعليق بيتعاد لوحده؛ ومهمة ربطها اتثبّت والتعليق واقف على صفها مابتاخدش تعليق؛ وتعديلين على نفس الحساب في نفس اللحظة
+//         ورا بعض، فربط الحساب اللي في النص متسجّل ومابيتحفظش فوقه بكيان قديم.
 // الـAPI بيرجّع مرجع للتعليق (ref) مش رقمه. المساعدين said وshown بيزوّدوا الرقم من القاعدة (id وcommentId) عشان فحوصات القاعدة.
 // Run (من api/): node --test test/comments.integration.cjs
 const { test, before, after } = require('node:test')
@@ -603,6 +604,24 @@ test('CM-07: الإشعار — للدور المشار له وكاتب التع
     assert.deepEqual([answer(await thread(moved, 'requests', req.id)), await mentionsOf(moved)], [[404, 'الطلب غير موجود'], 0])
   } finally { await repo('User').update({ id: users.manager.id }, { employeeId: emps.manager.id, branchId: org.branchA.id }) }
   assert.equal(await mentionsOf(users.manager), mentions)
+  // وإشعارات محجوبة أحدث مابتزاحمش إشعار مسموح أقدم برّه القايمة: الحكم قبل الحد، صفحة ورا صفحة (Codex CRP2Q-N01)
+  const hiddenThread = await submit(users.other, types.hr)
+  const [hiddenComment] = await query(`INSERT INTO [comments] ([entityType], [entityId], [authorUserId], [authorEmployeeId], [body], [internal], [mentions], [createdAt])
+    OUTPUT INSERTED.[id] VALUES (N'request', @0, @1, @2, N'تعليق على طلب مش ظاهر للمعتمد', 0, NULL, SYSUTCDATETIME())`, [hiddenThread.id, users.other.id, emps.other.id])
+  assert.deepEqual(answer(await thread(users.manager, 'requests', hiddenThread.id)), [403, 'لا تملك صلاحية عرض هذا الطلب'])
+  const mentionRow = (recipient, commentId, requestId, key) => query(`INSERT INTO [notifications] ([recipientUserId], [eventCode], [category], [kind], [title], [body], [link], [entityType], [entityId], [inApp], [dedupeKey], [createdAt])
+    SELECT TOP (@4) @0, N'comment.mentioned', N'comment', N'info', N'إشارة لك في تعليق', N'على طلب', @1, N'comment', CAST(@2 AS nvarchar(30)), 1,
+      @3 + CAST(ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS nvarchar(10)), SYSUTCDATETIME() FROM sys.all_objects`, [recipient.id, `/requests?request=${requestId}`, commentId, key, key.startsWith('cm07-hidden') ? 70 : 1])
+  try {
+    await mentionRow(users.manager, hiddenComment.id, hiddenThread.id, 'cm07-hidden:')
+    assert.equal(await mentionsOf(users.manager), mentions, 'المسموح لسه ظاهر ورا 70 صف محجوب')
+    // والحكم لكل تعليق بنوعه: إشعارين لصاحب الطلب على نفس الطلب، واحد على تعليق ظاهر وواحد على داخلي — الظاهر بس
+    const inside = await said(users.manager, 'requests', req.id, { body: 'داخلي على نفس الطلب', internal: true })
+    const mine = await mentionsOf(users.worker)
+    await mentionRow(users.worker, asked.id, req.id, 'cm07-visible:')
+    await mentionRow(users.worker, inside.id, req.id, 'cm07-inside:')
+    assert.equal(await mentionsOf(users.worker), mine + 1)
+  } finally { await query(`DELETE FROM [notifications] WHERE [dedupeKey] LIKE N'cm07-%'`) }
   // رد المعتمد: صاحب الطلب مشار له بالدور وبالرد — إشعار واحد
   mailbox.sent.length = 0
   const answered = await said(users.manager, 'requests', req.id, { body: 'رد', targets: ['REQUESTER'], replyTo: [asked.id] })
@@ -821,6 +840,35 @@ test('CM-09: التعليق والتغيير في نفس اللحظة — الق
     if (retried) await retried.catch(() => undefined)
   }
   assert.deepEqual([(await rowsOf('request', tangled.id)).length, (await query('SELECT COUNT(*) AS [n] FROM [request_approvals] WHERE [requestId] = @0', [tangled.id]))[0].n], [1, 0])
+  // تعديلين على نفس الحساب في نفس اللحظة (Codex CRP2Q-B01): ورا بعض، فكل تعديل بيقرا الربط اللي قبله اتثبّت. جدول سجل الموظف ممسوك من
+  // اتصال تالت: الأول قرا الحساب وواقف على تسجيل ربطه القديم، والتاني واقف على قفل الحساب قبل ما يقراه (من غير القفل كان هيقرا نفس
+  // الربط القديم ويسجّله تاني). الربط اللي في النص (اللي الأول ثبّته والتاني شاله) متسجّل، والأصلي مرة واحدة
+  const linksOf = async employeeId => (await query(`SELECT [oldValue] FROM [employee_status_history] WHERE [employeeId] = @0 AND [fieldName] = N'loginAccount'`, [employeeId])).map(row => row.oldValue)
+  const origin = await employee(), left = await employee({ managerEmployeeId: emps.manager.id }), right = await employee({ managerEmployeeId: emps.manager.id })
+  const racer = await account('racer', 'employee', ['requests.view_all'], { employeeId: origin.id })
+  const patch = body => request(users.admin, 'PATCH', `/users/${racer.id}`, body)
+  const HOLD = 'SELECT TOP (1) 1 FROM [employee_status_history] WITH (TABLOCKX, HOLDLOCK)'
+  const [first, second] = await releaseTogether(HOLD, [], 2, async () => {
+    const one = patch({ employeeId: left.id })
+    await untilBlocked(1)
+    return Promise.all([one, patch({ employeeId: right.id })])
+  })
+  assert.deepEqual([first.status, second.status, (await repo('User').findOneByOrFail({ id: racer.id })).employeeId], [200, 200, right.id])
+  assert.deepEqual([await linksOf(origin.id), await linksOf(left.id), await linksOf(right.id)], [[String(racer.id)], [String(racer.id)], []])
+  // والحساب بهويته الأخيرة مايقراش الداخلي عن طلب الموظف اللي كان مربوط بيه في النص
+  const midway = expectStatus(await request(users.proxy, 'POST', '/requests', { typeCode: types.plain.code, payload: { reason: 'نيابة عن موظف النص' }, submit: true, onBehalfEmployeeId: left.id }), 201)
+  await said(users.manager, 'requests', midway.id, { body: 'داخلي عن موظف النص', internal: true })
+  const settled = await repo('User').findOneByOrFail({ id: racer.id })
+  assert.deepEqual([(await shown(settled, 'requests', midway.id)).comments.length, (await shown(settled, 'requests', midway.id)).canInternal], [0, false])
+  // وتعديل صلاحيات بس بدأ والربط بيتغيّر مابيرجّعش الربط القديم: بيقرا الحساب بعد ما تغيير الربط اتثبّت
+  const [linked, granted] = await releaseTogether(HOLD, [], 2, async () => {
+    const one = patch({ employeeId: origin.id })
+    await untilBlocked(1)
+    return Promise.all([one, patch({ permissions: ['requests.view_all', 'employees.view'] })])
+  })
+  const after = await repo('User').findOneByOrFail({ id: racer.id })
+  assert.deepEqual([linked.status, granted.status, after.employeeId, JSON.parse(after.permissions)], [200, 200, origin.id, ['requests.view_all', 'employees.view']])
+  assert.deepEqual(await linksOf(right.id), [String(racer.id)])
   // ونفس الشيء للمهمة: تحويلها لموظف تاني بيستنى تعليق مسؤولها اللي بدأ قبله
   const task = expectStatus(await request(users.tasksAdmin, 'POST', '/tasks', { title: 'مهمة بتتحوّل', assigneeEmployeeId: emps.worker.id }), 201)
   const [noted, moved] = await releaseTogether('SELECT TOP (1) 1 FROM [comments] WITH (TABLOCKX, HOLDLOCK)', [], 2, async () => {

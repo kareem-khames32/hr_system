@@ -104,7 +104,13 @@ export class CommentsService {
     const readable = new Set<number>()
     if (!ids.length || !(await commentsTableReady(this.ds.manager))) return readable
     const rows = await this.ds.getRepository(Comment).find({ where: { id: In(ids) }, select: { id: true, entityType: true, entityId: true, internal: true } })
-    for (const row of rows) if (await this.readableBy(account, row)) readable.add(row.id)
+    // الحكم لكل موضوع مرة: تعليقات نفس الطلب أو المهمة بنفس حق الحساب فيه
+    const verdicts = new Map<string, boolean>()
+    for (const row of rows) {
+      const key = `${row.entityType}:${row.entityId}:${row.internal === true}`
+      if (!verdicts.has(key)) verdicts.set(key, await this.readableBy(account, row))
+      if (verdicts.get(key)) readable.add(row.id)
+    }
     return readable
   }
 

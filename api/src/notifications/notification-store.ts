@@ -8,6 +8,9 @@ export const NOTIFICATIONS_MIGRATION_MISSING = 'محرك الإشعارات مح
 // الإشعار المخزّن بيفضل في القايمة المدة دي، وأقصى عدد منه في القايمة
 export const IN_APP_KEEP_DAYS = 60
 export const IN_APP_LIMIT = 20
+// صفحات القراءة: القايمة بتكمّل صفحة ورا صفحة لحد ما تكمل، فإشعارات محجوبة مابتزاحمش المسموح (Codex CRP2Q-N01)
+export const IN_APP_PAGE = IN_APP_LIMIT * 3
+export const IN_APP_MAX_PAGES = 10
 
 const logger = new Logger('Notifications')
 let ready: boolean | null = null, warned = false
@@ -38,26 +41,32 @@ export interface StoredNotificationItem { id: string; kind: string; category: st
  */
 export async function storedInAppNotifications(em: EntityManager, userId: number, readableComments?: (ids: number[]) => Promise<Set<number>>): Promise<StoredNotificationItem[]> {
   if (!(await notificationTablesReady(em))) return []
-  const rows: Array<{ id: string; eventCode: string; entityType: string | null; entityId: string | null; kind: string; category: string; title: string; body: string;
-    createdAt: Date; link: string }> = await em.query(
-    `SELECT TOP (${IN_APP_LIMIT * 3}) n.[id], n.[eventCode], n.[entityType], n.[entityId], n.[kind], n.[category], n.[title], n.[body], n.[createdAt], n.[link]
+  const since = new Date(Date.now() - IN_APP_KEEP_DAYS * 86_400_000)
+  const seen = new Set<string>(), out: StoredNotificationItem[] = []
+  let before: string | null = null
+  for (let page = 0; page < IN_APP_MAX_PAGES && out.length < IN_APP_LIMIT; page++) {
+    const rows: Array<{ id: string; eventCode: string; entityType: string | null; entityId: string | null; kind: string; category: string; title: string; body: string;
+      createdAt: Date; link: string }> = await em.query(
+      `SELECT TOP (${IN_APP_PAGE}) n.[id], n.[eventCode], n.[entityType], n.[entityId], n.[kind], n.[category], n.[title], n.[body], n.[createdAt], n.[link]
      FROM [notifications] n
-     WHERE n.[recipientUserId] = @0 AND n.[inApp] = 1 AND n.[createdAt] >= @1
+     WHERE n.[recipientUserId] = @0 AND n.[inApp] = 1 AND n.[createdAt] >= @1 AND (@2 IS NULL OR n.[id] < @2)
        AND (n.[entityType] IS NULL OR n.[entityType] <> N'payroll_run' OR EXISTS (
          SELECT 1 FROM [payroll_runs] r INNER JOIN [payroll_items] i ON i.[runId] = r.[id] INNER JOIN [users] u ON u.[employeeId] = i.[employeeId]
          WHERE u.[id] = n.[recipientUserId] AND r.[id] = TRY_CAST(n.[entityId] AS int) AND r.[status] IN (N'APPROVED', N'PAID')))
-     ORDER BY n.[id] DESC`, [userId, new Date(Date.now() - IN_APP_KEEP_DAYS * 86_400_000)])
-  const mentioned = rows.filter(row => row.eventCode === 'comment.mentioned').map(row => Number(row.entityId))
-  const readable = mentioned.length && readableComments ? await readableComments(mentioned) : new Set<number>()
-  const seen = new Set<string>(), out: StoredNotificationItem[] = []
-  for (const row of rows) {
-    if (row.eventCode === 'comment.mentioned' && !readable.has(Number(row.entityId))) continue
-    const key = `${row.eventCode}:${row.entityType}:${row.entityId}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push({ id: `n-${row.id}`, kind: row.kind, category: row.category, title: row.title, body: row.body, at: row.createdAt,
-      link: row.eventCode === 'comment.mentioned' ? String(row.link) : String(row.link).split('?')[0] })
-    if (out.length >= IN_APP_LIMIT) break
+     ORDER BY n.[id] DESC`, [userId, since, before])
+    const mentioned = rows.filter(row => row.eventCode === 'comment.mentioned').map(row => Number(row.entityId))
+    const readable = mentioned.length && readableComments ? await readableComments(mentioned) : new Set<number>()
+    for (const row of rows) {
+      if (row.eventCode === 'comment.mentioned' && !readable.has(Number(row.entityId))) continue
+      const key = `${row.eventCode}:${row.entityType}:${row.entityId}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push({ id: `n-${row.id}`, kind: row.kind, category: row.category, title: row.title, body: row.body, at: row.createdAt,
+        link: row.eventCode === 'comment.mentioned' ? String(row.link) : String(row.link).split('?')[0] })
+      if (out.length >= IN_APP_LIMIT) break
+    }
+    if (rows.length < IN_APP_PAGE) break
+    before = rows[rows.length - 1].id
   }
   return out
 }

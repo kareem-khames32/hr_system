@@ -15,6 +15,7 @@ import {
   Post,
   Query,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { In, Not, Repository } from 'typeorm'
@@ -61,6 +62,7 @@ import { Role } from './role.entity'
 import { User, UserRole } from './user.entity'
 import { Employee } from '../employees/employee.entity'
 import { recordLoginAccountUnlinked } from '../employees/employee-change-log'
+import { AccountEditLock } from './account-edit-lock'
 import { Branch } from '../org/entities/branch.entity'
 import { DomainSyncService } from './domain-sync.service'
 import { legacyUnusablePasswordUserIds, needsPasswordFromLegacy } from './legacy-password-marker'
@@ -609,6 +611,8 @@ export class UsersController {
     }
   }
 
+  // تعديلات الحساب الواحد ورا بعض (Codex CRP2Q-B01): القراءة وسجل الربط القديم والحفظ وإبطال الجلسات تحت قفل واحد
+  @UseInterceptors(AccountEditLock)
   @Patch(':id')
   async update(
     @CurrentUser() actor: JwtPayload,
@@ -721,7 +725,8 @@ export class UsersController {
       user.passwordChangedAt = new Date()
     }
     // B2.8 (Codex CRP2P-B03): حساب مربوط بموظف وربطه بيتغيّر: الربط القديم بيتسجّل على الموظف قبل الحفظ (مفيش لحظة الحساب فيها اتغيّر
-    // ربطه من غير سجل). حوار الطلبات بيقراه عشان الحساب يفضل على جانب الموظف في طلبات الموظف ده
+    // ربطه من غير سجل). حوار الطلبات بيقراه عشان الحساب يفضل على جانب الموظف في طلبات الموظف ده. والمسار كله تحت قفل الحساب
+    // (AccountEditLock): الربط اللي اتقري فوق هو اللي في القاعدة دلوقتي
     if (employeeChanged && user.employeeId != null) {
       await recordLoginAccountUnlinked(this.users.manager, { employeeId: user.employeeId, userId: user.id, changedByUserId: actor.sub })
     }
