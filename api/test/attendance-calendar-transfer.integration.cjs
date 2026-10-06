@@ -128,6 +128,17 @@ test('a transfer the administrator files on behalf is approved at once and store
   assert.equal((await repo('AttendanceDay').findOneByOrFail({ employeeId: emp.id, date: yesterday })).branchId, branchA.id)
   const account = await repo('User').findOneByOrFail({ id: user.id }); assert.equal(account.branchId, branchB.id); assert.equal(account.tokenVersion, 1)
   assert.equal((await request(user, 'GET', '/requests/types', undefined, oldToken)).status, 401)
+  // Codex CRP2R-B02: تغيير فرع الحساب في النقل متسجّل في التدقيق بفرعه القديم والجديد (التحديث المحدد للأعمدة مابيعدّيش على مستمع الحفظ)
+  const auditOf = id => ds.query(`SELECT [category], [branchId], [summary], [before], [after] FROM [audit_log] WHERE [entityType] = N'user' AND [entityId] = @0 AND [action] = N'USER_UPDATED' ORDER BY [id]`, [String(id)])
+  assert.deepEqual((await auditOf(user.id)).map(row => [row.category, row.branchId, row.summary, JSON.parse(row.before), JSON.parse(row.after)]),
+    [['PERMISSIONS', branchB.id, `تعديل الحساب ${user.email}`, { branchId: branchA.id }, { branchId: branchB.id }]])
+  // حساب فرعه هو فرع النقل من الأول: جلساته بتتبطّل زي الأول، ومن غير حدث (نطاقه مااتغيّرش). وحساب موظف تاني مابيتلمسش
+  const settled = await employee(), bystander = await employee()
+  await repo('User').update({ id: settled.user.id }, { branchId: branchB.id })
+  assert.equal((await submit(settled.emp)).status, 'COMPLETED')
+  assert.deepEqual([(await repo('User').findOneByOrFail({ id: settled.user.id })).tokenVersion, (await auditOf(settled.user.id)).length], [1, 0])
+  const untouched = await repo('User').findOneByOrFail({ id: bystander.user.id })
+  assert.deepEqual([untouched.branchId, untouched.tokenVersion, (await auditOf(bystander.user.id)).length], [branchA.id, 0, 0])
 })
 
 test('a future transfer approved at once changes no employee or org version before its date and concurrent scheduler runs apply it once with the instant approver', async () => {

@@ -10,7 +10,7 @@
     "seed": "ts-node src/seed/seed.ts",
     "reset": "ts-node src/seed/reset.ts",
     "typecheck": "tsc --noEmit",
-    "test:integration": "node --test --test-concurrency=1 test/*.integration.cjs test/*.test.cjs",
+    "test:integration": "node --test --test-concurrency=1 --test-timeout=1800000 test/*.integration.cjs test/*.test.cjs",
     "preview:test": "node test/preview.cjs"
   },
   "dependencies": {

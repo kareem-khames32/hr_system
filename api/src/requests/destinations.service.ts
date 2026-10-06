@@ -54,6 +54,7 @@ import { LettersService } from '../letters/letters.service'
 import { Employee } from '../employees/employee.entity'
 import { readBranchCurrency } from '../org/branch-currency-db'
 import { User } from '../auth/user.entity'
+import { recordAudit } from '../audit/audit'
 import { localDateOf } from '../attendance/attendance.service'
 import {
   assertEmploymentValues, employmentEffectiveDate, executeContract, executeShiftSwap,
@@ -621,8 +622,18 @@ export class DestinationsService {
       await appendEmployeeOrgCalendar(em, { employeeId: emp.id, beforeBranchId: emp.branchId, branchId: department.branchId,
         effectiveFrom: transfer.effectiveDate, reason: `نقل معتمد بطلب ${req.id} بتاريخ السريان`, actorUserId: calendarActor! })
       // تحديث فرع حسابات الموظف وإبطال جلساتها بعمودين بس، مش حفظ كيان الحساب كله: حفظ الكيان بقيم اتقرت قبل لحظة كان ممكن يرجّع
-      // ربط الحساب بموظف اتغيّر في نفس اللحظة من غير سجل (Codex CRP2Q-B01)
-      await em.getRepository(User).update({ employeeId: emp.id }, { branchId: department.branchId, tokenVersion: () => 'COALESCE([tokenVersion], 0) + 1' })
+      // ربط الحساب بموظف اتغيّر في نفس اللحظة من غير سجل (Codex CRP2Q-B01). جملة واحدة بترجّع الحسابات اللي اتغيّرت بالظبط وفرعها
+      // القديم، فتغيير نطاق الحساب بيتسجّل في التدقيق زي ما مستمع الحفظ كان بيسجّله (Codex CRP2R-B02) — من غير قراءة قبل الكتابة
+      const moved: Array<{ id: number; email: string | null; beforeBranchId: number | null }> = await em.query(
+        `DECLARE @moved TABLE ([id] int NOT NULL, [beforeBranchId] int NULL)
+         UPDATE [users] SET [branchId] = @0, [tokenVersion] = COALESCE([tokenVersion], 0) + 1
+           OUTPUT inserted.[id], deleted.[branchId] INTO @moved WHERE [employeeId] = @1
+         SELECT m.[id], m.[beforeBranchId], u.[email] FROM @moved m INNER JOIN [users] u ON u.[id] = m.[id] ORDER BY m.[id]`, [department.branchId, emp.id])
+      for (const account of moved) {
+        if (account.beforeBranchId === department.branchId) continue
+        await recordAudit(em, { category: 'PERMISSIONS', action: 'USER_UPDATED', entityType: 'user', entityId: account.id, branchId: department.branchId,
+          summary: `تعديل الحساب ${account.email ?? ''}`, before: { branchId: account.beforeBranchId ?? null }, after: { branchId: department.branchId } })
+      }
     }
     transfer.status = 'EXECUTED'
     transfer.executedAt = new Date()

@@ -15,6 +15,8 @@
 //         صف الطلب نفسه (التعليق ماسكه بقفل القرار) فمايتقاطعوش على سجل الاعتماد؛ وكاتب مابياخدش صف الطلب الأول بيتقاطع مع التعليق
 //         فالتعليق بيتعاد لوحده؛ ومهمة ربطها اتثبّت والتعليق واقف على صفها مابتاخدش تعليق؛ وتعديلين على نفس الحساب في نفس اللحظة
 //         ورا بعض، فربط الحساب اللي في النص متسجّل ومابيتحفظش فوقه بكيان قديم.
+//  CM-10) قفل تعديل الحساب مايستنفدش اتصالات القاعدة (Codex CRP2R-B01): أقفال الحسابات المفتوحة نص المخزن بالكتير، والباقي بيستنى دوره
+//         من غير اتصال وبياخد دوره بالترتيب؛ واللي دوره ماجاش في المهلة «مشغول» من غير ما شغله يتنفّذ.
 // الـAPI بيرجّع مرجع للتعليق (ref) مش رقمه. المساعدين said وshown بيزوّدوا الرقم من القاعدة (id وcommentId) عشان فحوصات القاعدة.
 // Run (من api/): node --test test/comments.integration.cjs
 const { test, before, after } = require('node:test')
@@ -893,4 +895,97 @@ test('CM-09: التعليق والتغيير في نفس اللحظة — الق
     assert.deepEqual(answer(await comment(users.worker, 'tasks', loose.id, 'محاولة تانية')), [400, 'المهمة دي تبع طلب أو مستند — مفيش تعليقات عليها من هنا'])
     assert.equal((await rowsOf('task', loose.id)).length, 0)
   } finally { await link(null) }
+})
+
+test('CM-10: قفل تعديل الحساب مايستنفدش اتصالات القاعدة — نص المخزن بالكتير، والباقي بيستنى دوره من غير اتصال', async () => {
+  const { accountEditLocked, accountEditLockLimit, accountEditGateState, ACCOUNT_EDIT_BUSY } = require('../src/auth/account-edit-lock')
+  const pool = ds.driver.master.pool, max = pool.max, limit = accountEditLockLimit(ds)
+  assert.deepEqual([max, limit, accountEditGateState()], [10, 5, { open: 0, waiting: 0 }])
+  const until = async (ready, label) => {
+    for (let waited = 0; waited < 8000 && !ready(); waited += 25) await new Promise(resolve => setTimeout(resolve, 25))
+    assert.ok(ready(), label)
+  }
+  // تعديلات لحسابات مختلفة بعدد اتصالات المخزن، وكل معالج واقف قبل أول قراءة للحساب (بعد ما أخد قفله)
+  const many = []
+  for (let index = 0; index < max; index++) many.push(await account(`pool${index}`, 'employee', []))
+  const ids = new Set(many.map(user => user.id)), repository = app.get(require('../src/auth/users.controller').UsersController).users, find = repository.findOne
+  let release, pending
+  const seen = new Set(), entered = () => seen.size
+  const held = new Promise(resolve => { release = resolve })
+  // قراءات الحراس ليها select؛ دي أول قراءة في معالج التعديل نفسه
+  repository.findOne = async function (options) {
+    if (!options?.select && ids.has(options?.where?.id)) { seen.add(options.where.id); await held }
+    return find.call(this, options)
+  }
+  try {
+    pending = Promise.all(many.map(user => request(users.admin, 'PATCH', `/users/${user.id}`, { permissions: ['reports.view'] })))
+    await until(() => entered() === limit && accountEditGateState().waiting === max - limit, 'نص التعديلات دخل والباقي في الدور')
+    await new Promise(resolve => setTimeout(resolve, 300))
+    // نص المخزن بس ماسك أقفال، والباقي مستني من غير اتصال: فاضل اتصالات لشغل المعالجات
+    assert.deepEqual([entered(), accountEditGateState(), pool.numUsed() < max], [limit, { open: limit, waiting: max - limit }, true])
+    release()
+    assert.deepEqual((await pending).map(response => response.status), many.map(() => 200))
+    assert.equal(entered(), max)
+  } finally {
+    release()
+    if (pending) await pending.catch(() => undefined)
+    repository.findOne = find
+  }
+  assert.deepEqual(accountEditGateState(), { open: 0, waiting: 0 })
+  assert.deepEqual((await repo('User').find({ where: { id: In([...ids]) } })).map(user => JSON.parse(user.permissions)), many.map(() => ['reports.view']))
+
+  // الدور بالترتيب: اللي خلص بيسلّم مكانه لأول واحد مستني، ومحدش جديد بيدخل قبله
+  const order = [], doors = []
+  const hold = (name, id) => accountEditLocked(ds, id, () => new Promise(resolve => { order.push(name); doors.push(resolve) }))
+  const running = Array.from({ length: limit }, (_, index) => hold(`holder${index}`, 800000 + index))
+  try {
+    await until(() => doors.length === limit, 'الحد اتملى')
+    running.push(hold('first', 800100))
+    await until(() => accountEditGateState().waiting === 1, 'واحد في الدور')
+    running.push(hold('second', 800101))
+    await until(() => accountEditGateState().waiting === 2, 'اتنين في الدور')
+    // دوره ماجاش في المهلة: «مشغول» من غير ما شغله يتنفّذ، ومكانه في الدور بيتشال
+    let ran = false
+    await assert.rejects(accountEditLocked(ds, 800102, async () => { ran = true }, 250), error => error.getStatus?.() === 409 && error.message === ACCOUNT_EDIT_BUSY)
+    assert.deepEqual([ran, accountEditGateState()], [false, { open: limit, waiting: 2 }])
+    // واحد خلص: الأول في الدور دخل مكانه (العدد زي ما هو)، والتاني لسه مستني
+    doors[0]()
+    await until(() => doors.length === limit + 1, 'الأول في الدور دخل')
+    assert.deepEqual([order.slice(limit), accountEditGateState()], [['first'], { open: limit, waiting: 1 }])
+    doors[1]()
+    await until(() => doors.length === limit + 2, 'التاني في الدور دخل')
+    assert.deepEqual([order.slice(limit), accountEditGateState()], [['first', 'second'], { open: limit, waiting: 0 }])
+  } finally {
+    // الأبواب كلها بتتفتح حتى لو فحص وقع: مفيش معاملة قفل بتفضل ماسكة اتصال
+    for (let waited = 0; waited < 8000 && (accountEditGateState().open > 0 || accountEditGateState().waiting > 0); waited += 25) {
+      for (const open of doors) open()
+      await new Promise(resolve => setTimeout(resolve, 25))
+    }
+    await Promise.allSettled(running)
+  }
+  assert.deepEqual(accountEditGateState(), { open: 0, waiting: 0 })
+  // ومخزن باتصال واحد مافيهوش مكان لقفل قاعدة: التعديلات ورا بعض في العملية (من غير ما معاملة القفل تمسك الاتصال الوحيد)
+  assert.deepEqual([{ driver: { master: { pool: { max: 1 } } } }, { driver: { master: { pool: { max: 2 } } } }, { driver: { master: { pool: { max: 7 } } } }, { driver: {} }].map(accountEditLockLimit), [0, 1, 3, 1])
+  const single = { driver: { master: { pool: { max: 1 } } }, transaction: () => { throw new Error('معاملة قفل على مخزن باتصال واحد') } }
+  const steps = []
+  await Promise.all([accountEditLocked(single, 1, async () => { steps.push('a1'); await new Promise(resolve => setTimeout(resolve, 60)); steps.push('a2') }),
+    accountEditLocked(single, 2, async () => { steps.push('b1'); steps.push('b2') })])
+  assert.deepEqual([steps, accountEditGateState()], [['a1', 'a2', 'b1', 'b2'], { open: 0, waiting: 0 }])
+  // مهلة واحدة للدور ولقفل القاعدة: اللي استناه في الدور بيتخصم من مهلة القفل. وقفل قاعدة ماجاش = «مشغول» من غير ما الشغل يتنفّذ
+  const asked = []
+  const fake = result => ({ driver: { master: { pool: { max: 2 } } },
+    transaction: work => work({ query: async sqlText => { asked.push(Number(/@LockTimeout = (\d+)/.exec(sqlText)[1])); return [{ result }] } }) })
+  let open
+  const blocker = accountEditLocked(fake(0), 1, () => new Promise(resolve => { open = resolve }))
+  try {
+    await until(() => !!open, 'القفل الأول دخل')
+    const queued = accountEditLocked(fake(0), 2, async () => 'done', 5000)
+    await new Promise(resolve => setTimeout(resolve, 300))
+    open()
+    assert.deepEqual([await blocker, await queued], [undefined, 'done'])
+  } finally { if (open) open() }
+  assert.ok(asked.length === 2 && asked[0] > 14900 && asked[0] <= 15000 && asked[1] >= 4000 && asked[1] <= 4750, JSON.stringify(asked))
+  let reached = false
+  await assert.rejects(accountEditLocked(fake(-1), 3, async () => { reached = true }), error => error.getStatus?.() === 409 && error.message === ACCOUNT_EDIT_BUSY)
+  assert.deepEqual([reached, accountEditGateState()], [false, { open: 0, waiting: 0 }])
 })
