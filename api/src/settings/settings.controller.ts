@@ -70,7 +70,8 @@ import { bonusSettingError } from '../payroll/bonuses'
 import { exemptionSettingError } from '../payroll/financial-exemptions'
 import { companyProfileConfigError, COMPANY_PROFILE_FIELD_NAMES } from './company-profile'
 import { assertDefinitionBranchUnchanged, assertDefinitionWritable, definitionBranchForCreate, definitionBranchWhere, definitionInBranch } from '../common/definition-branch'
-import { AUDIENCE_POSITION_KEYS, AUDIENCE_WHERE_MODES, AUDIENCE_WHO_MODES } from '../requests/request-audience'
+import { AUDIENCE_CONTRACT_TYPES, AUDIENCE_JOIN_DATE_OPS, AUDIENCE_NATIONALITY_KINDS, AUDIENCE_POSITION_KEYS, AUDIENCE_WHERE_MODES, AUDIENCE_WHO_MODES, type AudienceCondition } from '../requests/request-audience'
+import { Grade } from '../assets/assets.entities'
 import { CATEGORY_CHAIN_KEY_PREFIX, REQUEST_CATEGORY_LABELS, categoryChainMap, isCategoryChainKey } from '../requests/request-category-chains'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
@@ -516,7 +517,7 @@ class CreateRequestTypeDto {
   branchId?: number | null
 }
 
-type AudienceDto = { mode: string; ids: Array<number | string>; where?: { mode?: string; ids?: Array<number | string> } | null }
+type AudienceDto = { mode: string; ids: Array<number | string>; where?: { mode?: string; ids?: Array<number | string> } | null; conditions?: unknown }
 
 class UpdateRequestTypeFullDto {
   @IsOptional()
@@ -1400,7 +1401,10 @@ export class SettingsController {
     if (!(AUDIENCE_WHERE_MODES as readonly string[]).includes(whereMode)) {
       throw new BadRequestException('اختار فين: كل الشركة أو فروع محددة أو أقسام محددة أو فرق محددة')
     }
-    if (whereMode === 'company') return JSON.stringify({ mode: v.mode, ids })
+    // B2.9: شروط صفات الموظف — من غيرها الشكل المتخزّن زي ما هو بالحرف
+    const list = await this.validateAudienceConditions(v.conditions)
+    const conditions = list.length ? { conditions: list } : {}
+    if (whereMode === 'company') return JSON.stringify({ mode: v.mode, ids, ...conditions })
     const whereIds = [...new Set((Array.isArray(v.where?.ids) ? v.where!.ids : []).map(Number))]
     if (!whereIds.length || whereIds.some((id) => !Number.isInteger(id) || id < 1)) {
       throw new BadRequestException(whereMode === 'branches' ? 'اختار فرع واحد على الأقل' : whereMode === 'teams' ? 'اختار فريق واحد على الأقل' : 'اختار قسم واحد على الأقل')
@@ -1426,7 +1430,44 @@ export class SettingsController {
         throw new BadRequestException('الطلب ده خاص بفرع واحد، فاختار أقسام من نفس الفرع')
       }
     }
-    return JSON.stringify({ mode: v.mode, ids, where: { mode: whereMode, ids: whereIds } })
+    return JSON.stringify({ mode: v.mode, ids, where: { mode: whereMode, ids: whereIds }, ...conditions })
+  }
+
+  // B2.9: شروط على صفات الموظف — صفة واحدة لكل شرط، وقيم معروفة بس، ودرجات موجودة، وتاريخ صحيح
+  private async validateAudienceConditions(raw: unknown): Promise<AudienceCondition[]> {
+    if (raw == null) return []
+    if (!Array.isArray(raw)) throw new BadRequestException('شروط صفات الموظف غير صالحة')
+    const out: AudienceCondition[] = [], seen = new Set<string>()
+    for (const item of raw as AudienceCondition[]) {
+      const field = String(item?.field ?? '')
+      if (seen.has(field)) throw new BadRequestException('كل صفة ليها شرط واحد في شروط الجمهور')
+      seen.add(field)
+      if (field === 'joinDate') {
+        const day = String(item.value ?? ''), parsed = /^\d{4}-\d{2}-\d{2}$/.test(day) ? new Date(`${day}T00:00:00Z`) : null
+        if (!(AUDIENCE_JOIN_DATE_OPS as readonly string[]).includes(String(item.op)) || !parsed || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== day) {
+          throw new BadRequestException('شرط تاريخ التعيين: «قبل» أو «من» بتاريخ صحيح')
+        }
+        out.push({ field, op: String(item.op), value: day })
+        continue
+      }
+      const values = [...new Set(Array.isArray(item?.values) ? item.values : [])]
+      if (!values.length) throw new BadRequestException('اختار قيمة واحدة على الأقل لكل شرط في شروط الجمهور')
+      if (field === 'nationality') {
+        if (values.some((value) => !(AUDIENCE_NATIONALITY_KINDS as readonly string[]).includes(String(value)))) throw new BadRequestException('جنسية غير معروفة في شروط الجمهور')
+        out.push({ field, values: values.map(String) })
+      } else if (field === 'contractType') {
+        if (values.some((value) => !(AUDIENCE_CONTRACT_TYPES as readonly string[]).includes(String(value)))) throw new BadRequestException('نوع عقد غير معروف في شروط الجمهور')
+        out.push({ field, values: values.map(String) })
+      } else if (field === 'grade') {
+        const gradeIds = values.map(Number)
+        if (gradeIds.some((id) => !Number.isInteger(id) || id < 1)) throw new BadRequestException('درجة غير صحيحة في شروط الجمهور')
+        if (await this.requestTypes.manager.getRepository(Grade).count({ where: { id: In(gradeIds) } }) !== gradeIds.length) throw new BadRequestException('درجة من الدرجات المختارة غير موجودة')
+        out.push({ field, values: gradeIds })
+      } else {
+        throw new BadRequestException('صفة غير معروفة في شروط الجمهور')
+      }
+    }
+    return out
   }
 
   private validateCustomFields(fields?: CustomFieldDto[]) {

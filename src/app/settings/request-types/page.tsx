@@ -38,6 +38,7 @@ import {
   createRequestType,
   fetchAdminRequestTypes,
   fetchApprovalChains,
+  fetchCatalog,
   fetchDepartments,
   fetchDestinationHandlers,
   fetchEmployees,
@@ -184,6 +185,12 @@ type BuilderForm = {
   branchIds: number[]
   // فرق «فين»
   teamIds: number[]
+  // B2.9: شروط على صفات الموظف (الفاضي = من غير شرط)
+  natKinds: string[]
+  contractKinds: string[]
+  gradeIds: number[]
+  joinOp: '' | 'before' | 'from'
+  joinDay: string
   // فرع النوع نفسه: null = كل الشركة
   branchId: number | null
 }
@@ -207,10 +214,51 @@ const emptyForm = (): BuilderForm => ({
   whereMode: 'company',
   branchIds: [],
   teamIds: [],
+  natKinds: [],
+  contractKinds: [],
+  gradeIds: [],
+  joinOp: '',
+  joinDay: '',
   branchId: null,
 })
 
-type StoredAudience = { mode?: string; ids?: Array<number | string>; where?: { mode?: string; ids?: Array<number | string> } | null }
+type AudienceCondition = { field?: string; values?: Array<number | string>; op?: string; value?: string }
+type StoredAudience = { mode?: string; ids?: Array<number | string>; where?: { mode?: string; ids?: Array<number | string> } | null; conditions?: AudienceCondition[] | null }
+
+// B2.9: شروط على صفات الموظف فوق «مين + فين»
+const NATIONALITY_KINDS: Array<[string, string]> = [['SAUDI', 'سعودي'], ['EGYPTIAN', 'مصري'], ['RESIDENT', 'جنسية تانية']]
+const CONTRACT_KINDS: Array<[string, string]> = [['permanent', 'عقد دائم'], ['fixed_term', 'عقد محدد المدة'], ['part_time', 'دوام جزئي'], ['seasonal', 'عقد موسمي']]
+// «… بشرط: سعودي، عقد محدد المدة»
+const conditionsText = (audience: StoredAudience | null, grade: (id: number) => string): string => {
+  const parts = (Array.isArray(audience?.conditions) ? audience!.conditions! : []).map((condition) => {
+    const values = Array.isArray(condition.values) ? condition.values : []
+    const labels = (list: Array<[string, string]>) => values.map((value) => list.find(([key]) => key === String(value))?.[1] ?? String(value)).join(' أو ')
+    if (condition.field === 'nationality') return labels(NATIONALITY_KINDS)
+    if (condition.field === 'contractType') return labels(CONTRACT_KINDS)
+    if (condition.field === 'grade') return `درجة ${values.map((value) => grade(Number(value))).join(' أو ')}`
+    if (condition.field === 'joinDate') return `${condition.op === 'before' ? 'متعيّن قبل' : 'متعيّن من'} ${condition.value ?? ''}`
+    return ''
+  }).filter(Boolean)
+  return parts.length ? ` — بشرط: ${parts.join('، ')}` : ''
+}
+// الشروط من النموذج (الفاضي مابيتبعتش)، ومن المتخزّن للنموذج
+const conditionsOfForm = (form: BuilderForm): AudienceCondition[] => [
+  ...(form.natKinds.length ? [{ field: 'nationality', values: form.natKinds }] : []),
+  ...(form.contractKinds.length ? [{ field: 'contractType', values: form.contractKinds }] : []),
+  ...(form.gradeIds.length ? [{ field: 'grade', values: form.gradeIds }] : []),
+  ...(form.joinOp && form.joinDay ? [{ field: 'joinDate', op: form.joinOp, value: form.joinDay }] : []),
+]
+const conditionsToForm = (audience: StoredAudience | null): Pick<BuilderForm, 'natKinds' | 'contractKinds' | 'gradeIds' | 'joinOp' | 'joinDay'> => {
+  const of = (field: string) => (Array.isArray(audience?.conditions) ? audience!.conditions! : []).find((condition) => condition.field === field)
+  const join = of('joinDate')
+  return {
+    natKinds: (of('nationality')?.values ?? []).map(String),
+    contractKinds: (of('contractType')?.values ?? []).map(String),
+    gradeIds: (of('grade')?.values ?? []).map(Number),
+    joinOp: join?.op === 'before' || join?.op === 'from' ? join.op : '',
+    joinDay: join?.value ?? '',
+  }
+}
 
 // «فلان وفلان» أو «فلان، فلان و3 غيرهم»
 const namesText = (names: string[]): string =>
@@ -220,7 +268,7 @@ const namesText = (names: string[]): string =>
 const audienceText = (
   audience: StoredAudience | null,
   typeBranch: string | null,
-  lookup: { branch: (id: number) => string; department: (id: number) => string; team: (id: number) => string }
+  lookup: { branch: (id: number) => string; department: (id: number) => string; team: (id: number) => string; grade?: (id: number) => string }
 ): string => {
   const ids = Array.isArray(audience?.ids) ? audience!.ids : []
   const label = (list: Array<[string, string]>) => (id: number | string) => list.find(([key]) => key === String(id))?.[1] ?? String(id)
@@ -234,12 +282,12 @@ const audienceText = (
   else if (audience?.where?.mode === 'branches' && whereIds.length) where = `في ${namesText(whereIds.map(lookup.branch))}`
   else if (audience?.where?.mode === 'departments' && whereIds.length) where = `في ${namesText(whereIds.map(lookup.department))}`
   else if (audience?.where?.mode === 'teams' && whereIds.length) where = `في ${namesText(whereIds.map(lookup.team))}`
-  return `${who} ${where}`
+  return `${who} ${where}${conditionsText(audience, lookup.grade ?? String)}`
 }
 
 // الجمهور كما يُحفظ من النموذج: بدون «فين» = نفس الشكل القديم {mode, ids}
-const audienceOfForm = (form: BuilderForm, ids: Array<number | string>): StoredAudience =>
-  form.whereMode === 'company'
+const audienceOfForm = (form: BuilderForm, ids: Array<number | string>): StoredAudience => ({
+  ...(form.whereMode === 'company'
     ? { mode: form.audienceMode, ids }
     : {
         mode: form.audienceMode,
@@ -248,7 +296,10 @@ const audienceOfForm = (form: BuilderForm, ids: Array<number | string>): StoredA
           mode: form.whereMode,
           ids: form.whereMode === 'branches' ? form.branchIds : form.whereMode === 'teams' ? form.teamIds : form.deptIds,
         },
-      }
+      }),
+  // B2.9: الشروط بتتبعت لما يبقى فيه شرط بس
+  ...(conditionsOfForm(form).length ? { conditions: conditionsOfForm(form) } : {}),
+})
 
 // فلتر الحالة: «غير مستخدمة» = ولا طلب اتقدّم عليها (للتنضيف — مفيش حاجة بتتعطل لوحدها)
 type StatusFilter = 'all' | 'active' | 'inactive' | 'unused' | 'unused_active'
@@ -281,6 +332,11 @@ export default function RequestTypesPage() {
   const [handlers, setHandlers] = useState<Array<{ key: string; labelAr: string }>>([])
   const [departments, setDepartments] = useState<ApiDepartment[]>([])
   const [teams, setTeams] = useState<ApiTeam[]>([])
+  // B2.9: الدرجات لشرط «الدرجة» في الجمهور (من غيرها الشرط مابيظهرش)
+  const [grades, setGrades] = useState<Array<{ id: number; name: string }>>([])
+  useEffect(() => {
+    fetchCatalog<{ id: number; name: string }>('grades').then((rows) => setGrades(Array.isArray(rows) ? rows : [])).catch(() => undefined)
+  }, [])
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -318,7 +374,8 @@ export default function RequestTypesPage() {
   const branchInfo = useDefinitionBranches()
   const departmentName = (id: number) => departments.find((d) => d.id === id)?.name ?? `قسم رقم ${id}`
   const teamName = (id: number) => teams.find((t) => t.id === id)?.name ?? `فريق رقم ${id}`
-  const audienceLookup = { branch: (id: number) => branchInfo.label(id), department: departmentName, team: teamName }
+  const audienceLookup = { branch: (id: number) => branchInfo.label(id), department: departmentName, team: teamName,
+    grade: (id: number) => grades.find((row) => row.id === id)?.name ?? `#${id}` }
   const typeAudienceText = (rt: ApiRequestType) =>
     audienceText(parseJson<StoredAudience | null>(rt.visibleTo, null), rt.branchId != null ? branchInfo.label(rt.branchId) : null, audienceLookup)
 
@@ -600,6 +657,7 @@ export default function RequestTypesPage() {
         whereMode,
         branchIds: whereMode === 'branches' ? whereIds : [],
         teamIds: whereMode === 'teams' ? whereIds : [],
+        ...conditionsToForm(v),
         branchId: rt.branchId ?? null,
       })
     } else {
@@ -676,6 +734,10 @@ export default function RequestTypesPage() {
     }
     if (form.whereMode === 'teams' && form.teamIds.length === 0) {
       setModalError('اختار فريق واحد على الأقل في «فين»')
+      return
+    }
+    if (form.joinOp && !form.joinDay) {
+      setModalError('اختار التاريخ في شرط «تاريخ التعيين»')
       return
     }
 
@@ -1927,6 +1989,65 @@ export default function RequestTypesPage() {
                         )}
                       </div>
                     )}
+                  </div>
+
+                  {/* B2.9: شروط على صفات الموظف — فوق «مين» و«فين»، وكلها لازم تتحقق */}
+                  <div data-audience-conditions>
+                    <p className="text-sm font-medium text-gray-700 mb-1">شروط على صفات الموظف (اختياري)</p>
+                    <p className="text-xs text-gray-500 mb-2">الطلب بيظهر للي تنطبق عليه كل الشروط المختارة. سيبها فاضية لو مفيش شرط.</p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <p className="text-xs text-gray-600 mb-1">الجنسية</p>
+                        <div className="flex flex-wrap gap-x-4 gap-y-1">
+                          {NATIONALITY_KINDS.map(([key, label]) => (
+                            <label key={key} className="flex items-center gap-1.5 text-sm text-gray-700">
+                              <input type="checkbox" checked={form.natKinds.includes(key)} onChange={() => setForm({ ...form, natKinds: toggleId(form.natKinds, key) })}
+                                className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+                              {label}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-600 mb-1">نوع العقد</p>
+                        <div className="flex flex-wrap gap-x-4 gap-y-1">
+                          {CONTRACT_KINDS.map(([key, label]) => (
+                            <label key={key} className="flex items-center gap-1.5 text-sm text-gray-700">
+                              <input type="checkbox" checked={form.contractKinds.includes(key)} onChange={() => setForm({ ...form, contractKinds: toggleId(form.contractKinds, key) })}
+                                className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+                              {label}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                      {grades.length > 0 && (
+                        <div>
+                          <p className="text-xs text-gray-600 mb-1">الدرجة</p>
+                          <div className="flex flex-wrap gap-x-4 gap-y-1 max-h-24 overflow-y-auto">
+                            {grades.map((grade) => (
+                              <label key={grade.id} className="flex items-center gap-1.5 text-sm text-gray-700">
+                                <input type="checkbox" checked={form.gradeIds.includes(grade.id)} onChange={() => setForm({ ...form, gradeIds: toggleId(form.gradeIds, grade.id) })}
+                                  className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+                                {grade.name}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      <div>
+                        <p className="text-xs text-gray-600 mb-1">تاريخ التعيين</p>
+                        <div className="flex items-center gap-2">
+                          <select value={form.joinOp} onChange={(event) => setForm({ ...form, joinOp: event.target.value as BuilderForm['joinOp'] })} className="input w-32" aria-label="شرط تاريخ التعيين">
+                            <option value="">من غير شرط</option>
+                            <option value="before">قبل</option>
+                            <option value="from">من</option>
+                          </select>
+                          {form.joinOp && (
+                            <input type="date" value={form.joinDay} onChange={(event) => setForm({ ...form, joinDay: event.target.value })} className="input" dir="ltr" aria-label="تاريخ التعيين" />
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   </div>
 
                   <p className="text-sm text-blue-900 bg-white border border-blue-100 rounded-xl px-3 py-2">

@@ -1,5 +1,6 @@
 import type { JwtPayload } from '../auth/auth.service'
 import { definitionInBranch } from '../common/definition-branch'
+import { nationalityKind } from '../employees/employee-required-fields'
 
 // ===== ب4 (قرار المالك): «جمهور» نوع الطلب — مين يقدر يقدّمه =====
 // إعداد واحد ومقيّم واحد: الكتالوج (عرض الكارت) ومحرك الطلبات (التقديم) وشاشتا «خصم» و«مكافأة»
@@ -17,7 +18,18 @@ import { definitionInBranch } from '../common/definition-branch'
 export type RequestAudiencePurpose = 'catalog' | 'submit'
 export type AudienceWhereMode = 'company' | 'branches' | 'departments' | 'teams'
 export type AudienceWhere = { mode?: string; ids?: Array<number | string> }
-export type RequestAudience = { mode?: string; ids?: Array<number | string>; where?: AudienceWhere | null }
+// B2.9: شروط على صفات الموظف فوق «مين + فين» — كلها لازم تتحقق:
+//   conditions: [{ field: 'nationality', values: ['SAUDI'] }, { field: 'contractType', values: ['fixed_term'] },
+//                { field: 'grade', values: [3] }, { field: 'joinDate', op: 'before' | 'from', value: '2025-01-01' }]
+// مثال: «السعوديين على عقد محدد المدة» = { mode: 'all', ids: [], conditions: [الجنسية SAUDI، ونوع العقد fixed_term] }
+// من غير conditions الشكل المتخزّن زي ما هو. والشرط قيد: موظف مالوش الصفة، أو شرط تالف أو مش معروف = مش من الجمهور
+// (عكس «مين» و«فين» التالفين: دول بيفتحوا، والشرط مايفتحش). الجنسية بمصنّفها الموجود (nationalityKind) مش بنصها الحر.
+export type AudienceCondition = { field?: string; values?: Array<number | string>; op?: string; value?: string }
+export type RequestAudience = { mode?: string; ids?: Array<number | string>; where?: AudienceWhere | null; conditions?: AudienceCondition[] | null }
+export const AUDIENCE_NATIONALITY_KINDS = ['SAUDI', 'EGYPTIAN', 'RESIDENT'] as const
+export const AUDIENCE_CONTRACT_TYPES = ['permanent', 'fixed_term', 'part_time', 'seasonal'] as const
+export const AUDIENCE_JOIN_DATE_OPS = ['before', 'from'] as const
+export type AudienceAttributes = { nationality?: string | null; contractType?: string | null; gradeId?: number | null; joinDate?: string | null }
 // المنصب في الهيكل (قرار المالك 16 سبتمبر): قادة الفرق ومديرو الأقسام غالبًا دورهم «موظف»،
 // فالجمهور «حسب المنصب» يعرفهم من الهيكل نفسه لا من الدور.
 export type AudiencePositions = { departmentManager?: boolean; teamLeader?: boolean; branchManager?: boolean }
@@ -33,6 +45,7 @@ export type AudienceSubject = {
   teamId?: number | null
   branchId?: number | null
   positions?: AudiencePositions | null
+  attributes?: AudienceAttributes | null
 }
 
 // جمهور «حسب المنصب» وحده يحتاج قراءة الهيكل؛ باقي الأوضاع لا تكلّف استعلامًا
@@ -44,8 +57,12 @@ export const audienceNeedsEmployee = (visibleTo: string | null | undefined): boo
   const audience = parseRequestAudience(visibleTo)
   if (!audience) return false
   const where = audienceWhereOf(audience)
-  return audience.mode === 'departments' || where.mode !== 'company'
+  return audience.mode === 'departments' || where.mode !== 'company' || audienceConditionsOf(audience).length > 0
 }
+
+// جمهور فيه شروط على صفات الموظف؟ (شاشتي المال بيقروا الصفات لما يبقى فيه شروط بس)
+export const audienceHasConditions = (visibleTo: string | null | undefined): boolean =>
+  audienceConditionsOf(parseRequestAudience(visibleTo)).length > 0
 
 export function parseRequestAudience(visibleTo: string | null | undefined): RequestAudience | null {
   if (!visibleTo) return null
@@ -65,6 +82,35 @@ export function audienceWhereOf(audience: RequestAudience | null | undefined): {
     return { mode: where.mode, ids }
   }
   return { mode: 'company', ids: [] }
+}
+
+// شروط الجمهور بعد التطبيع: غايبة = من غير شروط؛ وقيمة مش قايمة = شرط تالف (مش من الجمهور)
+function audienceConditionsOf(audience: RequestAudience | null | undefined): AudienceCondition[] {
+  const conditions = audience?.conditions
+  if (conditions == null) return []
+  return Array.isArray(conditions) ? conditions : [{}]
+}
+
+const audienceDay = (value: unknown): string | null => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value) ? value.slice(0, 10) : null
+
+function audienceConditionAllows(condition: AudienceCondition, attributes: AudienceAttributes | null | undefined): boolean {
+  if (!condition || typeof condition !== 'object' || !attributes) return false
+  const values = Array.isArray(condition.values) ? condition.values : []
+  switch (condition.field) {
+    case 'nationality':
+      return values.map(String).includes(nationalityKind(attributes.nationality))
+    case 'contractType':
+      return !!attributes.contractType && values.map(String).includes(attributes.contractType)
+    case 'grade':
+      return attributes.gradeId != null && values.map(Number).includes(Number(attributes.gradeId))
+    case 'joinDate': {
+      const joined = audienceDay(attributes.joinDate), limit = audienceDay(condition.value)
+      if (!joined || !limit) return false
+      return condition.op === 'before' ? joined < limit : condition.op === 'from' && joined >= limit
+    }
+    default:
+      return false
+  }
 }
 
 function audienceWhoAllows(audience: RequestAudience, subject: AudienceSubject): boolean {
@@ -117,8 +163,9 @@ export function requestAudienceAllows(
   if (purpose === 'catalog' && permissions.includes('request_types.manage')) return true
   const audience = parseRequestAudience(visibleTo)
   if (!audience) return true
-  // مين + فين: الاتنين لازم يتحققوا
+  // مين + فين + شروط الصفات (B2.9): كلهم لازم يتحققوا
   return audienceWhoAllows(audience, subject) && audienceWhereAllows(audience, subject)
+    && audienceConditionsOf(audience).every((condition) => audienceConditionAllows(condition, subject.attributes))
 }
 
 // نوع طلب خاص بفرع (branchId) لا يظهر ولا يُستخدم خارج فرعه — حتى للمالك عند التقديم لموظف فرع آخر.
@@ -131,9 +178,17 @@ export function requestTypeInBranch(
   return companyWideViewer || definitionInBranch(type.branchId, subjectBranchId)
 }
 
+// صفات الموظف بتتحط على الموضوع لما صف الموظف اللي اتقري شايلها بس: محرك الطلبات بيقرا الصف كله، وشاشتي المال بيقروا أعمدة أقل
+// وبيزودوا الصفات لما الجمهور فيه شروط. صف من غيرها = من غير صفات، فأي شرط مابيتحققش
+const AUDIENCE_ATTRIBUTE_KEYS = ['nationality', 'contractType', 'gradeId', 'joinDate'] as const
+function audienceAttributesOf(employee: AudienceAttributes | null | undefined): { attributes?: AudienceAttributes } {
+  if (!employee || AUDIENCE_ATTRIBUTE_KEYS.every((key) => employee[key] === undefined)) return {}
+  return { attributes: { nationality: employee.nationality ?? null, contractType: employee.contractType ?? null, gradeId: employee.gradeId ?? null, joinDate: employee.joinDate ?? null } }
+}
+
 export const audienceSubjectOf = (
   user: JwtPayload,
-  employee?: { departmentId?: number | null; teamId?: number | null; branchId?: number | null } | null
+  employee?: ({ departmentId?: number | null; teamId?: number | null; branchId?: number | null } & AudienceAttributes) | null
 ): AudienceSubject => ({
   role: user.role,
   permissions: user.permissions ?? [],
@@ -142,4 +197,5 @@ export const audienceSubjectOf = (
   teamId: employee?.teamId ?? null,
   // فرع الموظف نفسه أولًا؛ حساب بلا موظف مربوط يُقاس بفرع حسابه
   branchId: employee?.branchId ?? user.branchId ?? null,
+  ...audienceAttributesOf(employee),
 })

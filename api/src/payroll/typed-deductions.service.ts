@@ -18,7 +18,7 @@ import { Team } from '../org/entities/team.entity'
 import { branchLocalParentOfRows, branchLocalSubtree } from '../org/department-tree'
 import { EmployeeObligation } from '../requests/entities/financial.entities'
 import { RequestType } from '../requests/entities/request-type.entity'
-import { audienceNeedsEmployee, audienceSubjectOf, parseRequestAudience, requestAudienceAllows, requestTypeInBranch } from '../requests/request-audience'
+import { audienceHasConditions, audienceNeedsEmployee, audienceSubjectOf, parseRequestAudience, requestAudienceAllows, requestTypeInBranch } from '../requests/request-audience'
 import { hasHrOverride } from '../requests/approver-resolver.service'
 import { orgPositionsOf } from '../requests/request-audience-positions'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
@@ -347,6 +347,10 @@ export class TypedDeductionsService {
     const self = (audienceNeedsEmployee(type.visibleTo) || type.branchId != null) && user.employeeId
       ? await em.getRepository(Employee).findOne({ where: { id: user.employeeId }, select: { id: true, departmentId: true, teamId: true, branchId: true } })
       : null
+    // B2.9: صفات الموظف (جنسية، عقد، درجة، تعيين) بتتقري لما جمهور النوع فيه شروط عليها بس
+    if (self && audienceHasConditions(type.visibleTo)) {
+      Object.assign(self, await em.getRepository(Employee).findOne({ where: { id: self.id }, select: { id: true, nationality: true, contractType: true, gradeId: true, joinDate: true } }))
+    }
     // «حسب المنصب»: مدير قسم / قائد فريق / مدير فرع يُعرفون من الهيكل لا من الدور
     const positions = audience?.mode === 'positions' ? await orgPositionsOf(em, user.employeeId) : null
     const owner = user.role === 'super_admin' || (user.permissions ?? []).includes('*')
