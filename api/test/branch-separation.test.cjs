@@ -113,13 +113,19 @@ test('financial exemptions service wires the run scope gate into runView and can
   assert.ok(candidates.indexOf('assertRunInScope') < candidates.indexOf('return { run:'), 'gate before the candidate list')
 })
 
+// CRP2V: الترحيل بيحكم على كل صف مصدر جوه معاملة ماسكة صف موظفه — المخزن المصطنع بيدّي المعاملة نفس المخزن، والقفل استعلام من غير نتيجة
+function rolloverRepo(repo) {
+  repo.manager = { transaction: async fn => fn(repo.manager), query: async () => [], getRepository: () => repo }
+  return repo
+}
+
 test('leave balance rollover: a branch-scoped call touches only that branch employees; null keeps the company-wide job', async () => {
   const balances = [{ id: 1, employeeId: 10, period: '2025', balanceType: 'annual' }, { id: 2, employeeId: 166, period: '2025', balanceType: 'annual' }]
   const touched = []
   const ensured = []
   const make = () => {
     const service = new LeaveBalancesService(
-      { find: async ({ where }) => { if (where.employeeId !== undefined) { touched.push(where.employeeId); return [] } return balances.filter(row => row.balanceType === where.balanceType) } },
+      rolloverRepo({ find: async ({ where }) => { if (where.employeeId !== undefined) { touched.push(where.employeeId); return [] } return balances.filter(row => row.balanceType === where.balanceType) } }),
       { find: async ({ where }) => [{ id: 10, branchId: 1 }, { id: 166, branchId: 4 }].filter(row => row.branchId === where.branchId) },
       {})
     const typeSettings = { carryOverEnabled: true, carryOverMaxDays: null, renewalBasis: 'YEAR_START' }
@@ -156,7 +162,7 @@ test('leave balance rollover: a multi-branch scope touches exactly those branche
     return Array.isArray(list) && list.includes(row.branchId)
   }
   const service = new LeaveBalancesService(
-    { find: async ({ where }) => { if (where.employeeId !== undefined) { touched.push(where.employeeId); return [] } return balances.filter(row => row.balanceType === where.balanceType) } },
+    rolloverRepo({ find: async ({ where }) => { if (where.employeeId !== undefined) { touched.push(where.employeeId); return [] } return balances.filter(row => row.balanceType === where.balanceType) } }),
     { find: async ({ where }) => employees.filter(row => matches(where, row)) },
     {})
   const typeSettings = { carryOverEnabled: true, carryOverMaxDays: null, renewalBasis: 'YEAR_START' }

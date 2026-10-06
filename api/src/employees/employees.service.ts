@@ -65,7 +65,7 @@ import type { CreateEmployeeSuspensionDto, EndEmployeeSuspensionDto } from './em
 import { recordOutboxEvent } from '../queue/outbox'
 import { recordAudit } from '../audit/audit'
 import { EmploymentPeriod } from './employment-period.entity'
-import { EMPLOYMENT_PERIODS_MIGRATION_MISSING, REHIRE_REASON_MAX, REHIRE_REASON_MIN, employmentPeriodsReady, frozenBalanceKey, isoDay, rehireGate, rehireStartIssue } from './employment-periods'
+import { EMPLOYMENT_PERIODS_MIGRATION_MISSING, REHIRE_REASON_MAX, REHIRE_REASON_MIN, employmentPeriodsReady, frozenBalanceKey, isoDay, reasonWithLabel, rehireGate, rehireStartIssue } from './employment-periods'
 
 // حقول إجبارية عند الإضافة (قرار المالك 16 سبتمبر): في التعديل الغائب بلا تغيير، والمرسل فاضي = مسح مرفوض.
 // رقم الهوية / الجواز مش هنا: مسح واحد منهم مسموح لو التاني فاضل (employeeIdentityIssues في update)
@@ -967,7 +967,7 @@ export class EmployeesService {
       await em.update(User, { employeeId: id }, { isActive: true, tokenVersion: () => 'tokenVersion + 1' })
       const base = oldStatus === 'terminated' ? 'عودة على رأس العمل بعد انتهاء خدمة' : 'إعادة تفعيل من الأرشيف'
       await recordEmployeeChange(em, { employeeId: id, fieldName: 'status', oldValue: oldStatus, newValue: 'active',
-        changedByUserId: actorId, reason: note ? `${base} — ${note}` : base })
+        changedByUserId: actorId, reason: reasonWithLabel(base, note) })
       return emp
     })
   }
@@ -983,14 +983,14 @@ export class EmployeesService {
     const periods = await em.find(EmploymentPeriod, { where: { employeeId: id }, order: { periodNo: 'ASC' } })
     const status = (emp as Employee & { storedStatus?: Employee['status'] }).storedStatus ?? emp.status
     const gate = ['terminated', 'archived'].includes(status)
-      ? await rehireGate(em, { id, status, joinDate: emp.joinDate, createdAt: emp.createdAt }, localDateOf(new Date())) : null
+      ? await rehireGate(em, { id, status, joinDate: emp.joinDate, createdAt: emp.createdAt }, localDateOf(new Date()), branchScope) : null
     return {
       ready: true,
       periods: periods.map(period => ({ periodNo: period.periodNo, startDate: day(period.startDate), endDate: day(period.endDate), exitReason: period.exitReason ?? null,
         rehireReason: period.rehireReason, rehiredAt: period.createdAt })),
       current: { periodNo: (periods[periods.length - 1]?.periodNo ?? 0) + 1, startDate: day(emp.joinDate) },
       rehire: gate ? { available: !gate.blocked, code: gate.blocked?.code ?? null, blocked: gate.blocked?.message ?? null,
-        lastWorkingDay: gate.lastWorkingDay, minStartDate: gate.blocked ? null : gate.minStartDate, maxStartDate: gate.maxStartDate } : null,
+        lastWorkingDay: gate.lastWorkingDay, minStartDate: gate.minStartDate, maxStartDate: gate.maxStartDate } : null,
     }
   }
 
@@ -1010,7 +1010,7 @@ export class EmployeesService {
       // النطاق بيتحكم على الصف المقفول نفسه (برّه النطاق = «غير موجود» زي الموظف اللي مش موجود)
       await lockPayrollEmployees(em, [id])
       const emp = await this.scopedEmployee(em, id, branchScope, true)
-      const gate = await rehireGate(em, emp, localDateOf(new Date()))
+      const gate = await rehireGate(em, emp, localDateOf(new Date()), branchScope)
       const issue = gate.blocked ?? rehireStartIssue(startDate, gate)
       if (issue) throw new BadRequestException(issue)
       await em.insert(EmploymentPeriod, { employeeId: id, periodNo: gate.periodNo, startDate: gate.currentStart!, endDate: gate.lastWorkingDay!,
@@ -1021,7 +1021,7 @@ export class EmployeesService {
       }
       const next = { joinDate: startDate, actualStartDate: null, salaryEntitlementStart: null, probationEndDate: null,
         contractStart: null, contractEnd: null, contractNumber: null, contractDurationMonths: null } as const
-      const note = `إعادة تعيين — فترة خدمة رقم ${gate.periodNo + 1} من ${startDate} (السابقة ${gate.currentStart} → ${gate.lastWorkingDay}) — ${reason}`
+      const note = reasonWithLabel(`إعادة تعيين — فترة خدمة رقم ${gate.periodNo + 1} من ${startDate} (السابقة ${gate.currentStart} → ${gate.lastWorkingDay})`, reason)
       for (const fieldName of Object.keys(next) as Array<keyof typeof next>) {
         const stored = emp[fieldName] as unknown
         const oldValue = stored == null ? null : fieldName === 'contractNumber' || fieldName === 'contractDurationMonths' ? stored : String(stored).slice(0, 10)

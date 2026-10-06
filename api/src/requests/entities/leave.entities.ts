@@ -212,7 +212,8 @@ export class LeaveBalance {
   @Column({ type: 'decimal', precision: 6, scale: 2, default: 0 })
   taken: number
 
-  @Column({ length: 20 })
+  // CRP2V (B2.10): المفتاح بيتكتب عند إنشاء الصف بس. حفظ كيان اتقرا قبل إعادة تعيين مايرجّعش مفتاح الصف المتجمّد (P1:2026) لشكله القديم
+  @Column({ length: 20, update: false })
   period: string // '2026'
 
   // طبقة الرصيد الافتتاحي المُرحّل وصلاحيته — تُستهلك أولاً قبل رصيد السنة

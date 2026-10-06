@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common'
+import { BadRequestException, ConflictException } from '@nestjs/common'
 import { EntityManager, In } from 'typeorm'
 import { localDateOf } from '../attendance/attendance.service'
 import { payrollSuspensionNote } from '../employees/employee-suspension-rules'
@@ -105,42 +105,60 @@ export const PAYROLL_COVERAGE_EXCLUSION_MESSAGES: Record<string, string> = {
 export async function resolvePayrollRunMembership(em: EntityManager, input: PayrollMembershipInput): Promise<PayrollMembershipResolution> {
   const { run, definition } = input
   const { filters } = definition
-  const history = await loadPayrollOrgHistory(em, input.today)
-  const departments = payrollDepartmentSet(history, filters.departmentIds, filters.includeSubDepartments)
   const previousIncluded = new Map((input.previousMembers ?? [])
     .filter(member => member.membershipStatus !== 'EXCLUDED').map(member => [member.employeeId, member]))
   const repo = em.getRepository(Employee)
   // القائمة الثابتة لا تحتاج بقية الموظفين؛ الفلاتر تُطبق على الكل لأن المكان يُقرأ بتاريخ نهاية الفترة لا من الملف.
   const listOnly = definition.mode === 'LIST'
   const wanted = listOnly ? [...new Set([...filters.employeeIds, ...previousIncluded.keys()])] : null
-  const employees: Employee[] = []
-  if (wanted) {
-    for (let offset = 0; offset < wanted.length; offset += ID_CHUNK) {
-      employees.push(...await repo.find({ where: { id: In(wanted.slice(offset, offset + ID_CHUNK)) } }))
-    }
-    employees.sort((a, b) => a.id - b.id)
-  } else employees.push(...await repo.find({ order: { id: 'ASC' } }))
-
   const inclusionSource: PayrollMembershipRow['inclusionSource'] = filters.employeeIds.length ? 'MANUAL_INCLUDE' : 'SCOPE'
-  const candidates: Array<{ employee: Employee; org: PayrollOrgAt }> = []
-  const outside: Array<{ employee: Employee; org: PayrollOrgAt; orgAtEnd: PayrollOrgAt; code: 'TRANSFERRED_OUT' | 'EXC_OUT_OF_SCOPE'; lastInScopeDate: string | null }> = []
-  for (const employee of employees) {
-    const orgAtEnd = payrollOrgAt(history, employee, run.endDate)
-    if (payrollRunFilterMatches(filters, employee.id, orgAtEnd, departments)) { candidates.push({ employee, org: orgAtEnd }); continue }
-    const listed = !filters.employeeIds.length || filters.employeeIds.includes(employee.id)
-    const lastIn = payrollRunHasOrgFilters(filters) && listed
-      ? payrollRunLastInScope(history, filters, employee, run.startDate, run.endDate, departments) : null
-    if (lastIn) { outside.push({ employee, org: lastIn, orgAtEnd, code: 'TRANSFERRED_OUT', lastInScopeDate: lastIn.date }); continue }
-    const previous = previousIncluded.get(employee.id)
-    if (!previous) continue
-    // عضو سابق خرج من النطاق لا يختفي صامتًا عند إعادة الحساب.
-    const snapshot = previous.snapshot
-    const moved = !!snapshot && (snapshot.branchId !== orgAtEnd.branchId || snapshot.departmentId !== orgAtEnd.departmentId || snapshot.teamId !== orgAtEnd.teamId)
-    const org: PayrollOrgAt = snapshot ? { date: run.endDate, branchId: snapshot.branchId, departmentId: snapshot.departmentId, teamId: snapshot.teamId,
-      costCenterId: snapshot.costCenterId, issues: [] } : orgAtEnd
-    outside.push({ employee, org, orgAtEnd, code: moved ? 'TRANSFERRED_OUT' : 'EXC_OUT_OF_SCOPE', lastInScopeDate: null })
+  // قراءة الموظفين وأماكنهم وتصنيفهم (مرشح / برّه النطاق). الحساب بينادي عليها مرتين: قبل قفل المالية عشان يعرف يقفل مين، وبعده للحكم (تحت).
+  const gather = async () => {
+    const history = await loadPayrollOrgHistory(em, input.today)
+    const departments = payrollDepartmentSet(history, filters.departmentIds, filters.includeSubDepartments)
+    const employees: Employee[] = []
+    if (wanted) {
+      for (let offset = 0; offset < wanted.length; offset += ID_CHUNK) {
+        employees.push(...await repo.find({ where: { id: In(wanted.slice(offset, offset + ID_CHUNK)) } }))
+      }
+      employees.sort((a, b) => a.id - b.id)
+    } else employees.push(...await repo.find({ order: { id: 'ASC' } }))
+
+    const candidates: Array<{ employee: Employee; org: PayrollOrgAt }> = []
+    const outside: Array<{ employee: Employee; org: PayrollOrgAt; orgAtEnd: PayrollOrgAt; code: 'TRANSFERRED_OUT' | 'EXC_OUT_OF_SCOPE'; lastInScopeDate: string | null }> = []
+    for (const employee of employees) {
+      const orgAtEnd = payrollOrgAt(history, employee, run.endDate)
+      if (payrollRunFilterMatches(filters, employee.id, orgAtEnd, departments)) { candidates.push({ employee, org: orgAtEnd }); continue }
+      const listed = !filters.employeeIds.length || filters.employeeIds.includes(employee.id)
+      const lastIn = payrollRunHasOrgFilters(filters) && listed
+        ? payrollRunLastInScope(history, filters, employee, run.startDate, run.endDate, departments) : null
+      if (lastIn) { outside.push({ employee, org: lastIn, orgAtEnd, code: 'TRANSFERRED_OUT', lastInScopeDate: lastIn.date }); continue }
+      const previous = previousIncluded.get(employee.id)
+      if (!previous) continue
+      // عضو سابق خرج من النطاق لا يختفي صامتًا عند إعادة الحساب.
+      const snapshot = previous.snapshot
+      const moved = !!snapshot && (snapshot.branchId !== orgAtEnd.branchId || snapshot.departmentId !== orgAtEnd.departmentId || snapshot.teamId !== orgAtEnd.teamId)
+      const org: PayrollOrgAt = snapshot ? { date: run.endDate, branchId: snapshot.branchId, departmentId: snapshot.departmentId, teamId: snapshot.teamId,
+        costCenterId: snapshot.costCenterId, issues: [] } : orgAtEnd
+      outside.push({ employee, org, orgAtEnd, code: moved ? 'TRANSFERRED_OUT' : 'EXC_OUT_OF_SCOPE', lastInScopeDate: null })
+    }
+    return { history, candidates, outside }
   }
-  if (input.beforeEvaluate) await input.beforeEvaluate([...candidates, ...outside].sort((a, b) => a.employee.id - b.employee.id))
+  let gathered = await gather()
+  if (input.beforeEvaluate) {
+    // CRP2V-B-B03 (مراجعة Codex P2V): اللي اتقرا قبل قفل المالية ممكن يكون اتغيّر قبل ما القفل يتمسك (إعادة تعيين، نقل، إنهاء)، والحكم بيه
+    // بعد القفل حكم قديم — حساب مايو كان بيعمل بند لموظف اتعاد تعيينه قبل ما القفل يتمسك. فبعد القفل الموظفين وأماكنهم بيتقروا تاني والحكم
+    // عليهم؛ ولو القراءة التانية جابت موظف مااتقفلش أو فرع مااتفحصش، بيتقفلوا ويتفحصوا ونقرا تاني (القفل بيتكرر على نفس المعاملة من غير ضرر)
+    for (let round = 0; ; round++) {
+      const rows = [...gathered.candidates, ...gathered.outside].sort((a, b) => a.employee.id - b.employee.id)
+      await input.beforeEvaluate(rows)
+      const locked = new Set(rows.map(row => row.employee.id)), checked = new Set(rows.map(row => row.org.branchId))
+      gathered = await gather()
+      if ([...gathered.candidates, ...gathered.outside].every(row => locked.has(row.employee.id) && checked.has(row.org.branchId))) break
+      if (round >= 2) throw new ConflictException('بيانات موظفي المسير بتتغيّر دلوقتي — أعد الحساب بعد لحظات')
+    }
+  }
+  const { history, candidates, outside } = gathered
 
   const caseRows: OffboardingCase[] = []
   const evaluatedIds = candidates.map(row => row.employee.id)
