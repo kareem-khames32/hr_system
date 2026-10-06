@@ -2,7 +2,7 @@ import { Logger, NotFoundException } from '@nestjs/common'
 import type { EntityManager } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, inBranchScope, userHasPerm } from '../auth/guards'
-import { Employee } from '../employees/employee.entity'
+import { Employee, type EmployeeStatus } from '../employees/employee.entity'
 import type { StoredFile } from '../files/stored-file.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
@@ -18,12 +18,16 @@ import { Task } from './task.entity'
 
 export const TASKS_MIGRATION_MISSING = 'المهام العامة محتاجة ترحيل 20261005_088 على قاعدة البيانات'
 export const TASK_NOT_FOUND = 'المهمة غير موجودة'
+/** المهمة ربطها (بطلب تنفيذ أو بمستند إقرار) اتثبّت والنداء واقف على صفها: المحاولة الجاية بتقراه من الأول */
+export const TASK_STILL_OPENING = 'المهمة لسه بتتسجّل — حاول تاني بعد لحظة'
 export const TASK_FILE_NOT_FOUND = 'الملف غير موجود'
 export const TASKS_REMINDER_DAYS_KEY = 'tasks.reminder_days_before'
 export const TASKS_REMINDER_DAYS_DEFAULT = 1
 export const TASKS_ESCALATION_DAYS_KEY = 'tasks.escalation_days_after'
 export const TASKS_ESCALATION_DAYS_DEFAULT = 3
 export const TASKS_DAYS_MAX = 60
+/** موظف مش على رأس العمل: مابيتكلّفش بمهمة، ومابيتطلبش منه إقرار مستند (B2.7-ب) */
+export const TASK_OFF_DUTY_STATUSES: EmployeeStatus[] = ['terminated', 'archived']
 
 export const TASK_ROLE_LABELS: Record<(typeof FUNCTIONAL_APPROVER_ROLES)[number], string> = {
   hr: 'الموارد البشرية', finance: 'المالية', it: 'تقنية المعلومات', custody_officer: 'مسؤول العهد', payroll_officer: 'مسؤول الرواتب', executive: 'الإدارة التنفيذية',

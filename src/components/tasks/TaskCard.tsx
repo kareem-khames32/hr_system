@@ -111,6 +111,8 @@ export default function TaskCard({ task, onChanged, onEdit, highlighted }: Props
         {task.requiresProof && open && <span>لازم إثبات عند الإقفال</span>}
         {task.execution && <span>مهمة تنفيذ طلب معتمد — إقفالها بيكمّل الطلب</span>}
         {task.requestId && <a href={`/approvals-inbox?request=${task.requestId}`} className="text-primary-600 underline" data-task-request>افتح الطلب</a>}
+        {task.documentAck && <span>مهمة إقرار مستند — بتتقفل لما الموظف يقرّ بيه</span>}
+        {task.documentAckId && task.status !== 'CANCELLED' && <a href={`/my/documents?ack=${task.documentAckId}`} className="text-primary-600 underline" data-task-document>افتح المستند</a>}
         {task.statusNote && <span>{task.status === 'WAITING' ? 'مستنية: ' : task.status === 'CANCELLED' ? 'سبب الإلغاء: ' : task.status === 'OPEN' ? 'اتفتحت تاني: ' : ''}{task.statusNote}</span>}
         {task.closedByName && <span>{task.status === 'DONE' ? 'قفلها: ' : 'لغاها: '}{task.closedByName}</span>}
       </div>

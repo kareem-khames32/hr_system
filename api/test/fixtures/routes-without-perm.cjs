@@ -46,6 +46,9 @@ const EXCEPTIONS = {
   'PoliciesController.mine': 'SELF', // GET /policies/mine
   'PoliciesController.pending': 'SELF', // GET /policies/pending
   'PoliciesController.acknowledge': 'SELF', // POST /policies/versions/:versionId/acknowledge
+  'HrDocumentsController.myAcknowledgements': 'SELF', // GET /hr-documents/mine/acknowledgements
+  'HrDocumentsController.acknowledgementOf': 'SELF', // GET /hr-documents/issued/:id/acknowledgement
+  'HrDocumentsController.acknowledge': 'SELF', // POST /hr-documents/issued/:id/acknowledge
   // التكليف والقراءة والتعديل والحالة: الحق بيتحكم في الخدمة (المسؤول، المنشئ، المدير المباشر، أو صلاحية المهام في فرعها) — برّه كده 404
   'TasksController.create': 'SERVICE_CHECK', // POST /tasks
   'TasksController.detail': 'SERVICE_CHECK', // GET /tasks/:id

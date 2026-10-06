@@ -1,10 +1,11 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { Brackets, DataSource, In, Not, type EntityManager } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchIdIn, branchScopeOf, inBranchScope, isEmptyBranchScope, userHasPerm } from '../auth/guards'
 import { User } from '../auth/user.entity'
 import { Employee, type EmployeeStatus } from '../employees/employee.entity'
+import { documentAckTaskLinked, documentOfAckTask, documentsOfAckTasks, DOCUMENT_ACK_TASK_BLOCKED } from '../hr-documents/document-acknowledgements'
 import { StoredFile } from '../files/stored-file.entity'
 import { ModulesService } from '../modules-registry/modules.service'
 import { OffboardingService } from '../offboarding/offboarding.service'
@@ -14,13 +15,14 @@ import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
 import { recordOutboxEvent } from '../queue/outbox'
 import { ApproverResolver, FUNCTIONAL_APPROVER_ROLES } from '../requests/approver-resolver.service'
-import { completeExecution, executionOwnRequest, executionRequestOfTask, executionRequestsOfTasks, EXECUTION_TASK_CANCEL_BLOCKED, EXECUTION_TASK_CLOSE_BLOCKED, EXECUTION_TASK_EDIT_BLOCKED, EXECUTION_TASK_OWN_BLOCKED, EXECUTION_TASK_REOPEN_BLOCKED } from '../requests/execution-tasks'
+import { completeExecution, executionOwnRequest, executionRequestOfTask, executionRequestsOfTasks, executionTaskLinked, EXECUTION_TASK_CANCEL_BLOCKED, EXECUTION_TASK_CLOSE_BLOCKED, EXECUTION_TASK_EDIT_BLOCKED, EXECUTION_TASK_OWN_BLOCKED, EXECUTION_TASK_REOPEN_BLOCKED } from '../requests/execution-tasks'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { Task, TASK_OPEN_STATUSES, type TaskPriority, type TaskStatus } from './task.entity'
 import {
   isTaskDate, isTaskRole, taskAccess, taskAddDays, taskAwaitsAccount, taskDaysBetween, taskIdChunks, taskLocalDate, taskManagedBy, taskRolesHeldBy, tasksTableReady,
   TASK_NOT_FOUND, TASK_ROLE_LABELS, TASKS_DAYS_MAX, TASKS_ESCALATION_DAYS_DEFAULT, TASKS_ESCALATION_DAYS_KEY, TASKS_MIGRATION_MISSING,
   TASKS_REMINDER_DAYS_DEFAULT, TASKS_REMINDER_DAYS_KEY,
+  TASK_OFF_DUTY_STATUSES, TASK_STILL_OPENING,
 } from './task-rules'
 
 // B2.5: محرك المهام.
@@ -31,7 +33,7 @@ import {
 //  التذكير والتصعيد: مهمة مجدولة يومية بتسجّل حدث في الطابور، ومحرك الإشعارات (B2.4) بيبعته.
 //  قبل ترحيل 088: «مهامي» بتعرض التهيئة والإخلاء بس، والمهمة العامة مرفوضة برسالة.
 
-const INACTIVE: EmployeeStatus[] = ['terminated', 'archived']
+const INACTIVE: EmployeeStatus[] = TASK_OFF_DUTY_STATUSES
 // أقصى صفوف في قايمة واحدة
 const LIST_LIMIT = 500
 // المهام المقفولة بتفضل ظاهرة في «فريقي» المدة دي
@@ -288,6 +290,14 @@ export class TasksService {
     return { task, access }
   }
 
+  /**
+   * بعد قفل صف المهمة: ربط (بطلب تنفيذ أو بمستند إقرار) ماكانش ظاهر قبل القفل وظهر دلوقتي؟ الربط بيتكتب في معاملة فتح المهمة بعد صفها،
+   * فنداء قرا الربط قبل ما المعاملة دي تتثبت واستنى على صف المهمة كان هيكمّل عليها كمهمة عادية. المنادي بيرفض «حاول تاني».
+   */
+  private async linkedWhileWaiting(em: EntityManager, id: number, execution: boolean) {
+    return (!execution && await executionTaskLinked(em, id)) || await documentAckTaskLinked(em, id)
+  }
+
   async detail(user: JwtPayload, id: number) {
     return (await this.views(user, [(await this.load(user, id)).task]))[0]
   }
@@ -298,9 +308,15 @@ export class TasksService {
       // B2.6: مهمة تنفيذ طلب معتمد مسؤولها من إعداد نوع الطلب — ماتتعدّلش ولا تتحوّل من هنا: مسؤولها بيقرا الطلب، فتحويلها كان
       // هيدّي «إدارة المهام» حق تختار مين يقراه. (الربط بالطلب ثابت من يوم ما المهمة اتفتحت، فبيتقري قبل قفل صفها)
       const execution = await executionRequestOfTask(em, id)
-      const { task, access } = await this.load(user, id, em, true)
+      // B2.7-ب: مهمة إقرار مستند مابتتغيّرش من هنا خالص، فصفها مابيتقفلش: الإقرار والإلغاء بيقفلوا المستند والموظف وبعدهم المهمة، ونداء
+      // ماسك صف المهمة وبيقرا واحد منهم كان بيتعارض معاهم
+      const acknowledgement = await documentOfAckTask(em, id)
+      const { task, access } = await this.load(user, id, em, !acknowledgement)
       if (!access.manage) throw new ForbiddenException('تعديل المهمة لمنشئها أو لصاحب صلاحية «إدارة المهام»')
       if (execution) throw new BadRequestException(EXECUTION_TASK_EDIT_BLOCKED)
+      // B2.7-ب: مهمة إقرار مستند مسؤولها وموعدها من المستند نفسه
+      if (acknowledgement) throw new BadRequestException(DOCUMENT_ACK_TASK_BLOCKED)
+      if (await this.linkedWhileWaiting(em, id, !!execution)) throw new ConflictException(TASK_STILL_OPENING)
       if (!TASK_OPEN_STATUSES.includes(task.status as TaskStatus)) throw new BadRequestException('المهمة مقفولة — افتحها تاني الأول')
       if (input.title !== undefined) task.title = this.cleanTitle(input.title)
       if (input.description !== undefined) task.description = this.cleanText(input.description, 2000)
@@ -339,7 +355,12 @@ export class TasksService {
     const saved = await this.ds.transaction(async em => {
       // B2.6: مهمة تنفيذ طلب معتمد — صف طلبها بيتقفل قبل صفها (نفس ترتيب الاعتماد ورفض التنفيذ)
       const execution = await executionRequestOfTask(em, id, true)
-      const { task, access } = await this.load(user, id, em, true)
+      // B2.7-ب: مهمة إقرار مستند صفها مابيتقفلش من هنا (زي التعديل فوق)
+      const acknowledgement = await documentOfAckTask(em, id)
+      const { task, access } = await this.load(user, id, em, !acknowledgement)
+      // B2.7-ب: مهمة إقرار مستند بتتقفل مع إقرار الموظف، وبتتلغي مع إلغاء الطلب من المستند — مفيش تغيير حالة من هنا (ولا إعادة فتح)
+      if (acknowledgement) throw new BadRequestException(DOCUMENT_ACK_TASK_BLOCKED)
+      if (await this.linkedWhileWaiting(em, id, !!execution)) throw new ConflictException(TASK_STILL_OPENING)
       // مهمة تنفيذ طلب بيشتغل عليها اللي هي عليه، أو مدير النظام (فكّ الانسداد) — ومش صاحب الطلب ولا منشئه: نفس قاعدتي الاعتماد
       const own = !!execution && executionOwnRequest(user, execution, this.resolver.hasHrOverride(user))
       const work = execution ? !own && (access.work || user.role === 'super_admin') : access.work
@@ -452,6 +473,8 @@ export class TasksService {
     // «اللي كلّف بيها» بيديرها طول ما هو المدير المباشر لمسؤولها (نفس حكم taskAccess): مرؤوسيه مرة واحدة للقايمة كلها
     // B2.6: مهام تنفيذ الطلبات (رقم المهمة ← طلبها)
     const requestOf = await executionRequestsOfTasks(this.ds.manager, tasks.map(task => task.id))
+    // B2.7-ب: مهام إقرار المستندات (رقم المهمة ← مستندها)
+    const documentOf = await documentsOfAckTasks(this.ds.manager, tasks.map(task => task.id))
     const hrOverride = this.resolver.hasHrOverride(user)
     const mayManageAsManager = !!user.employeeId && tasks.some(task => task.createdByUserId === user.sub && task.assigneeEmployeeId != null)
     const reports = new Set(mayManageAsManager ? knownReports ?? await this.resolver.directReportsOf(user.employeeId!) : [])
@@ -475,7 +498,7 @@ export class TasksService {
       const link = requestOf.get(task.id), unblocks = !!link && user.role === 'super_admin'
       const works = link ? !executionOwnRequest(user, link, hrOverride) && (mine || unblocks) : mine
       const party = !link || (open ? mine || unblocks : task.closedByUserId === user.sub)
-      return {
+      const view = {
         id: task.id, title: task.title, description: task.description ?? null,
         assigneeEmployeeId: task.assigneeEmployeeId ?? null, assigneeName: employee?.fullName ?? null, assigneeCode: employee?.employeeCode ?? null,
         assigneeRole: task.assigneeRole ?? null, assigneeRoleLabel: task.assigneeRole ? TASK_ROLE_LABELS[task.assigneeRole as keyof typeof TASK_ROLE_LABELS] ?? task.assigneeRole : null,
@@ -489,6 +512,10 @@ export class TasksService {
         canWork: open && works, canManage: canManage && !link,
         execution: !!link, requestId: link && party ? link.requestId : null,
       }
+      // B2.7-ب: مهمة إقرار مستند — من غير أزرار (بتتقفل مع الإقرار، وبتتلغي مع إلغاء الطلب)، ورقم المستند لصاحبها بس (يفتحه من «مستنداتي»)
+      const document = documentOf.get(task.id)
+      return document ? { ...view, canWork: false, canManage: false, documentAck: true, documentAckId: mine ? document.documentId : null }
+        : { ...view, documentAck: false, documentAckId: null }
     })
   }
 }

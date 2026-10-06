@@ -65,6 +65,8 @@ export function hrDocumentEditorIssues(content: HrDocumentContent, builtins: HrD
 }
 
 // A stable representation keeps one UUID for retries of exactly the same issuance.
-export function hrDocumentAttemptFingerprint(input: { templateId: number; revisionId: number; employeeId?: number; values: Record<string, string> }): string {
-  return JSON.stringify([input.templateId, input.revisionId, input.employeeId ?? null, Object.entries(input.values).sort(([a], [b]) => a.localeCompare(b))])
+// The acknowledgement request and its due date are part of the attempt: the server rejects one key reused with different data.
+export function hrDocumentAttemptFingerprint(input: { templateId: number; revisionId: number; employeeId?: number; values: Record<string, string>; requireAck?: boolean; ackDueDate?: string | null }): string {
+  return JSON.stringify([input.templateId, input.revisionId, input.employeeId ?? null, Object.entries(input.values).sort(([a], [b]) => a.localeCompare(b)),
+    input.requireAck === true, input.requireAck === true ? input.ackDueDate ?? null : null])
 }

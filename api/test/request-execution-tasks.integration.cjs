@@ -112,7 +112,7 @@ async function approved(type, requester = users.worker) {
   return requestRow(req.id)
 }
 // اتصال تاني بيمسك صفوف لحد ما `count` طلب يقفوا عليها وبعدها يسيبها: التزامن مضمون مش بالصدفة
-async function releaseTogether(lockSql, params, count, start) {
+async function releaseTogether(lockSql, params, count, start, whileBlocked) {
   assertDisposable()
   const holder = ds.createQueryRunner()
   await holder.connect()
@@ -127,6 +127,7 @@ async function releaseTogether(lockSql, params, count, start) {
       blocked = Number((await query('SELECT COUNT(*) AS [n] FROM sys.dm_exec_requests WHERE [database_id] = DB_ID() AND [blocking_session_id] <> 0'))[0].n)
     }
     assert.equal(blocked, count, 'الطلبات واقفة على الصفوف الممسوكة')
+    if (whileBlocked) await whileBlocked()
     await holder.commitTransaction()
     return await pending
   } finally {
@@ -640,4 +641,38 @@ test('RX-12: إقفال المهمة ورفض تنفيذ الطلب في نفس 
     assert.deepEqual([row.status, task.status], close.status === 201 ? ['COMPLETED', 'DONE'] : ['REJECTED', 'CANCELLED'])
     assert.deepEqual((await history(req.id)).map(item => item.action), ['APPROVED', close.status === 201 ? 'EXECUTED' : 'REJECTED'])
   }
+})
+
+test('RX-13: مهمة ربطها بطلبها اتثبّت والنداء واقف على صفها — مابتتعاملش كمهمة عادية', async () => {
+  // ربط مهمة التنفيذ بطلبها بيتكتب في معاملة الاعتماد بعد صف المهمة: نداء قرا الربط قبل ما المعاملة تتثبت واستنى على صف المهمة مايكمّلش
+  // عليها كمهمة عادية. المحاكاة: مهمة ممسوكة، وربطها بطلب بيتثبّت والنداء واقف عليها
+  const task = expectStatus(await request(users.tasksAdmin, 'POST', '/tasks', { title: 'مهمة لسه بتتربط', assigneeEmployeeId: emps.worker.id }), 201)
+  const req = await approved(types.plain)
+  const link = taskId => query('UPDATE [requests] SET [executionTaskId] = @1 WHERE [id] = @0', [req.id, taskId])
+  try {
+    for (const [user, method, route, body] of [[users.worker, 'POST', `/tasks/${task.id}/status`, { status: 'DONE' }], [users.tasksAdmin, 'PATCH', `/tasks/${task.id}`, { title: 'عنوان تاني' }]]) {
+      await link(null)
+      const waited = await releaseTogether('UPDATE [tasks] SET [title] = [title] WHERE [id] = @0', [task.id], 1, () => request(user, method, route, body), () => link(task.id))
+      assert.deepEqual([waited.status, messageOf(waited)], [409, 'المهمة لسه بتتسجّل — حاول تاني بعد لحظة'], `${method} ${route}`)
+    }
+    const kept = await repo('Task').findOneByOrFail({ id: task.id })
+    assert.deepEqual([kept.status, kept.title], ['OPEN', 'مهمة لسه بتتربط'])
+    // والقراءة اللي بعد القفل مابتستناش: طرف تاني كتب ربط المهمة بالطلب ولسه ماثبّتوش (صف الربط نفسه ممسوك)، والنداء بيرد «حاول تاني»
+    // من غير ما يستنى الطرف ده يخلّص
+    await link(null)
+    const linkHolder = ds.createQueryRunner()
+    await linkHolder.connect()
+    await linkHolder.startTransaction()
+    try {
+      const answered = await releaseTogether('UPDATE [tasks] SET [title] = [title] WHERE [id] = @0', [task.id], 1,
+        () => Promise.race([request(users.worker, 'POST', `/tasks/${task.id}/status`, { status: 'DONE' }), new Promise(resolve => setTimeout(() => resolve({ status: 'waited', body: null }), 4000))]),
+        () => linkHolder.query('UPDATE [requests] SET [executionTaskId] = @1 WHERE [id] = @0', [req.id, task.id]))
+      assert.deepEqual([answered.status, messageOf(answered)], [409, 'المهمة لسه بتتسجّل — حاول تاني بعد لحظة'])
+    } finally {
+      await linkHolder.rollbackTransaction()
+      await linkHolder.release()
+    }
+  } finally { await link(null) }
+  // ومن غير ربط: مهمة عادية زي ما هي
+  expectStatus(await request(users.worker, 'POST', `/tasks/${task.id}/status`, { status: 'DONE' }), 201)
 })

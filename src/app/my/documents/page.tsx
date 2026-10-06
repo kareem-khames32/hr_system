@@ -7,6 +7,7 @@ import { docTypeLabel } from '@/lib/doc-types'
 import { localToday } from '@/lib/dates'
 import { getCurrentUser, fetchDocuments, type ApiDocument } from '@/lib/api'
 import { fetchMyHiringDocuments, type MyHiringDocuments } from '@/lib/hiring-documents-api'
+import MyDocumentAcknowledgements from '@/components/hr-documents/MyDocumentAcknowledgements'
 
 // حالة المستند حسب تاريخ الانتهاء
 type DocStatus = 'valid' | 'expiring' | 'expired' | 'none'
@@ -74,6 +75,9 @@ export default function MyDocumentsPage() {
         </div>
 
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+
+        {/* B2.7-ب: مستندات مطلوب إقرارك بيها (واللي أقرّيت بيه) — بتتقرا وبيتقرّ بيها من هنا */}
+        <MyDocumentAcknowledgements />
 
         {/* مسوغات التعيين المطلوبة منك — كل نوع معلَّم «مطلوب للتعيين» وهل مرفوع على ملفك */}
         {hiringError && <div className="bg-amber-50 text-amber-800 rounded-xl p-4 text-sm">{hiringError}</div>}

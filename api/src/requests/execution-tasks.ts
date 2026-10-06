@@ -136,6 +136,16 @@ const LINK_COLUMNS = '[id], [status], [requesterId], [createdByUserId]'
 const linkOf = (row: LinkRow): ExecutionLink => ({ requestId: Number(row.id), status: String(row.status),
   requesterId: row.requesterId == null ? null : Number(row.requesterId), createdByUserId: row.createdByUserId == null ? null : Number(row.createdByUserId) })
 
+/**
+ * المهمة دي مربوطة بطلب (مهمة تنفيذه)؟ قراءة من غير انتظار على صف الطلب، لبعد قفل صف المهمة: الربط بيتكتب مرة في معاملة فتح المهمة
+ * ومابيتشالش، فاللي قفل صف مهمة متثبّتة بيشوفه (B2.7-ب).
+ */
+export async function executionTaskLinked(em: EntityManager, taskId: number): Promise<boolean> {
+  if (!(await executionSchemaReady(em))) return false
+  const rows: unknown[] = await em.query(`SELECT TOP (1) [id] FROM [requests] WITH (NOLOCK) WHERE [executionTaskId] = @0`, [taskId])
+  return rows.length > 0
+}
+
 /** الطلب اللي المهمة دي مهمة تنفيذه — null لو مهمة عادية (أو الترحيل ناقص). lock: بيقفل صف الطلب لآخر المعاملة (قبل صف المهمة) */
 export async function executionRequestOfTask(em: EntityManager, taskId: number, lock = false): Promise<ExecutionLink | null> {
   if (!(await executionSchemaReady(em))) return null

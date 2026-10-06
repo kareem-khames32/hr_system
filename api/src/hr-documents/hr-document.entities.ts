@@ -41,6 +41,7 @@ export class HrDocumentTemplateRevision {
 
 @Entity('hr_issued_documents')
 @Unique(['issuedByUserId', 'idempotencyKey'])
+@Index('UX_hr_issued_documents_ack_task', ['ackTaskId'], { unique: true, where: '[ackTaskId] IS NOT NULL' })
 export class HrIssuedDocument {
   @PrimaryGeneratedColumn() id: number
   @Index({ unique: true }) @Column({ length: 60 }) reference: string
@@ -58,4 +59,28 @@ export class HrIssuedDocument {
   @Column({ length: 64 }) inputHash: string
   @Column({ type: 'simple-json' }) snapshot: HrDocumentSnapshot
   @CreateDateColumn() createdAt: Date
+
+  // B2.7-ب (ترحيل 092): طلب إقرار الموظف بالمستند — وقته، وموعده، ومهمته في محرك المهام (tasks.id)، وبصمة الملف اللي هيتعرض له.
+  // برّه الكيان للقراءة والكتابة (الكود بيشتغل قبل الترحيل): hr-documents/document-acknowledgements.ts
+  @Column({ type: 'datetime2', nullable: true, select: false, insert: false, update: false }) ackRequestedAt?: Date | null
+  @Column({ type: 'date', nullable: true, select: false, insert: false, update: false }) ackDueDate?: string | null
+  @Column({ type: 'int', nullable: true, select: false, insert: false, update: false }) ackTaskId?: number | null
+  @Column({ type: 'nvarchar', length: 64, nullable: true, select: false, insert: false, update: false }) ackContentHash?: string | null
+}
+
+// B2.7-ب (ترحيل 092): دليل إقرار الموظف بالمستند — سطر واحد للمستند، بيتضاف ومابيتعدلش ولا بيتمسح (مشغّل في الترحيل). نفس أعمدة دليل
+// إقرار السياسة (policy_acknowledgements).
+@Entity('hr_document_acknowledgements')
+@Index('UQ_hr_document_acknowledgements_document', ['documentId'], { unique: true })
+export class HrDocumentAcknowledgement {
+  @PrimaryGeneratedColumn({ primaryKeyConstraintName: 'PK_hr_document_acknowledgements' }) id: number
+  @Column({ type: 'int' }) documentId: number
+  // الموظف صاحب المستند، والحساب اللي دخل بيه (الإقرار لنفسه بس)
+  @Column({ type: 'int' }) employeeId: number
+  @Column({ type: 'int' }) userId: number
+  @Column({ type: 'datetime2' }) acknowledgedAt: Date
+  // بصمة الملف اللي اتعرض له وقت الإقرار
+  @Column({ type: 'nvarchar', length: 64 }) contentHash: string
+  @Column({ type: 'nvarchar', length: 64, nullable: true }) ip: string | null
+  @Column({ type: 'nvarchar', length: 300, nullable: true }) userAgent: string | null
 }

@@ -7,19 +7,21 @@ import { MainLayout } from '@/components/layout'
 import PdfPreview from '@/components/PdfPreview'
 import { EmployeePicker } from '@/components/EmployeePicker'
 import { ApiError, can, isUncertainWriteError } from '@/lib/api'
+import GroupIssuePanel from '@/components/hr-documents/GroupIssuePanel'
 import {
-  downloadIssuedHrDocument, fetchHrDocumentEmployees, fetchIssuedHrDocuments, fetchPublishedHrDocumentTemplates,
-  HR_DOCUMENT_CATEGORY_LABELS, issueHrDocument, previewHrDocument,
-  type HrDocumentCatalog, type HrDocumentEmployee, type HrDocumentIssueInput, type IssuedHrDocument,
+  cancelHrDocumentAck, downloadIssuedHrDocument, fetchHrDocumentEmployees, fetchIssuedHrDocuments, fetchPublishedHrDocumentTemplates,
+  HR_DOCUMENT_ACK_LABELS, HR_DOCUMENT_CATEGORY_LABELS, issueHrDocument, previewHrDocument,
+  type HrDocumentAckFilter, type HrDocumentAckState, type HrDocumentCatalog, type HrDocumentEmployee, type HrDocumentIssueInput, type IssuedHrDocument,
 } from '@/lib/hr-documents'
 import { hrDocumentAttemptFingerprint } from '@/lib/hr-document-template-editor'
 import { printHrDocument } from '@/lib/print-hr-document'
-import { DISPLAY_LOCALE } from '@/lib/dates'
+import { DISPLAY_LOCALE, localToday } from '@/lib/dates'
 
-type Operation = 'load' | 'preview' | 'issue' | 'download' | 'print' | null
+type Operation = 'load' | 'preview' | 'issue' | 'download' | 'print' | 'cancel' | null
 type Attempt = { input: HrDocumentIssueInput; key: string; fingerprint: string }
 type Preview = { url: string; title: string; saved: boolean; documentId?: number }
 const dateLabel = (date: string) => new Date(date).toLocaleString(DISPLAY_LOCALE, { dateStyle: 'medium', timeStyle: 'short' })
+const ACK_TONE: Record<HrDocumentAckState, string> = { PENDING: 'bg-warning-50 text-warning-700', OVERDUE: 'bg-red-100 text-red-700', ACKNOWLEDGED: 'bg-success-50 text-success-700' }
 
 function IssueWorkspace() {
   const [catalog, setCatalog] = useState<HrDocumentCatalog | null>(null)
@@ -27,6 +29,10 @@ function IssueWorkspace() {
   const [templateId, setTemplateId] = useState('')
   const [employeeId, setEmployeeId] = useState('')
   const [values, setValues] = useState<Record<string, string>>({})
+  // B2.7-ب: مطلوب إقرار الموظف، وآخر موعد اختياري؛ وتصفية السجل بحالة الإقرار
+  const [requireAck, setRequireAck] = useState(false)
+  const [ackDueDate, setAckDueDate] = useState('')
+  const [ackFilter, setAckFilter] = useState<'' | HrDocumentAckFilter>('')
   const [issued, setIssued] = useState<IssuedHrDocument[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState('')
@@ -46,13 +52,19 @@ function IssueWorkspace() {
   const requiresEmployee = revision ? Object.values(revision.content).some(text => /\{\{\s*(employee|contract|salary)\./.test(text)) : false
   const hasSalary = revision ? Object.values(revision.content).some(text => /\{\{\s*salary\./.test(text)) : false
   const selectedEmployee = employees.find(employee => employee.id === Number(employeeId))
-  const input: HrDocumentIssueInput | null = selected && revision ? {
-    templateId: selected.id, revisionId: revision.id, ...(employeeId ? { employeeId: Number(employeeId) } : {}),
-    values: Object.fromEntries(fields.map(field => [field.key, values[field.key] ?? ''])),
+  // بيانات الإصدار من غير الموظف: للمستند الواحد وللمجموعة
+  const shared = selected && revision ? {
+    templateId: selected.id, revisionId: revision.id, values: Object.fromEntries(fields.map(field => [field.key, values[field.key] ?? ''])),
+    ...(requireAck ? { requireAck: true, ...(ackDueDate ? { ackDueDate } : {}) } : {}),
   } : null
+  const input: HrDocumentIssueInput | null = shared ? { ...shared, ...(employeeId ? { employeeId: Number(employeeId) } : {}) } : null
   const fingerprint = input ? hrDocumentAttemptFingerprint(input) : ''
   const invalidFields = fields.filter(field => (field.required && !values[field.key]?.trim()) || (values[field.key]?.length ?? 0) > 4000)
-  const valid = !!input && invalidFields.length === 0 && (!requiresEmployee || !!selectedEmployee) && (!employeeId || !!selectedEmployee)
+  const ackDateInvalid = requireAck && !!ackDueDate && ackDueDate < localToday()
+  // المشترك بين المستند الواحد والمجموعة: القالب والحقول وموعد الإقرار
+  const sharedValid = !!shared && invalidFields.length === 0 && !ackDateInvalid
+  // المستند العام (من غير موظف) مابيتبعتش للإقرار
+  const valid = sharedValid && (!requiresEmployee || !!selectedEmployee) && (!employeeId || !!selectedEmployee) && (!requireAck || !!selectedEmployee)
   const currentCreated = created?.fingerprint === fingerprint ? created.document : null
   const inputsDisabled = !!operation || !!uncertain
 
@@ -79,9 +91,9 @@ function IssueWorkspace() {
     if (!catalog) return
     let active = true
     setHistoryLoading(true); setHistoryError('')
-    fetchIssuedHrDocuments(employeeId ? Number(employeeId) : undefined).then(result => { if (active) setIssued(result) }).catch(err => { if (active) { setIssued([]); setHistoryError(err instanceof Error ? err.message : 'تعذر تحميل سجل المستندات') } }).finally(() => { if (active) setHistoryLoading(false) })
+    fetchIssuedHrDocuments(employeeId ? Number(employeeId) : undefined, ackFilter || undefined).then(result => { if (active) setIssued(result) }).catch(err => { if (active) { setIssued([]); setHistoryError(err instanceof Error ? err.message : 'تعذر تحميل سجل المستندات') } }).finally(() => { if (active) setHistoryLoading(false) })
     return () => { active = false }
-  }, [catalog, employeeId, historyVersion])
+  }, [catalog, employeeId, historyVersion, ackFilter])
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview.url) }, [preview])
   useEffect(() => {
     if (!uncertain) return
@@ -122,7 +134,7 @@ function IssueWorkspace() {
     setCreated({ document, fingerprint: currentAttempt.fingerprint })
     setHistoryVersion(previous => previous + 1)
     setPreview(null)
-    setNotice(`صدر المستند وحُفظ بالمرجع ${document.reference}. يمكنك تنزيل ملفه المحفوظ أو طباعته.`)
+    setNotice(`صدر المستند وحُفظ بالمرجع ${document.reference}. يمكنك تنزيل ملفه المحفوظ أو طباعته.${document.ack ? ' وأُرسل للموظف طلب الإقرار به.' : ''}`)
   })
   const viewSaved = (document: IssuedHrDocument) => run('download', async () => {
     const blob = await downloadIssuedHrDocument(document.id)
@@ -138,6 +150,16 @@ function IssueWorkspace() {
   const printSaved = (document: IssuedHrDocument) => run('print', () => printHrDocument(() => downloadIssuedHrDocument(document.id), document.reference))
   const startNew = () => {
     attempt.current = null; setCreated(null); setValues({}); setError(''); setNotice(''); setPreview(null); setRevisionConflict(false)
+    setRequireAck(false); setAckDueDate('')
+  }
+  // إلغاء طلب إقرار لم يُقرّ به بعد (مستند أُرسل بالخطأ): تُلغى مهمته، والمستند نفسه يبقى
+  const cancelAck = (document: IssuedHrDocument) => {
+    if (!window.confirm(`إلغاء طلب إقرار المستند ${document.reference}؟ ستُلغى مهمة الإقرار لدى الموظف، ويبقى المستند في ملفه.`)) return
+    void run('cancel', async () => {
+      await cancelHrDocumentAck(document.id)
+      setHistoryVersion(previous => previous + 1)
+      setNotice('أُلغي طلب الإقرار ومهمته.')
+    })
   }
 
   return <div className="space-y-6 pb-10">
@@ -152,6 +174,7 @@ function IssueWorkspace() {
       <section className="card p-5 space-y-5"><h2 className="font-bold">بيانات الإصدار</h2>{!catalog.templates.length ? <div className="rounded-xl bg-gray-50 p-6 text-center text-gray-500"><FileText size={30} className="mx-auto mb-3" /><p>لا توجد قوالب نشطة منشورة متاحة للإصدار.</p>{can('settings.manage') && <Link href="/settings/document-templates" className="text-primary-700 underline block mt-3">إنشاء قالب ونشره</Link>}</div> : <>
         <label className="block text-sm font-medium">القالب المنشور<select value={templateId} disabled={inputsDisabled} onChange={event => { changed(); setTemplateId(event.target.value); setValues({}) }} className="input w-full mt-2"><option value="">اختر قالبًا</option>{catalog.templates.map(template => <option key={template.id} value={template.id}>{template.name} — {HR_DOCUMENT_CATEGORY_LABELS[template.category]} — نسخة {template.publishedRevision?.revision}</option>)}</select></label>
         <div className="space-y-2"><label htmlFor="document-employee" className="text-sm font-medium">الموظف {requiresEmployee ? '(مطلوب لهذا القالب)' : '(اختياري)'}</label><EmployeePicker id="document-employee" employees={employees} value={employeeId} disabled={inputsDisabled} onChange={id => { changed(); setEmployeeId(id) }} required={requiresEmployee} inputClassName="text-sm" placeholder={requiresEmployee ? 'اختر موظفًا — اكتب الاسم أو الرقم الوظيفي' : 'مستند عام — دون موظف'} /><p className="text-xs text-gray-500">{requiresEmployee ? 'يحتوي القالب بيانات موظف أو عقد أو راتب؛ يجب اختيار الموظف.' : 'عند عدم اختيار موظف، يُحفظ المستند ضمن المستندات العامة في نطاقك.'}</p>{hasSalary && <p className="text-xs text-amber-700">يحتوي القالب بيانات راتب مسجلة؛ يتحقق الخادم من صلاحيتك المالية للموظف المختار.</p>}</div>
+        <div className="rounded-xl border border-gray-200 p-4 space-y-3" data-require-ack><label className="flex items-start gap-2 text-sm font-medium cursor-pointer"><input type="checkbox" className="mt-1" checked={requireAck} disabled={inputsDisabled} onChange={event => { changed(); setRequireAck(event.target.checked) }} /><span>مطلوب إقرار الموظف<span className="block text-xs font-normal text-gray-500 mt-1 leading-5">يظهر المستند للموظف في «مستنداتي» و«مهامي» حتى يقرأه ويوافق عليه من حسابه. المستند العام (دون موظف) لا يُرسل للإقرار.</span></span></label>{requireAck && <label className="block text-sm font-medium">آخر موعد للإقرار (اختياري)<input type="date" value={ackDueDate} min={localToday()} disabled={inputsDisabled} onChange={event => { changed(); setAckDueDate(event.target.value) }} className="input w-full sm:w-56 mt-2 block" />{ackDateInvalid ? <span className="block text-xs font-normal text-red-600 mt-1">الموعد من اليوم أو بعده.</span> : <span className="block text-xs font-normal text-gray-500 mt-1">بعد الموعد تصبح مهمة الإقرار متأخرة، والتذكير والتصعيد حسب إعدادات المهام.</span>}</label>}{requireAck && !employeeId && <p className="text-xs text-amber-700">اختر الموظف، أو أضف الموظفين في «المستند نفسه لأكثر من موظف» أدناه.</p>}</div>
         {fields.length > 0 && <div className="border-t pt-4 space-y-4"><h3 className="font-bold text-sm">الحقول الإضافية</h3>{fields.map(field => <label key={field.key} className="block"><span className="text-sm font-medium">{field.label} {field.required && <span className="text-red-600">*</span>}</span><textarea value={values[field.key] ?? ''} rows={field.key === 'custom.terms' ? 8 : 3} maxLength={4000} disabled={inputsDisabled} required={field.required} onChange={event => { changed(); setValues(previous => ({ ...previous, [field.key]: event.target.value })) }} className="input w-full mt-2 leading-7" /><span className="text-[10px] text-gray-400">{values[field.key]?.length ?? 0} / 4000 حرف {field.required ? '• مطلوب' : '• اختياري'}</span></label>)}</div>}
         <div className="border-t pt-4 flex flex-wrap gap-3"><button type="button" disabled={inputsDisabled || !valid || revisionConflict} onClick={() => void run('preview', async () => { if (!input) return; const blob = await previewHrDocument(input); setPreview({ url: URL.createObjectURL(blob), title: selected?.name ?? 'المستند', saved: false }) })} className="btn-secondary flex gap-2 items-center disabled:opacity-40">{operation === 'preview' ? <Loader2 size={17} className="animate-spin" /> : <Eye size={17} />}معاينة PDF بالبيانات الحالية</button><button type="button" disabled={inputsDisabled || !valid || !!currentCreated || revisionConflict} onClick={() => void submit()} className="btn-primary flex gap-2 items-center disabled:opacity-40">{operation === 'issue' ? <Loader2 size={17} className="animate-spin" /> : <FileCheck size={17} />}إصدار المستند وحفظه</button></div>{invalidFields.some(field => field.required && !values[field.key]?.trim()) && <p className="text-xs text-gray-500">أكمل الحقول المطلوبة لتتمكن من المعاينة والإصدار.</p>}
       </>}</section>
@@ -159,7 +182,8 @@ function IssueWorkspace() {
         {currentCreated && <section className="rounded-2xl border border-green-200 bg-green-50 p-5 space-y-3"><h2 className="font-bold text-green-800 flex gap-2 items-center"><CheckCircle2 size={18} />المستند محفوظ</h2><p className="text-sm text-green-800" dir="ltr">{currentCreated.reference}</p><div className="flex flex-wrap gap-2"><button type="button" disabled={!!operation} onClick={() => void viewSaved(currentCreated)} className="btn-secondary text-xs">عرض</button><button type="button" disabled={!!operation} onClick={() => void downloadSaved(currentCreated)} className="btn-secondary text-xs">تنزيل PDF</button><button type="button" disabled={!!operation} onClick={() => void printSaved(currentCreated)} className="btn-secondary text-xs">طباعة</button></div><button type="button" disabled={inputsDisabled} onClick={startNew} className="text-xs text-primary-700 font-semibold flex items-center gap-1"><Plus size={14} />بدء مستند جديد</button></section>}
       </aside>
     </div>}
-    {catalog && <section className="card overflow-hidden"><div className="p-5 border-b flex justify-between items-center gap-3"><div><h2 className="font-bold">سجل المستندات الصادرة</h2><p className="text-xs text-gray-500 mt-1">{selectedEmployee ? `مستندات ${selectedEmployee.fullName} ضمن صلاحياتك` : 'المستندات العامة ومستندات الموظفين المتاحة ضمن نطاق صلاحياتك'}</p></div><button type="button" disabled={historyLoading || !!operation} onClick={() => setHistoryVersion(previous => previous + 1)} className="btn-secondary text-xs flex items-center gap-1"><RefreshCw size={14} />تحديث السجل</button></div>{historyError && <div role="alert" className="m-4 p-3 bg-red-50 text-red-700 text-sm rounded-xl">{historyError}</div>}{historyLoading ? <div className="p-10 text-center text-gray-500 text-sm">جارٍ تحميل السجل...</div> : issued.length ? <div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-gray-50 text-gray-500"><tr><th className="text-right p-4">المرجع</th><th className="text-right p-4">القالب</th><th className="text-right p-4">الموظف</th><th className="text-right p-4">تاريخ الإصدار</th><th className="text-right p-4">PDF المحفوظ</th></tr></thead><tbody>{issued.map(document => <tr key={document.id} className="border-t border-gray-100"><td className="p-4 font-medium" dir="ltr">{document.reference}</td><td className="p-4">{document.templateName}</td><td className="p-4">{document.employeeId ? employees.find(employee => employee.id === document.employeeId)?.fullName ?? `موظف #${document.employeeId}` : 'مستند عام'}</td><td className="p-4 text-xs text-gray-500 whitespace-nowrap">{dateLabel(document.createdAt)}</td><td className="p-4"><div className="flex gap-2"><button type="button" disabled={!!operation} onClick={() => void viewSaved(document)} aria-label={`عرض ${document.reference}`} title="عرض المستند المحفوظ" className="p-2 rounded-lg bg-primary-50 text-primary-700"><Eye size={16} /></button><button type="button" disabled={!!operation} onClick={() => void downloadSaved(document)} aria-label={`تنزيل ${document.reference}`} title="تنزيل PDF" className="p-2 rounded-lg bg-gray-100 text-gray-700"><Download size={16} /></button><button type="button" disabled={!!operation} onClick={() => void printSaved(document)} aria-label={`طباعة ${document.reference}`} title="طباعة PDF المحفوظ" className="p-2 rounded-lg bg-gray-100 text-gray-700"><Printer size={16} /></button></div></td></tr>)}</tbody></table></div> : !historyError && <p className="p-10 text-center text-gray-500 text-sm">لا توجد مستندات صادرة في هذا النطاق حتى الآن.</p>}</section>}
+    {catalog && catalog.templates.length > 0 && employees.length > 0 && <GroupIssuePanel employees={employees} input={shared} ready={sharedValid && !revisionConflict} disabled={inputsDisabled} onIssued={() => setHistoryVersion(previous => previous + 1)} />}
+    {catalog && <section className="card overflow-hidden"><div className="p-5 border-b flex flex-wrap justify-between items-center gap-3"><div><h2 className="font-bold">سجل المستندات الصادرة</h2><p className="text-xs text-gray-500 mt-1">{selectedEmployee ? `مستندات ${selectedEmployee.fullName} ضمن صلاحياتك` : 'المستندات العامة ومستندات الموظفين المتاحة ضمن نطاق صلاحياتك'}</p></div><div className="flex flex-wrap items-center gap-2"><select value={ackFilter} disabled={historyLoading || !!operation} onChange={event => setAckFilter(event.target.value as '' | HrDocumentAckFilter)} aria-label="تصفية السجل بحالة الإقرار" className="input text-xs w-auto"><option value="">كل المستندات</option><option value="pending">بانتظار الإقرار</option><option value="overdue">إقرار متأخر</option><option value="acknowledged">أقرّ الموظف</option></select><button type="button" disabled={historyLoading || !!operation} onClick={() => setHistoryVersion(previous => previous + 1)} className="btn-secondary text-xs flex items-center gap-1"><RefreshCw size={14} />تحديث السجل</button></div></div>{historyError && <div role="alert" className="m-4 p-3 bg-red-50 text-red-700 text-sm rounded-xl">{historyError}</div>}{historyLoading ? <div className="p-10 text-center text-gray-500 text-sm">جارٍ تحميل السجل...</div> : issued.length ? <div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-gray-50 text-gray-500"><tr><th className="text-right p-4">المرجع</th><th className="text-right p-4">القالب</th><th className="text-right p-4">الموظف</th><th className="text-right p-4">تاريخ الإصدار</th><th className="text-right p-4">الإقرار</th><th className="text-right p-4">PDF المحفوظ</th></tr></thead><tbody>{issued.map(document => <tr key={document.id} className="border-t border-gray-100"><td className="p-4 font-medium" dir="ltr">{document.reference}</td><td className="p-4">{document.templateName}</td><td className="p-4">{document.employeeId ? employees.find(employee => employee.id === document.employeeId)?.fullName ?? `موظف #${document.employeeId}` : 'مستند عام'}</td><td className="p-4 text-xs text-gray-500 whitespace-nowrap">{dateLabel(document.createdAt)}</td><td className="p-4 whitespace-nowrap" data-document-ack={document.ack?.state ?? ''}>{document.ack ? <div className="space-y-1"><span className={`badge text-xs ${ACK_TONE[document.ack.state]}`}>{HR_DOCUMENT_ACK_LABELS[document.ack.state]}</span><p className="text-[11px] text-gray-500">{document.ack.acknowledgedAt ? dateLabel(document.ack.acknowledgedAt) : document.ack.dueDate ? <>الموعد <span dir="ltr">{document.ack.dueDate}</span></> : 'دون موعد'}</p>{document.ack.state !== 'ACKNOWLEDGED' && <button type="button" disabled={!!operation} onClick={() => cancelAck(document)} className="text-[11px] text-red-700 underline disabled:opacity-40">إلغاء طلب الإقرار</button>}</div> : <span className="text-xs text-gray-400">—</span>}</td><td className="p-4"><div className="flex gap-2"><button type="button" disabled={!!operation} onClick={() => void viewSaved(document)} aria-label={`عرض ${document.reference}`} title="عرض المستند المحفوظ" className="p-2 rounded-lg bg-primary-50 text-primary-700"><Eye size={16} /></button><button type="button" disabled={!!operation} onClick={() => void downloadSaved(document)} aria-label={`تنزيل ${document.reference}`} title="تنزيل PDF" className="p-2 rounded-lg bg-gray-100 text-gray-700"><Download size={16} /></button><button type="button" disabled={!!operation} onClick={() => void printSaved(document)} aria-label={`طباعة ${document.reference}`} title="طباعة PDF المحفوظ" className="p-2 rounded-lg bg-gray-100 text-gray-700"><Printer size={16} /></button></div></td></tr>)}</tbody></table></div> : !historyError && <p className="p-10 text-center text-gray-500 text-sm">{ackFilter ? 'لا توجد مستندات بهذه الحالة في هذا النطاق.' : 'لا توجد مستندات صادرة في هذا النطاق حتى الآن.'}</p>}</section>}
     {preview && <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-3 sm:p-6" role="dialog" aria-modal="true" aria-labelledby="preview-title"><div className="bg-white rounded-2xl w-full max-w-5xl overflow-hidden"><div className="flex flex-wrap items-center justify-between gap-3 p-4 border-b"><div><h2 id="preview-title" className="font-bold">{preview.saved ? 'المستند المحفوظ' : 'معاينة قبل الإصدار'} — {preview.title}</h2><p className={`text-xs mt-1 ${preview.saved ? 'text-green-700' : 'text-amber-700'}`}>{preview.saved ? 'هذه نسخة PDF الأصلية التي حُفظت عند الإصدار.' : 'معاينة بالبيانات الحالية؛ لم يُصدر المستند ولم يُحفظ بعد.'}</p></div><div className="flex gap-2 items-center"><a href={preview.url} download={preview.saved ? `${preview.title}.pdf` : 'hr-document-preview.pdf'} className="btn-secondary text-xs flex gap-1 items-center"><Download size={15} />{preview.saved ? 'تنزيل PDF' : 'تنزيل المعاينة'}</a>{preview.saved && preview.documentId && <button type="button" disabled={!!operation} onClick={() => void run('print', () => printHrDocument(() => downloadIssuedHrDocument(preview.documentId!), preview.title))} className="btn-secondary text-xs flex gap-1 items-center"><Printer size={15} />طباعة</button>}<button type="button" onClick={() => setPreview(null)} aria-label="إغلاق معاينة المستند" className="p-2"><X size={20} /></button></div></div><PdfPreview url={preview.url} /></div></div>}
   </div>
 }

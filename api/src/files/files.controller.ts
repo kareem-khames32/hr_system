@@ -3,6 +3,7 @@ import {
   Controller,
   ForbiddenException,
   Get,
+  Logger,
   NotFoundException,
   Param,
   ParseIntPipe,
@@ -28,6 +29,7 @@ import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { RequestsService } from '../requests/requests.service'
 import { fileStorage } from './storage'
 import { assertHrDocumentFileAccess } from '../hr-documents/hr-document-access'
+import { documentAckRequest, sendVerifiedFile, verifiedDocumentFile } from '../hr-documents/document-acknowledgements'
 import { assertLetterFileAccess } from '../letters/letter-access'
 import { assertTaskFileAccess } from '../tasks/task-rules'
 import { assertExecutionProofAccess } from '../requests/execution-tasks'
@@ -49,6 +51,8 @@ const monthFolder = () => {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('files')
 export class FilesController {
+  private readonly logger = new Logger(FilesController.name)
+
   constructor(
     @InjectRepository(StoredFile)
     private readonly files: Repository<StoredFile>,
@@ -150,8 +154,11 @@ export class FilesController {
   ) {
     const f = await this.files.findOne({ where: { id } })
     if (!f) throw new NotFoundException('الملف غير موجود')
+    // B2.7-ب: ملف مستند عليه طلب إقرار بيتبعت من هنا بنفس تطابق مسار المستند (بصمته قبل الإرسال وأثناءه): null = مش منهم
+    let ackHash: string | null = null
     if (f.entityType === 'hr_document') {
-      await assertHrDocumentFileAccess(this.ds.manager, user, f)
+      const document = await assertHrDocumentFileAccess(this.ds.manager, user, f)
+      ackHash = (await documentAckRequest(this.ds.manager, document.id))?.contentHash ?? null
     } else if (f.entityType === 'letter') {
       // نفس سياسة /letters/:id/download — خطاب الراتب يحتاج قراءة المالية (SEC-07)
       await assertLetterFileAccess(this.ds.manager, user, f)
@@ -196,13 +203,22 @@ export class FilesController {
     }
     const storage = fileStorage()
     if (!(await storage.exists(f.storedName))) throw new NotFoundException('ملف التخزين مفقود')
-    res.setHeader('Content-Type', f.mime)
-    res.setHeader('X-Content-Type-Options', 'nosniff')
-    res.setHeader('Cache-Control', 'private, no-store')
-    res.setHeader(
-      'Content-Disposition',
-      `inline; filename*=UTF-8''${encodeURIComponent(f.originalName)}`
-    )
+    const headers = () => {
+      res.setHeader('Content-Type', f.mime)
+      res.setHeader('X-Content-Type-Options', 'nosniff')
+      res.setHeader('Cache-Control', 'private, no-store')
+      res.setHeader(
+        'Content-Disposition',
+        `inline; filename*=UTF-8''${encodeURIComponent(f.originalName)}`
+      )
+    }
+    if (ackHash !== null) {
+      const verified = await verifiedDocumentFile(f.storedName, ackHash)
+      sendVerifiedFile(res, f.storedName, verified, headers,
+        () => this.logger.error(`ملف المستند ${f.entityId} اتبدّل على التخزين بعد التحقق من بصمته — الرد اتقطع قبل ما يكمل`))
+      return
+    }
+    headers()
     const local = storage.localPath(f.storedName)
     if (local) res.sendFile(local)
     else storage.read(f.storedName).pipe(res)

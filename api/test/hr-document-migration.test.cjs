@@ -4,9 +4,12 @@ const {test,before,after}=require('node:test')
 const assert=require('node:assert/strict')
 const {fs,path,crypto,sql,env,pool,apiRoot}=require('../scripts/migrations-lib.cjs')
 const {DataSource}=require('../node_modules/typeorm')
+const {splitBatches}=require('../scripts/db-migrate.cjs')
 const {HrDocumentTemplate,HrDocumentTemplateRevision,HrIssuedDocument}=require('../src/hr-documents/hr-document.entities')
 const database='hr_hrdoc_migration_test_'+crypto.randomBytes(8).toString('hex')
 const migration=fs.readFileSync(path.resolve(apiRoot,'../docs/migrations/20260912_007_pre_payroll_hr_document_templates.sql'),'utf8')
+// B2.7-ب: ترحيل 092 زوّد أعمدة طلب الإقرار على hr_issued_documents، فمخطط الكيانات الحالي = 007 وبعده 092
+const acknowledgements=fs.readFileSync(path.resolve(apiRoot,'../docs/migrations/payroll/20261006_092_document_acknowledgements.sql'),'utf8')
 let master,p,ds,created=false
 const content={title:'Synthetic factory contract',greeting:'',body:'Contract body {{employee.fullName}}',closing:'Employee signature: ______',footer:''}
 const fields=[{key:'custom.shift',label:'Factory shift',required:true}]
@@ -15,6 +18,7 @@ async function apply(extra=''){
   try{await new sql.Request(tx).batch('SET XACT_ABORT ON;\n'+migration+'\n'+extra);await tx.commit()}
   catch(err){try{await tx.rollback()}catch{}throw err}
 }
+async function applyAcknowledgements(){for(const batch of splitBatches(acknowledgements))await p.request().batch(batch)}
 async function existingRows(){return (await p.request().query('SELECT * FROM dbo.existing_document_canary ORDER BY id')).recordset}
 before(async()=>{
   assert.match(database,/^hr_hrdoc_migration_test_[a-f0-9]{16}$/);assert.notEqual(database,env.DB_DATABASE)
@@ -38,7 +42,7 @@ test('HR007 transactional DDL rollback leaves existing document data and no part
   assert.deepEqual(await existingRows(),existing)
 })
 test('HR007 creates exact current TypeORM schema without changing existing document bytes',async()=>{
-  const existing=await existingRows();await apply()
+  const existing=await existingRows();await apply();await applyAcknowledgements()
   const diff=await ds.driver.createSchemaBuilder().log()
   assert.deepEqual(diff.upQueries.map(q=>q.query),[])
   assert.deepEqual(await existingRows(),existing)
@@ -53,7 +57,7 @@ test('HR007 replay preserves saved drafts revisions snapshots and unique issuanc
   const row={reference:'HRDOC-TEST-1',templateId:template.id,revisionId:revision.id,employeeId:17,branchId:3,fileId:101,employeeDocumentId:29,templateName:template.name,category:'contract',isFinancial:true,issuedByUserId:51,idempotencyKey:key,inputHash:'a'.repeat(64),snapshot}
   const saved=await issued.save(row)
   const before={templates:await templates.find(),revisions:await revisions.find(),issued:await issued.find(),existing:await existingRows()}
-  await apply();await apply()
+  await apply();await apply();await applyAcknowledgements();await applyAcknowledgements()
   assert.deepEqual({templates:await templates.find(),revisions:await revisions.find(),issued:await issued.find(),existing:await existingRows()},before)
   assert.deepEqual((await ds.driver.createSchemaBuilder().log()).upQueries.map(q=>q.query),[])
   for(const duplicate of [

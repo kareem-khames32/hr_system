@@ -17,12 +17,24 @@ import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { LetterRenderer } from '../letters/letter-renderer.service'
 import { localDateOf } from '../attendance/attendance.service'
 import { readBranchCurrency } from '../org/branch-currency-db'
-import { HrDocumentCategory, HrDocumentSnapshot, HrDocumentTemplate, HrDocumentTemplateRevision, HrIssuedDocument } from './hr-document.entities'
+import { auditRequestContext } from '../audit/audit'
+import { HrDocumentAcknowledgement, HrDocumentCategory, HrDocumentSnapshot, HrDocumentTemplate, HrDocumentTemplateRevision, HrIssuedDocument } from './hr-document.entities'
+import { clearDocumentAckRequest, closeDocumentAckTask, documentAckRequest, documentAckRequests, documentAckRequestsOfEmployee, documentAckSchemaReady, documentAckState,
+  openDocumentAckRequest, verifiedDocumentFile, DOCUMENT_ACK_MIGRATION_MISSING, DOCUMENT_ACK_OWN_CANCEL, DOCUMENT_FILE_MISMATCH, type DocumentAckRequest,
+  type DocumentAckState } from './document-acknowledgements'
 import { HR_DOCUMENT_VARIABLES, hrContentVariables, resolveHrContent, validateHrContent, validateHrFields, validateHrValues } from './hr-document-content'
-import { assertHrDocumentAccess, assertHrDocumentFileAccess } from './hr-document-access'
+import { assertHrDocumentAccess, assertHrDocumentFileAccess, hrDocumentManageable } from './hr-document-access'
+import { TASK_OFF_DUTY_STATUSES } from '../tasks/task-rules'
 import { withoutDataPlaceholder } from '../common/data-placeholders'
 
-export interface HrDocumentInput { templateId: number; revisionId: number; employeeId?: number | null; values: Record<string, string> }
+export interface HrDocumentInput {
+  templateId: number; revisionId: number; employeeId?: number | null; values: Record<string, string>
+  /** B2.7-ب: مطلوب إقرار الموظف بالمستند (مهمة «إقرار مستند» عليه)، وآخر موعد اختياري YYYY-MM-DD */
+  requireAck?: boolean; ackDueDate?: string | null
+}
+const DOCUMENT_NOT_FOUND = 'المستند غير موجود'
+/** رقم مستند ممكن يكون موجود (جوه مدى عمود int): غير كده «غير موجود» من غير ما نسأل القاعدة */
+const validDocumentId = (id: number) => Number.isSafeInteger(id) && id > 0 && id <= 2147483647
 export interface HrTemplateInput { name: string; category: HrDocumentCategory; draft: unknown; customFields?: unknown; isActive?: boolean }
 const categories = new Set<HrDocumentCategory>(['contract', 'acknowledgement', 'certificate', 'general'])
 
@@ -128,7 +140,16 @@ export class HrDocumentsService {
     if (employeeId !== null && (!Number.isSafeInteger(employeeId) || employeeId < 1)) throw new BadRequestException('معرف الموظف غير صالح')
     if (!body.values || typeof body.values !== 'object' || Array.isArray(body.values) || Object.entries(body.values).some(([key, value]) => !/^custom\.[A-Za-z][A-Za-z0-9_]{0,49}$/.test(key) || typeof value !== 'string' || value.length > 4000) || Object.keys(body.values).length > 20) throw new BadRequestException('قيم الحقول المخصصة غير صالحة')
     const values = Object.fromEntries(Object.entries(body.values).sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => [key, value.trim()]))
-    return { templateId: body.templateId, revisionId: body.revisionId, employeeId, values }
+    if (body.requireAck !== true) {
+      if (body.ackDueDate != null) throw new BadRequestException('موعد الإقرار من غير «مطلوب إقرار الموظف»')
+      return { templateId: body.templateId, revisionId: body.revisionId, employeeId, values }
+    }
+    // المستند العام مالوش موظف يقرّ بيه
+    if (employeeId === null) throw new BadRequestException('طلب الإقرار لمستند صادر لموظف — اختار الموظف الأول')
+    const ackDueDate = body.ackDueDate ?? null
+    if (ackDueDate !== null && (typeof ackDueDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(ackDueDate) || Number.isNaN(Date.parse(`${ackDueDate}T00:00:00Z`))
+      || new Date(`${ackDueDate}T00:00:00Z`).toISOString().slice(0, 10) !== ackDueDate)) throw new BadRequestException('موعد الإقرار بصيغة YYYY-MM-DD')
+    return { templateId: body.templateId, revisionId: body.revisionId, employeeId, values, requireAck: true, ackDueDate }
   }
   private async prepare(em: EntityManager, user: JwtPayload, input: HrDocumentInput, reference: string, lock = false) {
     this.documentsPermission(user)
@@ -194,9 +215,14 @@ export class HrDocumentsService {
     const { snapshot } = await this.prepare(this.ds.manager, user, this.input(body), 'HRD-PREVIEW')
     return this.renderer.pdf(snapshot, true)
   }
-  private issuedView(document: HrIssuedDocument) {
+  private ackView(request: DocumentAckRequest | null | undefined, today = localDateOf(new Date())) {
+    return request ? { requestedAt: request.requestedAt, dueDate: request.dueDate, acknowledgedAt: request.acknowledgedAt, state: documentAckState(request, today) } : null
+  }
+  private issuedView(document: HrIssuedDocument, request?: DocumentAckRequest | null) {
     return { id: document.id, reference: document.reference, employeeId: document.employeeId, employeeDocumentId: document.employeeDocumentId,
-      fileRef: `file:${document.fileId}`, templateName: document.templateName, category: document.category, createdAt: document.createdAt }
+      fileRef: `file:${document.fileId}`, templateName: document.templateName, category: document.category, createdAt: document.createdAt,
+      // طلب الإقرار القايم وحالته (null = من غير طلب)؛ من غير بصمة الملف: البصمة من قراءة المستند نفسه
+      ack: this.ackView(request) }
   }
   async issue(user: JwtPayload, body: HrDocumentInput & { idempotencyKey: string }) {
     this.documentsPermission(user)
@@ -214,10 +240,19 @@ export class HrDocumentsService {
         if (existing) {
           await assertHrDocumentAccess(em, user, existing)
           if (existing.inputHash !== inputHash) throw new ConflictException('استُخدم مفتاح الإصدار مع بيانات أخرى؛ استخدم مفتاحاً جديداً')
-          return this.issuedView(existing)
+          return this.issuedView(existing, await documentAckRequest(em, existing.id))
         }
+        // قبل ترحيل 092: الإصدار العادي شغال، وطلب الإقرار مرفوض برسالته قبل ما أي ملف يتكتب
+        if (input.requireAck && !(await documentAckSchemaReady(em))) throw new BadRequestException(DOCUMENT_ACK_MIGRATION_MISSING)
+        // موعد فات مرفوض وقت الإنشاء بس: إعادة نفس المحاولة بمفتاحها بعد ما موعدها عدّى بترجّع مستندها (فوق)
+        if (input.requireAck && input.ackDueDate && input.ackDueDate < localDateOf(new Date())) throw new BadRequestException('موعد الإقرار من النهارده أو بعده')
         const reference = `HRD-${new Date().getFullYear()}-${randomUUID()}`
         const prepared = await this.prepare(em, user, input, reference, true)
+        // الطلب للي يقدر يقرّ: موظف على رأس العمل (نفس حكم تكليف المهام). الموظف اللي لسه مالوش حساب بيتقبل طلبه: حسابه بيتعمل مع أول دخول
+        // بالدومين (أو من الموارد البشرية)، والطلب مستنيه
+        if (input.requireAck && TASK_OFF_DUTY_STATUSES.includes(prepared.employee!.status)) {
+          throw new BadRequestException('الموظف مش على رأس العمل — طلب الإقرار للي على رأس العمل بس')
+        }
         const bytes = await this.renderer.pdf(prepared.snapshot)
         if (bytes.length < 5 || Buffer.from(bytes.subarray(0, 5)).toString() !== '%PDF-') throw new BadRequestException('تعذّر توليد ملف PDF صالح')
         // B2.2: عن طريق واجهة التخزين، والصف ببصمة المحتوى
@@ -238,15 +273,21 @@ export class HrDocumentsService {
           templateName: prepared.revision.name, category: prepared.revision.category, isFinancial: prepared.financial, issuedByUserId: user.sub,
           idempotencyKey, inputHash, snapshot: prepared.snapshot }))
         await em.update(StoredFile, file.id, { entityId: issued.id })
-        return this.issuedView(issued)
+        if (!input.requireAck) return this.issuedView(issued)
+        // B2.7-ب: طلب الإقرار ومهمته في نفس معاملة الإصدار، ببصمة الملف اللي اتكتب دلوقتي
+        const employee = prepared.employee!
+        await openDocumentAckRequest(em, { documentId: issued.id, employeeId: employee.id, branchId: employee.branchId, issuedByUserId: user.sub,
+          dueDate: input.ackDueDate ?? null, contentHash: sha256Hex(bytes) })
+        return this.issuedView(issued, await documentAckRequest(em, issued.id))
       })
     } catch (error) {
       if (createdName) await fileStorage().remove(createdName).catch(() => undefined)
       throw error
     }
   }
-  async issued(user: JwtPayload, employeeId?: number) {
+  async issued(user: JwtPayload, employeeId?: number, ack?: string) {
     this.documentsPermission(user)
+    if (ack !== undefined && !['pending', 'overdue', 'acknowledged'].includes(ack)) throw new BadRequestException('فلتر الإقرار: pending أو overdue أو acknowledged')
     const scope = branchScopeOf(user)
     if (employeeId !== undefined && (!Number.isSafeInteger(employeeId) || employeeId < 1)) throw new BadRequestException('معرف الموظف غير صالح')
     if (employeeId !== undefined) {
@@ -263,11 +304,14 @@ export class HrDocumentsService {
       const [documentBranch] = branchScopeQb('d.branchId', scope)
       query.andWhere(`((d.employeeId IS NOT NULL AND ${employeeBranch}) OR (d.employeeId IS NULL AND ${documentBranch}))`, params)
     }
-    const rows = await query.orderBy('d.id', 'DESC').getMany()
-    return rows.filter(row => !row.isFinancial || (!!row.employeeId && canReadEmployeeFinance(user, row.employeeId))).map(row => this.issuedView(row))
+    const rows = (await query.orderBy('d.id', 'DESC').getMany()).filter(row => !row.isFinancial || (!!row.employeeId && canReadEmployeeFinance(user, row.employeeId)))
+    // حالة الإقرار للمستندات الظاهرة للقارئ بس (بعد النطاق والحكم المالي)
+    const requests = await documentAckRequests(this.ds.manager, rows.map(row => row.id))
+    const today = localDateOf(new Date()), wanted = ack?.toUpperCase() as DocumentAckState | undefined
+    return rows.filter(row => !wanted || (requests.has(row.id) && documentAckState(requests.get(row.id)!, today) === wanted)).map(row => this.issuedView(row, requests.get(row.id)))
   }
   async fileFor(user: JwtPayload, id: number) {
-    const document = await this.ds.manager.findOneBy(HrIssuedDocument, { id })
+    const document = validDocumentId(id) ? await this.ds.manager.findOneBy(HrIssuedDocument, { id }) : null
     if (!document) throw new NotFoundException('المستند غير موجود')
     await assertHrDocumentAccess(this.ds.manager, user, document)
     const file = await this.ds.manager.findOneBy(StoredFile, { id: document.fileId, entityType: 'hr_document' })
@@ -275,6 +319,86 @@ export class HrDocumentsService {
     await assertHrDocumentFileAccess(this.ds.manager, user, file)
     const path = storedPath(file.storedName)
     try { await access(path) } catch { throw new NotFoundException('ملف المستند مفقود من التخزين') }
-    return { file, path }
+    // B2.7-ب: المستند المطلوب إقراره (أو اللي اتقرّ بيه) ملفه بيتطابق مع البصمة اللي اتسجّلت وقت الإصدار قبل ما يتبعت: ملف اتبدّل على
+    // التخزين مابيتعرضش، فمحدش بيقرّ بمستند شاف غيره. الباقي بيتبعت زي الأول
+    const request = await documentAckRequest(this.ds.manager, document.id)
+    const verified = request ? await verifiedDocumentFile(file.storedName, request.contentHash) : null
+    return { file, path, verified }
+  }
+
+  // ===== B2.7-ب: إقرار الموظف بالمستند =====
+  /** «مستني إقرارك» واللي أقرّيت بيه: مستندات الموظف صاحب الحساب اللي عليها طلب إقرار، من غير بصمة الملف */
+  async myAcknowledgements(user: JwtPayload) {
+    const em = this.ds.manager
+    if (!(await documentAckSchemaReady(em))) return { available: false, documents: [] }
+    const requests = user.employeeId ? await documentAckRequestsOfEmployee(em, user.employeeId) : []
+    const documents = requests.length ? await em.find(HrIssuedDocument, { where: { id: In(requests.map(request => request.documentId)) } }) : []
+    const byId = new Map(documents.map(document => [document.id, document]))
+    const today = localDateOf(new Date())
+    return { available: true, documents: requests.filter(request => byId.has(request.documentId)).map(request => {
+      const document = byId.get(request.documentId)!
+      return { id: document.id, reference: document.reference, templateName: document.templateName, category: document.category, createdAt: document.createdAt, ...this.ackView(request, today)! }
+    }) }
+  }
+
+  /** مستند عليه طلب إقرار لصاحبه هو بس — غير كده نفس رد المستند اللي مش موجود */
+  private async ownAckDocument(em: EntityManager, user: JwtPayload, id: number, lock = false) {
+    const document = user.employeeId && validDocumentId(id) ? await em.findOneBy(HrIssuedDocument, { id, employeeId: user.employeeId }) : null
+    const request = document ? await documentAckRequest(em, document.id, lock) : null
+    if (!document || !request) throw new NotFoundException('المستند غير موجود')
+    return { document, request }
+  }
+
+  /** قراءة المستند قبل الإقرار: بياناته وبصمة ملفه (البصمة من هنا بس، فالإقرار مايتمش من القايمة لوحدها) */
+  async acknowledgementOf(user: JwtPayload, id: number) {
+    const { document, request } = await this.ownAckDocument(this.ds.manager, user, id)
+    return { id: document.id, reference: document.reference, templateName: document.templateName, category: document.category, contentHash: request.contentHash,
+      ...this.ackView(request)! }
+  }
+
+  /**
+   * الإقرار: صاحب المستند لنفسه بس، ببصمة الملف اللي اتعرض له. سطر واحد للمستند، ومهمته بتتقفل معاه. صف المستند بيتقفل لحد آخر المعاملة،
+   * فإقرارين (أو إقرار وإلغاء) في نفس اللحظة بييجوا واحد ورا التاني.
+   */
+  async acknowledge(user: JwtPayload, id: number, contentHash: string) {
+    if (!user.employeeId) throw new ForbiddenException('الإقرار لصاحب المستند نفسه — حسابك مش مربوط بموظف')
+    const context = auditRequestContext.getStore()
+    return this.ds.transaction(async em => {
+      const { document, request } = await this.ownAckDocument(em, user, id, true)
+      if (contentHash !== request.contentHash) throw new ConflictException('المستند اتغيّر — افتحه تاني واقراه قبل الإقرار')
+      const repo = em.getRepository(HrDocumentAcknowledgement)
+      const existing = await repo.findOne({ where: { documentId: document.id } })
+      if (existing) return { id: existing.id, acknowledgedAt: existing.acknowledgedAt, already: true }
+      // الإقرار بملف لسه مطابق لبصمته على التخزين: ملف اتبدّل أو اختفى = من غير إقرار (حتى لو اتعرض من مسار تاني)
+      const file = await em.findOneBy(StoredFile, { id: document.fileId, entityType: 'hr_document' })
+      if (!file || !(await fileStorage().exists(file.storedName))) throw new ConflictException(DOCUMENT_FILE_MISMATCH)
+      await verifiedDocumentFile(file.storedName, request.contentHash)
+      const saved = await repo.save(repo.create({ documentId: document.id, employeeId: user.employeeId!, userId: user.sub, acknowledgedAt: new Date(), contentHash: request.contentHash,
+        ip: context?.ip?.slice(0, 64) ?? null, userAgent: context?.userAgent?.slice(0, 300) ?? null }))
+      await closeDocumentAckTask(em, request.taskId, user.sub, false)
+      return { id: saved.id, acknowledgedAt: saved.acknowledgedAt, already: false }
+    })
+  }
+
+  /**
+   * إلغاء طلب إقرار لسه مااتقرّش بيه (مستند اتبعت غلط): لصاحب «إدارة المستندات» اللي فرع الموظف دلوقتي في نطاقه، ومش لصاحب المستند نفسه.
+   * مهمته بتتلغي، والإقرار نفسه مابيتلغيش. الحكم بعد قفل صف المستند وقراءة الموظف بقفل (نقل الموظف في نفس اللحظة مايتخطّاش الحكم)، والمستند
+   * اللي مش ظاهر للحساب نفس رد اللي مش موجود.
+   */
+  async cancelAcknowledgement(user: JwtPayload, id: number) {
+    this.documentsPermission(user)
+    if (!validDocumentId(id)) throw new NotFoundException(DOCUMENT_NOT_FOUND)
+    return this.ds.transaction(async em => {
+      const request = await documentAckRequest(em, id, true)
+      const document = await em.findOneBy(HrIssuedDocument, { id })
+      // محدش بيلغي طلب إقرار عليه هو
+      if (request && document?.employeeId != null && document.employeeId === user.employeeId) throw new ForbiddenException(DOCUMENT_ACK_OWN_CANCEL)
+      if (!document || !(await hrDocumentManageable(em, user, document))) throw new NotFoundException(DOCUMENT_NOT_FOUND)
+      if (!request) throw new BadRequestException('المستند ده مش عليه طلب إقرار')
+      if (request.acknowledgedAt) throw new BadRequestException('الموظف أقرّ بالمستند خلاص — الإقرار مابيتلغيش')
+      await clearDocumentAckRequest(em, document.id)
+      await closeDocumentAckTask(em, request.taskId, user.sub, true)
+      return this.issuedView(document, null)
+    })
   }
 }

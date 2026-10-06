@@ -23,3 +23,15 @@ export async function assertHrDocumentFileAccess(em: EntityManager, user: JwtPay
   await assertHrDocumentAccess(em, user, document)
   return document
 }
+
+/**
+ * B2.7-ب: حكم الإدارة على المستند (إلغاء طلب إقراره) — صاحب «إدارة المستندات» وفرع الموظف دلوقتي في نطاقه، وبالحكم المالي للمستند المالي.
+ * من غير اختصار «صاحب المستند» (ده للقراءة بس). الموظف بيتقري بقفل مشاركة لآخر المعاملة، فنقله في نفس اللحظة يا إما قبل الحكم (فالحكم
+ * بفرعه الجديد) يا إما بعد ما المعاملة تخلص. false = المستند مش ظاهر للحساب، والمنادي بيرد زي المستند اللي مش موجود.
+ */
+export async function hrDocumentManageable(em: EntityManager, user: JwtPayload, document: HrIssuedDocument): Promise<boolean> {
+  const employee = document.employeeId ? await em.findOne(Employee, { where: { id: document.employeeId }, lock: { mode: 'pessimistic_read' } }) : null
+  if (document.employeeId && !employee) return false
+  if (!userHasPerm(user, 'documents.manage') || !inBranchScope(branchScopeOf(user), employee?.branchId ?? document.branchId)) return false
+  return !document.isFinancial || (!!employee && canReadEmployeeFinance(user, employee.id))
+}
