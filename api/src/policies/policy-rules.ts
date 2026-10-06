@@ -16,20 +16,20 @@ export const POLICY_BODY_MAX = 30_000
 /** أقصى طول لجمهور السياسة وهو متخزن (عمود audience) */
 export const POLICY_AUDIENCE_MAX = 2000
 
-let ready: boolean | null = null, checkedAt = 0
+let ready: boolean | null = null
 
-/** جداول السياسات التلاتة موجودة (ترحيل 091)؟ الموجود بيتحفظ، والناقص بيتفحص تاني كل دقيقة */
+/** جداول السياسات التلاتة موجودة (ترحيل 091)؟ الموجود بيتحفظ (المخطط مابيتشالش). الناقص مابيتحفظش: بيتفحص مع
+ * كل نداء، فعملية شغالة من قبل الترحيل بتشوفه أول ما يتطبق وماتكمّلش بحكم «قبل الترحيل» على حاجة اتعملت بعده (Codex CRP2N-B01). */
 export async function policySchemaReady(em: EntityManager): Promise<boolean> {
-  if (ready === true || (ready === false && Date.now() - checkedAt < 60_000)) return ready
+  if (ready === true) return true
   const [row] = await em.query(`SELECT CASE WHEN OBJECT_ID(N'dbo.policies', N'U') IS NOT NULL AND OBJECT_ID(N'dbo.policy_versions', N'U') IS NOT NULL
     AND OBJECT_ID(N'dbo.policy_acknowledgements', N'U') IS NOT NULL THEN 1 ELSE 0 END AS [ready]`)
   ready = Number(row?.ready) === 1
-  checkedAt = Date.now()
   return ready
 }
 
 /** للاختبارات: نسيان حالة الجداول */
-export function resetPolicySchemaCache() { ready = null; checkedAt = 0 }
+export function resetPolicySchemaCache() { ready = null }
 
 /** تاريخ محلي YYYY-MM-DD (ممنوع toISOString على «الآن») */
 export const policyLocalDate = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`

@@ -31,20 +31,20 @@ export const EXECUTION_TASK_OWN_BLOCKED = 'دي مهمة تنفيذ طلبك: ب
 export const EXECUTION_RECORD_ONLY_REQUIRED = 'مهمة التنفيذ لأنواع «تسجيل فقط» بس: النوع ده وجهته بتنفّذ آليًا بعد الاعتماد — شيل مهمة التنفيذ أو خلّي وجهته «سجل فقط»'
 export const EXECUTION_CONFIDENTIAL_REJECT_BLOCKED = 'رفض تنفيذ طلب سري لأطرافه بس'
 
-let ready: boolean | null = null, checkedAt = 0
+let ready: boolean | null = null
 
-/** أعمدة مهمة التنفيذ موجودة (ترحيل 089) وجدول المهام موجود (088)؟ الموجود بيتحفظ، والناقص بيتفحص تاني كل دقيقة */
+/** أعمدة مهمة التنفيذ موجودة (ترحيل 089) وجدول المهام موجود (088)؟ الموجود بيتحفظ (المخطط مابيتشالش). الناقص مابيتحفظش: بيتفحص مع
+ * كل نداء، فعملية شغالة من قبل الترحيل بتشوفه أول ما يتطبق وماتكمّلش بحكم «قبل الترحيل» على حاجة اتعملت بعده (Codex CRP2N-B01). */
 export async function executionSchemaReady(em: EntityManager): Promise<boolean> {
-  if (ready === true || (ready === false && Date.now() - checkedAt < 60_000)) return ready
+  if (ready === true) return true
   const [row] = await em.query(`SELECT CASE WHEN COL_LENGTH(N'dbo.request_types', N'executionRole') IS NOT NULL
     AND COL_LENGTH(N'dbo.requests', N'executionTaskId') IS NOT NULL AND OBJECT_ID(N'dbo.tasks', N'U') IS NOT NULL THEN 1 ELSE 0 END AS [ready]`)
   ready = Number(row?.ready) === 1
-  checkedAt = Date.now()
   return ready
 }
 
 /** للاختبارات: نسيان حالة الأعمدة */
-export function resetExecutionSchemaCache() { ready = null; checkedAt = 0 }
+export function resetExecutionSchemaCache() { ready = null }
 
 export interface ExecutionSetting { role: string; days: number | null; proof: boolean }
 export interface ExecutionSettingInput { executionRole?: string | null; executionDays?: number | null; executionProof?: boolean | null }

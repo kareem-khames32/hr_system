@@ -244,14 +244,21 @@ test('DM-2: من غير الترحيل الإصدار العادي شغال وط
   assert.equal(plan.readOnly, true); assert.equal(plan.pendingCount, 0); assert.deepEqual(plan.problems, [])
   assert.equal(plan.schemaDiffCount, 0, JSON.stringify(plan.schemaDiff))
 
-  // بعد الترحيل والخادم شغال: الخاصية بتشتغل من غير إعادة تشغيل، بعد دقيقة الفحص (النتيجة «مش جاهز» بتتفحص تاني كل دقيقة)
-  const clock = Date.now
-  Date.now = () => clock() + 61_000
-  try { assert.equal(await rules.documentAckSchemaReady(ds.manager), true) } finally { Date.now = clock }
+  // بعد الترحيل والخادم شغال: الخاصية بتشتغل من غير إعادة تشغيل ومن غير مهلة — «مش جاهز» اللي العملية شافتها قبل الترحيل مابتتحفظش
+  // (Codex CRP2N-B01: نتيجة سلبية محفوظة دقيقة كانت بتخلّي عملية قديمة تعامل مهمة إقرار فتحتها عملية تانية كمهمة عادية)
+  assert.equal(await rules.documentAckSchemaReady(ds.manager), true)
   // طلب الإقرار بيتسجّل بمهمته، والموظف بيقرّ، والمستند القديم (قبل الترحيل) من غير طلب
   const sent = expectStatus(await issue({ requireAck: true }), 201)
   assert.deepEqual([sent.ack.state, expectStatus(await request(users.admin, 'GET', '/hr-documents/issued'), 200).map(row => [row.id, row.ack?.state ?? null])],
     ['PENDING', [[sent.id, 'PENDING'], [plain.id, null]]])
+  // والعملية دي — اللي شافت المخطط ناقص قبل الترحيل — مابتقفلش مهمة الإقرار من غير إقرار ولا بتعدّلها
+  const [{ ackTaskId }] = await ds.query('SELECT [ackTaskId] FROM [hr_issued_documents] WHERE [id] = @0', [sent.id])
+  const BLOCKED = 'دي مهمة إقرار مستند: بتتقفل لوحدها لما الموظف يقرّ بيه من «مستنداتي»، ومابتتعدلش ولا بتتلغي من هنا'
+  for (const [user, method, route, body] of [[users.staff, 'POST', `/tasks/${ackTaskId}/status`, { status: 'DONE' }], [users.admin, 'PATCH', `/tasks/${ackTaskId}`, { title: 'عنوان تاني' }]]) {
+    const refused = await request(user, method, route, body)
+    assert.deepEqual([refused.status, messageOf(refused)], [400, BLOCKED], `${method} ${route}`)
+  }
+  assert.deepEqual((({ status, title }) => [status, title])(await ds.getRepository('Task').findOneByOrFail({ id: ackTaskId })), ['OPEN', 'إقرار مستند'])
   const read = expectStatus(await request(users.staff, 'GET', `/hr-documents/issued/${sent.id}/acknowledgement`), 200)
   expectStatus(await request(users.staff, 'POST', `/hr-documents/issued/${sent.id}/acknowledge`, { contentHash: read.contentHash }), 201)
   // والدليل مابيتعدلش ولا بيتمسح من القاعدة نفسها

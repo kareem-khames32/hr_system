@@ -10,21 +10,21 @@ export const IN_APP_KEEP_DAYS = 60
 export const IN_APP_LIMIT = 20
 
 const logger = new Logger('Notifications')
-let ready: boolean | null = null, checkedAt = 0, warned = false
+let ready: boolean | null = null, warned = false
 
-/** الجداول موجودة (ترحيل 087)؟ الموجود بيتحفظ، والناقص بيتفحص تاني كل دقيقة */
+/** الجداول موجودة (ترحيل 087)؟ الموجود بيتحفظ (المخطط مابيتشالش). الناقص مابيتحفظش: بيتفحص مع
+ * كل نداء، فعملية شغالة من قبل الترحيل بتشوفه أول ما يتطبق وماتكمّلش بحكم «قبل الترحيل» على حاجة اتعملت بعده (Codex CRP2N-B01). */
 export async function notificationTablesReady(em: EntityManager): Promise<boolean> {
-  if (ready === true || (ready === false && Date.now() - checkedAt < 60_000)) return ready
+  if (ready === true) return true
   const [row] = await em.query(`SELECT CASE WHEN OBJECT_ID(N'dbo.notifications', N'U') IS NOT NULL AND OBJECT_ID(N'dbo.notification_deliveries', N'U') IS NOT NULL
     AND OBJECT_ID(N'dbo.notification_templates', N'U') IS NOT NULL AND OBJECT_ID(N'dbo.notification_preferences', N'U') IS NOT NULL THEN 1 ELSE 0 END AS [ready]`)
   ready = Number(row?.ready) === 1
-  checkedAt = Date.now()
   if (!ready && !warned) { warned = true; logger.warn(NOTIFICATIONS_MIGRATION_MISSING + ' — مفيش إشعار بيتخزن ولا بريد بيتبعت لحد ما يتطبق') }
   return ready
 }
 
 /** للاختبارات: نسيان حالة الجداول */
-export function resetNotificationTablesCache() { ready = null; checkedAt = 0; warned = false }
+export function resetNotificationTablesCache() { ready = null; warned = false }
 
 export interface StoredNotificationItem { id: string; kind: string; category: string; title: string; body: string; at: Date; link: string }
 

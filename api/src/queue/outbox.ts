@@ -35,14 +35,14 @@ export interface OutboxEventInput {
 }
 
 const logger = new Logger('Outbox')
-let ready: boolean | null = null, checkedAt = 0, warned = false
+let ready: boolean | null = null, warned = false
 
-/** الجداول موجودة (ترحيل 086)؟ الموجود بيتحفظ، والناقص بيتفحص تاني كل دقيقة */
+/** الجداول موجودة (ترحيل 086)؟ الموجود بيتحفظ (المخطط مابيتشالش). الناقص مابيتحفظش: بيتفحص مع
+ * كل نداء، فعملية شغالة من قبل الترحيل بتشوفه أول ما يتطبق وماتكمّلش بحكم «قبل الترحيل» على حاجة اتعملت بعده (Codex CRP2N-B01). */
 export async function queueTablesReady(em: EntityManager): Promise<boolean> {
-  if (ready === true || (ready === false && Date.now() - checkedAt < 60_000)) return ready
+  if (ready === true) return true
   const [row] = await em.query(`SELECT CASE WHEN OBJECT_ID(N'dbo.outbox_events', N'U') IS NOT NULL AND OBJECT_ID(N'dbo.jobs_queue', N'U') IS NOT NULL THEN 1 ELSE 0 END AS [ready]`)
   ready = Number(row?.ready) === 1
-  checkedAt = Date.now()
   if (!ready && !warned) { warned = true; logger.warn(QUEUE_MIGRATION_MISSING + ' — الأحداث مش بتتسجل لحد ما يتطبق') }
   return ready
 }
@@ -97,4 +97,4 @@ export async function enqueueQueueJob(em: EntityManager, input: { jobType: strin
 }
 
 /** للاختبارات: نسيان حالة الجداول */
-export function resetQueueTablesCache() { ready = null; checkedAt = 0; warned = false }
+export function resetQueueTablesCache() { ready = null; warned = false }

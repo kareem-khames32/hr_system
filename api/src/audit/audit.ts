@@ -63,14 +63,14 @@ export interface AuditRequestContext { ip: string | null; userAgent: string | nu
 export const auditRequestContext = new AsyncLocalStorage<AuditRequestContext>()
 
 const logger = new Logger('AuditLog')
-let ready: boolean | null = null, checkedAt = 0, warned = false
+let ready: boolean | null = null, warned = false
 
-/** الجدول موجود (ترحيل 084)؟ الموجود بيتحفظ، والناقص بيتفحص تاني كل دقيقة */
+/** الجدول موجود (ترحيل 084)؟ الموجود بيتحفظ (المخطط مابيتشالش). الناقص مابيتحفظش: بيتفحص مع
+ * كل نداء، فعملية شغالة من قبل الترحيل بتشوفه أول ما يتطبق وماتكمّلش بحكم «قبل الترحيل» على حاجة اتعملت بعده (Codex CRP2N-B01). */
 export async function auditTableReady(em: EntityManager): Promise<boolean> {
-  if (ready === true || (ready === false && Date.now() - checkedAt < 60_000)) return ready
+  if (ready === true) return true
   const [row] = await em.query(`SELECT OBJECT_ID(N'dbo.audit_log', N'U') AS [id]`)
   ready = row?.id != null
-  checkedAt = Date.now()
   if (!ready && !warned) { warned = true; logger.warn(AUDIT_MIGRATION_MISSING + ' — الأحداث مش بتتسجل لحد ما يتطبق') }
   return ready
 }
@@ -94,4 +94,4 @@ export async function recordAudit(em: EntityManager, entry: AuditEntryInput): Pr
 }
 
 /** للاختبارات: نسيان حالة الجدول (بعد ترحيل أو حذف في قاعدة تجربة) */
-export function resetAuditTableCache() { ready = null; checkedAt = 0; warned = false }
+export function resetAuditTableCache() { ready = null; warned = false }

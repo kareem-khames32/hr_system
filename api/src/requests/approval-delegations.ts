@@ -11,20 +11,20 @@ export const DELEGATION_NOT_FOUND = 'التفويض غير موجود'
 /** أقصى فترة تفويض بالأيام (الطرفين داخلين) */
 export const DELEGATION_DAYS_MAX = 366
 
-let ready: boolean | null = null, checkedAt = 0
+let ready: boolean | null = null
 
-/** جدول التفويضات وعمود «بالنيابة عن» موجودين (ترحيل 090)؟ الموجود بيتحفظ، والناقص بيتفحص تاني كل دقيقة */
+/** جدول التفويضات وعمود «بالنيابة عن» موجودين (ترحيل 090)؟ الموجود بيتحفظ (المخطط مابيتشالش). الناقص مابيتحفظش: بيتفحص مع
+ * كل نداء، فعملية شغالة من قبل الترحيل بتشوفه أول ما يتطبق وماتكمّلش بحكم «قبل الترحيل» على حاجة اتعملت بعده (Codex CRP2N-B01). */
 export async function delegationSchemaReady(em: EntityManager): Promise<boolean> {
-  if (ready === true || (ready === false && Date.now() - checkedAt < 60_000)) return ready
+  if (ready === true) return true
   const [row] = await em.query(`SELECT CASE WHEN OBJECT_ID(N'dbo.approval_delegations', N'U') IS NOT NULL
     AND COL_LENGTH(N'dbo.request_approvals', N'onBehalfOfEmployeeId') IS NOT NULL THEN 1 ELSE 0 END AS [ready]`)
   ready = Number(row?.ready) === 1
-  checkedAt = Date.now()
   return ready
 }
 
 /** للاختبارات: نسيان حالة الجدول */
-export function resetDelegationSchemaCache() { ready = null; checkedAt = 0 }
+export function resetDelegationSchemaCache() { ready = null }
 
 /** تاريخ محلي YYYY-MM-DD (ممنوع toISOString على «الآن») */
 export const delegationLocalDate = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`

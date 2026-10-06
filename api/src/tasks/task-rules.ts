@@ -34,20 +34,20 @@ export const TASK_ROLE_LABELS: Record<(typeof FUNCTIONAL_APPROVER_ROLES)[number]
 }
 
 const logger = new Logger('Tasks')
-let ready: boolean | null = null, checkedAt = 0, warned = false
+let ready: boolean | null = null, warned = false
 
-/** جدول المهام موجود (ترحيل 088)؟ الموجود بيتحفظ، والناقص بيتفحص تاني كل دقيقة */
+/** جدول المهام موجود (ترحيل 088)؟ الموجود بيتحفظ (المخطط مابيتشالش). الناقص مابيتحفظش: بيتفحص مع
+ * كل نداء، فعملية شغالة من قبل الترحيل بتشوفه أول ما يتطبق وماتكمّلش بحكم «قبل الترحيل» على حاجة اتعملت بعده (Codex CRP2N-B01). */
 export async function tasksTableReady(em: EntityManager): Promise<boolean> {
-  if (ready === true || (ready === false && Date.now() - checkedAt < 60_000)) return ready
+  if (ready === true) return true
   const [row] = await em.query(`SELECT CASE WHEN OBJECT_ID(N'dbo.tasks', N'U') IS NOT NULL THEN 1 ELSE 0 END AS [ready]`)
   ready = Number(row?.ready) === 1
-  checkedAt = Date.now()
   if (!ready && !warned) { warned = true; logger.warn(TASKS_MIGRATION_MISSING + ' — «مهامي» بتعرض مهام التهيئة وبنود الإخلاء بس لحد ما يتطبق') }
   return ready
 }
 
 /** للاختبارات: نسيان حالة الجدول */
-export function resetTasksTableCache() { ready = null; checkedAt = 0; warned = false }
+export function resetTasksTableCache() { ready = null; warned = false }
 
 // تاريخ محلي YYYY-MM-DD — ممنوع toISOString على «الآن» (قاعدة التوقيت المحلي)
 export const taskLocalDate = (date: Date): string =>

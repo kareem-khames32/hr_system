@@ -23,20 +23,20 @@ export const DOCUMENT_ACK_CANCELLED_NOTE = 'طلب الإقرار اتلغى'
 export const DOCUMENT_ACK_OWN_CANCEL = 'طلب الإقرار ده عليك إنت — يلغيه حساب تاني من الموارد البشرية'
 export const DOCUMENT_FILE_MISMATCH = 'ملف المستند على التخزين مش مطابق للملف اللي اتصدر — بلّغ مسؤول النظام'
 
-let ready: boolean | null = null, checkedAt = 0
+let ready: boolean | null = null
 
-/** أعمدة طلب الإقرار وجدول الدليل موجودين (ترحيل 092) وجدول المهام موجود (088)؟ الموجود بيتحفظ، والناقص بيتفحص تاني كل دقيقة */
+/** أعمدة طلب الإقرار وجدول الدليل موجودين (ترحيل 092) وجدول المهام موجود (088)؟ الموجود بيتحفظ (المخطط مابيتشالش). الناقص مابيتحفظش: بيتفحص مع
+ * كل نداء، فعملية شغالة من قبل الترحيل بتشوفه أول ما يتطبق وماتكمّلش بحكم «قبل الترحيل» على حاجة اتعملت بعده (Codex CRP2N-B01). */
 export async function documentAckSchemaReady(em: EntityManager): Promise<boolean> {
-  if (ready === true || (ready === false && Date.now() - checkedAt < 60_000)) return ready
+  if (ready === true) return true
   const [row] = await em.query(`SELECT CASE WHEN COL_LENGTH(N'dbo.hr_issued_documents', N'ackTaskId') IS NOT NULL
     AND OBJECT_ID(N'dbo.hr_document_acknowledgements', N'U') IS NOT NULL AND OBJECT_ID(N'dbo.tasks', N'U') IS NOT NULL THEN 1 ELSE 0 END AS [ready]`)
   ready = Number(row?.ready) === 1
-  checkedAt = Date.now()
   return ready
 }
 
 /** للاختبارات: نسيان حالة الأعمدة */
-export function resetDocumentAckSchemaCache() { ready = null; checkedAt = 0 }
+export function resetDocumentAckSchemaCache() { ready = null }
 
 export type DocumentAckState = 'PENDING' | 'OVERDUE' | 'ACKNOWLEDGED'
 
