@@ -106,6 +106,8 @@ const EXCEPTIONS = {
   'BonusesController.reject': 'SERVICE_CHECK', // POST /bonuses/:id/reject
   'BonusesController.withdraw': 'SERVICE_CHECK', // POST /bonuses/:id/withdraw
   'DocsController.list': 'SERVICE_CHECK', // GET /documents
+  // B2.9-ب: قيم الحقول المخصصة — صاحب الملف أو «عرض الموظفين» في نطاقه (قاعدة ملف الموظف، في الخدمة)
+  'EmployeeCustomFieldsController.values': 'SERVICE_CHECK', // GET /employees/:id/custom-fields
   'EmployeeExtrasController.employeeHistory': 'SERVICE_CHECK', // GET /employees/:id/history
   'EmployeeExtrasController.profile': 'SERVICE_CHECK', // GET /employees/:id/profile
   'EmployeeLoginAccountController.read': 'SERVICE_CHECK', // GET /employees/:id/login-account

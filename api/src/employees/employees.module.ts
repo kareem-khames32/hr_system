@@ -25,6 +25,9 @@ import { EmployeeSelfPhotoController } from './employee-self-photo.controller'
 import { QualificationsController } from './qualifications.controller'
 import { EmployeesService } from './employees.service'
 import { EmployeeExportService } from './employee-export.service'
+import { EmployeeCustomField, EmployeeCustomValue } from './employee-custom-fields.entities'
+import { EmployeeCustomFieldsController, EmployeeFieldsSettingsController } from './employee-custom-fields.controller'
+import { EmployeeCustomFieldsService } from './employee-custom-fields.service'
 
 @Module({
   imports: [
@@ -47,6 +50,9 @@ import { EmployeeExportService } from './employee-export.service'
       EmployeeLanguage,
       // الإيقاف عن العمل لفترة (ترحيل 20260916_044)
       EmployeeSuspension,
+      // B2.9-ب: الحقول المخصصة على ملف الموظف (ترحيل 094)
+      EmployeeCustomField,
+      EmployeeCustomValue,
     ]),
     // ربط البصمات اليتيمة بأثر رجعي عند ضبط رقم البصمة/الكود
     AttendanceModule,
@@ -54,8 +60,8 @@ import { EmployeeExportService } from './employee-export.service'
     // فمفيش روتين إنشاء تاني. AuthModule مابيستوردش EmployeesModule (بياخد الكيان لوحده) فمفيش حلقة.
     AuthModule,
   ],
-  controllers: [EmployeesController, QualificationsController, EmployeeSelfPhotoController],
-  providers: [EmployeesService, EmployeeExportService],
+  controllers: [EmployeesController, QualificationsController, EmployeeSelfPhotoController, EmployeeFieldsSettingsController, EmployeeCustomFieldsController],
+  providers: [EmployeesService, EmployeeExportService, EmployeeCustomFieldsService],
   exports: [EmployeesService],
 })
 export class EmployeesModule {}

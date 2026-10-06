@@ -24,12 +24,14 @@ export type AudienceWhere = { mode?: string; ids?: Array<number | string> }
 // مثال: «السعوديين على عقد محدد المدة» = { mode: 'all', ids: [], conditions: [الجنسية SAUDI، ونوع العقد fixed_term] }
 // من غير conditions الشكل المتخزّن زي ما هو. والشرط قيد: موظف مالوش الصفة، أو شرط تالف أو مش معروف = مش من الجمهور
 // (عكس «مين» و«فين» التالفين: دول بيفتحوا، والشرط مايفتحش). الجنسية بمصنّفها الموجود (nationalityKind) مش بنصها الحر.
-export type AudienceCondition = { field?: string; values?: Array<number | string>; op?: string; value?: string }
+// B2.9-ب: وشرط على حقل مخصص في ملف الموظف (نوعه «اختيار» أو «نعم/لا»، وغير مقيّد): { field: 'custom', key: 'مفتاح الحقل', values: [...] }.
+// قيمة الموظف في الحقل لازم تكون من القايمة؛ موظف من غير قيمة، أو حقل اتعطّل أو بقى مقيّد = مش من الجمهور.
+export type AudienceCondition = { field?: string; key?: string; values?: Array<number | string>; op?: string; value?: string }
 export type RequestAudience = { mode?: string; ids?: Array<number | string>; where?: AudienceWhere | null; conditions?: AudienceCondition[] | null }
 export const AUDIENCE_NATIONALITY_KINDS = ['SAUDI', 'EGYPTIAN', 'RESIDENT'] as const
 export const AUDIENCE_CONTRACT_TYPES = ['permanent', 'fixed_term', 'part_time', 'seasonal'] as const
 export const AUDIENCE_JOIN_DATE_OPS = ['before', 'from'] as const
-export type AudienceAttributes = { nationality?: string | null; contractType?: string | null; gradeId?: number | null; joinDate?: string | null }
+export type AudienceAttributes = { nationality?: string | null; contractType?: string | null; gradeId?: number | null; joinDate?: string | null; customValues?: Record<string, string> | null }
 // المنصب في الهيكل (قرار المالك 16 سبتمبر): قادة الفرق ومديرو الأقسام غالبًا دورهم «موظف»،
 // فالجمهور «حسب المنصب» يعرفهم من الهيكل نفسه لا من الدور.
 export type AudiencePositions = { departmentManager?: boolean; teamLeader?: boolean; branchManager?: boolean }
@@ -63,6 +65,10 @@ export const audienceNeedsEmployee = (visibleTo: string | null | undefined): boo
 // جمهور فيه شروط على صفات الموظف؟ (شاشتي المال بيقروا الصفات لما يبقى فيه شروط بس)
 export const audienceHasConditions = (visibleTo: string | null | undefined): boolean =>
   audienceConditionsOf(parseRequestAudience(visibleTo)).length > 0
+
+// جمهور فيه شرط على حقل مخصص؟ (قيم الحقول المخصصة بتتقري لما يبقى فيه الشرط ده بس)
+export const audienceNeedsCustomValues = (visibleTo: string | null | undefined): boolean =>
+  audienceConditionsOf(parseRequestAudience(visibleTo)).some((condition) => condition?.field === 'custom')
 
 export function parseRequestAudience(visibleTo: string | null | undefined): RequestAudience | null {
   if (!visibleTo) return null
@@ -107,6 +113,11 @@ function audienceConditionAllows(condition: AudienceCondition, attributes: Audie
       const joined = audienceDay(attributes.joinDate), limit = audienceDay(condition.value)
       if (!joined || !limit) return false
       return condition.op === 'before' ? joined < limit : condition.op === 'from' && joined >= limit
+    }
+    case 'custom': {
+      const custom = attributes.customValues
+      const value = custom && typeof condition.key === 'string' && Object.prototype.hasOwnProperty.call(custom, condition.key) ? custom[condition.key] : null
+      return typeof value === 'string' && values.map(String).includes(value)
     }
     default:
       return false
@@ -183,7 +194,9 @@ export function requestTypeInBranch(
 const AUDIENCE_ATTRIBUTE_KEYS = ['nationality', 'contractType', 'gradeId', 'joinDate'] as const
 function audienceAttributesOf(employee: AudienceAttributes | null | undefined): { attributes?: AudienceAttributes } {
   if (!employee || AUDIENCE_ATTRIBUTE_KEYS.every((key) => employee[key] === undefined)) return {}
-  return { attributes: { nationality: employee.nationality ?? null, contractType: employee.contractType ?? null, gradeId: employee.gradeId ?? null, joinDate: employee.joinDate ?? null } }
+  return { attributes: { nationality: employee.nationality ?? null, contractType: employee.contractType ?? null, gradeId: employee.gradeId ?? null, joinDate: employee.joinDate ?? null,
+    // قيم الحقول المخصصة بتتحط لما اللي بينادي قراها بس (جمهور فيه شرط على حقل مخصص)
+    ...(employee.customValues ? { customValues: employee.customValues } : {}) } }
 }
 
 export const audienceSubjectOf = (

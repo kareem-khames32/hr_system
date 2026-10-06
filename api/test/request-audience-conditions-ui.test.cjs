@@ -28,6 +28,6 @@ test('AU-01: محرر الجمهور فيه شروط صفات الموظف — �
   assert.ok(page.includes('{grades.length > 0 && ('))
   assert.ok(page.includes("fetchCatalog<{ id: number; name: string }>('grades')"))
   // جملة «يظهر لـ…» بتذكر الشروط
-  assert.ok(page.includes('return `${who} ${where}${conditionsText(audience, lookup.grade ?? String)}`'))
+  assert.ok(page.includes('return `${who} ${where}${conditionsText(audience, lookup.grade ?? String, lookup.custom)}`'))
   assert.ok(page.includes("return parts.length ? ` — بشرط: ${parts.join('، ')}` : ''"))
 })

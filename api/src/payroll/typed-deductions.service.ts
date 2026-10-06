@@ -18,7 +18,8 @@ import { Team } from '../org/entities/team.entity'
 import { branchLocalParentOfRows, branchLocalSubtree } from '../org/department-tree'
 import { EmployeeObligation } from '../requests/entities/financial.entities'
 import { RequestType } from '../requests/entities/request-type.entity'
-import { audienceHasConditions, audienceNeedsEmployee, audienceSubjectOf, parseRequestAudience, requestAudienceAllows, requestTypeInBranch } from '../requests/request-audience'
+import { audienceHasConditions, audienceNeedsCustomValues, audienceNeedsEmployee, audienceSubjectOf, parseRequestAudience, requestAudienceAllows, requestTypeInBranch } from '../requests/request-audience'
+import { audienceCustomValuesOf } from '../employees/employee-custom-fields'
 import { hasHrOverride } from '../requests/approver-resolver.service'
 import { orgPositionsOf } from '../requests/request-audience-positions'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
@@ -351,6 +352,8 @@ export class TypedDeductionsService {
     if (self && audienceHasConditions(type.visibleTo)) {
       Object.assign(self, await em.getRepository(Employee).findOne({ where: { id: self.id }, select: { id: true, nationality: true, contractType: true, gradeId: true, joinDate: true } }))
     }
+    // B2.9-ب: وقيم الحقول المخصصة لما فيه شرط على حقل مخصص
+    if (self && audienceNeedsCustomValues(type.visibleTo)) Object.assign(self, { customValues: await audienceCustomValuesOf(em, self.id) })
     // «حسب المنصب»: مدير قسم / قائد فريق / مدير فرع يُعرفون من الهيكل لا من الدور
     const positions = audience?.mode === 'positions' ? await orgPositionsOf(em, user.employeeId) : null
     const owner = user.role === 'super_admin' || (user.permissions ?? []).includes('*')

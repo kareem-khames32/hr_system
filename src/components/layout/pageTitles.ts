@@ -110,6 +110,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/settings/teams', 'الفرق'],
   ['/settings/job-titles', 'المسميات الوظيفية'],
   ['/settings/grades', 'الدرجات الوظيفية'],
+  ['/settings/employee-fields', 'حقول ملف الموظف'],
   ['/settings/cost-centers', 'مراكز التكلفة'],
   ['/settings/work-days', 'أيام العمل'],
   ['/settings/permission-types', 'أنواع الأذونات'],

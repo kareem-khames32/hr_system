@@ -238,6 +238,7 @@ const adminMenuDefs: MenuItem[] = [
       { label: 'الفرق', href: '/settings/teams', perm: 'org.manage' },
       { label: 'المسميات الوظيفية', href: '/settings/job-titles', perm: 'settings.manage' },
       { label: 'الدرجات الوظيفية', href: '/settings/grades', perm: 'settings.manage' },
+      { label: 'حقول ملف الموظف', href: '/settings/employee-fields', perm: 'settings.manage' },
       { label: 'مراكز التكلفة', href: '/settings/cost-centers', perm: 'settings.manage' },
       { label: 'أيام العمل', href: '/settings/work-days', perm: 'settings.manage' },
       { label: 'أنواع الأذونات', href: '/settings/permission-types', perm: 'settings.manage' },

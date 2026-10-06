@@ -90,7 +90,7 @@ export const MODULES = {
     nameAr: 'الموظفين والملف والعقود والحركة', group: 'core', core: true, dependsOn: ['org'],
     description: 'ملف الموظف وبياناته وعقوده ونقله وترقيته وإيقافه وأرشفته',
     permissions: ['employees.view', 'employees.create', 'employees.edit', 'employees.archive', 'transfers.view'],
-    routes: ['/employees', '/settings/job-titles', '/settings/grades'],
+    routes: ['/employees', '/settings/job-titles', '/settings/grades', '/settings/employee-fields'],
     requestHandlers: ['employee_update_promotions', 'transfers_effective_date', 'employee_update', 'contracts_register', 'employee_record', 'employee_record_auto'],
     jobs: ['requests.scheduled-transfers'],
   }),

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import Link from 'next/link'
+import { audienceValueLabel, fetchAudienceFieldOptions, type AudienceFieldOption } from '@/lib/employee-fields-api'
 import {
   ArrowRight,
   Plus,
@@ -191,6 +192,8 @@ type BuilderForm = {
   gradeIds: number[]
   joinOp: '' | 'before' | 'from'
   joinDay: string
+  // B2.9-ب: شروط على حقول مخصصة — مفتاح الحقل ← القيم المختارة
+  customConds: Record<string, string[]>
   // فرع النوع نفسه: null = كل الشركة
   branchId: number | null
 }
@@ -219,17 +222,18 @@ const emptyForm = (): BuilderForm => ({
   gradeIds: [],
   joinOp: '',
   joinDay: '',
+  customConds: {},
   branchId: null,
 })
 
-type AudienceCondition = { field?: string; values?: Array<number | string>; op?: string; value?: string }
+type AudienceCondition = { field?: string; key?: string; values?: Array<number | string>; op?: string; value?: string }
 type StoredAudience = { mode?: string; ids?: Array<number | string>; where?: { mode?: string; ids?: Array<number | string> } | null; conditions?: AudienceCondition[] | null }
 
 // B2.9: شروط على صفات الموظف فوق «مين + فين»
 const NATIONALITY_KINDS: Array<[string, string]> = [['SAUDI', 'سعودي'], ['EGYPTIAN', 'مصري'], ['RESIDENT', 'جنسية تانية']]
 const CONTRACT_KINDS: Array<[string, string]> = [['permanent', 'عقد دائم'], ['fixed_term', 'عقد محدد المدة'], ['part_time', 'دوام جزئي'], ['seasonal', 'عقد موسمي']]
 // «… بشرط: سعودي، عقد محدد المدة»
-const conditionsText = (audience: StoredAudience | null, grade: (id: number) => string): string => {
+const conditionsText = (audience: StoredAudience | null, grade: (id: number) => string, custom?: (key: string) => AudienceFieldOption | undefined): string => {
   const parts = (Array.isArray(audience?.conditions) ? audience!.conditions! : []).map((condition) => {
     const values = Array.isArray(condition.values) ? condition.values : []
     const labels = (list: Array<[string, string]>) => values.map((value) => list.find(([key]) => key === String(value))?.[1] ?? String(value)).join(' أو ')
@@ -237,6 +241,11 @@ const conditionsText = (audience: StoredAudience | null, grade: (id: number) => 
     if (condition.field === 'contractType') return labels(CONTRACT_KINDS)
     if (condition.field === 'grade') return `درجة ${values.map((value) => grade(Number(value))).join(' أو ')}`
     if (condition.field === 'joinDate') return `${condition.op === 'before' ? 'متعيّن قبل' : 'متعيّن من'} ${condition.value ?? ''}`
+    // B2.9-ب: حقل مخصص باسمه (أو بمفتاحه لو مابقاش متاح)
+    if (condition.field === 'custom') {
+      const field = custom?.(String(condition.key ?? ''))
+      return `${field?.label ?? condition.key ?? 'حقل مخصص'}: ${values.map((value) => audienceValueLabel(field?.type ?? '', String(value))).join(' أو ')}`
+    }
     return ''
   }).filter(Boolean)
   return parts.length ? ` — بشرط: ${parts.join('، ')}` : ''
@@ -247,8 +256,9 @@ const conditionsOfForm = (form: BuilderForm): AudienceCondition[] => [
   ...(form.contractKinds.length ? [{ field: 'contractType', values: form.contractKinds }] : []),
   ...(form.gradeIds.length ? [{ field: 'grade', values: form.gradeIds }] : []),
   ...(form.joinOp && form.joinDay ? [{ field: 'joinDate', op: form.joinOp, value: form.joinDay }] : []),
+  ...Object.entries(form.customConds).filter(([, values]) => values.length).map(([key, values]) => ({ field: 'custom', key, values })),
 ]
-const conditionsToForm = (audience: StoredAudience | null): Pick<BuilderForm, 'natKinds' | 'contractKinds' | 'gradeIds' | 'joinOp' | 'joinDay'> => {
+const conditionsToForm = (audience: StoredAudience | null): Pick<BuilderForm, 'natKinds' | 'contractKinds' | 'gradeIds' | 'joinOp' | 'joinDay' | 'customConds'> => {
   const of = (field: string) => (Array.isArray(audience?.conditions) ? audience!.conditions! : []).find((condition) => condition.field === field)
   const join = of('joinDate')
   return {
@@ -257,6 +267,8 @@ const conditionsToForm = (audience: StoredAudience | null): Pick<BuilderForm, 'n
     gradeIds: (of('grade')?.values ?? []).map(Number),
     joinOp: join?.op === 'before' || join?.op === 'from' ? join.op : '',
     joinDay: join?.value ?? '',
+    customConds: Object.fromEntries((Array.isArray(audience?.conditions) ? audience!.conditions! : []).filter((condition) => condition.field === 'custom' && condition.key)
+      .map((condition) => [String(condition.key), (condition.values ?? []).map(String)])),
   }
 }
 
@@ -268,7 +280,7 @@ const namesText = (names: string[]): string =>
 const audienceText = (
   audience: StoredAudience | null,
   typeBranch: string | null,
-  lookup: { branch: (id: number) => string; department: (id: number) => string; team: (id: number) => string; grade?: (id: number) => string }
+  lookup: { branch: (id: number) => string; department: (id: number) => string; team: (id: number) => string; grade?: (id: number) => string; custom?: (key: string) => AudienceFieldOption | undefined }
 ): string => {
   const ids = Array.isArray(audience?.ids) ? audience!.ids : []
   const label = (list: Array<[string, string]>) => (id: number | string) => list.find(([key]) => key === String(id))?.[1] ?? String(id)
@@ -282,7 +294,7 @@ const audienceText = (
   else if (audience?.where?.mode === 'branches' && whereIds.length) where = `في ${namesText(whereIds.map(lookup.branch))}`
   else if (audience?.where?.mode === 'departments' && whereIds.length) where = `في ${namesText(whereIds.map(lookup.department))}`
   else if (audience?.where?.mode === 'teams' && whereIds.length) where = `في ${namesText(whereIds.map(lookup.team))}`
-  return `${who} ${where}${conditionsText(audience, lookup.grade ?? String)}`
+  return `${who} ${where}${conditionsText(audience, lookup.grade ?? String, lookup.custom)}`
 }
 
 // الجمهور كما يُحفظ من النموذج: بدون «فين» = نفس الشكل القديم {mode, ids}
@@ -337,6 +349,11 @@ export default function RequestTypesPage() {
   useEffect(() => {
     fetchCatalog<{ id: number; name: string }>('grades').then((rows) => setGrades(Array.isArray(rows) ? rows : [])).catch(() => undefined)
   }, [])
+  // B2.9-ب: الحقول المخصصة اللي ينفع تبقى شرط (نشطة، غير مقيّدة، اختيار أو نعم/لا) — من غيرها الجزء مابيظهرش
+  const [customFields, setCustomFields] = useState<AudienceFieldOption[]>([])
+  useEffect(() => {
+    fetchAudienceFieldOptions().then((rows) => setCustomFields(Array.isArray(rows) ? rows : [])).catch(() => undefined)
+  }, [])
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -375,7 +392,8 @@ export default function RequestTypesPage() {
   const departmentName = (id: number) => departments.find((d) => d.id === id)?.name ?? `قسم رقم ${id}`
   const teamName = (id: number) => teams.find((t) => t.id === id)?.name ?? `فريق رقم ${id}`
   const audienceLookup = { branch: (id: number) => branchInfo.label(id), department: departmentName, team: teamName,
-    grade: (id: number) => grades.find((row) => row.id === id)?.name ?? `#${id}` }
+    grade: (id: number) => grades.find((row) => row.id === id)?.name ?? `#${id}`,
+    custom: (key: string) => customFields.find((field) => field.fieldKey === key) }
   const typeAudienceText = (rt: ApiRequestType) =>
     audienceText(parseJson<StoredAudience | null>(rt.visibleTo, null), rt.branchId != null ? branchInfo.label(rt.branchId) : null, audienceLookup)
 
@@ -2047,6 +2065,29 @@ export default function RequestTypesPage() {
                           )}
                         </div>
                       </div>
+                      {/* B2.9-ب: شرط على حقل مخصص في ملف الموظف (اختيار أو نعم/لا) */}
+                      {customFields.map((field) => (
+                        <div key={field.fieldKey} data-audience-custom={field.fieldKey}>
+                          <p className="text-xs text-gray-600 mb-1">{field.label}</p>
+                          <div className="flex flex-wrap gap-x-4 gap-y-1">
+                            {field.options.map((option) => (
+                              <label key={option} className="flex items-center gap-1.5 text-sm text-gray-700">
+                                <input type="checkbox" checked={(form.customConds[field.fieldKey] ?? []).includes(option)}
+                                  onChange={() => setForm({ ...form, customConds: { ...form.customConds, [field.fieldKey]: toggleId(form.customConds[field.fieldKey] ?? [], option) } })}
+                                  className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+                                {audienceValueLabel(field.type, option)}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                      {/* شرط متخزّن على حقل مابقاش متاح (اتعطّل أو بقى مقيّد): بيتشال من هنا عشان النوع يتحفظ */}
+                      {Object.keys(form.customConds).filter((key) => form.customConds[key].length > 0 && !customFields.some((field) => field.fieldKey === key)).map((key) => (
+                        <p key={key} className="text-xs text-amber-700" data-audience-custom-stale={key}>
+                          شرط على حقل مابقاش متاح ({key})
+                          <button type="button" className="underline mr-2" onClick={() => setForm({ ...form, customConds: { ...form.customConds, [key]: [] } })}>إزالة الشرط</button>
+                        </p>
+                      ))}
                     </div>
                   </div>
 

@@ -90,7 +90,7 @@ test('money requests (B3/B4): both financial catalog cards open their own form i
   // ب4: المالك وحده خارج القيد في البابين؛ بانِي الأنواع يرى الكتالوج كله ولا يقدّم نوعًا يستثنيه جمهوره
   assert.ok(audience.includes("if (subject.role === 'super_admin' || permissions.includes('*')) return true"), 'owner bypass at both doors')
   assert.ok(audience.includes("if (purpose === 'catalog' && permissions.includes('request_types.manage')) return true"), 'the type builder bypass is catalog-only')
-  assert.ok(engine.includes("this.audienceAllows(type, user, requester, 'submit', positions)"), 'submission asks with the submit purpose')
+  assert.ok(engine.includes("this.audienceAllows(type, user, requester, 'submit', positions, customValues)"), 'submission asks with the submit purpose')
   assert.ok(engine.includes('requestAudienceAllows(type.visibleTo, { ...audienceSubjectOf(user, emp), positions }, purpose)'), 'the engine delegates to the shared evaluator')
   // ج1: التقديم نيابةً عن موظف آخر لا يوقفه جمهور النوع
   assert.ok(engine.includes('if (requesterId === actorEmployeeId) {'))

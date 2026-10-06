@@ -5,7 +5,7 @@ import { MainLayout } from '@/components/layout'
 import { can } from '@/lib/api'
 import { useRouteFilter } from '@/lib/modules'
 import {
-  ArrowLeft, Award, Briefcase, Building2, CalendarDays, CalendarClock,
+  ArrowLeft, Award, Briefcase, Building2, CalendarDays, CalendarClock, ListPlus,
   Clock, FileCheck, FileText, Fingerprint, GitBranch, Layers3,
   Package, Settings2, ShieldCheck, Users, UsersRound, Wallet,
   type LucideIcon,
@@ -30,6 +30,7 @@ const groups: { title: string; description: string; links: SettingsLink[] }[] = 
       { title: 'الفرق', description: 'فرق العمل والأقسام التي تتبعها.', href: '/settings/teams', permission: 'org.manage', icon: UsersRound },
       { title: 'المسميات الوظيفية', description: 'المسميات المتاحة في ملفات الموظفين.', href: '/settings/job-titles', permission: 'settings.manage', icon: Briefcase },
       { title: 'الدرجات الوظيفية', description: 'الدرجات وحدود الرواتب الخاصة بها.', href: '/settings/grades', permission: 'settings.manage', icon: Award },
+      { title: 'حقول ملف الموظف', description: 'حقول زيادة على ملف الموظف بترتيبها وإلزامها ومين يشوفها.', href: '/settings/employee-fields', permission: 'settings.manage', icon: ListPlus },
       { title: 'مراكز التكلفة', description: 'المراكز المستخدمة لتوزيع تكاليف الموظفين.', href: '/settings/cost-centers', permission: 'settings.manage', icon: Wallet },
     ],
   },

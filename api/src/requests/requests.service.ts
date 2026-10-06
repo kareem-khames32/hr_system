@@ -42,7 +42,8 @@ import { OvertimeEntry } from './entities/attendance.entities'
 import { OVERTIME_ZERO_AT_APPROVAL_BLOCKERS, overtimeSubmissionBlockers, type OvertimeEvidence } from '../attendance/overtime-evidence'
 import { overtimeWindowRedactor } from '../attendance/overtime-window-view'
 import { ApproverResolver, FUNCTIONAL_APPROVER_ROLES, ResolvedStep } from './approver-resolver.service'
-import { audienceNeedsPositions, audienceSubjectOf, requestAudienceAllows, requestTypeInBranch, type AudiencePositions } from './request-audience'
+import { audienceNeedsCustomValues, audienceNeedsPositions, audienceSubjectOf, requestAudienceAllows, requestTypeInBranch, type AudiencePositions } from './request-audience'
+import { audienceCustomValuesOf } from '../employees/employee-custom-fields'
 import { definitionInBranch } from '../common/definition-branch'
 import { orgPositionsOf } from './request-audience-positions'
 import {
@@ -267,8 +268,12 @@ export class RequestsService {
     // نوع خاص بفرع (قرار المالك 16 سبتمبر) لا يظهر خارج فرعه؛ الحساب العام يراه لأنه قد يقدّم نيابةً عن أي فرع
     const companyWide = branchScopeOf(user) === null
     const subjectBranch = emp?.branchId ?? user.branchId ?? null
+    // B2.9-ب: قيم الحقول المخصصة تُقرأ مرة واحدة وفقط لو فيه نوع جمهوره بشرط على حقل مخصص
+    const customValues = emp && all.some((t) => audienceNeedsCustomValues(t.visibleTo))
+      ? await audienceCustomValuesOf(this.employees.manager, emp.id)
+      : null
     return groupLeaveProfiles(all.filter((t) => requestTypeInBranch(t, subjectBranch, companyWide)
-      && this.audienceAllows(t, user, emp, 'catalog', positions)))
+      && this.audienceAllows(t, user, emp, 'catalog', positions, customValues)))
   }
 
   // نوع طلب موديوله مقفول (أو مش مفعّل للمستخدم): نفس رد «النوع غير موجود» — مانكشفش إن الموديول موجود
@@ -279,7 +284,10 @@ export class RequestsService {
   // هل النوع متاح للمستخدم ده؟ (ب4)
   // المقيّم واحد مشترك مع شاشتي «خصم» و«مكافأة» (request-audience.ts): إخفاء النوع عن جهة
   // معناه منعها من تقديمه فعلاً، والعرض في الكتالوج والتقديم يقرآن نفس الإجابة.
-  private audienceAllows(type: RequestType, user: JwtPayload, emp: Employee | null, purpose: 'catalog' | 'submit' = 'catalog', positions: AudiencePositions | null = null): boolean {
+  private audienceAllows(type: RequestType, user: JwtPayload, emp: Employee | null, purpose: 'catalog' | 'submit' = 'catalog', positions: AudiencePositions | null = null,
+    customValues: Record<string, string> | null = null): boolean {
+    // B2.9-ب: قيم الحقول المخصصة (لو اتقرت) بتتحط جنب صفات الموظف في نسخة — صف الموظف نفسه مابيتغيّرش
+    if (emp && customValues) emp = { ...emp, customValues } as Employee
     return requestAudienceAllows(type.visibleTo, { ...audienceSubjectOf(user, emp), positions }, purpose)
   }
 
@@ -376,7 +384,8 @@ export class RequestsService {
     // الموارد البشرية تدفع الشغل ولا يوقفها جمهور النوع (القرار ج1).
     if (requesterId === actorEmployeeId) {
       const positions = audienceNeedsPositions(type.visibleTo) ? await orgPositionsOf(this.employees.manager, actorEmployeeId) : null
-      if (!this.audienceAllows(type, user, requester, 'submit', positions)) {
+      const customValues = audienceNeedsCustomValues(type.visibleTo) ? await audienceCustomValuesOf(this.employees.manager, requester.id) : null
+      if (!this.audienceAllows(type, user, requester, 'submit', positions, customValues)) {
         throw new ForbiddenException('هذا النوع من الطلبات غير متاح لك')
       }
     }

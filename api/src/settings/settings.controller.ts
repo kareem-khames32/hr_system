@@ -72,6 +72,7 @@ import { companyProfileConfigError, COMPANY_PROFILE_FIELD_NAMES } from './compan
 import { assertDefinitionBranchUnchanged, assertDefinitionWritable, definitionBranchForCreate, definitionBranchWhere, definitionInBranch } from '../common/definition-branch'
 import { AUDIENCE_CONTRACT_TYPES, AUDIENCE_JOIN_DATE_OPS, AUDIENCE_NATIONALITY_KINDS, AUDIENCE_POSITION_KEYS, AUDIENCE_WHERE_MODES, AUDIENCE_WHO_MODES, type AudienceCondition } from '../requests/request-audience'
 import { Grade } from '../assets/assets.entities'
+import { audienceCustomFieldsOf } from '../employees/employee-custom-fields'
 import { CATEGORY_CHAIN_KEY_PREFIX, REQUEST_CATEGORY_LABELS, categoryChainMap, isCategoryChainKey } from '../requests/request-category-chains'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
@@ -1433,15 +1434,17 @@ export class SettingsController {
     return JSON.stringify({ mode: v.mode, ids, where: { mode: whereMode, ids: whereIds }, ...conditions })
   }
 
-  // B2.9: شروط على صفات الموظف — صفة واحدة لكل شرط، وقيم معروفة بس، ودرجات موجودة، وتاريخ صحيح
+  // B2.9: شروط على صفات الموظف — صفة واحدة لكل شرط، وقيم معروفة بس، ودرجات موجودة، وتاريخ صحيح، وحقل مخصص متاح بقيم من قايمته
   private async validateAudienceConditions(raw: unknown): Promise<AudienceCondition[]> {
     if (raw == null) return []
     if (!Array.isArray(raw)) throw new BadRequestException('شروط صفات الموظف غير صالحة')
     const out: AudienceCondition[] = [], seen = new Set<string>()
     for (const item of raw as AudienceCondition[]) {
       const field = String(item?.field ?? '')
-      if (seen.has(field)) throw new BadRequestException('كل صفة ليها شرط واحد في شروط الجمهور')
-      seen.add(field)
+      // الحقل المخصص: شرط واحد لكل حقل (بمفتاحه)
+      const slot = field === 'custom' ? `custom:${String(item?.key ?? '')}` : field
+      if (seen.has(slot)) throw new BadRequestException('كل صفة ليها شرط واحد في شروط الجمهور')
+      seen.add(slot)
       if (field === 'joinDate') {
         const day = String(item.value ?? ''), parsed = /^\d{4}-\d{2}-\d{2}$/.test(day) ? new Date(`${day}T00:00:00Z`) : null
         if (!(AUDIENCE_JOIN_DATE_OPS as readonly string[]).includes(String(item.op)) || !parsed || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== day) {
@@ -1463,6 +1466,12 @@ export class SettingsController {
         if (gradeIds.some((id) => !Number.isInteger(id) || id < 1)) throw new BadRequestException('درجة غير صحيحة في شروط الجمهور')
         if (await this.requestTypes.manager.getRepository(Grade).count({ where: { id: In(gradeIds) } }) !== gradeIds.length) throw new BadRequestException('درجة من الدرجات المختارة غير موجودة')
         out.push({ field, values: gradeIds })
+      } else if (field === 'custom') {
+        // B2.9-ب: حقل مخصص نشط وغير مقيّد ونوعه «اختيار» أو «نعم/لا»، وقيم من قايمته
+        const key = String(item.key ?? ''), custom = (await audienceCustomFieldsOf(this.requestTypes.manager)).find((option) => option.fieldKey === key)
+        if (!custom) throw new BadRequestException('حقل مخصص مش متاح لشروط الجمهور (لازم يكون نشط وغير مقيّد، ونوعه اختيار أو نعم/لا)')
+        if (values.some((value) => !custom.options.includes(String(value)))) throw new BadRequestException(`قيمة مش في قايمة الحقل «${custom.label}»`)
+        out.push({ field, key, values: values.map(String) })
       } else {
         throw new BadRequestException('صفة غير معروفة في شروط الجمهور')
       }
