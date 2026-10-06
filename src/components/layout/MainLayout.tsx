@@ -4,7 +4,8 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { EyeOff, ShieldAlert } from 'lucide-react'
-import { can, CHANGE_PASSWORD_PATH, getCurrentUser, getToken } from '@/lib/api'
+import { can, CHANGE_PASSWORD_PATH, getCurrentUser, getToken, POLICY_GATE_PATH } from '@/lib/api'
+import { fetchPendingPolicies, markPoliciesChecked, policiesCheckedThisSession } from '@/lib/policies-api'
 import { routeAvailable, useModules } from '@/lib/modules'
 import Sidebar from './Sidebar'
 import Header from './Header'
@@ -69,6 +70,9 @@ const PATH_PERMS: Array<[prefix: string | RegExp, perm: string | string[] | null
   ['/leaves', 'leaves.view_all'],
   ['/reports', 'reports.view'],
   ['/recruitment', 'candidates.manage'],
+  // B2.7: مكتبة السياسات لمديرها؛ وتقرير الإقرارات لصاحب أي واحدة من الصلاحيتين (الخادم بيحكم)
+  ['/policies/reports', null],
+  ['/policies', 'policies.manage'],
 ]
 
 // الصلاحية/الصلاحيات المطلوبة للمسار الحالي — null إن كان مفتوحاً
@@ -117,6 +121,23 @@ export function AppShell({ children }: MainLayoutProps) {
     }
     setAuthed(true)
   }, [bare, pathname])
+
+  // B2.7: سياسة إلزامية مااقرّش بيها → شاشة الإقرار، مرة مع كل دخول (جوه المهلة فيها «بعدين»؛ بعد المهلة الخادم قافل الباقي أصلًا).
+  // تعذّر النداء مايوقفش النظام
+  useEffect(() => {
+    if (!authed || bare || policiesCheckedThisSession()) return
+    let cancelled = false
+    fetchPendingPolicies()
+      .then((pending) => {
+        if (cancelled) return
+        if (pending.policies.length) window.location.href = POLICY_GATE_PATH
+        else markPoliciesChecked()
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [authed, bare])
 
   // الدرج بيتقفل مع أي انتقال لصفحة تانية
   useEffect(() => {

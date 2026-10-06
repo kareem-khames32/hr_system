@@ -98,6 +98,9 @@ export const PERMISSIONS: Record<string, string> = {
   // B2.5: المهام العامة. المدير المباشر بيكلّف مرؤوسيه من غير صلاحية، و«مهامي» لكل حساب
   'tasks.manage': 'إدارة المهام',
   'tasks.view_all': 'عرض كل المهام',
+  // B2.7: مكتبة السياسات. الموظف بيقرا سياساته ويقرّ بيها من غير صلاحية
+  'policies.manage': 'إدارة السياسات',
+  'policies.report': 'تقرير إقرارات السياسات',
   'request_types.manage': 'بانِي أنواع الطلبات',
   'approval_chains.manage': 'بانِي دورات الاعتماد',
   'candidates.manage': 'المرشحون والتعيين',
@@ -146,6 +149,7 @@ export const PERMISSION_MODULES: Array<{ key: string; labelAr: string; permissio
   { key: 'assets', labelAr: 'الأصول والعهد', permissions: ['custody.assign'] },
   { key: 'offboarding', labelAr: 'إنهاء الخدمة', permissions: ['offboarding.manage', 'settlement.edit', 'settlement.approve'] },
   { key: 'tasks', labelAr: 'المهام', permissions: ['tasks.manage', 'tasks.view_all'] },
+  { key: 'policies', labelAr: 'السياسات والإقرار', permissions: ['policies.manage', 'policies.report'] },
   { key: 'insights', labelAr: 'التقارير واللوحات', permissions: ['reports.view', 'dashboard.view_all', 'calendar.view_all'] },
   { key: 'access', labelAr: 'الحسابات والأدوار', permissions: ['users.manage', 'roles.manage', 'audit.view'] },
   { key: 'settings', labelAr: 'إعدادات النظام', permissions: ['settings.manage', 'settings.modules', 'request_types.manage', 'approval_chains.manage'] },
@@ -218,6 +222,8 @@ export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   'calendar.view_all': 'يشوف إجازات كل موظفي نطاقه في التقويم (من غيرها يشوف إجازاته هو بس)',
   'tasks.manage': 'يكلّف أي موظف أو دور في نطاق فروعه بمهمة، ويعدّلها ويحوّلها ويلغيها (المدير المباشر بيكلّف مرؤوسيه من غيرها). شاشة «المهام» نفسها بصلاحية «عرض كل المهام»',
   'tasks.view_all': 'يفتح شاشة «المهام»: كل المهام العامة في نطاق فروعه وتقرير المتأخر منها',
+  'policies.manage': 'ينشئ سياسات الشركة وينشر نسخها ويحدد جمهورها وإلزامها ومهلتها ويسحبها — لحساب نطاقه كل الفروع',
+  'policies.report': 'يشوف تقرير «مين أقرّ ومين لسه» لكل سياسة، لموظفي نطاق فروعه',
   'users.manage': 'ينشئ حسابات الدخول ويغيّر دورها وفرعها وكلمة مرورها ويعطّلها — لا يمنحها إلا مدير النظام',
   'audit.view': 'يشوف سجل التدقيق (الدخول والصلاحيات والإعدادات والبيانات البنكية والرواتب والتصدير وإجراءات المسير) بنطاق فروعه — قراءة بس، ولا يمنحها إلا مدير النظام',
   'roles.manage': 'ينشئ الأدوار ويعدّل صلاحيات كل دور، ويمنح أو يسحب صلاحية من مستخدم بعينه — لا يمنحها إلا مدير النظام',
@@ -330,6 +336,8 @@ export const ROLE_PRESETS: Array<{
       'offboarding.manage', 'settlement.edit', 'settlement.approve',
       // B2.5: حزمة الدور في الكود بس — دور الشركة القايم مابيتغيّرش بترحيل، وشاشة الأدوار بتعرض الفرق والمالك يمنحها
       'tasks.manage', 'tasks.view_all',
+      // B2.7: زي المهام — في حزمة الكود بس
+      'policies.manage', 'policies.report',
       'reports.view', 'dashboard.view_all', 'calendar.view_all',
       'settings.manage', 'request_types.manage', 'approval_chains.manage',
       'candidates.manage', 'transfers.view',

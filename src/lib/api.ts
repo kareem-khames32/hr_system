@@ -48,6 +48,8 @@ export const lockedBranchIdOf = (user: CurrentUser | null | undefined): number |
 
 // صفحة «غيّر كلمة المرور» — تحت /login فبتفتح من غير إطار النظام
 export const CHANGE_PASSWORD_PATH = '/login/change-password'
+// B2.7: شاشة إقرار السياسات — تحت /login برضه
+export const POLICY_GATE_PATH = '/login/policies'
 
 export const getToken = (): string | null => {
   if (typeof window === 'undefined') return null
@@ -185,6 +187,15 @@ export async function apiFetch<T>(
       !window.location.pathname.startsWith('/login')
     ) {
       window.location.href = CHANGE_PASSWORD_PATH
+    }
+    // B2.7: سياسة إلزامية عدّت مهلتها: الخادم قافل كل حاجة غير الإقرار → وجّه لشاشته
+    if (
+      res.status === 403 &&
+      details?.code === 'POLICY_ACK_REQUIRED' &&
+      typeof window !== 'undefined' &&
+      !window.location.pathname.startsWith('/login')
+    ) {
+      window.location.href = POLICY_GATE_PATH
     }
     if (isRouteMissing(res.status, message) && !path.startsWith('/modules/enabled')) routeMissingListener?.()
     throw new ApiError(res.status, arabicErrorMessage(res.status, message), details)

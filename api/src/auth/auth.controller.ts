@@ -12,6 +12,7 @@ import { IsEmail, IsString, Matches, MaxLength, MinLength } from 'class-validato
 import { AuthService, JwtPayload } from './auth.service'
 import { AllowPendingPasswordChange, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from './guards'
 import { RequireModule } from '../modules-registry/module.guard'
+import { AllowDuringPolicyGate } from '../policies/policy-gate.decorator'
 
 class LoginDto {
   @IsEmail()
@@ -127,6 +128,7 @@ export class AuthController {
 
   @UseGuards(JwtAuthGuard)
   @AllowPendingPasswordChange()
+  @AllowDuringPolicyGate()
   @Get('me')
   me(@CurrentUser() user: JwtPayload) {
     return user

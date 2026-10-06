@@ -132,6 +132,14 @@ export const MODULES = {
     // B2.3: حدث «مستند هينتهي» للطابور
     jobs: ['documents.expiry-events'],
   }),
+  // B2.7: لوائح الشركة بنسخ وجمهور، وإقرار الموظف بيها عند الدخول (القفل في الخادم بعد مهلة السماح). أساسي زي المهام: من غير سياسة
+  // إلزامية منشورة مالوش أي أثر
+  policies: moduleDef({
+    nameAr: 'السياسات والإقرار', group: 'core', core: true, dependsOn: ['documents'],
+    description: 'مكتبة سياسات الشركة بنسخ وجمهور، وإقرار الموظف بيها عند الدخول، وتقرير مين أقرّ',
+    permissions: ['policies.manage', 'policies.report'],
+    routes: ['/policies', '/my/policies'],
+  }),
   reports: moduleDef({
     nameAr: 'التقارير', group: 'core', core: true,
     description: 'لوحة التقارير والتقارير المالية',

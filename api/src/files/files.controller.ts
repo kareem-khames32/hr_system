@@ -75,7 +75,7 @@ export class FilesController {
     @Query('employeeId') employeeId?: string
   ) {
     if (!file) throw new BadRequestException('لم يصل ملف — أرسل الحقل file')
-    if (entityType && !['request', 'employee_photo', 'company_logo', 'document', 'contract', 'leave_attachment', 'task'].includes(entityType)) {
+    if (entityType && !['request', 'employee_photo', 'company_logo', 'document', 'contract', 'policy', 'leave_attachment', 'task'].includes(entityType)) {
       throw new BadRequestException('تصنيف الملف غير صالح')
     }
     for (const value of [entityId, employeeId]) {
@@ -85,6 +85,9 @@ export class FilesController {
     }
     const LOGO_RULE = 'رفع شعار الشركة يتطلب صلاحية الإعدادات وملف صورة'
     if (entityType === 'company_logo' && !userHasPerm(user, 'settings.manage')) throw new ForbiddenException(LOGO_RULE)
+    // B2.7: ملف سياسة (PDF) — لمدير السياسات بس، ومش تبع موظف. قراءته من مسار السياسات بحق الجمهور، مش من هنا
+    const POLICY_RULE = 'رفع ملف سياسة يتطلب صلاحية إدارة السياسات وملف PDF'
+    if (entityType === 'policy' && (!userHasPerm(user, 'policies.manage') || employeeId)) throw new ForbiddenException(POLICY_RULE)
     const ownerId = employeeId ? Number(employeeId) : user.employeeId
     if (ownerId && ownerId !== user.employeeId) {
       const emp = await this.ds.getRepository(Employee).findOneBy({ id: ownerId })
@@ -101,6 +104,7 @@ export class FilesController {
     const image = IMAGE_FILE_TYPES.includes(verdict.type)
     if (entityType === 'company_logo' && !image) throw new ForbiddenException(LOGO_RULE)
     if (entityType === 'employee_photo' && !image) throw new BadRequestException('صورة الموظف لازم تكون صورة (JPG أو PNG أو WEBP)')
+    if (entityType === 'policy' && FILE_TYPE_MIME[verdict.type] !== 'application/pdf') throw new ForbiddenException(POLICY_RULE)
     // الاسم على التخزين بامتداد النوع الحقيقي (مش امتداد المستخدم)، والنوع المسجل هو الحقيقي
     const storedName = `${monthFolder()}/${randomUUID()}${FILE_TYPE_EXTENSIONS[verdict.type][0]}`
     const sha256 = sha256Hex(file.buffer)
@@ -115,8 +119,8 @@ export class FilesController {
           size: file.size,
           entityType: entityType || undefined,
           entityId: entityId ? Number(entityId) : undefined,
-          // الافتراضي: الملف تبع موظف رافعه — إلا لو الإدارة حددت غيره
-          employeeId: employeeId ? Number(employeeId) : (user.employeeId ?? undefined),
+          // الافتراضي: الملف تبع موظف رافعه — إلا لو الإدارة حددت غيره. ملف السياسة مش تبع موظف
+          employeeId: entityType === 'policy' ? undefined : employeeId ? Number(employeeId) : (user.employeeId ?? undefined),
           uploadedBy: user.sub,
         }))
         return { saved: row, hashed: await recordStoredFileHash(em, row.id, sha256) }

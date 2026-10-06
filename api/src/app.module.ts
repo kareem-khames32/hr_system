@@ -33,6 +33,7 @@ import { AuditModule } from './audit/audit.module'
 import { QueueModule } from './queue/queue.module'
 import { NotificationsModule } from './notifications/notifications.module'
 import { TasksModule } from './tasks/tasks.module'
+import { PoliciesModule } from './policies/policies.module'
 import { StatutoryModule } from './statutory/statutory.module'
 import { validateEnv } from './auth/jwt-secret'
 import { dbPacketSize } from './common/sql-packet-size'
@@ -118,6 +119,8 @@ import { dbPacketSize } from './common/sql-packet-size'
     // B2.4: محرك الإشعارات (بريد وإشعار مخزّن) — أول مستهلك للطابور
     NotificationsModule,
     TasksModule,
+    // B2.7: مكتبة السياسات وبوابة الإقرار
+    PoliciesModule,
   ],
   controllers: [HealthController, DashboardController, ReportsController, CostCenterReportController],
   providers: [CostCenterReportService],

@@ -41,6 +41,7 @@ import {
   UserMinus,
   Gift,
   ListChecks,
+  ScrollText,
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -103,6 +104,16 @@ const adminMenuDefs: MenuItem[] = [
     icon: <ListChecks size={20} />,
     href: '/tasks',
     perm: 'tasks.view_all',
+  },
+  // B2.7: مكتبة السياسات لمديرها، وتقرير الإقرارات لصاحب صلاحيته («سياساتي» لكل حساب في بنود البوابة)
+  {
+    id: 'policies',
+    label: 'السياسات',
+    icon: <ScrollText size={20} />,
+    children: [
+      { label: 'مكتبة السياسات', href: '/policies', perm: 'policies.manage' },
+      { label: 'تقرير الإقرارات', href: '/policies/reports', perm: 'policies.report' },
+    ],
   },
   {
     id: 'attendance',
@@ -436,6 +447,8 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
       // «إعفاءاتي» أُخفيت (تبسيط الرواتب 2026-09-15): الرابط يتحول لـ«قسائم راتبي» والخصم الملغى يظهر سطرًا في القسيمة
       { id: 'my-custody', label: 'عهدي', icon: <Package size={20} />, href: '/my/custody' },
       { id: 'my-documents', label: 'مستنداتي', icon: <FolderOpen size={20} />, href: '/my/documents' },
+      // B2.7: سياسات الشركة اللي عليّ وإقراري بيها
+      { id: 'my-policies', label: 'سياساتي', icon: <ScrollText size={20} />, href: '/my/policies' },
       { id: 'profile', label: 'ملفي الشخصي', icon: <UserCircle size={20} />, href: '/profile' },
       { id: 'notifications', label: 'الإشعارات', icon: <Bell size={20} />, href: '/notifications' },
       { id: 'calendar', label: 'التقويم', icon: <Calendar size={20} />, href: '/calendar' },
