@@ -10,6 +10,7 @@ import { Employee } from '../employees/employee.entity'
 import { StoredFile } from '../files/stored-file.entity'
 import { recordOutboxEvent } from '../queue/outbox'
 import { RequestsService } from '../requests/requests.service'
+import { TASK_NOT_MINE_LABEL } from '../tasks/task-extras'
 import { taskAwaitsAccount, TASK_NOT_FOUND } from '../tasks/task-rules'
 import { TasksService } from '../tasks/tasks.service'
 import { Comment } from './comment.entity'
@@ -50,6 +51,9 @@ export interface CommentAccess {
 }
 
 interface AuthorView { name: string | null; subject: boolean }
+
+// تعليق مسؤول المهمة «مش بتاعتي» بعلامته ومسمّاها؛ والتعليق العادي من غير الخانتين (شكله زي ما هو). علامة تانية في التخزين = تعليق عادي
+const notMineView = (event: string | null | undefined) => event === 'NOT_MINE' ? { event: 'NOT_MINE', eventLabel: TASK_NOT_MINE_LABEL } : {}
 
 @Injectable()
 export class CommentsService {
@@ -163,6 +167,7 @@ export class CommentsService {
           .map(id => ({ ref: commentRef(id), mine: loaded.get(id)!.authorUserId === user.sub, author: authors.get(id)! })),
       },
       files: files.get(row.id) ?? [],
+      ...notMineView(mentionsOf.get(row.id)!.event),
     }))
   }
 
@@ -206,6 +211,14 @@ export class CommentsService {
       // صف الطلب أو المهمة مقفول لآخر المعاملة، والحق والإشارات المتاحة بيتحكموا تحته
       const access = await this.access(user, entityType, entityId, em, true)
       if (input.internal && !access.internal) throw new BadRequestException('التعليق الداخلي على الطلبات بس')
+      // B2.5 (إضافة المالك 6 أكتوبر): «مش بتاعتي» — لمسؤول المهمة على مهمة كلّفه بيها حد تاني. المسؤول مايرفضش ولا يحوّل: بيقول، واللي
+      // كلّف بيها بيتبلّغ (الإشارة ليه بيحطها الخادم مش العميل) وهو اللي يقرر
+      if (input.notMine) {
+        if (entityType !== 'task' || access.targets.includes('ASSIGNEE') || !access.targets.includes('CREATOR')) {
+          throw new BadRequestException('«مش بتاعتي» لمسؤول المهمة على مهمة كلّفه بيها حد تاني')
+        }
+        if (!input.targets.includes('CREATOR')) input.targets.push('CREATOR')
+      }
       // جانب الموظف مايكتبش داخلي: مش هيرجعله بعد ما يكتبه
       if (input.internal && access.subject) throw new BadRequestException('التعليق الداخلي لغير صاحب الطلب')
       // الإشارة من المتاح للحساب دلوقتي، والداخلي مايشاورش لصاحب الطلب (مش هيشوفه)
@@ -223,7 +236,7 @@ export class CommentsService {
       }
       const row = await em.getRepository(Comment).save(em.getRepository(Comment).create({
         entityType, entityId, authorUserId: user.sub, authorEmployeeId: user.employeeId ?? null, body: input.body, internal: input.internal,
-        mentions: storedCommentMentions({ targets: input.targets, replyTo }), createdAt: new Date(),
+        mentions: storedCommentMentions({ targets: input.targets, replyTo, event: input.notMine ? 'NOT_MINE' : null }), createdAt: new Date(),
       }))
       // المرفق: ملف رفعه الكاتب نفسه بتصنيف «تعليق» ولسه مش مربوط — بيتربط مرة واحدة (تعليقين في نفس اللحظة: واحد بس بياخده)
       for (const fileId of input.fileIds) {

@@ -53,26 +53,33 @@ export async function commentsTableReady(em: EntityManager): Promise<boolean> {
 /** للاختبارات: نسيان حالة الجدول */
 export function resetCommentsTableCache() { ready = null; warned = false }
 
-export interface CommentMentions { targets: string[]; replyTo: number[] }
+/**
+ * event (B2.5، إضافة المالك 6 أكتوبر): علامة تعليق مسؤول المهمة «مش بتاعتي». الخادم هو اللي بيحطها (العميل بيبعت notMine)؛ والتعليق
+ * العادي من غير علامة.
+ */
+export interface CommentMentions { targets: string[]; replyTo: number[]; event?: string | null }
+const COMMENT_EVENT = /^[A-Z][A-Z_]{1,39}$/
 
 /** الإشارات المخزّنة — أي شكل غير متوقع = من غير إشارات */
 export function parseCommentMentions(raw: string | null | undefined): CommentMentions {
   try {
     const value: unknown = raw ? JSON.parse(raw) : null
-    const { targets, replyTo } = value as { targets?: unknown; replyTo?: unknown }
+    const { targets, replyTo, event } = value as { targets?: unknown; replyTo?: unknown; event?: unknown }
     return {
       targets: Array.isArray(targets) ? targets.filter((item): item is string => typeof item === 'string') : [],
       replyTo: Array.isArray(replyTo) ? replyTo.filter((item): item is number => Number.isSafeInteger(item) && item > 0) : [],
+      event: typeof event === 'string' && COMMENT_EVENT.test(event) ? event : null,
     }
-  } catch { return { targets: [], replyTo: [] } }
+  } catch { return { targets: [], replyTo: [], event: null } }
 }
 
 export const storedCommentMentions = (mentions: CommentMentions): string | null =>
-  mentions.targets.length || mentions.replyTo.length ? JSON.stringify({ targets: mentions.targets, replyTo: mentions.replyTo }) : null
+  mentions.targets.length || mentions.replyTo.length || mentions.event
+    ? JSON.stringify({ targets: mentions.targets, replyTo: mentions.replyTo, ...(mentions.event ? { event: mentions.event } : {}) }) : null
 
-export interface CommentInput { body?: unknown; internal?: unknown; targets?: unknown; replyTo?: unknown; fileIds?: unknown }
+export interface CommentInput { body?: unknown; internal?: unknown; targets?: unknown; replyTo?: unknown; fileIds?: unknown; notMine?: unknown }
 /** replyTo هنا مراجع (commentRef) زي ما العميل بعتها — الخدمة بتحوّلها لأرقام تعليقات من نفس الحوار */
-export interface CleanComment { body: string; internal: boolean; targets: string[]; replyTo: string[]; fileIds: number[] }
+export interface CleanComment { body: string; internal: boolean; targets: string[]; replyTo: string[]; fileIds: number[]; notMine: boolean }
 
 const idList = (raw: unknown, max: number, label: string): number[] => {
   if (raw === undefined || raw === null) return []
@@ -96,5 +103,6 @@ export function cleanComment(entityType: CommentEntityType, raw: CommentInput): 
   if (!Array.isArray(replies) || replies.some(item => typeof item !== 'string' || !COMMENT_REF.test(item))) throw new BadRequestException('التعليقات المردود عليها غير صالحة')
   const replyTo = [...new Set(replies as string[])]
   if (replyTo.length > COMMENT_REPLIES_MAX) throw new BadRequestException(`التعليقات المردود عليها: بحد أقصى ${COMMENT_REPLIES_MAX}`)
-  return { body, internal: raw.internal === true, targets: [...new Set(targets as string[])], replyTo, fileIds: idList(raw.fileIds, COMMENT_FILES_MAX, 'المرفقات') }
+  if (raw.notMine !== undefined && typeof raw.notMine !== 'boolean') throw new BadRequestException('قيمة «مش بتاعتي» غير صالحة')
+  return { body, internal: raw.internal === true, targets: [...new Set(targets as string[])], replyTo, fileIds: idList(raw.fileIds, COMMENT_FILES_MAX, 'المرفقات'), notMine: raw.notMine === true }
 }

@@ -19,6 +19,9 @@ export interface ApiComment {
   author: CommentAuthor
   mentions: { targets: CommentTarget[]; replies: Array<{ ref: string; mine: boolean; author: CommentAuthor }> }
   files: Array<{ id: number; name: string; size: number }>
+  /** تعليق مسؤول المهمة «مش بتاعتي»: علامته ومسمّاها — التعليق العادي من غير الخانتين */
+  event?: string
+  eventLabel?: string
 }
 export interface ApiCommentThread {
   /** false قبل ترحيل 093: مفيش حوار ولا خانة كتابة */
@@ -30,7 +33,7 @@ export interface ApiCommentThread {
   /** الحوار أطول من المعروض (آخر 200 تعليق) */
   truncated: boolean
 }
-export interface CommentInput { body: string; internal?: boolean; targets?: string[]; replyTo?: string[]; fileIds?: number[] }
+export interface CommentInput { body: string; internal?: boolean; targets?: string[]; replyTo?: string[]; fileIds?: number[]; /** مسؤول المهمة: «مش بتاعتي» */ notMine?: boolean }
 
 export const COMMENT_BODY_MAX = 2000
 export const COMMENT_FILES_MAX = 3

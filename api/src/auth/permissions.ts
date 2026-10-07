@@ -98,6 +98,7 @@ export const PERMISSIONS: Record<string, string> = {
   // B2.5: المهام العامة. المدير المباشر بيكلّف مرؤوسيه من غير صلاحية، و«مهامي» لكل حساب
   'tasks.manage': 'إدارة المهام',
   'tasks.view_all': 'عرض كل المهام',
+  'tasks.assign_any': 'تكليف أي موظف بمهمة',
   // B2.7: مكتبة السياسات. الموظف بيقرا سياساته ويقرّ بيها من غير صلاحية
   'policies.manage': 'إدارة السياسات',
   'policies.report': 'تقرير إقرارات السياسات',
@@ -148,7 +149,7 @@ export const PERMISSION_MODULES: Array<{ key: string; labelAr: string; permissio
   },
   { key: 'assets', labelAr: 'الأصول والعهد', permissions: ['custody.assign'] },
   { key: 'offboarding', labelAr: 'إنهاء الخدمة', permissions: ['offboarding.manage', 'settlement.edit', 'settlement.approve'] },
-  { key: 'tasks', labelAr: 'المهام', permissions: ['tasks.manage', 'tasks.view_all'] },
+  { key: 'tasks', labelAr: 'المهام', permissions: ['tasks.manage', 'tasks.view_all', 'tasks.assign_any'] },
   { key: 'policies', labelAr: 'السياسات والإقرار', permissions: ['policies.manage', 'policies.report'] },
   { key: 'insights', labelAr: 'التقارير واللوحات', permissions: ['reports.view', 'dashboard.view_all', 'calendar.view_all'] },
   { key: 'access', labelAr: 'الحسابات والأدوار', permissions: ['users.manage', 'roles.manage', 'audit.view'] },
@@ -222,6 +223,7 @@ export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   'calendar.view_all': 'يشوف إجازات كل موظفي نطاقه في التقويم (من غيرها يشوف إجازاته هو بس)',
   'tasks.manage': 'يكلّف أي موظف أو دور في نطاق فروعه بمهمة، ويعدّلها ويحوّلها ويلغيها (المدير المباشر بيكلّف مرؤوسيه من غيرها). شاشة «المهام» نفسها بصلاحية «عرض كل المهام»',
   'tasks.view_all': 'يفتح شاشة «المهام»: كل المهام العامة في نطاق فروعه وتقرير المتأخر منها',
+  'tasks.assign_any': 'يكلّف أي موظف في نطاق فروعه بمهمة من غير ما يكون مديره، ويدير المهام اللي كلّف بيها هو بس (مش في أي دور جاهز: بتتدّى لدور زي مدير مشروع)',
   'policies.manage': 'ينشئ سياسات الشركة وينشر نسخها ويحدد جمهورها وإلزامها ومهلتها ويسحبها — لحساب نطاقه كل الفروع',
   'policies.report': 'يشوف تقرير «مين أقرّ ومين لسه» لكل سياسة، لموظفي نطاق فروعه',
   'users.manage': 'ينشئ حسابات الدخول ويغيّر دورها وفرعها وكلمة مرورها ويعطّلها — لا يمنحها إلا مدير النظام',

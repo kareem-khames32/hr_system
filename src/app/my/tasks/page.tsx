@@ -1,12 +1,14 @@
 'use client'
 
 // B2.5: «مهامي» — كل اللي على الحساب في مكان واحد: المهام العامة، ومهام التهيئة اللي على جهته، وبنود إخلاء الطرف اللي عليه.
-// التهيئة والإخلاء بيتقفلوا من شاشاتهم (اللينك جنب كل بند). وتبويب «فريقي» للمدير المباشر: مهام مرؤوسيه.
+// التهيئة والإخلاء بيتقفلوا من شاشاتهم (اللينك جنب كل بند). وتبويب «فريقي» للمدير المباشر: مهام مرؤوسيه، واللي كلّف بيه حد تحته في
+// الهيكل (أو في نطاقه بصلاحية «تكليف أي موظف»)، وتقرير الالتزام عليهم (قواعد المالك 6 أكتوبر).
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { ClipboardCheck, ListChecks, Plus, UserMinus, UserPlus, Users } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import TaskCard from '@/components/tasks/TaskCard'
+import TaskComplianceReport from '@/components/tasks/TaskComplianceReport'
 import TaskFormModal from '@/components/tasks/TaskFormModal'
 import { localToday } from '@/lib/dates'
 import { fetchMyTasks, fetchTask, fetchTaskAssignees, fetchTeamTasks, notifyTasksChanged, type ApiMyTasks, type ApiTask, type ApiTaskAssignees } from '@/lib/tasks-api'
@@ -99,11 +101,14 @@ export default function MyTasksPage() {
         )}
 
         {loading ? <p className="text-sm text-gray-500">جاري التحميل…</p> : tab === 'team' && team ? (
-          <div className="card space-y-3" data-team-tasks>
-            <p className="text-sm text-gray-500">مهام مرؤوسيك المباشرين: المفتوحة، واللي اتقفلت في آخر أسبوعين.</p>
-            {team.tasks.length === 0 ? <p className="text-sm text-gray-500">مفيش مهام على فريقك.</p>
-              : team.tasks.map(task => <TaskCard key={task.id} task={task} onChanged={changed} onEdit={row => setForm({ task: row })} highlighted={task.id === linkedId} />)}
-          </div>
+          <>
+            <div className="card space-y-3" data-team-tasks>
+              <p className="text-sm text-gray-500">مهام مرؤوسيك المباشرين واللي كلّفت بيه حد تاني: المفتوحة، واللي اتقفلت في آخر أسبوعين.</p>
+              {team.tasks.length === 0 ? <p className="text-sm text-gray-500">مفيش مهام على فريقك.</p>
+                : team.tasks.map(task => <TaskCard key={task.id} task={task} onChanged={changed} onEdit={row => setForm({ task: row })} highlighted={task.id === linkedId} />)}
+            </div>
+            <TaskComplianceReport />
+          </>
         ) : mine && (
           <>
             <div className="card space-y-3" data-general-tasks>

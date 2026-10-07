@@ -120,6 +120,8 @@ export default function CommentsThread({ kind, id }: Props) {
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
                 <span className="font-medium text-gray-700" data-comment-author>
                   {label(comment.mine, comment.author)}{comment.author.subject && !comment.mine && subject ? ` — ${subject}` : ''}
+                  {/* تعليق مسؤول المهمة «مش بتاعتي»: علامته جنب اسمه */}
+                  {comment.eventLabel && <span className="badge bg-gray-100 text-gray-700 mr-2" data-comment-event-label>{comment.eventLabel}</span>}
                 </span>
                 <span>{formatDateTime(comment.createdAt)}</span>
               </div>

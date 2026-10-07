@@ -8,13 +8,16 @@ import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
 import { ApproverResolver, FUNCTIONAL_APPROVER_ROLES, holdsFunctionalStep } from '../requests/approver-resolver.service'
+import { taskExtrasOfOne } from './task-extras'
 import { Task } from './task.entity'
 
 // B2.5: قواعد المهمة العامة — جاهزية الجدول، ومين يشتغل عليها ومين يديرها ومين يشوفها. قاعدة واحدة للخدمة ولتحميل ملف الإثبات.
 //  المسؤول: الموظف نفسه، أو حامل الدور الوظيفي اللي فرع المهمة في نطاقه (holdsFunctionalStep: من غير مخرج مدير النظام، فمهام
 //  الأدوار مابتتراكمش في «مهامي» بتاعته).
-//  الإدارة: «إدارة المهام» في فرع المهمة، أو اللي كلّف بيها طول ما هو المدير المباشر لمسؤولها — بحقه دلوقتي، مش بإنه كلّف بيها زمان.
+//  الإدارة: «إدارة المهام» في فرع المهمة، أو اللي كلّف بيها بحقه دلوقتي (مسؤولها لسه تحته في الشجرة، أو لسه معاه «تكليف أي موظف»
+//  وفرعها في نطاقه) — مش بإنه كلّف بيها زمان.
 //  الاطلاع: دول + المدير المباشر للموظف المسؤول + «عرض كل المهام» في فرع المهمة. برّه كده المهمة «غير موجودة».
+//  المهمة الشخصية (الموظف كلّف نفسه — إضافة المالك 6 أكتوبر): صاحبها بيديرها، ومديره المباشر بيشوفها، ومحدش غيرهم.
 
 export const TASKS_MIGRATION_MISSING = 'المهام العامة محتاجة ترحيل 20261005_088 على قاعدة البيانات'
 export const TASK_NOT_FOUND = 'المهمة غير موجودة'
@@ -90,7 +93,23 @@ export const isTaskRole = (value: unknown): value is (typeof FUNCTIONAL_APPROVER
 /** الأدوار الوظيفية اللي الحساب بيحملها بصلاحياته */
 export const taskRolesHeldBy = (user: Pick<JwtPayload, 'role' | 'permissions'>): string[] => FUNCTIONAL_APPROVER_ROLES.filter(role => holdsFunctionalStep(user, role))
 
-type TaskAssignment = Pick<Task, 'assigneeEmployeeId' | 'assigneeRole' | 'branchId' | 'createdByUserId'>
+/** الالتزام بالميعاد لمهمة خلصت وليها موعد: في الميعاد، أو متأخرة كام يوم (بتاريخ الإقفال المحلي). غير كده null */
+export function taskCompliance(task: Pick<Task, 'status' | 'dueDate' | 'closedAt'>): { onTime: boolean; lateDays: number } | null {
+  if (task.status !== 'DONE' || !task.dueDate || !task.closedAt) return null
+  const lateDays = Math.max(0, taskDaysBetween(String(task.dueDate).slice(0, 10), taskLocalDate(new Date(task.closedAt))))
+  return { onTime: lateDays === 0, lateDays }
+}
+export const taskComplianceLabel = (compliance: { onTime: boolean; lateDays: number } | null): string | null =>
+  !compliance ? null : compliance.onTime ? 'في الميعاد' : compliance.lateDays === 1 ? 'متأخر يوم' : compliance.lateDays === 2 ? 'متأخر يومين' : `متأخر ${compliance.lateDays} يوم`
+
+// isPersonal من جدول ترحيل 096 (task_extras): المنادي بيقراه (taskExtrasOf) ويبعته صريح — من غيره الحكم مايتاخدش
+type TaskAssignment = Pick<Task, 'assigneeEmployeeId' | 'assigneeRole' | 'branchId' | 'createdByUserId'> & { isPersonal: boolean }
+
+/** الهيكل اللي الحكم محتاجه: المدير المباشر، و«تحته في الشجرة» (ApproverResolver بيأديهم) */
+export interface TaskStructure {
+  directManagerOf(employeeId: number): Promise<number | null>
+  isUnder(employeeId: number, managerEmployeeId: number): Promise<boolean>
+}
 
 /** المهمة على الحساب ده؟ موظفها، أو حامل دورها اللي فرعها في نطاقه */
 export const taskAwaitsAccount = (user: JwtPayload, task: Pick<TaskAssignment, 'assigneeEmployeeId' | 'assigneeRole' | 'branchId'>): boolean =>
@@ -99,25 +118,37 @@ export const taskAwaitsAccount = (user: JwtPayload, task: Pick<TaskAssignment, '
     : !!task.assigneeRole && holdsFunctionalStep(user, task.assigneeRole) && inBranchScope(branchScopeOf(user), task.branchId)
 
 /**
- * الحساب بيدير المهمة (تعديل، تحويل، إلغاء، إعادة فتح)؟ «إدارة المهام» في فرعها، أو اللي كلّف بيها وهو لسه المدير المباشر لمسؤولها
- * (managesAssignee). اللي كلّف بمهمة وبعدها فقد حقه في تكليف مسؤولها (اتشالت صلاحيته، أو فرعها خرج من نطاقه، أو مابقاش مديره) زيه زي
- * أي حساب تاني: لا يديرها ولا يشوفها.
+ * الحساب بيدير المهمة (تعديل، تحويل، إلغاء، رجوع للتعديل، رد على طلب التمديد)؟ بحقه دلوقتي، مش بإنه كلّف بيها زمان:
+ *  - المهمة الشخصية: صاحبها بس. الصلاحيات مابتفتحهاش، والحساب اللي كلّف بيها لو اتربط بموظف تاني مالوش حق.
+ *  - «إدارة المهام» في فرعها.
+ *  - اللي كلّف بيها: ومسؤولها لسه تحته في الشجرة (assigneeUnder)، أو لسه معاه «تكليف أي موظف» وفرعها في نطاقه.
+ * اللي كلّف بمهمة وفقد حقه في تكليف مسؤولها زيه زي أي حساب تاني: لا يديرها ولا يشوفها.
  */
-export const taskManagedBy = (user: JwtPayload, task: Pick<TaskAssignment, 'createdByUserId' | 'branchId'>, managesAssignee: boolean): boolean =>
-  (userHasPerm(user, 'tasks.manage') && inBranchScope(branchScopeOf(user), task.branchId)) || (managesAssignee && task.createdByUserId === user.sub)
+export const taskManagedBy = (user: JwtPayload, task: Pick<TaskAssignment, 'createdByUserId' | 'branchId' | 'assigneeEmployeeId' | 'isPersonal'>, assigneeUnder: boolean): boolean => {
+  if (task.isPersonal) return !!user.employeeId && user.employeeId === task.assigneeEmployeeId
+  const inScope = inBranchScope(branchScopeOf(user), task.branchId)
+  if (userHasPerm(user, 'tasks.manage') && inScope) return true
+  return task.createdByUserId === user.sub && (assigneeUnder || (userHasPerm(user, 'tasks.assign_any') && inScope))
+}
 
 export interface TaskAccess { visible: boolean; work: boolean; manage: boolean }
 
-/** صلاحيات الحساب على المهمة. directManagerOf: نفس حل المدير المباشر بتاع محرك الطلبات (ApproverResolver.directManagerOf) */
-export async function taskAccess(user: JwtPayload, task: TaskAssignment, directManagerOf: (employeeId: number) => Promise<number | null>): Promise<TaskAccess> {
+/** صلاحيات الحساب على المهمة. structure: نفس حل المدير المباشر والشجرة بتاع محرك الطلبات (ApproverResolver) */
+export async function taskAccess(user: JwtPayload, task: TaskAssignment, structure: TaskStructure): Promise<TaskAccess> {
   const work = taskAwaitsAccount(user, task)
-  const byPermission = taskManagedBy(user, task, false), viewAll = userHasPerm(user, 'tasks.view_all') && inBranchScope(branchScopeOf(user), task.branchId)
-  // المدير المباشر للموظف المسؤول (هيكليًا، من غير قيد فرع): بيتحل لما الحكم واقف عليه بس
-  const managesAssignee = !byPermission && (task.createdByUserId === user.sub || !(work || viewAll))
-    && task.assigneeEmployeeId != null && !!user.employeeId && user.employeeId !== task.assigneeEmployeeId
-    && (await directManagerOf(task.assigneeEmployeeId)) === user.employeeId
-  const manage = taskManagedBy(user, task, managesAssignee)
-  return { visible: work || manage || viewAll || managesAssignee, work, manage }
+  const other = task.assigneeEmployeeId != null && !!user.employeeId && user.employeeId !== task.assigneeEmployeeId
+  // المدير المباشر للموظف المسؤول (هيكليًا، من غير قيد فرع): بيشوف مهامه — وبيتحل لما الحكم واقف عليه بس
+  const directManager = async () => other && (await structure.directManagerOf(task.assigneeEmployeeId!)) === user.employeeId
+  if (task.isPersonal) {
+    // شخصية: صاحبها ومديره المباشر بس. «إدارة المهام» و«عرض كل المهام» مابيشوفوهاش
+    const manage = taskManagedBy(user, task, false)
+    return { visible: work || manage || await directManager(), work, manage }
+  }
+  const byRight = taskManagedBy(user, task, false), viewAll = userHasPerm(user, 'tasks.view_all') && inBranchScope(branchScopeOf(user), task.branchId)
+  // اللي كلّف بيها بيديرها طول ما مسؤولها لسه تحته في الشجرة
+  const under = !byRight && other && task.createdByUserId === user.sub && await structure.isUnder(task.assigneeEmployeeId!, user.employeeId!)
+  const manage = byRight || under
+  return { visible: work || manage || viewAll || await directManager(), work, manage }
 }
 
 /**
@@ -129,5 +160,6 @@ export async function assertTaskFileAccess(em: EntityManager, user: JwtPayload, 
   const task = (await tasksTableReady(em)) ? await em.getRepository(Task).findOne({ where: { proofFileId: file.id } }) : null
   if (!task) throw new NotFoundException(TASK_FILE_NOT_FOUND)
   const resolver = new ApproverResolver(em.getRepository(Employee), em.getRepository(Team), em.getRepository(Department), em.getRepository(Branch))
-  if (!(await taskAccess(user, task, id => resolver.directManagerOf(id))).visible) throw new NotFoundException(TASK_FILE_NOT_FOUND)
+  const { isPersonal } = await taskExtrasOfOne(em, task.id)
+  if (!(await taskAccess(user, { ...task, isPersonal }, resolver)).visible) throw new NotFoundException(TASK_FILE_NOT_FOUND)
 }

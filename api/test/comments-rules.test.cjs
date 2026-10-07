@@ -12,15 +12,18 @@ const r5 = rules.commentRef(5), r7 = rules.commentRef(7)
 const refused = (kind, input, message) => assert.throws(() => rules.cleanComment(kind, input), error => error.getStatus() === 400 && error.message === message, JSON.stringify(input).slice(0, 80))
 
 test('CK-01: مدخل التعليق — النص بحده بعد توحيد نهايات السطور، و«داخلي» قيمة منطقية، والأرقام صالحة ومن غير تكرار وبحدودها', () => {
-  assert.deepEqual(rules.cleanComment('request', { body: '  سؤال\r\nتاني  ' }), { body: 'سؤال\nتاني', internal: false, targets: [], replyTo: [], fileIds: [] })
+  assert.deepEqual(rules.cleanComment('request', { body: '  سؤال\r\nتاني  ' }), { body: 'سؤال\nتاني', internal: false, targets: [], replyTo: [], fileIds: [], notMine: false })
   assert.deepEqual(rules.cleanComment('request', { body: 'نص', internal: true, targets: ['REQUESTER', 'REQUESTER', 'CURRENT_APPROVERS'], replyTo: [r5, r5, r7], fileIds: [3, 3] }),
-    { body: 'نص', internal: true, targets: ['REQUESTER', 'CURRENT_APPROVERS'], replyTo: [r5, r7], fileIds: [3] })
+    { body: 'نص', internal: true, targets: ['REQUESTER', 'CURRENT_APPROVERS'], replyTo: [r5, r7], fileIds: [3], notMine: false })
   assert.deepEqual(rules.cleanComment('request', { body: 'نص', targets: null, replyTo: null, fileIds: null }).targets, [])
   // الحد بعد التوحيد: 2000 بالظبط مقبول، و2001 لأ
   assert.equal(rules.cleanComment('task', { body: `${'ن'.repeat(1998)}\r\nن` }).body.length, 2000)
   refused('task', { body: 'ن'.repeat(2001) }, 'التعليق بحد أقصى 2000 حرف')
   for (const body of [undefined, null, 5, '', '   ', '\r\n']) refused('request', { body }, 'اكتب نص التعليق')
   for (const internal of ['yes', 1, null]) refused('request', { body: 'نص', internal }, 'قيمة «داخلي» غير صالحة')
+  // B2.5 (إضافة المالك): «مش بتاعتي» قيمة منطقية — مين يكتبها (مسؤول المهمة) بيتحكم في الخدمة
+  assert.equal(rules.cleanComment('task', { body: 'نص', notMine: true }).notMine, true)
+  for (const notMine of ['yes', 1, null]) refused('task', { body: 'نص', notMine }, 'قيمة «مش بتاعتي» غير صالحة')
   // الرد بمرجع التعليق (20 حرف hex) مش برقمه
   for (const replyTo of [[5], ['5'], [r5.toUpperCase()], [`${r5}0`], [r5.slice(1)], 'x', [null]]) refused('request', { body: 'نص', replyTo }, 'التعليقات المردود عليها غير صالحة')
   for (const fileIds of [[0], [-1], [1.5], ['1'], {}, [2147483648]]) refused('request', { body: 'نص', fileIds }, 'المرفقات غير صالحة')
@@ -48,8 +51,17 @@ test('CK-03: الإشارات المخزّنة — من غير إشارات ما
   assert.equal(rules.storedCommentMentions({ targets: [], replyTo: [] }), null)
   assert.equal(rules.storedCommentMentions({ targets: ['REQUESTER'], replyTo: [] }), '{"targets":["REQUESTER"],"replyTo":[]}')
   assert.equal(rules.storedCommentMentions({ targets: [], replyTo: [9] }), '{"targets":[],"replyTo":[9]}')
-  assert.deepEqual(rules.parseCommentMentions('{"targets":["REQUESTER"],"replyTo":[9,10]}'), { targets: ['REQUESTER'], replyTo: [9, 10] })
-  for (const raw of [null, undefined, '', 'مش JSON', '5', '[]', '"نص"', '{"targets":"REQUESTER","replyTo":7}']) assert.deepEqual(rules.parseCommentMentions(raw), { targets: [], replyTo: [] }, String(raw))
+  assert.deepEqual(rules.parseCommentMentions('{"targets":["REQUESTER"],"replyTo":[9,10]}'), { targets: ['REQUESTER'], replyTo: [9, 10], event: null })
+  for (const raw of [null, undefined, '', 'مش JSON', '5', '[]', '"نص"', '{"targets":"REQUESTER","replyTo":7}']) assert.deepEqual(rules.parseCommentMentions(raw), { targets: [], replyTo: [], event: null }, String(raw))
   // قيم غلط جوه القايمة بتتشال، والباقي بيتقري
-  assert.deepEqual(rules.parseCommentMentions('{"targets":["CREATOR",5,null],"replyTo":[3,"4",0,-2,1.5]}'), { targets: ['CREATOR'], replyTo: [3] })
+  assert.deepEqual(rules.parseCommentMentions('{"targets":["CREATOR",5,null],"replyTo":[3,"4",0,-2,1.5]}'), { targets: ['CREATOR'], replyTo: [3], event: null })
+  // B2.5 (إضافة المالك): علامة سطر سجل المهمة — بتتخزن حتى من غير إشارات، ومن غيرها الشكل المخزّن زي ما كان، وأي علامة مش بالشكل ده
+  // بتتقري «من غير علامة»
+  assert.equal(rules.storedCommentMentions({ targets: [], replyTo: [], event: 'RETURNED' }), '{"targets":[],"replyTo":[],"event":"RETURNED"}')
+  assert.equal(rules.storedCommentMentions({ targets: ['ASSIGNEE'], replyTo: [], event: null }), '{"targets":["ASSIGNEE"],"replyTo":[]}')
+  assert.equal(rules.storedCommentMentions({ targets: [], replyTo: [], event: null }), null)
+  assert.deepEqual(rules.parseCommentMentions('{"targets":["CREATOR"],"replyTo":[],"event":"NOT_MINE"}'), { targets: ['CREATOR'], replyTo: [], event: 'NOT_MINE' })
+  for (const event of ['returned', 'A', 5, null, '<b>', 'X'.repeat(41), 'RETURNED ', ['RETURNED']]) {
+    assert.equal(rules.parseCommentMentions(JSON.stringify({ targets: [], replyTo: [], event })).event, null, String(event))
+  }
 })

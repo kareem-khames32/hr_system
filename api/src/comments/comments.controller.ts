@@ -16,6 +16,8 @@ class CommentDto {
   // مراجع تعليقات من نفس الحوار (مش أرقامها)
   @IsOptional() @IsArray() @ArrayMaxSize(50) @IsString({ each: true }) replyTo?: string[]
   @IsOptional() @IsArray() @ArrayMaxSize(50) @IsInt({ each: true }) fileIds?: number[]
+  // B2.5 (إضافة المالك): تعليق مسؤول المهمة «مش بتاعتي» — بيتشاور فيه للي كلّف بيها
+  @IsOptional() @IsBoolean() notMine?: boolean
 }
 
 @UseGuards(JwtAuthGuard, RolesGuard)

@@ -1,6 +1,7 @@
 'use client'
-// B2.5: نموذج تكليف مهمة (جديدة أو تعديل). المسؤول موظف من اللي الحساب يقدر يكلّفهم (مرؤوسيه، أو موظفي نطاقه بصلاحية «إدارة المهام»)،
-// أو دور وظيفي في فرع (لصاحب الصلاحية بس). الخادم هو اللي بيحكم؛ القايمة هنا من نفس حكمه (GET /tasks/assignees).
+// B2.5: نموذج تكليف مهمة (جديدة أو تعديل). المسؤول موظف من اللي الحساب يقدر يكلّفهم (نفسه: مهمة شخصية؛ واللي تحته في الهيكل؛ وموظفي
+// نطاقه بصلاحية «إدارة المهام» أو «تكليف أي موظف»)، أو دور وظيفي في فرع (لصاحب «إدارة المهام» بس). الخادم هو اللي بيحكم؛ القايمة هنا
+// من نفس حكمه (GET /tasks/assignees). حد برّه القايمة مايتكلّفش مباشرة: طلب، ولما يتعتمد بيتحوّل مهمة (قواعد المالك 6 أكتوبر).
 import { useState } from 'react'
 import { EmployeePicker } from '../EmployeePicker'
 import { localToday } from '../../lib/dates'
@@ -24,6 +25,11 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved }: Pro
   const [dueDate, setDueDate] = useState(task?.dueDate ?? '')
   const [priority, setPriority] = useState<TaskPriority>(task?.priority ?? 'NORMAL')
   const [requiresProof, setRequiresProof] = useState(task?.requiresProof ?? false)
+  const [needsRating, setNeedsRating] = useState(task?.needsRating ?? false)
+  // نفسي = مهمة شخصية (بيشوفها صاحبها ومديره المباشر بس، ومن غير تقييم)
+  const self = target === 'employee' && !!assignees.employees.find(row => String(row.id) === employeeId)?.self
+  const canFlagRating = !!assignees.ratingEnabled && target === 'employee' && !self
+  const options = assignees.employees.map(row => row.self ? { ...row, fullName: `${row.fullName} — نفسي (مهمة شخصية)` } : row)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -32,7 +38,8 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved }: Pro
     if (title.trim().length < 2) { setError('اكتب عنوان المهمة'); return }
     if (target === 'employee' && !employeeId) { setError('اختار الموظف المسؤول عن المهمة'); return }
     if (target === 'role' && (!role || !branchId)) { setError('اختار الدور والفرع'); return }
-    const input: TaskInput = { title: title.trim(), description: description.trim() || null, dueDate: dueDate || null, priority, requiresProof }
+    const input: TaskInput = { title: title.trim(), description: description.trim() || null, dueDate: dueDate || null, priority, requiresProof,
+      ...(assignees.ratingEnabled ? { needsRating: canFlagRating && needsRating } : {}) }
     // في التعديل المسؤول بيتبعت لما يتغيّر بس: تحويل المهمة تكليف جديد بشروطه
     const sameEmployee = target === 'employee' && task?.assigneeEmployeeId === Number(employeeId)
     const sameRole = target === 'role' && task?.assigneeRole === role && task?.branchId === Number(branchId)
@@ -72,9 +79,14 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved }: Pro
           {target === 'employee' ? (
             <div>
               <label className="label" htmlFor="task-assignee">الموظف المسؤول *</label>
-              <EmployeePicker id="task-assignee" employees={assignees.employees} value={employeeId} onChange={id => setEmployeeId(id)} placeholder="اكتب الاسم أو الكود"
+              <EmployeePicker id="task-assignee" employees={options} value={employeeId} onChange={id => setEmployeeId(id)} placeholder="اكتب الاسم أو الكود"
                 missingLabel={() => task?.assigneeName ?? 'الموظف الحالي'} />
-              {!assignees.canManage && <p className="text-xs text-gray-500 mt-1">تقدر تكلّف مرؤوسيك المباشرين.</p>}
+              {self && <p className="text-xs text-gray-500 mt-1" data-task-personal-hint>مهمة شخصية: بتظهر لك ولمديرك المباشر بس.</p>}
+              {!assignees.canManage && (
+                <p className="text-xs text-gray-500 mt-1" data-task-outside-hint>
+                  تقدر تكلّف نفسك وأي حد تحتك في الهيكل. حد مش في فريقك؟ <a href="/requests" className="text-primary-600 underline">اعمل طلب</a>، ولما يتعتمد هيتحوّل مهمة.
+                </p>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -110,6 +122,12 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved }: Pro
             <input type="checkbox" checked={requiresProof} onChange={event => setRequiresProof(event.target.checked)} />
             لازم إثبات عند الإقفال (نص أو ملف)
           </label>
+          {canFlagRating && (
+            <label className="flex items-center gap-2 text-sm text-gray-700" data-task-needs-rating>
+              <input type="checkbox" checked={needsRating} onChange={event => setNeedsRating(event.target.checked)} />
+              تحتاج تقييم (هتقيّم التنفيذ من 1 لـ5 بعد ما تخلص)
+            </label>
+          )}
         </div>
         <div className="flex justify-end gap-2 mt-5">
           <button type="button" className="btn-secondary" disabled={busy} onClick={onClose}>إلغاء</button>

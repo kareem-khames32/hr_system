@@ -54,6 +54,13 @@ const EXCEPTIONS = {
   'TasksController.detail': 'SERVICE_CHECK', // GET /tasks/:id
   'TasksController.update': 'SERVICE_CHECK', // PATCH /tasks/:id
   'TasksController.setStatus': 'SERVICE_CHECK', // POST /tasks/:id/status
+  // B2.5 (إضافة المالك 6 أكتوبر): تقرير الالتزام (صاحب «عرض كل المهام» في نطاقه، وغيره على مهام فريقه واللي كلّف بيه)، وطلب تمديد الميعاد
+  // (المسؤول) وقراره (اللي بيدير المهمة)، وتقييم اللي كلّف بيها، وسجل المهمة (للي يشوفها) — الحق في الخدمة زي باقي مسارات المهمة
+  'TasksController.report': 'SERVICE_CHECK', // GET /tasks/report
+  'TasksController.log': 'SERVICE_CHECK', // GET /tasks/:id/log
+  'TasksController.requestExtension': 'SERVICE_CHECK', // POST /tasks/:id/extension
+  'TasksController.decideExtension': 'SERVICE_CHECK', // POST /tasks/:id/extension/decision
+  'TasksController.rate': 'SERVICE_CHECK', // POST /tasks/:id/rating
   // B2.8: حوار التعليقات على الطلب والمهمة — الحق هو حق قراءة الكيان نفسه (طرف في الطلب أو «عرض كل الطلبات» في فرعه؛ واللي يشوف المهمة)،
   // والفحص في الخدمة (CommentsService.access): مفيش مفتاح صلاحية واحد يعبّر عنه
   'CommentsController.requestThread': 'SERVICE_CHECK', // GET /requests/:id/comments

@@ -193,6 +193,86 @@ export class ApproverResolver {
     return false
   }
 
+  // B2.5 (إضافة المالك 6 أكتوبر): «تحته في الشجرة» لتكليف المهام — من الموظف لفوق بخطوتين مع بعض: مديره المباشر (directManagerOf)،
+  // ومديري الوحدات اللي فوق قسمه (قسمه ثم اللي فوقه بـparentId: القسم والإدارة). أي حد يتوصل له كده «فوقه»، من غير قيد فرع (زي الخطوات
+  // الهيكلية). الدواير بتقف: كل موظف مرة
+  private async managersStepOf(employeeId: number): Promise<number[]> {
+    const emp = await this.employees.findOne({ where: { id: employeeId }, select: { id: true, departmentId: true } })
+    if (!emp) return []
+    const direct = await this.directManagerOf(employeeId)
+    const heads = (await this.unitChainOf(emp.departmentId)).map(unit => unit.managerEmployeeId)
+    return [...new Set([direct, ...heads].filter((id): id is number => !!id && id !== employeeId))]
+  }
+
+  /** الموظف تحت المدير ده في الشجرة (أي عمق)؟ */
+  async isUnder(employeeId: number, managerEmployeeId: number): Promise<boolean> {
+    if (!employeeId || !managerEmployeeId || employeeId === managerEmployeeId) return false
+    const seen = new Set<number>([employeeId])
+    for (let level = [employeeId]; level.length;) {
+      const next: number[] = []
+      for (const id of level) {
+        for (const manager of await this.managersStepOf(id)) {
+          if (manager === managerEmployeeId) return true
+          if (!seen.has(manager)) { seen.add(manager); next.push(manager) }
+        }
+      }
+      level = next
+    }
+    return false
+  }
+
+  /** كل اللي تحت المدير في الشجرة (أي عمق) — نفس قاعدة isUnder بالحرف، محسوبة مرة واحدة على هيكل الشركة (اختبار بيقارنهم) */
+  async subordinatesOf(managerEmployeeId: number): Promise<number[]> {
+    if (!managerEmployeeId) return []
+    const [employees, teams, departments, branches] = await Promise.all([
+      this.employees.find({ select: { id: true, managerEmployeeId: true, teamId: true, departmentId: true, branchId: true } }),
+      this.teams.find({ select: { id: true, leaderEmployeeId: true } }),
+      this.departments.find({ select: { id: true, managerEmployeeId: true, parentId: true } }),
+      this.branches.find({ select: { id: true, managerEmployeeId: true } }),
+    ])
+    const leaderOf = new Map(teams.map(row => [row.id, row.leaderEmployeeId ?? null]))
+    const unitOf = new Map(departments.map(row => [row.id, row]))
+    const branchManagerOf = new Map(branches.map(row => [row.id, row.managerEmployeeId ?? null]))
+    const below = new Map<number, number[]>()
+    for (const emp of employees) {
+      // المدير المباشر بنفس تدرّج directManagerOf: المسجّل في الملف، وإلا قائد الفريق، وإلا رئيس القسم، وإلا مدير الفرع
+      const leader = emp.teamId ? leaderOf.get(emp.teamId) : null
+      const head = emp.departmentId ? unitOf.get(emp.departmentId)?.managerEmployeeId : null
+      const branchManager = branchManagerOf.get(emp.branchId)
+      const direct = emp.managerEmployeeId ? emp.managerEmployeeId
+        : leader && leader !== emp.id ? leader
+        : head && head !== emp.id ? head
+        : branchManager && branchManager !== emp.id ? branchManager : null
+      const managers = new Set<number>()
+      if (direct && direct !== emp.id) managers.add(direct)
+      // مديري الوحدات من قسمه لفوق (نفس unitChainUp: كل وحدة مرة، والوحدة اللي مش موجودة بتوقّف الصعود)
+      const seen = new Set<number>()
+      for (let unitId: number | null = emp.departmentId ?? null; unitId != null && !seen.has(unitId);) {
+        seen.add(unitId)
+        const unit = unitOf.get(unitId)
+        if (!unit) break
+        if (unit.managerEmployeeId && unit.managerEmployeeId !== emp.id) managers.add(unit.managerEmployeeId)
+        unitId = unit.parentId ?? null
+      }
+      for (const manager of managers) {
+        const list = below.get(manager)
+        if (list) list.push(emp.id); else below.set(manager, [emp.id])
+      }
+    }
+    const found = new Set<number>()
+    for (let level = [managerEmployeeId]; level.length;) {
+      const next: number[] = []
+      for (const id of level) {
+        for (const child of below.get(id) ?? []) {
+          if (child !== managerEmployeeId && !found.has(child)) { found.add(child); next.push(child) }
+        }
+      }
+      level = next
+    }
+    return [...found]
+  }
+
+
   // الوحدات من قسم الموظف لفوق بالترتيب (بادئة بقسمه) — «مدير الإدارة» و«الإدارة» في بطاقة صاحب الطلب (org/department-tree)
   unitChainOf(departmentId: number | null | undefined): Promise<Department[]> {
     return unitChainUp(departmentId, (id) => this.departments.findOne({ where: { id },

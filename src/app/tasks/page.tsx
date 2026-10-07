@@ -7,6 +7,7 @@ import { Download, ListChecks, Plus } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import { EmployeePicker } from '@/components/EmployeePicker'
 import TaskCard from '@/components/tasks/TaskCard'
+import TaskComplianceReport from '@/components/tasks/TaskComplianceReport'
 import TaskFormModal from '@/components/tasks/TaskFormModal'
 import { csvDateStamp, downloadCsv } from '@/lib/csv'
 import {
@@ -105,6 +106,7 @@ export default function TasksPage() {
             : tasks.length === 0 ? <p className="text-sm text-gray-500">مفيش مهام بالفلتر ده.</p>
               : tasks.map(task => <TaskCard key={task.id} task={task} onChanged={() => { notifyTasksChanged(); void load() }} onEdit={row => setForm({ task: row })} />)}
         </div>
+        {available && <TaskComplianceReport />}
       </div>
       {form && assignees && (
         <TaskFormModal assignees={assignees} task={form.task} onClose={() => setForm(null)} onSaved={() => { setForm(null); notifyTasksChanged(); void load() }} />

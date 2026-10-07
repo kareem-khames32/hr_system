@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common'
-import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Matches, MaxLength, Min, MinLength, ValidateIf } from 'class-validator'
+import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateIf } from 'class-validator'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { RequireModule } from '../modules-registry/module.guard'
@@ -24,6 +24,7 @@ class TaskDto {
   @IsOptional() @Matches(DATE) dueDate?: string
   @IsOptional() @IsIn([...TASK_PRIORITIES]) priority?: string
   @IsOptional() @IsBoolean() requiresProof?: boolean
+  @IsOptional() @IsBoolean() needsRating?: boolean
 }
 
 class TaskPatchDto {
@@ -36,6 +37,23 @@ class TaskPatchDto {
   @IsOptional() @ValidateIf((_, value) => value !== null) @Matches(DATE) dueDate?: string | null
   @IsOptional() @IsIn([...TASK_PRIORITIES]) priority?: string
   @IsOptional() @IsBoolean() requiresProof?: boolean
+  @IsOptional() @IsBoolean() needsRating?: boolean
+}
+
+// إضافة المالك 6 أكتوبر: طلب تمديد الميعاد وقراره، وتقييم المهمة
+class TaskExtensionDto {
+  @Matches(DATE) dueDate: string
+  @IsString() @MinLength(3) @MaxLength(500) reason: string
+}
+
+class TaskExtensionDecisionDto {
+  @IsBoolean() approve: boolean
+  @IsOptional() @IsString() @MaxLength(500) note?: string
+}
+
+class TaskRatingDto {
+  @IsInt() @Min(1) @Max(5) rating: number
+  @IsOptional() @IsString() @MaxLength(500) note?: string
 }
 
 class TaskStatusDto {
@@ -78,6 +96,12 @@ export class TasksController {
     return this.tasks.list(user, { status, overdue, assigneeEmployeeId, branchId })
   }
 
+  // تقرير الالتزام: الفحص في الخدمة (صاحب «عرض كل المهام» في نطاقه، وغيره على مهام فريقه واللي كلّف بيه)
+  @Get('report')
+  report(@CurrentUser() user: JwtPayload, @Query('from') from?: string, @Query('to') to?: string) {
+    return this.tasks.report(user, { from, to })
+  }
+
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: TaskDto) {
     return this.tasks.create(user, dto)
@@ -88,6 +112,12 @@ export class TasksController {
     return this.tasks.detail(user, id)
   }
 
+  // سجل المهمة (إضافة المالك 6 أكتوبر): سطر لكل تغيير، للي يشوف المهمة (الفحص في الخدمة)
+  @Get(':id/log')
+  log(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number) {
+    return this.tasks.log(user, id)
+  }
+
   @Patch(':id')
   update(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: TaskPatchDto) {
     return this.tasks.update(user, id, dto)
@@ -96,5 +126,22 @@ export class TasksController {
   @Post(':id/status')
   setStatus(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: TaskStatusDto) {
     return this.tasks.setStatus(user, id, dto)
+  }
+
+  // المسؤول بيطلب تمديد الميعاد، واللي بيدير المهمة بيرد (الفحص في الخدمة)
+  @Post(':id/extension')
+  requestExtension(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: TaskExtensionDto) {
+    return this.tasks.requestExtension(user, id, dto)
+  }
+
+  @Post(':id/extension/decision')
+  decideExtension(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: TaskExtensionDecisionDto) {
+    return this.tasks.decideExtension(user, id, dto)
+  }
+
+  // تقييم اللي كلّف بالمهمة بعد ما تخلص (الميزة الفرعية tasks.rating، والفحص في الخدمة)
+  @Post(':id/rating')
+  rate(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: TaskRatingDto) {
+    return this.tasks.rate(user, id, dto)
   }
 }

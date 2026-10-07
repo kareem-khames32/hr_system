@@ -214,7 +214,8 @@ test('RM-2: من غير الأعمدة الإعداد مرفوض برسالة و
   const mine = expectStatus(await request(users.worker, 'GET', '/tasks/mine'), 200).tasks.find(row => row.id === task.id)
   assert.deepEqual([mine.execution, mine.requestId], [false, null])
   assert.equal(expectStatus(await request(users.worker, 'POST', `/tasks/${task.id}/status`, { status: 'DONE' }), 201).status, 'DONE')
-  assert.equal(expectStatus(await request(users.tasksAdmin, 'POST', `/tasks/${task.id}/status`, { status: 'OPEN', note: 'محتاجة تتراجع' }), 201).status, 'OPEN')
+  // (B2.5، إضافة المالك: إعادة فتح مهمة «خلصت» = رجوع للتعديل، فبترجع «جاري»)
+  assert.equal(expectStatus(await request(users.tasksAdmin, 'POST', `/tasks/${task.id}/status`, { status: 'OPEN', note: 'محتاجة تتراجع' }), 201).status, 'IN_PROGRESS')
   assert.equal(expectStatus(await request(users.tasksAdmin, 'POST', `/tasks/${task.id}/status`, { status: 'CANCELLED', note: 'مش لازمة' }), 201).status, 'CANCELLED')
 
   // عمود قديم بنوع تاني: الترحيل بيقف برسالته ومابيلمسوش

@@ -50,6 +50,28 @@ export interface ApiTask {
   documentAck: boolean
   /** رقم المستند لصاحب المهمة بس (لينك فتحه) — لغيره null */
   documentAckId: number | null
+  /** إضافة المالك 6 أكتوبر (ترحيل 096). false قبل الترحيل: الخانات اللي تحت على قيمها الفاضية */
+  rulesAvailable: boolean
+  /** الموظف كلّف نفسه: بيشوفها صاحبها ومديره المباشر بس */
+  personal: boolean
+  /** مرات «رجّعها للتعديل» */
+  returnCount: number
+  /** الالتزام بالميعاد لمهمة خلصت وليها موعد (محسوب من الإقفال والموعد) — غير كده null */
+  compliance: { onTime: boolean; lateDays: number } | null
+  complianceLabel: string | null
+  /** طلب تمديد الميعاد المعلّق من المسؤول */
+  extension: { dueDate: string; reason: string | null } | null
+  /** المسؤول يطلب تمديد / اللي بيدير المهمة يرد / المسؤول يكتب «مش بتاعتي» */
+  canRequestExtension: boolean
+  canDecideExtension: boolean
+  canNotMine: boolean
+  /** ميزة تقييم المهام (tasks.rating) مفتوحة؟ من غيرها خانات التقييم فاضية */
+  ratingEnabled: boolean
+  needsRating: boolean
+  rating: number | null
+  ratingNote: string | null
+  /** اللي كلّف بيها يقيّمها (خلصت، ومعلّمة، ولسه مااتقيّمتش) */
+  canRate: boolean
   /** مهمة تنفيذ طلب معتمد (B2.6): مابتتدارش من هنا (canManage = false دايمًا)، وإقفالها من مسؤولها بيكمّل الطلب */
   execution: boolean
   /** رقم الطلب (لينك تفاصيله) للي يقدر يفتحه: اللي بيشتغل عليها وهي مفتوحة، واللي قفلها. ومعاه الإثبات والملاحظات ومين قفلها — لغيرهم null */
@@ -94,9 +116,13 @@ export interface ApiMyTasks {
 export interface ApiTaskAssignees {
   available: boolean
   canManage: boolean
-  /** المدير المباشر ليه مرؤوسين، أو الحساب عنده «إدارة المهام» */
+  /** الحساب يقدر يكلّف حد: نفسه (مهمة شخصية)، أو حد تحته في الهيكل، أو موظفي نطاقه بصلاحية */
   canAssign: boolean
-  employees: Array<{ id: number; fullName: string; employeeCode: string; jobTitle: string | null; branchName: string | null }>
+  /** self = الحساب نفسه (مهمة شخصية) */
+  employees: Array<{ id: number; fullName: string; employeeCode: string; jobTitle: string | null; branchName: string | null; self?: boolean }>
+  /** ترحيل 096 موجود (المهمة الشخصية والتمديد والتقييم)، وميزة التقييم مفتوحة */
+  rulesAvailable?: boolean
+  ratingEnabled?: boolean
   roles: Array<{ key: string; label: string }>
   branches: Array<{ id: number; name: string }>
 }
@@ -110,6 +136,27 @@ export interface TaskInput {
   dueDate?: string | null
   priority?: TaskPriority
   requiresProof?: boolean
+  needsRating?: boolean
+}
+
+/** سجل المهمة: سطر لكل تغيير (الأقدم الأول) باسم اللي عمله */
+export interface ApiTaskLog {
+  /** false قبل ترحيل التعليقات (093): من غير سجل */
+  available: boolean
+  /** السجل أطول من المعروض (آخر 200 سطر) */
+  truncated: boolean
+  lines: Array<{ event: string; label: string; body: string; at: string; by: string | null; mine: boolean }>
+}
+
+/** تقرير الالتزام: صف لكل موظف في الفترة */
+export interface ApiTaskReport {
+  available: boolean
+  ratingEnabled: boolean
+  from: string
+  to: string
+  truncated: boolean
+  rows: Array<{ employeeId: number; fullName: string; employeeCode: string; branchName: string | null; done: number; onTime: number; late: number; noDueDate: number;
+    returns: number; rated: number | null; ratingAverage: number | null }>
 }
 
 export interface TaskListFilter { status?: 'open' | 'done' | 'cancelled' | 'all'; overdue?: boolean; assigneeEmployeeId?: number }
@@ -125,6 +172,7 @@ export const fetchMyTasksCount = () => apiFetch<ApiTaskCounts>('/tasks/mine/coun
 export const fetchTeamTasks = () => apiFetch<{ manager: boolean; tasks: ApiTask[] }>('/tasks/team')
 export const fetchTaskAssignees = () => apiFetch<ApiTaskAssignees>('/tasks/assignees')
 export const fetchTask = (id: number) => apiFetch<ApiTask>(`/tasks/${id}`)
+export const fetchTaskLog = (id: number) => apiFetch<ApiTaskLog>(`/tasks/${id}/log`)
 export const fetchTasks = (filter: TaskListFilter = {}) => {
   const params = new URLSearchParams()
   if (filter.status) params.set('status', filter.status)
@@ -137,3 +185,8 @@ export const createTask = (input: TaskInput) => apiFetch<ApiTask>('/tasks', json
 export const updateTask = (id: number, input: TaskInput) => apiFetch<ApiTask>(`/tasks/${id}`, json('PATCH', input))
 export const setTaskStatus = (id: number, input: { status: TaskStatus; note?: string; proofNote?: string; proofFileId?: number }) =>
   apiFetch<ApiTask>(`/tasks/${id}/status`, json('POST', input))
+// إضافة المالك 6 أكتوبر: طلب تمديد الميعاد (المسؤول) وقراره (اللي بيدير المهمة)، وتقييم اللي كلّف بيها، وتقرير الالتزام
+export const requestTaskExtension = (id: number, input: { dueDate: string; reason: string }) => apiFetch<ApiTask>(`/tasks/${id}/extension`, json('POST', input))
+export const decideTaskExtension = (id: number, input: { approve: boolean; note?: string }) => apiFetch<ApiTask>(`/tasks/${id}/extension/decision`, json('POST', input))
+export const rateTask = (id: number, input: { rating: number; note?: string }) => apiFetch<ApiTask>(`/tasks/${id}/rating`, json('POST', input))
+export const fetchTaskReport = (from: string, to: string) => apiFetch<ApiTaskReport>(`/tasks/report?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)

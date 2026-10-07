@@ -3,9 +3,10 @@
 //  TK-01) مهمة لموظف: بتظهر في «مهامي» بتاعته بس، ويشوفها مسؤولها ومنشئها ومديره المباشر وصاحب «عرض كل المهام» في فرعها — برّه كده 404.
 //         وحدثها في الطابور بمراجع بس.
 //  TK-02) حدود التكليف: مسؤول واحد، وفرع من النطاق، وموعد حقيقي مش فايت، وموظف على رأس العمل، ومن غير كاشف وجود.
-//  TK-03) المدير المباشر بيكلّف مرؤوسيه من غير صلاحية، ومش غيرهم ولا نفسه ولا دور. وقايمة «مين أقدر أكلّفه».
-//  TK-04) الحالة: المسؤول يبدأ ويعلّق بسبب ويقفل بإثبات (نص أو ملف رفعه هو بنوع task ومش مستعمل)، واللي بيديرها يلغي بسبب ويعيد الفتح
-//         بسبب، وإقفالين في نفس اللحظة واحد بس بينجح، ونفس ملف الإثبات لمهمتين في نفس اللحظة واحدة بس بتاخده.
+//  TK-03) المدير المباشر بيكلّف مرؤوسيه من غير صلاحية، ومش غيرهم (برسالة بتوجّه للطلب) ولا دور. وقايمة «مين أقدر أكلّفه» (ومنها نفسي:
+//         المهمة الشخصية — قواعد الإسناد كلها في tasks-assignment-rules.integration.cjs).
+//  TK-04) الحالة: المسؤول يبدأ ويعلّق بسبب ويقفل بإثبات (نص أو ملف رفعه هو بنوع task ومش مستعمل)، واللي بيديرها يلغي بسبب ويرجّع
+//         اللي خلصت للتعديل بسبب (بترجع «جاري»)، وإقفالين في نفس اللحظة واحد بس بينجح، ونفس ملف الإثبات لمهمتين في نفس اللحظة واحدة بس بتاخده.
 //  TK-05) مهمة الدور: لحاملي الدور اللي فرعها في نطاقهم — مش فرع تاني، ومش مدير النظام في «مهامي» بتاعته.
 //  TK-06) «مهامي» فيها مهام التهيئة اللي على جهتي وبنود الإخلاء اللي عليّ بنفس حكم شاشاتهم بالظبط، والموديول المقفول (أو اللي الحساب برّه
 //         جمهوره) مصدره مابيظهرش، ومصدر وقع مابيسيبش وعد مرفوض من غير مستمع.
@@ -278,25 +279,28 @@ test('TK-02: حدود التكليف — مسؤول واحد، وفرع من ا�
   made.today = today
 })
 
-test('TK-03: المدير المباشر بيكلّف مرؤوسيه من غير صلاحية — مش غيرهم ولا نفسه ولا دور', async () => {
+test('TK-03: المدير المباشر بيكلّف مرؤوسيه من غير صلاحية — مش غيرهم ولا دور', async () => {
   const task = await create(users.manager, { title: 'راجع كشف الجرد', assigneeEmployeeId: emps.w2.id })
   made.byManager = task
   assert.deepEqual([task.assigneeEmployeeId, task.branchId, task.canManage, task.canWork, task.createdByName], [emps.w2.id, org.branchA.id, true, false, 'حساب manager'])
-  for (const body of [{ title: 'مش مرؤوسه', assigneeEmployeeId: emps.other.id }, { title: 'نفسه', assigneeEmployeeId: emps.manager.id },
-    { title: 'فرع تاني', assigneeEmployeeId: emps.bw.id }, { title: 'دور', assigneeRole: 'it', branchId: org.branchA.id }]) {
-    expectStatus(await request(users.manager, 'POST', '/tasks', body), 403)
+  // حد مش تحته (في فرعه أو في فرع تاني، أو رقم مش موجود): 403 بنص المالك اللي بيوجّه للطلب؛ والدور لصاحب «إدارة المهام» بس
+  for (const body of [{ title: 'مش مرؤوسه', assigneeEmployeeId: emps.other.id }, { title: 'فرع تاني', assigneeEmployeeId: emps.bw.id }, { title: 'مش موجود', assigneeEmployeeId: 987654 }]) {
+    const refused = await request(users.manager, 'POST', '/tasks', body)
+    assert.deepEqual([refused.status, messageOf(refused)], [403, 'الموظف ده مش في فريقك. اعمل طلب، ولما يتعتمد هيتحوّل مهمة'], body.title)
   }
-  // «مين أقدر أكلّفه»: المدير مرؤوسيه اللي على رأس العمل، وصاحب الصلاحية موظفي نطاقه والأدوار وفروعه، وغيرهم ولا حد
+  expectStatus(await request(users.manager, 'POST', '/tasks', { title: 'دور', assigneeRole: 'it', branchId: org.branchA.id }), 403)
+  // «مين أقدر أكلّفه»: المدير اللي تحته على رأس العمل ونفسه (المهمة الشخصية)، وصاحب الصلاحية موظفي نطاقه والأدوار وفروعه، وغيرهم نفسه بس
   const forManager = expectStatus(await request(users.manager, 'GET', '/tasks/assignees'), 200)
   assert.deepEqual([forManager.available, forManager.canManage, forManager.canAssign, ids(forManager.employees), forManager.roles, forManager.branches],
-    [true, false, true, [emps.w1.id, emps.w2.id].sort((a, b) => a - b), [], []])
+    [true, false, true, [emps.manager.id, emps.w1.id, emps.w2.id].sort((a, b) => a - b), [], []])
+  assert.deepEqual(forManager.employees.filter(row => row.self).map(row => row.id), [emps.manager.id])
   const forHr = expectStatus(await request(users.hrA, 'GET', '/tasks/assignees'), 200)
   assert.deepEqual([forHr.canManage, forHr.canAssign, ids(forHr.employees), forHr.roles.map(role => role.key), forHr.branches],
     [true, true, [emps.manager.id, emps.w1.id, emps.w2.id, emps.other.id].sort((a, b) => a - b), ['hr', 'finance', 'it', 'custody_officer', 'payroll_officer', 'executive'],
       [{ id: org.branchA.id, name: 'فرع المهام أ' }]])
   assert.equal(forHr.roles.find(role => role.key === 'it').label, 'تقنية المعلومات')
   const forOther = expectStatus(await request(users.other, 'GET', '/tasks/assignees'), 200)
-  assert.deepEqual([forOther.canManage, forOther.canAssign, forOther.employees, forOther.roles, forOther.branches], [false, false, [], [], []])
+  assert.deepEqual([forOther.canManage, forOther.canAssign, forOther.employees.map(row => [row.id, row.self]), forOther.roles, forOther.branches], [false, true, [[emps.other.id, true]], [], []])
 })
 
 test('TK-04: الحالة — المسؤول يبدأ ويعلّق ويقفل بإثبات، والمنشئ يلغي ويعيد الفتح، وإقفالين في نفس اللحظة واحد بس', async () => {
@@ -326,10 +330,11 @@ test('TK-04: الحالة — المسؤول يبدأ ويعلّق ويقفل ب
   expectStatus(await status(users.w1, task.id, { status: 'OPEN' }), 403)
   // إعادة الفتح بتشيل إثبات الإقفال اللي فات، فسببها إلزامي — والمرفوض مابيغيّرش حاجة
   const noReason = await status(users.hrA, task.id, { status: 'OPEN' })
-  assert.deepEqual([noReason.status, messageOf(noReason)], [400, 'اكتب سبب إعادة فتح المهمة'])
+  assert.deepEqual([noReason.status, messageOf(noReason)], [400, 'اكتب سبب رجوع المهمة للتعديل'])
   assert.deepEqual((({ status, proofNote }) => [status, proofNote])(await repo('Task').findOneByOrFail({ id: task.id })), ['DONE', 'اتبعت الملف للشركة ورقم الاستلام 7781'])
   now = expectStatus(await status(users.hrA, task.id, { status: 'OPEN', note: 'الرقم غلط' }), 201)
-  assert.deepEqual([now.status, now.statusNote, now.proofNote, now.proofFileId, now.closedAt, now.closedByName], ['OPEN', 'الرقم غلط', null, null, null, null])
+  // إضافة المالك: مهمة «خلصت» بترجع «جاري» (رجوع للتعديل)، وعدّاد الرجوع بيزيد
+  assert.deepEqual([now.status, now.statusNote, now.proofNote, now.proofFileId, now.closedAt, now.closedByName, now.returnCount], ['IN_PROGRESS', 'الرقم غلط', null, null, null, null, 1])
   expectStatus(await status(users.hrA, task.id, { status: 'OPEN' }), 400)
 
   // الإثبات بملف: رفعه اللي بيقفل، بنوع task، ومش مستعمل في مهمة تانية
@@ -1126,7 +1131,7 @@ test('TK-17: مدير ليه آلاف المرؤوسين (فوق حد معامل
   const team = expectStatus(await request(boss, 'GET', '/tasks/team'), 200)
   assert.deepEqual([team.manager, team.tasks.map(row => [row.id, row.canManage])], [true, [[task.id, true]]])
   const options = expectStatus(await request(boss, 'GET', '/tasks/assignees'), 200)
-  assert.deepEqual([options.canAssign, options.employees.length], [true, total])
+  assert.deepEqual([options.canAssign, options.employees.length, options.employees.filter(row => row.self).map(row => row.id)], [true, total + 1, [big.id]])
   const inbox = await mine(boss)
   assert.deepEqual([inbox.tasks, inbox.onboarding.map(row => [row.employeeId, row.party]), inbox.counts], [[], [[last, 'manager']], { open: 1, overdue: 0 }])
   assert.deepEqual(expectStatus(await request(boss, 'GET', '/tasks/mine/count'), 200), { open: 1, overdue: 0 })

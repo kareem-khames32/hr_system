@@ -116,7 +116,7 @@ test('DU-04: «مهامي» — مهمة إقرار المستند من غير �
   // المهمة الملغية طلبها اتلغى: من غير رابط
   assert.match(card, /\{task\.documentAckId && task\.status !== 'CANCELLED' && <a href=\{`\/my\/documents\?ack=\$\{task\.documentAckId\}`\}[^>]*data-task-document>افتح المستند<\/a>\}/)
   // والخادم هو اللي بيشيل الأزرار عنها
-  assert.match(read('api/src/tasks/tasks.service.ts'), /return document \? \{ \.\.\.view, canWork: false, canManage: false, documentAck: true, documentAckId: mine \? document\.documentId : null \}\n\s+: \{ \.\.\.view, documentAck: false, documentAckId: null \}/)
+  assert.match(read('api/src/tasks/tasks.service.ts'), /return document \? \{ \.\.\.view, canWork: false, canManage: false, canRequestExtension: false, canDecideExtension: false, canNotMine: false, canRate: false,\n\s+documentAck: true, documentAckId: mine \? document\.documentId : null \}\n\s+: \{ \.\.\.view, documentAck: false, documentAckId: null \}/)
 })
 
 test('DU-05: شاشة الإصدار — طلب الإقرار وموعده، وحالته وفلترها وإلغاؤه في السجل، ونفس المستند لمجموعة', () => {

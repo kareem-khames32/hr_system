@@ -119,9 +119,17 @@ export const MODULES = {
   tasks: moduleDef({
     nameAr: 'المهام', group: 'core', core: true, dependsOn: ['employees'], softUses: ['onboarding', 'offboarding'],
     description: 'تكليف موظف أو دور بمهمة بموعد وإثبات، وصندوق «مهامي»، وتذكير وتصعيد المتأخر',
-    permissions: ['tasks.manage', 'tasks.view_all'],
+    permissions: ['tasks.manage', 'tasks.view_all', 'tasks.assign_any'],
     routes: ['/tasks', '/my/tasks'],
     jobs: ['tasks.reminders'],
+    features: {
+      // إضافة المالك 6 أكتوبر: تقييم اختياري للمهام المعلّمة — مقفول لحد ما الشركة تقرر. الالتزام بالميعاد ومرات الرجوع شغالين من غيره
+      'tasks.rating': {
+        nameAr: 'تقييم المهام المنفذة',
+        description: 'اللي بيكلّف بمهمة يعلّمها «تحتاج تقييم»، وبعد ما تخلص يقيّم تنفيذها من 1 لـ5 بتعليق اختياري. مفيش تقييم إلزامي، ومفيش درجة بتتحسب لوحدها',
+        default: false,
+      },
+    },
   }),
   documents: moduleDef({
     nameAr: 'المستندات والخطابات', group: 'core', core: true, dependsOn: ['employees'],

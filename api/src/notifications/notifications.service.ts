@@ -22,6 +22,7 @@ import { Request } from '../requests/entities/request.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { RequestsService } from '../requests/requests.service'
 import { Task, TASK_OPEN_STATUSES, type TaskStatus } from '../tasks/task.entity'
+import { taskExtrasOfOne } from '../tasks/task-extras'
 import { taskAccess, taskAwaitsAccount, taskLocalDate, taskStampCurrent, tasksTableReady, TASK_ROLE_LABELS } from '../tasks/task-rules'
 import { Notification, NotificationDelivery, NotificationPreference, NotificationTemplate } from './notification.entities'
 import { notificationTablesReady, NOTIFICATIONS_MIGRATION_MISSING } from './notification-store'
@@ -277,6 +278,9 @@ export class NotificationsService implements OnModuleInit {
    * اسم مسؤولها ولا موعدها.
    */
   private async taskEscalationAccounts(task: Task): Promise<JwtPayload[]> {
+    // المهمة الشخصية تذكير صاحبها: تأخيرها مابيتبلّغش بيه حد (إضافة المالك 6 أكتوبر)
+    const { isPersonal } = await taskExtrasOfOne(this.ds.manager, task.id)
+    if (isPersonal) return []
     const manager = task.assigneeEmployeeId != null ? await this.resolver.directManagerOf(task.assigneeEmployeeId) : null
     const users = this.ds.getRepository(User)
     const managers = manager ? await users.find({ where: { isActive: true, employeeId: manager } }) : []
@@ -285,7 +289,7 @@ export class NotificationsService implements OnModuleInit {
     for (const account of await this.auth.accountPayloads(found)) {
       // اللي المهمة عليه مابيتصعّدلوش تأخيره هو
       if (taskAwaitsAccount(account, task)) continue
-      if ((await taskAccess(account, task, employeeId => this.resolver.directManagerOf(employeeId))).visible) allowed.push(account)
+      if ((await taskAccess(account, { ...task, isPersonal }, this.resolver)).visible) allowed.push(account)
     }
     return allowed
   }
