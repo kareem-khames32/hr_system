@@ -241,3 +241,58 @@ test('المسير: أيام الإيقاف تُخصم يومًا بيوم بس�
   if (unpaid) assert.equal(unpaid.policy, unpaid.legacy, 'محرك السياسة يحسب نفس عمود بدون راتب')
   t.diagnostic('Manual: day rate 9000/30 = 300; suspension 5 days minus 09/07 (already unpaid leave) = 4 × 300 = 1200; leave 2 × 300 = 600; net 9000 − 1800 = 7200.')
 })
+
+test('CRP2X-N01: تسجيل إيقاف بيتقاطع مع اعتماد طلب بيغيّر ملف نفس الموظف — الإيقاف بيتعاد بعد التقاطع والاتنين بيكمّلوا', async () => {
+  // مفيش رسالة بريد حقيقية بتطلع من الاختبار
+  const { MailService } = require('../src/auth/mail.service')
+  const mail = app.get(MailService)
+  mail.isConfigured = () => false
+  mail.send = async () => { throw new Error('no mail in tests') }
+  assert.notEqual(mail.send, MailService.prototype.send)
+  const { Repository } = require('../node_modules/typeorm')
+  const service = app.get(require('../src/employees/employees.service').EmployeesService)
+  const emp = await employee(), IBAN = 'SA4420000001234567891234'
+  const type = await repo('RequestType').save({ code: 'SUSP_BANK', nameAr: 'تغيير حساب بنكي (اختبار الإيقاف)', category: 'financial', destinationHandler: 'payroll_bank_secure', isActive: true })
+  const pending = await repo('Request').save({ typeCode: type.code, definitionCode: type.code, requesterId: emp.id, createdByUserId: admin.id, branchId: branch.id,
+    status: 'UNDER_REVIEW', currentStep: 1, resolvedSteps: JSON.stringify([{ stepOrder: 1, role: 'hr', approverEmployeeId: null, dueAt: null }]),
+    payload: JSON.stringify({ iban: IBAN, bankName: 'بنك الاختبار', reason: 'حساب جديد' }) })
+  const from = addDays(today(), 40), to = addDays(today(), 41)
+  const overlap = service.assertNoLeaveOverlap, findOne = Repository.prototype.findOne
+  const latch = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
+  const suspensionHolds = latch(), approvalReads = latch(), release = latch()
+  const within = (promise, label) => { let timer; return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(label)), 25000) })]).finally(() => clearTimeout(timer)) }
+  let overlapCalls = 0, deadlocks = 0, armed = false, hit = false, suspension, approval
+  // الإيقاف بيقف بعد ما مسك صف الموظف وقبل ما يقرا طلباته (أول مرة بس)
+  service.assertNoLeaveOverlap = async function (em, id, ...rest) {
+    if (id === emp.id && ++overlapCalls === 1) { suspensionHolds.resolve(); await release.promise }
+    try { return await overlap.call(this, em, id, ...rest) } catch (error) {
+      if ((error?.number ?? error?.driverError?.number ?? error?.driverError?.originalError?.info?.number) === 1205) deadlocks++
+      throw error
+    }
+  }
+  // والاعتماد بيقف بعد ما مسك صف الطلب وقبل ما يمسك صف الموظف
+  Repository.prototype.findOne = async function (options) {
+    if (armed && !hit && this.metadata.name === 'Employee' && options?.where?.id === emp.id && options.lock?.mode === 'pessimistic_write') { hit = true; approvalReads.resolve(); await release.promise }
+    return findOne.call(this, options)
+  }
+  try {
+    suspension = request(admin, 'POST', `/employees/${emp.id}/suspensions`, { fromDate: from, toDate: to, reason: 'إيقاف متقاطع مع اعتماد' }); suspension.catch(() => undefined)
+    await within(Promise.race([suspensionHolds.promise, suspension.then(response => { throw new Error('الإيقاف خلص قبل الوقفة: ' + JSON.stringify(response.body).slice(0, 200)) })]), 'الإيقاف ماوصلش للوقفة')
+    armed = true
+    approval = request(admin, 'POST', `/requests/${pending.id}/act`, { action: 'APPROVE' }); approval.catch(() => undefined)
+    await within(Promise.race([approvalReads.promise, approval.then(response => { throw new Error('الاعتماد خلص قبل الوقفة: ' + JSON.stringify(response.body).slice(0, 200)) })]), 'الاعتماد ماوصلش للوقفة')
+    release.resolve()
+    const [approved, suspended] = await within(Promise.all([approval, suspension]), 'العمليتين ماخلصوش')
+    // التقاطع حصل فعلًا (SQL 1205 على قراءة الإيقاف لطلبات الموظف)، والإيقاف اتعاد من الأول: الاتنين نجحوا والنتيجتين محفوظين
+    assert.equal(deadlocks, 1, 'التقاطع حصل')
+    assert.equal(overlapCalls, 2, 'الإيقاف اتعاد من الأول مرة واحدة')
+    assert.deepEqual([approved.status, suspended.status], [201, 201], JSON.stringify([approved.body, suspended.body]).slice(0, 400))
+    assert.deepEqual((await repo('EmployeeSuspension').find({ where: { employeeId: emp.id } })).map(row => [String(row.fromDate).slice(0, 10), String(row.toDate).slice(0, 10), row.status]), [[from, to, 'ACTIVE']])
+    assert.equal((await repo('Employee').findOneByOrFail({ id: emp.id })).iban, IBAN)
+  } finally {
+    release.resolve()
+    await Promise.allSettled([approval, suspension].filter(Boolean))
+    service.assertNoLeaveOverlap = overlap
+    Repository.prototype.findOne = findOne
+  }
+})

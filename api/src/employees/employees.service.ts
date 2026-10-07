@@ -46,6 +46,7 @@ import { linkEmployeeFiles } from '../files/link-employee-files'
 import { applyEmployeeSalaryChange, documentInitialEmployeeSalary, employeeSalaryStartContext, readSalaryCycleStartDay } from '../payroll/payroll-salary-change'
 import { payrollPeriodBounds, payrollPeriodOfDate } from '../payroll/payroll-period'
 import { localDateOf } from '../attendance/attendance.service'
+import { withDeadlockRetry } from '../attendance/device-sync.service'
 import { readSalaryHistory, readSalaryHistoryCurrent, SALARY_HISTORY_MONEY_KEYS,
   salaryHistoryMoney, salaryHistorySchemaMissing } from '../payroll/payroll-salary-history'
 import { AttendanceDay } from '../attendance/attendance.entities'
@@ -1109,7 +1110,9 @@ export class EmployeesService {
     if (issue) throw new BadRequestException(issue)
     await this.assertSuspensionSchema()
     const today = localDateOf(new Date())
-    const saved = await this.employees.manager.transaction(async em => {
+    // CRP2X-N01: المعاملة دي بتمسك صف الموظف وبعدها بتقرا طلباته، واعتماد طلب بيغيّر ملف الموظف (حساب بنكي مثلًا) بيمسك صف الطلب وبعده صف
+    // الموظف. لو اتقاطعوا SQL Server بيختار المعاملة دي ضحية (1205) — ماكتبتش حاجة لسه لما بتقرا — فبتتعاد من الأول والحكم كله بيتاخد تاني
+    const saved = await withDeadlockRetry(() => this.employees.manager.transaction(async em => {
       // القفل المالي المشترك مع اعتماد المسير قبل قفل صف الموظف (نفس ترتيب الحضور والأجر)
       await lockPayrollEmployees(em, [id])
       const employee = await this.scopedEmployee(em, id, branchScope, true)
@@ -1139,7 +1142,7 @@ export class EmployeesService {
       // تراكم المسير: أيام الإيقاف تتحسب من جديد (يوم إيقاف مش غياب ولا تأخير)
       await markPayrollRangeDirty(em, id, dto.fromDate, dto.toDate, 'تسجيل إيقاف عن العمل')
       return row
-    })
+    }))
     return suspensionView(saved, today)
   }
 
