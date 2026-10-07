@@ -44,6 +44,8 @@ export const SCHEDULED_JOBS = {
     label: 'الملخص اليومي لإشعارات البريد', schedule: 'فحص كل ساعة عند الدقيقة 5 — الإرسال في الساعة المضبوطة (افتراضي 8 الصبح)' },
   'tasks.reminders': { cron: '30 7 * * *', module: 'tasks.reminders', lock: 'tasks.reminders',
     label: 'تذكير المهام وتصعيد المتأخر منها', schedule: 'كل يوم 07:30' },
+  'reports.scheduled': { cron: '20 * * * *', module: 'reports.scheduled', lock: 'reports.scheduled',
+    label: 'إرسال التقارير المجدولة بالبريد', schedule: 'فحص كل ساعة عند الدقيقة 20 — الإرسال من الساعة 7 الصبح' },
   'scheduler.prune-runs': { cron: '40 3 * * *', module: null, lock: 'scheduler.prune-runs',
     label: 'مسح سجل المهام ومهام الطابور المنتهية الأقدم من 30 يوم', schedule: 'كل يوم 03:40' },
 } as const satisfies Record<string, ScheduledJobDef>

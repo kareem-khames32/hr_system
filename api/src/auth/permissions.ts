@@ -88,6 +88,8 @@ export const PERMISSIONS: Record<string, string> = {
   'settlement.approve': 'اعتماد التصفية وقفلها',
   // عام
   'reports.view': 'مركز التقارير',
+  // B2.13: حفظ تقرير بفلاتره وجدولة إرساله بالبريد (كتابة — مش ضمن أدوار القراءة فقط)
+  'reports.save': 'حفظ التقارير وجدولتها بالبريد',
   'dashboard.view_all': 'لوحة التحكم الإدارية',
   'calendar.view_all': 'تقويم النطاق (إجازات الجميع)',
   'settings.manage': 'إعدادات النظام (المفاتيح والكتالوجات)',
@@ -155,7 +157,7 @@ export const PERMISSION_MODULES: Array<{ key: string; labelAr: string; permissio
   { key: 'offboarding', labelAr: 'إنهاء الخدمة', permissions: ['offboarding.manage', 'settlement.edit', 'settlement.approve'] },
   { key: 'tasks', labelAr: 'المهام', permissions: ['tasks.manage', 'tasks.view_all', 'tasks.assign_any'] },
   { key: 'policies', labelAr: 'السياسات والإقرار', permissions: ['policies.manage', 'policies.report'] },
-  { key: 'insights', labelAr: 'التقارير واللوحات', permissions: ['reports.view', 'dashboard.view_all', 'calendar.view_all'] },
+  { key: 'insights', labelAr: 'التقارير واللوحات', permissions: ['reports.view', 'reports.save', 'dashboard.view_all', 'calendar.view_all'] },
   { key: 'access', labelAr: 'الحسابات والأدوار', permissions: ['users.manage', 'roles.manage', 'audit.view'] },
   { key: 'settings', labelAr: 'إعدادات النظام', permissions: ['settings.manage', 'settings.modules', 'request_types.manage', 'approval_chains.manage'] },
 ]
@@ -224,6 +226,7 @@ export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   'offboarding.manage': 'يبدأ إنهاء خدمة موظف وإخلاء طرفه ويتابعه',
   'settlement.edit': 'يضيف بنود تصفية نهاية الخدمة ويعدّلها ويحذفها',
   'settlement.approve': 'يعتمد التصفية ويقفلها',
+  'reports.save': 'يحفظ تقرير بفلاتره باسم ويحدد دورية إرساله لبريده بالملف مرفق — التقرير بيتبني بصلاحياته ونطاقه وقت كل إرسال (محتاج معاها «مركز التقارير»)',
   'reports.view': 'يفتح مركز التقارير (الأعداد والحضور والإجازات) — التقارير المالية محتاجة معاها «عرض مسيرات الرواتب»',
   'dashboard.view_all': 'يشوف لوحة التحكم الإدارية بأرقام نطاقه',
   'calendar.view_all': 'يشوف إجازات كل موظفي نطاقه في التقويم (من غيرها يشوف إجازاته هو بس)',
@@ -348,6 +351,8 @@ export const ROLE_PRESETS: Array<{
       'policies.manage', 'policies.report',
       // B2.11: زي المهام — في حزمة الكود بس (والموديول نفسه مقفول افتراضيًا)
       'positions.view', 'positions.manage',
+      // B2.13: زي المهام — في حزمة الكود بس
+      'reports.save',
       'reports.view', 'dashboard.view_all', 'calendar.view_all',
       'settings.manage', 'request_types.manage', 'approval_chains.manage',
       'candidates.manage', 'transfers.view',

@@ -30,6 +30,7 @@ import { dayRangeLabel, validDayRange, type DayRange } from '@/lib/payroll-month
 import { localToday } from '@/lib/dates'
 import { categoryLabels } from '@/data/requestsCatalog'
 import { FinancialReportLinks } from './_financial/links'
+import { SavedReports } from '@/components/reports/SavedReports'
 
 interface HeadcountReport {
   byBranch: Array<{ branchName: string; total: number; active: number }>
@@ -931,6 +932,9 @@ export default function ReportsPage() {
                 ))}
               </div>
             </div>
+
+            {/* B2.13-ب: التقارير المحفوظة والمجدولة (بفلتر اللوحة الحالي) */}
+            <SavedReports orgParams={org.params} reports={[...reportCards.map((card) => ({ id: card.id, title: card.title })), { id: 'metrics', title: 'المؤشرات' }]} />
 
             {/* Requests by Category Table */}
             <div className="card">

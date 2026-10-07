@@ -237,7 +237,7 @@ test('RG-05: كل مهمة مجدولة بتسأل عن موديولها باس�
   const workFiles = ['attendance/attendance-scheduler.service.ts', 'attendance/device-sync.service.ts', 'offboarding/offboarding.service.ts',
     'payroll/payroll-daily-accrual.scheduler.ts', 'payroll/typed-deductions-scheduler.service.ts', 'requests/leave-attachment-deadline.job.ts',
     'requests/requests-scheduler.service.ts', 'requests/requests.service.ts', 'queue/queue.service.ts', 'notifications/notifications.service.ts',
-    'tasks/tasks.service.ts'].map(file => path.join(apiRoot, 'src', file))
+    'tasks/tasks.service.ts', 'reports/saved-reports.service.ts'].map(file => path.join(apiRoot, 'src', file))
   for (const file of files) {
     const source = fs.readFileSync(file, 'utf8')
     assert.doesNotMatch(source, /^\s*@Cron\(/m, `${path.relative(apiRoot, file)}: الموعد بيعدي على @Scheduled`)
@@ -251,8 +251,8 @@ test('RG-05: كل مهمة مجدولة بتسأل عن موديولها باس�
     }
   }
   // عدد المواعيد مثبّت (12 + مسح سجل المهام): مهمة جديدة لازم تتسجّل في السجل وتتغطى في modules-enforcement (ME-05). B2.3: + أحداث المستندات
-  // B2.4: + الملخص اليومي لإشعارات البريد. B2.5: + تذكير وتصعيد المهام
-  assert.equal(crons, 15)
+  // B2.4: + الملخص اليومي لإشعارات البريد. B2.5: + تذكير وتصعيد المهام. B2.13: + التقارير المجدولة بالبريد
+  assert.equal(crons, 16)
   const registered = registry.MODULE_KEYS.flatMap(key => registry.MODULES[key].jobs)
   assert.deepEqual([...used].sort(), [...registered].sort())
   assert.deepEqual([...scheduled].sort(), [...registered].sort())

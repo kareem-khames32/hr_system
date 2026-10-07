@@ -292,6 +292,9 @@ test('ME-05: المهام المجدولة — مهمة الموديول الم�
     // B2.4: الملخص اليومي لإشعارات البريد في ساعته المضبوطة (موديول الإشعارات أساسي)
     { module: null, run: () => get('../src/notifications/notifications.service', 'NotificationsService').digestHourlyWork(new Date(2026, 9, 5, 8, 5)),
       spy: () => spy(get('../src/notifications/notifications.service', 'NotificationsService'), 'sendDigests', 0) },
+    // B2.13: التقارير المجدولة بالبريد من ساعة الإرسال (موديول التقارير أساسي)
+    { module: null, run: () => get('../src/reports/saved-reports.service', 'SavedReportsService').sendDue(new Date(2026, 9, 5, 9, 20)),
+      spy: () => spy(get('../src/reports/saved-reports.service', 'SavedReportsService'), 'dueRows', []) },
   ]
   const calls = async job => { const watch = job.spy(); try { await job.run(); return watch.calls.length } finally { watch.restore() } }
   // كل الموديولات مفعّلة: كل مهمة بتوصل لشغلها

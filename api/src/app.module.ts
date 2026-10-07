@@ -25,6 +25,7 @@ import { DashboardController } from './dashboard/dashboard.controller'
 import { ReportsController } from './reports/reports.controller'
 import { MetricsService } from './reports/metrics.service'
 import { ReportPdfRenderer } from './reports/report-pdf.renderer'
+import { SavedReportsModule } from './reports/saved-reports.module'
 import { CostCenterReportController } from './reports/cost-center-report.controller'
 import { CostCenterReportService } from './reports/cost-center-report.service'
 import { FinancialReportModule } from './reports/financial-report.module'
@@ -128,6 +129,8 @@ import { dbPacketSize } from './common/sql-packet-size'
     CommentsModule,
     // B2.11: الوظائف المعتمدة (موديول اختياري مقفول افتراضيًا)
     PositionsModule,
+    // B2.13-ب: التقارير المحفوظة والمجدولة
+    SavedReportsModule,
   ],
   controllers: [HealthController, DashboardController, ReportsController, CostCenterReportController],
   providers: [CostCenterReportService, MetricsService, ReportPdfRenderer],

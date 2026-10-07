@@ -28,8 +28,9 @@ import { MetricsService } from './metrics.service'
 import {
   REPORT_CONTENT_TYPES, REPORT_MODULES, REPORT_PDF_MAX_ROWS, REPORT_PDF_TOO_LARGE, REPORT_XLSX_MAX_ROWS, REPORT_XLSX_TOO_LARGE,
   attendanceTable, headcountTable, isReportExportFormat, isReportKey, leavesTable, metricsTable, overtimeTable, payrollTable, reportTableHtml,
-  requestsTable, writeReportWorkbook, type ReportKey, type ReportTable,
+  requestsTable, writeReportWorkbook, type ReportExportFormat, type ReportKey, type ReportTable,
 } from './report-export'
+import type { SavedReportFilters } from './saved-reports'
 import { ReportPdfRenderer } from './report-pdf.renderer'
 
 const YEAR_RE = /^\d{4}$/
@@ -365,8 +366,22 @@ export class ReportsController {
     const format = typeof query.format === 'string' && query.format ? query.format : 'xlsx'
     if (!isReportKey(report)) throw new BadRequestException('التقرير المطلوب غير معروف')
     if (!isReportExportFormat(format)) throw new BadRequestException('صيغة التصدير xlsx أو pdf')
+    const file = await this.exportFile(user, report, format, query, { url: req.originalUrl ?? req.url })
+    await file.audit()
+    res.setHeader('Content-Type', file.contentType)
+    res.setHeader('Content-Disposition', `attachment; filename="${file.asciiName}"; filename*=UTF-8''${encodeURIComponent(file.fileName)}`)
+    res.setHeader('Cache-Control', 'no-store')
+    res.send(file.buffer)
+  }
+
+  /**
+   * ملف تصدير تقرير: لمسار التصدير، ولتنزيل التقرير المحفوظ، ولإرساله المجدول بهوية صاحبه وقت الإرسال (B2.13-ب). audit() بيكتب
+   * سطر التدقيق: المسارات بتناديه قبل ما الملف يطلع، والإرسال المجدول بعد ما الرسالة تطلع فعلًا.
+   */
+  async exportFile(user: JwtPayload, report: ReportKey, format: ReportExportFormat, query: Record<string, unknown>,
+    origin: { url: string; savedReportId?: number; scheduled?: boolean }) {
     for (const module of REPORT_MODULES[report]) {
-      if (!(await this.modules.allowedFor(module as ModuleKey, user))) throw new NotFoundException(`Cannot GET ${req.originalUrl ?? req.url}`)
+      if (!(await this.modules.allowedFor(module as ModuleKey, user))) throw new NotFoundException(`Cannot GET ${origin.url}`)
     }
     const table = await this.reportTable(report, user, query)
     if (format === 'pdf' && table.rows.length > REPORT_PDF_MAX_ROWS) throw new BadRequestException(REPORT_PDF_TOO_LARGE)
@@ -375,13 +390,23 @@ export class ReportsController {
     const buffer = format === 'xlsx' ? await writeReportWorkbook(table)
       : Buffer.from(await this.pdf.pdf(reportTableHtml(table, { company: await this.companyName(), printedAt: today, printedBy: user.email }, await this.pdf.font())))
     const fileName = `${table.title}-${today}.${format}`
-    await recordAudit(this.ds.manager, { category: 'EXPORT', action: 'REPORT_EXPORT', entityType: 'screen', entityId: '/reports', actorUserId: user.sub,
-      branchId: user.branchId ?? null, summary: `تصدير ${fileName} (${table.rows.length} صف)`,
-      after: { screen: '/reports', report, format, filename: fileName, rows: table.rows.length } })
-    res.setHeader('Content-Type', REPORT_CONTENT_TYPES[format])
-    res.setHeader('Content-Disposition', `attachment; filename="report-${report}.${format}"; filename*=UTF-8''${encodeURIComponent(fileName)}`)
-    res.setHeader('Cache-Control', 'no-store')
-    res.send(buffer)
+    const audit = () => recordAudit(this.ds.manager, { category: 'EXPORT', action: 'REPORT_EXPORT', entityType: 'screen', entityId: '/reports', actorUserId: user.sub,
+      branchId: user.branchId ?? null, summary: `${origin.scheduled ? 'إرسال مجدول' : 'تصدير'} ${fileName} (${table.rows.length} صف)`,
+      after: { screen: '/reports', report, format, filename: fileName, rows: table.rows.length,
+        ...(origin.savedReportId ? { savedReportId: origin.savedReportId } : {}), ...(origin.scheduled ? { scheduled: true } : {}) } })
+    return { buffer, fileName, asciiName: `report-${report}.${format}`, contentType: REPORT_CONTENT_TYPES[format], rows: table.rows.length, audit }
+  }
+
+  /** فلاتر تقرير محفوظ بعد الحكم عليها بقواعد التقرير نفسه: موديوله للقارئ، وصلاحية الرواتب لتقرير الرواتب، والفلتر الموحد جوه نطاقه. */
+  async savedFilters(user: JwtPayload, report: ReportKey, raw: OrgFilterInput & { period?: unknown }): Promise<SavedReportFilters> {
+    for (const module of REPORT_MODULES[report]) {
+      if (!(await this.modules.allowedFor(module as ModuleKey, user))) throw new BadRequestException('التقرير ده مش متاح لحسابك')
+    }
+    if (report === 'payroll') this.requirePayrollView(user)
+    // الجسم JSON: قايمة أقسام فاضية = من غير أقسام (في رابط الاستعلام مفيش قايمة فاضية أصلًا)
+    const departmentIds = Array.isArray(raw.departmentIds) && raw.departmentIds.length === 0 ? undefined : raw.departmentIds
+    const org = this.orgFilterOf(user, { branchId: raw.branchId, departmentIds, teamId: raw.teamId })
+    return { branchId: org.branchId, departmentIds: org.departmentIds, teamId: org.teamId, period: raw.period === 'previous' ? 'previous' : 'current' }
   }
 
   private async companyName(): Promise<string> {

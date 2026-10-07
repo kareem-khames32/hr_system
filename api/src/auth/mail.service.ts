@@ -10,6 +10,8 @@ export interface MailMessage {
   to: string
   subject: string
   text: string
+  /** B2.13-ب: ملفات مرفقة (التقرير المجدول) */
+  attachments?: Array<{ filename: string; content: Buffer; contentType: string }>
 }
 
 /** نتيجة الإرسال — response هو رد خادم البريد بالحرف (للفحص الذاتي قبل تشغيل التحقق بخطوتين). */
@@ -161,6 +163,7 @@ export class MailService implements MailProvider, OnApplicationBootstrap {
         to: message.to,
         subject: message.subject,
         text: message.text,
+        ...(message.attachments?.length ? { attachments: message.attachments } : {}),
       })) as { accepted?: unknown[]; rejected?: unknown[]; messageId?: string; response?: string }
       const accepted = (info.accepted ?? []).map((a) => String(a))
       const rejected = (info.rejected ?? []).map((a) => String(a))

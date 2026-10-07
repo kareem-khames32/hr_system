@@ -44,3 +44,29 @@ export const exportReportFor = (report: string, format: ReportExportFormat, para
 // كشف البنوك بالفلتر الموحد: الخادم بيفلتر بمكان الموظف في لقطة المسير (CR21-B02) وبيحسب الإجماليات من الصفوف المفلترة
 export const fetchBankSheetFor = (runId: number, params: OrgFilterParams) =>
   apiFetch<ApiBankSheet>(withOrg(`/payroll/runs/${runId}/bank-sheet`, params))
+
+// B2.13-ب: التقارير المحفوظة — فلاتر باسم لصاحبها بس، وتنزيلها ودورية إرسالها بالبريد
+export type SavedReportFrequency = 'NONE' | 'DAILY' | 'WEEKLY' | 'MONTHLY'
+export type SavedReportPeriod = 'current' | 'previous'
+export const SAVED_REPORT_PERIOD_LABELS: Record<SavedReportPeriod, string> = { current: 'شهر الرواتب الجاري', previous: 'شهر الرواتب السابق' }
+/** التقارير اللي ليها فترة (الباقي لحظي أو بالسنة الجارية) */
+export const SAVED_REPORT_PERIOD_REPORTS: readonly string[] = ['attendance', 'overtime', 'metrics']
+export interface SavedReportItem {
+  id: number; name: string; report: string; reportTitle: string; period: SavedReportPeriod | null; filtered: boolean
+  frequency: SavedReportFrequency; format: ReportExportFormat; lastSentOn: string | null; lastError: string | null
+}
+export interface SavedReportsList {
+  ready: boolean; migrationMessage: string | null; mailReady: boolean; max: number; sendHour: number
+  /** معاه صلاحية حفظ التقارير وجدولتها (reports.save)؟ غير كده قراءة وتنزيل بس */
+  canSave: boolean
+  frequencies: Record<SavedReportFrequency, string>; items: SavedReportItem[]
+}
+export const fetchSavedReports = () => apiFetch<SavedReportsList>('/reports/saved')
+export const createSavedReport = (
+  body: { name: string; report: string; period: SavedReportPeriod; frequency: SavedReportFrequency; format: ReportExportFormat }, params: OrgFilterParams
+) => apiFetch<SavedReportItem>('/reports/saved', { method: 'POST', body: JSON.stringify({ ...body, ...Object.fromEntries(new URLSearchParams(orgFilterQuery(params))) }) })
+export const updateSavedReport = (id: number, body: Partial<{ name: string; frequency: SavedReportFrequency; format: ReportExportFormat }>) =>
+  apiFetch<SavedReportItem>(`/reports/saved/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
+export const deleteSavedReport = (id: number) => apiFetch<{ ok: boolean }>(`/reports/saved/${id}`, { method: 'DELETE' })
+export const exportSavedReport = (id: number, format: ReportExportFormat) =>
+  downloadApiFile(`/reports/saved/${id}/export?format=${format}`, `saved-report.${format}`, 'تعذّر تنزيل التقرير المحفوظ')

@@ -151,8 +151,9 @@ export const MODULES = {
   reports: moduleDef({
     nameAr: 'التقارير', group: 'core', core: true,
     description: 'لوحة التقارير والتقارير المالية',
-    permissions: ['reports.view'],
+    permissions: ['reports.view', 'reports.save'],
     routes: ['/reports'],
+    jobs: ['reports.scheduled'],
   }),
 
   // ===== الوقت والحضور =====

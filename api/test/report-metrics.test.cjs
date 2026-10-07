@@ -61,11 +61,14 @@ test('MX-02: the dashboard and the workforce report read one function, and absen
   assert.equal(service.split("absenceOutsideServiceSql('a', 'e')").length - 1, 1)
   assert.doesNotMatch(reports, /oc\.lastWorkingDay < a\.date/, 'الشرط مش منسوخ في التقرير')
   // مسار التصدير: موديول التقرير، ثم جدول من دالة التقرير، ثم سطر التدقيق قبل الإرسال
-  const exportAt = reports.indexOf("@Get('export')")
-  const body = reports.slice(exportAt, reports.indexOf('private async companyName'))
-  assert.ok(exportAt > 0)
-  assert.ok(body.indexOf('this.modules.allowedFor(') < body.indexOf('this.reportTable(') && body.indexOf('this.reportTable(') < body.indexOf('recordAudit(')
-    && body.indexOf('recordAudit(') < body.indexOf('res.send(buffer)'))
+  const exportAt = reports.indexOf("@Get('export')"), fileAt = reports.indexOf('async exportFile(')
+  assert.ok(exportAt > 0 && fileAt > exportAt)
+  const handler = reports.slice(exportAt, fileAt), body = reports.slice(fileAt, reports.indexOf('async savedFilters('))
+  // المسار: الملف من exportFile، ثم سطر التدقيق، ثم الإرسال
+  assert.ok(handler.indexOf('this.exportFile(') > 0 && handler.indexOf('this.exportFile(') < handler.indexOf('await file.audit()')
+    && handler.indexOf('await file.audit()') < handler.indexOf('res.send(file.buffer)'))
+  assert.ok(body.indexOf('this.modules.allowedFor(') > 0 && body.indexOf('this.modules.allowedFor(') < body.indexOf('this.reportTable(')
+    && body.indexOf('this.reportTable(') < body.indexOf('recordAudit('))
   assert.match(body, /category: 'EXPORT', action: 'REPORT_EXPORT'/)
   for (const call of ['this.headcount(user', 'this.attendance(user', 'this.leaves(user', 'this.payroll(user', 'this.overtime(user', 'this.requests(user', 'this.metricValues(user']) {
     assert.ok(reports.slice(reports.indexOf('private async reportTable')).includes(call), call)

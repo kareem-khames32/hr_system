@@ -11,6 +11,7 @@ import { RequestsService } from '../requests/requests.service'
 import { QueueService } from '../queue/queue.service'
 import { NotificationsService } from '../notifications/notifications.service'
 import { TasksService } from '../tasks/tasks.service'
+import { SavedReportsService } from '../reports/saved-reports.service'
 import { Scheduled } from './scheduled-jobs'
 import { ScheduledJobsService } from './scheduled-jobs.service'
 
@@ -93,6 +94,12 @@ export class ScheduledJobsRunner {
   @Scheduled('tasks.reminders')
   tasksReminders() {
     return this.jobs.tick('tasks.reminders', () => this.use(TasksService).runReminders())
+  }
+
+  // B2.13-ب: التقارير المحفوظة المستحقة النهارده لبريد أصحابها
+  @Scheduled('reports.scheduled')
+  scheduledReports() {
+    return this.jobs.tick('reports.scheduled', () => this.use(SavedReportsService).sendDue())
   }
 
   // B2.4: ومعاه مهام الطابور المنتهية (DONE) الأقدم من نفس المدة — الطابور ماكانلوش تنضيف
