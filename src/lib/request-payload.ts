@@ -57,6 +57,10 @@ const fieldLabels: Record<string, string> = {
   positionTitle: 'المسمى الوظيفي المطلوب',
   headcount: 'العدد المطلوب',
   positionDepartment: 'قسم الوظيفة',
+  // B2.15-ب: طلب «تجديد مستند» (نوع الوثيقة فوق)
+  expiryDate: 'تاريخ الانتهاء الجديد',
+  documentNumber: 'رقم المستند الجديد',
+  issueDate: 'تاريخ الإصدار',
   toTeamId: 'الفريق الجديد',
   toEmployeeId: 'الموظف المستلم',
   assignmentId: 'العهدة',
@@ -196,7 +200,7 @@ export const payloadFieldLabel = labelOf
 
 // حقول يكتبها الخادم للتدقيق (فحص سقف السلفة وقراراته، ومين اختار شهر أول قسط) — تعرضها الشاشة ملخصًا عربيًا مستقلًا، ولا تظهر خامًا في حمولة الطلب.
 // ورقم قسم طلب «وظيفة جديدة / زيادة عدد»: الخادم بيثبّته مع اسمه عند كل تقديم، والمعتمد بيقرا الاسم («قسم الوظيفة»)
-export const SERVER_PAYLOAD_KEYS: readonly string[] = ['capCheck', 'capApprovals', 'exceptionalBy', 'firstInstallmentPeriodBy', 'positionDepartmentId']
+export const SERVER_PAYLOAD_KEYS: readonly string[] = ['capCheck', 'capApprovals', 'exceptionalBy', 'firstInstallmentPeriodBy', 'positionDepartmentId', 'documentTypeCode']
 
 // كل مفاتيح المستخدم بلا حد أقصى ولا فلترة نوع — «مفتاح: قيمة • مفتاح: قيمة»
 // omit: مفاتيح تعرضها الشاشة في أعمدتها الخاصة فقط (لا تُكرَّر) — الباقي كله يظهر

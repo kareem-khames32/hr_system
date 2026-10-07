@@ -92,3 +92,32 @@ test('DE-03: the settings sit on the document types screen and the report on the
   assert.match(lib, /apiFetch<DocumentExpiryReport>\(`\/documents\/expiry\?days=\$\{days\}/)
   assert.match(lib, /`\/documents\/expiry-settings\/\$\{id\}`, \{ method: 'PATCH'/)
 })
+
+test('DE-04: the renewal destination is registered with its own form fields and server-written key', () => {
+  const renewal = require('../src/assets/document-renewal')
+  const { MODULES, moduleOfHandler } = require('../src/modules-registry/registry')
+  assert.equal(renewal.DOCUMENT_RENEWAL_HANDLER, 'document_renewal')
+  assert.ok(MODULES.documents.requestHandlers.includes('document_renewal'))
+  if (typeof moduleOfHandler === 'function') assert.equal(moduleOfHandler('document_renewal'), 'documents')
+  const destinations = read('api/src/requests/destinations.service.ts'), requests = read('api/src/requests/requests.service.ts')
+  assert.match(destinations, /\[DOCUMENT_RENEWAL_HANDLER\]: executeDocumentRenewal,/)
+  assert.match(requests, /\[DOCUMENT_RENEWAL_HANDLER\]: \['documentType', 'expiryDate', 'documentNumber', 'issueDate', \.\.\.DOCUMENT_RENEWAL_STAGED_KEYS\],/)
+  assert.match(requests, /if \(type\.destinationHandler === DOCUMENT_RENEWAL_HANDLER\) req\.payload = JSON\.stringify\(await stageDocumentRenewal\(em, req\)\)/)
+  assert.match(read('api/src/settings/settings.controller.ts'), /\{ key: 'document_renewal', labelAr: 'تجديد مستند \(تحديث تاريخ الانتهاء\)' \},/)
+  // حقول الوجهة الأول، وحقول الباني بعدها، ومفاتيح الوجهة والخادم محجوزة
+  const fields = renewal.documentRenewalFields(['إقامة', 'جواز سفر'], { requiredFields: JSON.stringify(['notes', 'documentTypeCode']),
+    customFields: JSON.stringify([{ key: 'notes', label: 'ملاحظات', type: 'text' }, { key: 'expiryDate', label: 'مزوّر', type: 'text' }, { key: 'documentTypeCode', label: 'x', type: 'text' }]) })
+  assert.deepEqual(JSON.parse(fields.customFields).map(field => field.key), ['documentType', 'expiryDate', 'documentNumber', 'issueDate', 'notes'])
+  assert.deepEqual(JSON.parse(fields.customFields)[1].label, 'تاريخ الانتهاء الجديد')
+  assert.deepEqual(JSON.parse(fields.requiredFields), ['documentType', 'expiryDate', 'notes'])
+  // التنفيذ: الحكم تاني، ثم قفل صف المستند، ثم التحديث بالأعمدة المتغيّرة بس، ثم قفل مهمة التجديد
+  const source = read('api/src/assets/document-renewal.ts')
+  const execute = source.slice(source.indexOf('export async function executeDocumentRenewal'))
+  const order = ['await renewalValues(em, payload)', 'WITH (UPDLOCK, ROWLOCK) WHERE d.[employeeId] = @0', 'UPDATE [employee_documents] SET', 'await closeRenewalTask(em, documentId'].map(part => execute.indexOf(part))
+  assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), JSON.stringify(order))
+  assert.doesNotMatch(execute, /fileRef|\[notes\]/, 'ملف المستند وملاحظاته مابيتلمسوش')
+  // الواجهة: اسم الوجهة، وتسميات الحمولة، ومفتاح الخادم مخفي
+  assert.match(read('src/app/requests/page.tsx'), /document_renewal: 'تجديد مستند',/)
+  const payload = read('src/lib/request-payload.ts')
+  assert.match(payload, /expiryDate: 'تاريخ الانتهاء الجديد',/); assert.match(payload, /'positionDepartmentId', 'documentTypeCode'\]/)
+})

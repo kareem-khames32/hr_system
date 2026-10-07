@@ -208,3 +208,62 @@ test('DX-03: the expiring and expired report follows the branch scope, and renew
   const moved = await call(U.admin, 'PATCH', `/documents/${D.plain.id}`, { docType: 'iqama' })
   assert.deepEqual([moved.status, messageOf(moved)], [400, rules.DOCUMENT_EXPIRY_REQUIRED])
 })
+
+test('DX-04: an approved renewal request moves the expiry date of the requester\'s document and closes its renewal task', async () => {
+  const renewal = require('../src/assets/document-renewal')
+  const chain = await repo('ApprovalChain').save({ code: 'DX_HR', nameAr: 'سلسلة تجديد المستندات', isActive: true, autoApprove: false })
+  await repo('ApprovalStep').save({ chainId: chain.id, stepOrder: 1, approverRole: 'hr' })
+  await repo('RequestType').save({ code: 'DOC_RENEW', nameAr: 'تجديد مستند', category: 'personal_data', destinationHandler: renewal.DOCUMENT_RENEWAL_HANDLER,
+    approvalChainId: chain.id, isActive: true })
+  U.approver = await repo('User').save({ email: 'approver@document-expiry.invalid', displayName: 'معتمد التجديد', passwordHash: 'test-only', role: 'employee',
+    permissions: JSON.stringify(['approve.hr', 'requests.view_all']), isActive: true, branchId: B.a.id })
+  const ask = (user, payload) => call(user, 'POST', '/requests', { typeCode: 'DOC_RENEW', payload, submit: true })
+  const approve = (user, id) => call(user, 'POST', `/requests/${id}/act`, { action: 'APPROVE' })
+  const docOf = async id => (await ds.query('SELECT CONVERT(nvarchar(10), [expiryDate], 23) AS [expiryDate], [number], [fileRef], [renewalTaskId] FROM [employee_documents] WHERE [id] = @0', [id]))[0]
+  // حقول النموذج من الخادم: نوع المستند من الكتالوج المفعّل، وتاريخ الانتهاء الجديد
+  const type = expect(await call(U.owner, 'GET', '/requests/types'), 200).find(row => row.code === 'DOC_RENEW')
+  const fields = JSON.parse(type.customFields)
+  assert.deepEqual(fields.map(field => [field.key, field.type, field.required]), [['documentType', 'select', true], ['expiryDate', 'date', true], ['documentNumber', 'text', false], ['issueDate', 'date', false]])
+  assert.ok(fields[0].options.includes('إقامة') && fields[0].options.includes('جواز سفر'))
+  assert.deepEqual(JSON.parse(type.requiredFields), ['documentType', 'expiryDate'])
+  // التقديم: نوع من الكتالوج، وتاريخ بعد النهارده
+  for (const [payload, message] of [[{ documentType: 'نوع مش موجود', expiryDate: addDays(today, 500) }, renewal.DOCUMENT_RENEWAL_TYPE_MISSING],
+    [{ documentType: 'إقامة', expiryDate: today }, renewal.DOCUMENT_RENEWAL_EXPIRY], [{ documentType: 'إقامة', expiryDate: '2027-02-30' }, renewal.DOCUMENT_RENEWAL_EXPIRY],
+    [{ documentType: 'إقامة', expiryDate: addDays(today, 500), issueDate: addDays(today, 501) }, renewal.DOCUMENT_RENEWAL_ISSUE],
+    [{ documentType: 'إقامة', expiryDate: addDays(today, 500), documentNumber: 'x'.repeat(101) }, renewal.DOCUMENT_RENEWAL_NUMBER]]) {
+    const refused = await ask(U.owner, payload)
+    assert.deepEqual([refused.status, messageOf(refused)], [400, message], JSON.stringify(payload))
+  }
+  // كود النوع مش من العميل: الخادم بيثبّته من الاسم فوق أي قيمة مبعوتة
+  const linked = await linkOf(D.d1.id)
+  assert.equal((await repo('Task').findOneByOrFail({ id: linked })).status, 'OPEN')
+  const sent = expect(await ask(U.owner, { documentType: ' إقامة ', expiryDate: addDays(today, 800), documentNumber: 'NEW-9', documentTypeCode: 'passport' }), 201)
+  assert.deepEqual([JSON.parse((await repo('Request').findOneByOrFail({ id: sent.id })).payload).documentTypeCode, (await docOf(D.d1.id)).expiryDate], ['iqama', addDays(today, 400)])
+  // اللي مش على الخطوة مايعتمدش؛ والاعتماد بيحدّث مستند صاحب الطلب (الأبعد تاريخ) من غير ما يلمس ملفه، وبيقفل مهمة التجديد
+  assert.notEqual((await approve(U.owner, sent.id)).status, 201)
+  expect(await approve(U.approver, sent.id), 201)
+  const after = await docOf(D.d1.id)
+  assert.deepEqual([after.expiryDate, after.number, after.renewalTaskId], [addDays(today, 800), 'NEW-9', null])
+  const closed = await repo('Task').findOneByOrFail({ id: linked })
+  assert.deepEqual([closed.status, closed.statusNote, closed.closedByUserId], ['DONE', rules.DOCUMENT_RENEWED_NOTE, 0])
+  const done = await repo('Request').findOneByOrFail({ id: sent.id })
+  assert.deepEqual([done.status, done.destinationRef], ['COMPLETED', `DOC-${D.d1.id}`])
+  // موظف من غير مستند من النوع ده: الاعتماد بيسجّل له مستند جديد
+  const count = () => repo('EmployeeDocument').count({ where: { employeeId: E.a2.id, docType: 'health_certificate' } })
+  assert.equal(await count(), 0)
+  const fresh = expect(await ask(U.other, { documentType: 'شهادة صحية', expiryDate: addDays(today, 365), issueDate: today }), 201)
+  expect(await approve(U.approver, fresh.id), 201)
+  const made = await repo('EmployeeDocument').findOneByOrFail({ employeeId: E.a2.id, docType: 'health_certificate' })
+  assert.deepEqual([String(made.expiryDate).slice(0, 10), String(made.issueDate).slice(0, 10)], [addDays(today, 365), today])
+  // النوع اتقفل بعد التقديم: الاعتماد مابيعدّيش والطلب باقي عند المعتمد، والمستند زي ما هو
+  const pending = expect(await ask(U.other, { documentType: 'جواز سفر', expiryDate: addDays(today, 900) }), 201)
+  await ds.query('UPDATE [doc_types] SET [isActive] = 0 WHERE [code] = N\'passport\'')
+  const refused = await approve(U.approver, pending.id)
+  assert.notEqual(refused.status, 201)
+  assert.match(messageOf(refused), /لم يُعتمد الطلب — اختار نوع المستند/)
+  assert.equal((await docOf(D.d2.id)).expiryDate, addDays(today, 10))
+  assert.equal((await repo('Request').findOneByOrFail({ id: pending.id })).status, 'UNDER_REVIEW')
+  await ds.query('UPDATE [doc_types] SET [isActive] = 1 WHERE [code] = N\'passport\'')
+  expect(await approve(U.approver, pending.id), 201)
+  assert.equal((await docOf(D.d2.id)).expiryDate, addDays(today, 900))
+})

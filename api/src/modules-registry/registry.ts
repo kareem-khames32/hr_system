@@ -136,7 +136,8 @@ export const MODULES = {
     description: 'مستندات الموظفين ومسوغات التعيين وقوالب المستندات والخطابات',
     permissions: ['documents.manage'],
     routes: ['/employees/documents', '/employees/hiring-documents', '/my/documents', '/settings/documents', '/settings/document-templates', '/settings/letter-templates'],
-    requestHandlers: ['letter_pdf_generator'],
+    // B2.15-ب: وجهة «تجديد مستند» (أي نوع طلب وجهته دي بيتبع الموديول)
+    requestHandlers: ['letter_pdf_generator', 'document_renewal'],
     // B2.3: حدث «مستند هينتهي» للطابور
     jobs: ['documents.expiry-events'],
   }),

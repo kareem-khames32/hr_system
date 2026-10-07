@@ -102,6 +102,7 @@ import { ModulesService } from '../modules-registry/modules.service'
 import { moduleOfRequestType } from '../modules-registry/registry'
 import { onePersonControlEnabled } from '../payroll/one-person-controls'
 import { assertPersonalDataKeys, PERSONAL_DATA_HANDLER, validatePersonalDataRequest } from './personal-data-requests'
+import { DOCUMENT_RENEWAL_HANDLER, DOCUMENT_RENEWAL_STAGED_KEYS, documentRenewalFields, documentRenewalTypeNames, stageDocumentRenewal } from '../assets/document-renewal'
 import { POSITION_REQUEST_HANDLER, POSITION_REQUEST_STAGED_KEYS, positionRequestFields, positionRequestTitles, stagePositionRequest } from '../positions/position-requests'
 import { recordOutboxEvent } from '../queue/outbox'
 // CR36-B01 وCR37-B01: مرجع المسير في إضافي تفاصيل الطلب ونص أحداثه بقاعدة رؤية المسير
@@ -164,6 +165,8 @@ const HANDLER_PAYLOAD_KEYS: Record<string, string[]> = {
   loan_early_settlement: ['loanId', ...EARLY_SETTLEMENT_FIELDS],
   // B2.11-ب: «وظيفة جديدة / زيادة عدد». القسم مش من العميل: الخادم بيثبّته عند كل تقديم (مفتاحيه هنا عشان الحمولة المتخزّنة تعدّي عند إعادة التقديم)
   [POSITION_REQUEST_HANDLER]: ['positionTitle', 'headcount', ...POSITION_REQUEST_STAGED_KEYS],
+  // B2.15-ب: «تجديد مستند». كود النوع مش من العميل: الخادم بيثبّته عند كل تقديم
+  [DOCUMENT_RENEWAL_HANDLER]: ['documentType', 'expiryDate', 'documentNumber', 'issueDate', ...DOCUMENT_RENEWAL_STAGED_KEYS],
 }
 
 // C4 / الخطوة 27: المكافأة لا تُقترح عبر محرك الطلبات (كانت تُقيد لمقدم الطلب لا للمستفيد، وتسمح بمكافأة للنفس، وبلا فترة).
@@ -230,6 +233,8 @@ export class RequestsService {
     const actualLoanType = await this.types.findOneBy({ code: 'LOAN' })
     // B2.11-ب: اختيارات خانة المسمى في طلب «وظيفة جديدة / زيادة عدد» من كتالوج المسميات (لو فيه نوع مفعّل بالوجهة دي بس)
     const positionTitles = (await this.types.count({ where: { isActive: true, destinationHandler: POSITION_REQUEST_HANDLER } })) ? await positionRequestTitles(this.ds.manager) : []
+    // B2.15-ب: اختيارات خانة نوع المستند في طلب «تجديد مستند» من كتالوج أنواع المستندات (لو فيه نوع طلب مفعّل بالوجهة دي بس)
+    const renewalTypes = (await this.types.count({ where: { isActive: true, destinationHandler: DOCUMENT_RENEWAL_HANDLER } })) ? await documentRenewalTypeNames(this.ds.manager) : []
     const every = (
       await this.types.find({
         where: { isActive: true },
@@ -256,6 +261,7 @@ export class RequestsService {
         : t.autoGeneratesPdf,
       ...this.executionFormFields(t),
       ...(t.destinationHandler === POSITION_REQUEST_HANDLER ? positionRequestFields(positionTitles, t) : {}),
+      ...(t.destinationHandler === DOCUMENT_RENEWAL_HANDLER ? documentRenewalFields(renewalTypes, t) : {}),
       ...(t.code === 'RETIREMENT' ? {
         requiredFields: JSON.stringify([...new Set([...JSON.parse(t.requiredFields || '[]'), 'effectiveDate'])]),
       } : {}),
@@ -552,6 +558,8 @@ export class RequestsService {
     // B2.11-ب: «وظيفة جديدة / زيادة عدد»: المسمى من الكتالوج والعدد (نفس فحوص الاعتماد النهائي بدري)، وقسم الوظيفة بيتثبّت على الطلب
     // من قسم مقدّمه دلوقتي — عند كل تقديم وإعادة تقديم، فوق أي قيمة جاية من العميل
     if (type.destinationHandler === POSITION_REQUEST_HANDLER) req.payload = JSON.stringify(await stagePositionRequest(em, req))
+    // B2.15-ب: «تجديد مستند» — الحكم على النوع والتاريخ وتثبيت كود النوع، عند كل تقديم وإعادة تقديم
+    if (type.destinationHandler === DOCUMENT_RENEWAL_HANDLER) req.payload = JSON.stringify(await stageDocumentRenewal(em, req))
     if (type.destinationHandler === 'custody_transfer') {
       const payload = JSON.parse(req.payload || '{}')
       await custodyTransferTarget(em, Number(payload.assignmentId), Number(payload.toEmployeeId), req, user)

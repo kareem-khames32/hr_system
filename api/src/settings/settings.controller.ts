@@ -420,6 +420,8 @@ const AVAILABLE_HANDLERS: Array<{ key: string; labelAr: string }> = [
   { key: 'employee_status', labelAr: 'تغيير حالة وظيفية (استقالة/تقاعد)' },
   // B2.11-ب (تبع موديول الوظائف المعتمدة)
   { key: 'positions_headcount', labelAr: 'وظيفة معتمدة جديدة / زيادة عدد' },
+  // B2.15-ب (تبع موديول المستندات)
+  { key: 'document_renewal', labelAr: 'تجديد مستند (تحديث تاريخ الانتهاء)' },
   { key: 'leave_calendar', labelAr: 'إجازة تُخصم من الرصيد (وجهة قديمة)' },
   { key: 'leave_calendar_once', labelAr: 'إجازة لمرة واحدة بلا خصم رصيد (حج)' },
   { key: 'leave_balance_restore', labelAr: 'إلغاء/تعديل إجازة واسترداد الرصيد' },
