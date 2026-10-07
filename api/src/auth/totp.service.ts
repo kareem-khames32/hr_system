@@ -16,10 +16,12 @@ import { UserTotp } from './user-totp.entity'
 export interface TotpResetTarget {
   id: number; email: string; branchId?: number | null
   role?: string | null; permissions?: string | null; scopeAllBranches?: boolean | null; scopeBranchIds?: string | null
+  // CRP3E: إصدار الحساب — بيتحرك مع أي تغيير في صلاحياته الفعلية (حزمة دوره، المنح الفردية، دوره، نطاقه، تعطيله)
+  tokenVersion?: number | null
 }
 export const TOTP_RESET_ACCOUNT_CHANGED = 'بيانات الحساب اتغيّرت — حدّث الصفحة وحاول تاني'
 const accountStamp = (row: TotpResetTarget): string =>
-  JSON.stringify([row.role ?? '', row.permissions ?? '', row.scopeAllBranches === true, row.scopeBranchIds ?? '', row.branchId ?? null])
+  JSON.stringify([row.role ?? '', row.permissions ?? '', row.scopeAllBranches === true, row.scopeBranchIds ?? '', row.branchId ?? null, Number(row.tokenVersion ?? 0)])
 
 /** رموز غلط ورا بعض قبل ما التحقق يتقفل، ومدة القفل */
 export const TOTP_MAX_FAILURES = 5
@@ -213,9 +215,11 @@ export class TotpService {
     if (!(await totpReady(this.ds.manager))) return false
     return this.ds.transaction(async em => {
       // CRP3D-B17-01: حق المنفّذ اتحكم على صف الحساب المقري قبل المعاملة. الصف بيتقفل هنا ويتقارن: دوره أو صلاحياته أو نطاقه اتغيّروا بعد
-      // الحكم = رفض (المحاولة الجاية بتتحكم على الصف الجديد)، وأي تغيير تاني للحساب بيستنى المعاملة دي
+      // الحكم = رفض (المحاولة الجاية بتتحكم على الصف الجديد)، وأي تغيير تاني للحساب بيستنى المعاملة دي.
+      // CRP3E: والمقارنة بإصدار الحساب كمان — تعديل حزمة الدور والمنح الفردية بيحرّكوا الإصدار في معاملتهم (من غير ما أعمدة الصف دي تتغيّر)،
+      // فحكم اتعمل قبل ترقية ثبتت بيترفض، وترقية لسه ماثبتتش بتستنى القفل ده (إعادة الضبط سبقتها)
       const [fresh]: TotpResetTarget[] = await em.query(
-        'SELECT [id], [email], [role], [permissions], [scopeAllBranches], [scopeBranchIds], [branchId] FROM [users] WITH (UPDLOCK, ROWLOCK) WHERE [id] = @0', [target.id])
+        'SELECT [id], [email], [role], [permissions], [scopeAllBranches], [scopeBranchIds], [branchId], [tokenVersion] FROM [users] WITH (UPDLOCK, ROWLOCK) WHERE [id] = @0', [target.id])
       if (!fresh || accountStamp(fresh) !== accountStamp(target)) throw new ConflictException(TOTP_RESET_ACCOUNT_CHANGED)
       // الصف بيتقفل ويتقري الأول (رد جملة الحذف في المشغّل مش قايمة صفوف): مفيش صف = مفيش حاجة تتمسح ولا سطر تدقيق
       const row = await this.rowOf(em, target.id, true)

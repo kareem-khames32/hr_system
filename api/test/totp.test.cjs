@@ -88,9 +88,14 @@ test('TT-03: an enrolled account is asked for the app code before the mail gate;
   const resetRoute = read('api/src/auth/users.controller.ts')
   assert.match(resetRoute, /assertManageableScope\(actor, target\)\n\s+const beyond = await this\.takeoverBeyond\(actor, target\)\n\s+if \(beyond\) throw new ForbiddenException\([^\n]+\n\s+return \{ id: target\.id, reset: await this\.totp\.adminReset\(actor, target\) \}/)
   assert.match(totpService, /FROM \[users\] WITH \(UPDLOCK, ROWLOCK\) WHERE \[id\] = @0', \[target\.id\]\)\n\s+if \(!fresh \|\| accountStamp\(fresh\) !== accountStamp\(target\)\) throw new ConflictException\(TOTP_RESET_ACCOUNT_CHANGED\)/)
+  // CRP3E: المقارنة بإصدار الحساب كمان (حزمة الدور والمنح الفردية بيحرّكوه)، وجلسة رمز البريد بتتحكم بعد فتح صفها
+  assert.match(totpService, /\[branchId\], \[tokenVersion\] FROM \[users\] WITH \(UPDLOCK, ROWLOCK\)/)
+  assert.match(totpService, /row\.branchId \?\? null, Number\(row\.tokenVersion \?\? 0\)\]\)/)
+  assert.match(auth, /const opened = await this\.issueSession\(user, \{ \.\.\.session, mailFactor: challenge\.codeHash !== TOTP_CHALLENGE_MARK \}, context\)/)
+  assert.match(auth, /const sid = await this\.sessions\.open\(user, context\)[\s\S]{0,400}const totp = await this\.totp\.loginState\(user\)[\s\S]{0,420}if \(session\.mailFactor && totp\.enrolled\) \{\n\s+if \(sid\) await this\.sessions\.revoke\(sid, user\.id, 'LOGOUT'\)\n\s+throw new UnauthorizedException\(TOTP_FACTOR_CHANGED\)/)
   // علامة «فعّل الأول» من مكان واحد: كل جلسة بتتفتح بتتحكم بحالة الحساب وقتها
   const issue = auth.slice(auth.indexOf('private async issueSession('), auth.indexOf('async reissueSession('))
-  assert.match(issue, /const totp = await this\.totp\.loginState\(user\)\s+const totpSetupRequired = totp\.required && !totp\.enrolled/)
+  assert.match(issue, /const totp = await this\.totp\.loginState\(user\)\n[\s\S]{0,700}\n\s+const totpSetupRequired = totp\.required && !totp\.enrolled/)
   assert.match(issue, /\.\.\.\(totpSetupRequired \? \{ totpSetupRequired: true \} : \{\}\),/)
 
   const twoFactor = read('api/src/auth/two-factor.service.ts')
