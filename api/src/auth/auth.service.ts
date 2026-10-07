@@ -61,7 +61,8 @@ export interface JwtPayload {
 }
 
 /** B2.17: شكل الجلسة المطلوب من العميل. cookie = التوكن في cookie httpOnly (ومعاه رمز CSRF) بدل جسم الرد */
-export interface SessionMode { cookie?: boolean }
+// mailFactor (CRP3E): الجلسة دي جاية من تحقق برمز بريد — بتتحكم بعامل الحساب بعد ما صفها يتفتح
+export interface SessionMode { cookie?: boolean; mailFactor?: boolean }
 
 /** الجلسة المفتوحة — نفس شكل رد الدخول الحالي بالحرف (الواجهة بتقرأه كما هو). */
 export interface SessionResponse {
@@ -401,8 +402,15 @@ export class AuthService {
     // CRP3D-B17-02: عامل الحساب اتغيّر بين قبول رمز البريد وفتح الجلسة (التطبيق اتفعّل دلوقتي)؟ مفيش جلسة
     if (challenge.codeHash !== TOTP_CHALLENGE_MARK && (await this.totp.enrolled(user.id))) throw new UnauthorizedException(TOTP_FACTOR_CHANGED)
     await this.users.update({ id: user.id }, { lastLoginAt: new Date() })
+    // CRP3E: الجلسة بتتفتح الأول (وبتتحكم بعامل الحساب بعد فتح صفها)، وسطر «نجح» بيتسجّل بعدها؛ رفضها بيتسجّل باسمه
+    const opened = await this.issueSession(user, { ...session, mailFactor: challenge.codeHash !== TOTP_CHALLENGE_MARK }, context).catch(async (error) => {
+      if (error instanceof UnauthorizedException && error.message === TOTP_FACTOR_CHANGED) {
+        await this.security.record({ userId: user.id, identifier: user.email, method: 'CODE', outcome: 'CODE_SUPERSEDED', context })
+      }
+      throw error
+    })
     await this.security.record({ userId: user.id, identifier: user.email, method: 'CODE', outcome: 'SUCCESS', context })
-    return this.issueSession(user, session, context)
+    return opened
   }
 
   /** إعادة إرسال الرمز لنفس محاولة الدخول (بمهلة وحد أعلى) — مفيش جلسة بتتفتح هنا. */
@@ -473,6 +481,12 @@ export class AuthService {
     const sid = await this.sessions.open(user, context)
     // B2.17-ج: تطبيق المصادقة إلزامي لدوره ولسه مافعّلش = الجلسة مابتفتحش غير التفعيل
     const totp = await this.totp.loginState(user)
+    // CRP3E-B17-02: دخول برمز بريد والحساب بقى مفعّل تطبيق المصادقة — القراءة دي بعد ما صف الجلسة اتفتح، فتفعيل ثبت قبل فتح الصف بيتشاف
+    // هنا: الصف بيتنهي ومفيش توكن بيطلع (تفعيل بيثبت بعد فتح الصف = جلسة اتفتحت قبله، الحد المعلن)
+    if (session.mailFactor && totp.enrolled) {
+      if (sid) await this.sessions.revoke(sid, user.id, 'LOGOUT')
+      throw new UnauthorizedException(TOTP_FACTOR_CHANGED)
+    }
     const totpSetupRequired = totp.required && !totp.enrolled
 
     const payload: JwtPayload = {

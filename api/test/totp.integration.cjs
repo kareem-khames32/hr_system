@@ -400,3 +400,68 @@ test('TP-05 (CRP3D): the reset keeps the password-takeover boundary and is re-ju
     expect(await http('POST', '/auth/login/verify', { challengeToken: open.challengeToken, code: codeOf(S.late) }), 200)
   } finally { await config('auth.two_factor_enabled', 'false') }
 })
+
+test('TP-06 (CRP3E): a reset is refused when the account version moved after the judgment; a mail-code login that the enrolment overtakes opens no session', async () => {
+  const account = async (key, extra = {}) => {
+    P[key] = passwordOf()
+    U[key] = await repo('User').save({ email: `${key}@totp.invalid`, displayName: `حساب ${key}`, role: 'employee', permissions: '[]', isActive: true, branchId: B.a.id,
+      passwordHash: await bcrypt.hash(P[key], 10), ...extra })
+  }
+  const totp = app.get(require('../src/auth/totp.service').TotpService)
+  const actor = { sub: U.adminA.id, branchId: B.a.id }
+  // ===== B17-01: إصدار الحساب اتحرك بعد الحكم (ترقية من حزمة الدور أو من المنح الفردية: أعمدة الصف التانية زي ما هي) =====
+  await account('versioned'); await enroll('versioned')
+  const judged = await repo('User').findOneByOrFail({ id: U.versioned.id })
+  await query('UPDATE [users] SET [tokenVersion] = [tokenVersion] + 1 WHERE [id] = @0', [U.versioned.id])
+  const before = await audits('TOTP_RESET')
+  await assert.rejects(totp.adminReset(actor, judged), error => error.getStatus?.() === 409 && /بيانات الحساب اتغيّرت/.test(error.message))
+  assert.deepEqual([(await rowOf('versioned')).confirmedAt instanceof Date, await audits('TOTP_RESET') - before], [true, 0])
+  // والمسارين الفعليين بيحرّكوا الإصدار: تعديل حزمة دور الحساب، والمنح الفردية
+  const root = bearer(await signIn('admin'))
+  const done = response => { assert.ok([200, 201].includes(response.status), JSON.stringify(response.body)); return response.body }
+  const role = done(await http('POST', '/roles', { code: 'tp06_role', nameAr: 'دور اختبار الإصدار', permissions: [] }, root))
+  await account('promoted', { role: role.code }); await enroll('promoted')
+  for (const promote of [() => http('PATCH', `/roles/${role.id}`, { permissions: ['settings.manage'] }, root),
+    () => http('PUT', `/users/${U.promoted.id}/permissions`, { grants: ['audit.view'], revokes: [] }, root)]) {
+    const stale = await repo('User').findOneByOrFail({ id: U.promoted.id })
+    done(await promote())
+    assert.equal((await repo('User').findOneByOrFail({ id: U.promoted.id })).tokenVersion, stale.tokenVersion + 1, 'الترقية حرّكت إصدار الحساب')
+    await assert.rejects(totp.adminReset(actor, stale), error => error.getStatus?.() === 409)
+    assert.equal((await rowOf('promoted')).confirmedAt instanceof Date, true)
+  }
+  // وعلى الصف الحالي: الحكم نفسه بيرفض (الحساب بقى فيه صلاحية إدارية مش مع المنفّذ)
+  assert.equal((await http('POST', `/users/${U.promoted.id}/totp-reset`, {}, bearer(expect(await login('adminA'), 201).accessToken))).status, 403)
+
+  // ===== B17-02: التفعيل ثبت بعد آخر فحص للعامل وقبل ما جلسة رمز البريد تتفتح =====
+  await account('racer')
+  const early = bearer(expect(await login('racer'), 201).accessToken)
+  const setup = expect(await http('POST', '/auth/totp/setup', undefined, early), 200)
+  const sessions = app.get(require('../src/auth/user-sessions.service').UserSessionsService), realOpen = sessions.open
+  const liveSessions = async () => Number((await query('SELECT COUNT(*) AS [n] FROM [user_sessions] WHERE [userId] = @0 AND [revokedAt] IS NULL', [U.racer.id]))[0].n)
+  await config('auth.two_factor_enabled', 'true')
+  let overtaken = false
+  try {
+    mailbox.length = 0
+    const pending = expect(await login('racer'), 201)
+    assert.deepEqual([pending.twoFactor, pending.kind, mailbox.length], [true, undefined, 1])
+    const mailCode = mailbox[0].text.match(/\b\d{6}\b/)[0]
+    // فتح صف جلسة الدخول برمز البريد بيستنى لحد ما التفعيل (من الجلسة التانية) يثبت — يعني كل فحوص العامل اللي قبله شافت «مش مفعّل»
+    sessions.open = async function (user, ...rest) {
+      if (user.id === U.racer.id && !overtaken) {
+        overtaken = true
+        expect(await http('POST', '/auth/totp/confirm', { code: codeOf(setup.secret) }, early), 200)
+      }
+      return realOpen.call(this, user, ...rest)
+    }
+    const raced = await http('POST', '/auth/login/verify', { challengeToken: pending.challengeToken, code: mailCode })
+    assert.equal(overtaken, true)
+    assert.deepEqual([raced.status, messageOf(raced), 'accessToken' in (raced.body ?? {}), raced.cookies.length], [401, rules.TOTP_FACTOR_CHANGED, false, 0])
+  } finally { sessions.open = realOpen; await config('auth.two_factor_enabled', 'false') }
+  // الصف اللي اتفتح لدخول رمز البريد اتنهى: الجلسة القايمة الوحيدة هي اللي التفعيل طلّعها
+  assert.equal(await liveSessions(), 1)
+  S.racer = setup.secret; await rewind('racer')
+  // ودخول برمز التطبيق عادي
+  const next = expect(await login('racer'), 201)
+  assert.equal(next.kind, 'TOTP')
+  expect(await http('POST', '/auth/login/verify', { challengeToken: next.challengeToken, code: codeOf(S.racer) }), 200)
+})
