@@ -283,8 +283,9 @@ test('reports dashboard: attendance and overtime summaries follow the range filt
   // كل تقرير بيتطلب لو موديوله مفعّل (B0.4)، بنفس الفترة
   assert.ok(page.includes('Promise.all([attendanceOn ? fetchAttendanceReportRange(target) : Promise.resolve([]), overtimeOn ? fetchOvertimeReportRange(target) : Promise.resolve([])])'))
   assert.ok(page.includes('<DayRangeFilter idPrefix="reports-attendance" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />'))
-  assert.ok(page.includes('downloadCsv(`attendance-${listRange ? dayRangeKey(listRange) : \'range\'}-${stamp}.csv`'))
-  assert.ok(page.includes('downloadCsv(`overtime-${listRange ? dayRangeKey(listRange) : \'range\'}-${stamp}.csv`'))
+  // B2.13: التصدير بقى من الخادم — بنفس أيام الفلتر (from/to) للحضور والإضافي
+  assert.ok(page.includes('const days: Record<string, string> = listRange ? { from: listRange.from, to: listRange.to } : {}'))
+  assert.ok(page.includes("const extra = id === 'attendance' || id === 'overtime' ? days : id === 'leaves' ? { year: currentYear } : {}"))
   for (const gone of ['localMonth', 'currentMonth', 'هذا الشهر']) assert.ok(!page.includes(gone), gone)
   const api = read('src/lib/api.ts')
   for (const gone of ['/reports/attendance?month=', '/reports/overtime?month=', '/attendance/monthly?employeeId=${employeeId}&month=', '/attendance/overtime?month=']) assert.ok(!api.includes(gone), gone)

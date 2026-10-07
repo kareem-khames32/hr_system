@@ -8,6 +8,8 @@ import { RequestsService } from '../requests/requests.service'
 import { AttendanceService, localDateOf } from '../attendance/attendance.service'
 import { RequireModule } from '../modules-registry/module.guard'
 import { ModulesService } from '../modules-registry/modules.service'
+import { LEFT_STATUSES, currentEmployeeSql } from '../reports/metrics'
+import { MetricsService } from '../reports/metrics.service'
 
 // «حضر فعلاً» — تعريف كارت «الحاضرون اليوم» في stats نفسه (في الموعد + متأخر + منصرف
 // بدري، وأي صف آخر ببصمة عدا الإجازة والغياب) لمنحنى الحضور وإحصائيات الأقسام.
@@ -37,7 +39,8 @@ export class DashboardController {
     @InjectDataSource() private readonly ds: DataSource,
     private readonly requestsService: RequestsService,
     private readonly attendance: AttendanceService,
-    private readonly modules: ModulesService
+    private readonly modules: ModulesService,
+    private readonly metrics: MetricsService
   ) {}
 
   @Get('stats')
@@ -51,16 +54,9 @@ export class DashboardController {
     // اليوم بتوقيت الشركة — toISOString (UTC) كانت تعرض حضور امبارح من 00:00 لـ03:00
     const today = localDateOf(new Date())
 
-    // الموظفون الحاليون فقط — المؤرشف والمنتهية خدمته خارج «الإجمالي»
-    const empParams: unknown[] = []
-    const [emp] = await this.ds.query(
-      `SELECT COUNT(*) AS total,
-              SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active,
-              SUM(CASE WHEN status = 'probation' THEN 1 ELSE 0 END) AS probation
-       FROM employees
-       WHERE isActive = 1 AND status NOT IN ('archived', 'terminated') ${andBranchScopeSql('branchId', scope, empParams)}`,
-      empParams
-    )
+    // الموظفون الحاليون فقط — المؤرشف والمنتهية خدمته خارج «الإجمالي». B2.13: العدد والنشطين من قاموس المؤشرات (نفس دالة
+    // تقرير القوى العاملة والتصدير): النشط بالحالة المعروضة، فالموقوف بفترة مش نشط
+    const workforce = await this.metrics.workforce(scope)
     // الفرق بلا عمود فرع — نطاقها من فرع القسم التابعة له
     const orgParams: unknown[] = []
     const teamsScope = branchScopeSql('d.branchId', scope, orgParams)
@@ -123,7 +119,7 @@ export class DashboardController {
          FROM leaves l
          JOIN employees e ON e.id = l.employeeId
          WHERE l.status = 'APPROVED' AND l.fromDate <= '${today}' AND l.toDate >= '${today}'
-           AND e.isActive = 1 AND e.status NOT IN ('archived', 'terminated')
+           AND ${currentEmployeeSql('e.')}
            ${andBranchScopeSql('e.branchId', scope, leaveParams)}
          GROUP BY l.employeeId
        ) x`,
@@ -139,11 +135,7 @@ export class DashboardController {
 
     return {
       role: user.role,
-      employees: {
-        total: Number(emp.total ?? 0),
-        active: Number(emp.active ?? 0),
-        probation: Number(emp.probation ?? 0),
-      },
+      employees: { total: workforce.headcount, active: workforce.active, probation: workforce.probation },
       org: {
         branches: Number(org.branches ?? 0),
         departments: Number(org.departments ?? 0),
@@ -292,7 +284,7 @@ export class DashboardController {
     }
     // الإجمالي = الموظفون الحاليون فقط (المؤرشف والمنتهية خدمته خارجه) كالكارت
     for (const e of emps) {
-      if (e.status !== 'archived' && e.status !== 'terminated') {
+      if (!LEFT_STATUSES.includes(e.status)) {
         rowOf(e.departmentId).employees++
         if (e.attendanceExempt) rowOf(e.departmentId).exempt++
       }
@@ -331,7 +323,7 @@ export class DashboardController {
        FROM leaves l
        JOIN employees e ON e.id = l.employeeId
        WHERE l.status = 'APPROVED' AND l.fromDate <= '${today}' AND l.toDate >= '${today}'
-         AND e.isActive = 1 AND e.status NOT IN ('archived', 'terminated')
+         AND ${currentEmployeeSql('e.')}
          ${andBranchScopeSql('e.branchId', scope, params)}
        GROUP BY l.employeeId
        HAVING MAX(CASE WHEN l.period = 'FULL' THEN 1 ELSE 0 END) = 1

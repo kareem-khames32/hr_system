@@ -102,5 +102,6 @@ test('cost center endpoint: branch scoped, payroll.view required, registered in 
   assert.match(controller, /this\.service\.report\(\{ period: query\.period, branchId, branchScope: scope,/)
   const appModule = fs.readFileSync(path.join(root, 'src/app.module.ts'), 'utf8')
   assert.match(appModule, /CostCenterReportController/)
-  assert.match(appModule, /providers: \[CostCenterReportService\]/)
+  // B2.13: ومعاه خدمة المؤشرات ورسّام PDF التقارير
+  assert.match(appModule, /providers: \[CostCenterReportService[,\]]/)
 })

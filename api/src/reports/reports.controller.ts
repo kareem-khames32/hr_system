@@ -1,14 +1,14 @@
-import { BadRequestException, Controller, ForbiddenException, Get, Query, UseGuards } from '@nestjs/common'
+import { BadRequestException, Controller, ForbiddenException, Get, NotFoundException, Query, Req, Res, UseGuards } from '@nestjs/common'
 import { ModuleRef } from '@nestjs/core'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource } from 'typeorm'
+import type { Request, Response } from 'express'
+import { recordAudit } from '../audit/audit'
 import { localDateOf } from '../attendance/attendance.service'
 import { reportDayRange } from '../attendance/attendance-report-range'
 import type { JwtPayload } from '../auth/auth.service'
 import { andBranchScopeSql, branchScopeOf, branchScopeSql, CurrentUser, inBranchScope, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
 import type { BranchScope } from '../auth/guards'
-import { readOpenSuspensions } from '../employees/employee-suspensions'
-import { displayEmployeeStatus } from '../employees/employee-suspension-rules'
 import {
   assertReportRange, payrollLoansReport, payrollOvertimeReport, payrollRunsReport, payrollUnassignedReport, payrollVarianceReport,
 } from '../payroll/payroll-reports'
@@ -19,6 +19,18 @@ import {
   PayrollVarianceReportQuery,
 } from './payroll-reports.dto'
 import { RequireModule } from '../modules-registry/module.guard'
+import { ModulesService } from '../modules-registry/modules.service'
+import type { ModuleKey } from '../modules-registry/registry'
+import { RequestsConfig } from '../requests/entities/requests-config.entity'
+import { PRODUCT_NAME } from '../settings/product-name'
+import { absenceOutsideServiceSql } from './metrics'
+import { MetricsService } from './metrics.service'
+import {
+  REPORT_CONTENT_TYPES, REPORT_MODULES, REPORT_PDF_MAX_ROWS, REPORT_PDF_TOO_LARGE, REPORT_XLSX_MAX_ROWS, REPORT_XLSX_TOO_LARGE,
+  attendanceTable, headcountTable, isReportExportFormat, isReportKey, leavesTable, metricsTable, overtimeTable, payrollTable, reportTableHtml,
+  requestsTable, writeReportWorkbook, type ReportKey, type ReportTable,
+} from './report-export'
+import { ReportPdfRenderer } from './report-pdf.renderer'
 
 const YEAR_RE = /^\d{4}$/
 
@@ -31,6 +43,9 @@ export class ReportsController {
   constructor(
     @InjectDataSource() private readonly ds: DataSource,
     private readonly moduleRef: ModuleRef,
+    private readonly metrics: MetricsService,
+    private readonly modules: ModulesService,
+    private readonly pdf: ReportPdfRenderer,
   ) {}
 
   // التقارير التي تكشف مبالغ أو أرصدة فردية تتطلب صلاحية الرواتب فوق مركز التقارير (RP-00)
@@ -114,40 +129,12 @@ export class ReportsController {
     @Query('teamId') teamId?: string
   ) {
     const org = this.orgFilterOf(user, { branchId, departmentIds, teamId })
-    const params: unknown[] = []
-    const s = this.scopeSql(user, 'e.branchId', params)
-    const o = this.orgSql('e', org, params)
-    const rows: Array<{ id: number; status: string; branchName: string | null; departmentName: string | null }> =
-      await this.ds.query(
-        `SELECT e.id AS id, e.status AS status, b.name AS branchName, d.name AS departmentName
-         FROM employees e JOIN branches b ON b.id = e.branchId
-         LEFT JOIN departments d ON d.id = e.departmentId
-         WHERE 1=1 ${s} ${o}`,
-        params
-      )
-    const today = localDateOf(new Date())
-    const suspensions = await readOpenSuspensions(this.ds.manager, today)
-    const statusOf = (row: { id: number; status: string }) =>
-      displayEmployeeStatus(row.status, suspensions.get(row.id) ?? [], today)
-    const bump = (map: Map<string, { total: number; active: number }>, key: string, isActive: boolean) => {
-      const cell = map.get(key) ?? { total: 0, active: 0 }
-      cell.total += 1
-      if (isActive) cell.active += 1
-      map.set(key, cell)
-    }
-    const branches = new Map<string, { total: number; active: number }>()
-    const departments = new Map<string, { total: number; active: number }>()
-    const statuses = new Map<string, number>()
-    for (const row of rows) {
-      const status = statusOf(row)
-      if (row.branchName) bump(branches, row.branchName, status === 'active')
-      if (row.departmentName) bump(departments, row.departmentName, status === 'active')
-      statuses.set(status, (statuses.get(status) ?? 0) + 1)
-    }
+    // B2.13: العدد والنشطين بتعريف قاموس المؤشرات — نفس دالة اللوحة والتصدير. إجمالي الفرع والقسم = الموظفين الحاليين، والمؤرشف
+    // والمنتهية خدمته ظاهرين في توزيع الحالات.
+    const workforce = await this.metrics.workforce(branchScopeOf(user), org)
     return {
-      byBranch: [...branches.entries()].map(([branchName, cell]) => ({ branchName, total: cell.total, active: cell.active })),
-      byDepartment: [...departments.entries()].map(([departmentName, cell]) => ({ departmentName, total: cell.total })),
-      byStatus: [...statuses.entries()].map(([status, total]) => ({ status, total })),
+      date: workforce.date, summary: { headcount: workforce.headcount, active: workforce.active },
+      byBranch: workforce.byBranch, byDepartment: workforce.byDepartment, byStatus: workforce.byStatus,
     }
   }
 
@@ -183,17 +170,8 @@ export class ReportsController {
        WHERE a.date BETWEEN @0 AND @1 ${s}
          -- فترة الخدمة (نفس employmentWindowOf في شاشة الحضور بالحرف): غياب قبل المباشرة، أو بعد آخر يوم عمل
          -- (ملف إنهاء خدمة غير ملغي بعد التعيين)، أو بعد تاريخ الأرشفة لو مفيش ملف كده — مش غياب
-         AND NOT (a.status = 'absent' AND (
-           a.date < COALESCE(e.actualStartDate, e.joinDate, '1900-01-01')
-           OR EXISTS (
-             SELECT 1 FROM offboarding_cases oc
-              WHERE oc.employeeId = a.employeeId AND oc.status <> 'CANCELLED'
-                AND oc.lastWorkingDay < a.date
-                AND oc.lastWorkingDay >= COALESCE(e.actualStartDate, e.joinDate, '1900-01-01'))
-           OR (e.archivedAt IS NOT NULL AND CAST(e.archivedAt AS date) < a.date AND NOT EXISTS (
-             SELECT 1 FROM offboarding_cases ob
-              WHERE ob.employeeId = a.employeeId AND ob.status <> 'CANCELLED'
-                AND ob.lastWorkingDay >= COALESCE(e.actualStartDate, e.joinDate, '1900-01-01')))))
+         -- الشرط نفسه في قاموس المؤشرات (absenceOutsideServiceSql): مؤشر «نسبة الغياب» بيحسب به
+         AND NOT (a.status = 'absent' AND ${absenceOutsideServiceSql('a', 'e')})
        GROUP BY a.employeeId, e.fullName, e.employeeCode
        ORDER BY e.employeeCode`,
       params
@@ -364,5 +342,95 @@ export class ReportsController {
       params
     )
     return { byType }
+  }
+
+  // ===== مؤشرات القاموس بقيمها (B2.13): شهر الرواتب الجاري أو period، بنفس فلتر الفرع والإدارة والقسم والفريق =====
+  @Get('metrics')
+  async metricValues(
+    @CurrentUser() user: JwtPayload,
+    @Query('period') period?: string,
+    @Query('branchId') branchId?: string,
+    @Query('departmentIds') departmentIds?: string,
+    @Query('teamId') teamId?: string
+  ) {
+    return this.metrics.values(user, this.orgFilterOf(user, { branchId, departmentIds, teamId }), period || undefined)
+  }
+
+  // ===== تصدير تقرير من الخادم (B2.13): Excel أو PDF =====
+  // الجدول بيتبني من دالة التقرير نفسها (نفس الصلاحية والنطاق والفلاتر)، وموديول التقرير المقفول للقارئ بيرد زي مساره (404)،
+  // وكل تصدير سطر في سجل التدقيق (التقرير والصيغة وعدد الصفوف). GET لأنه قراءة.
+  @Get('export')
+  async export(@CurrentUser() user: JwtPayload, @Query() query: Record<string, unknown>, @Req() req: Request, @Res() res: Response) {
+    const report = typeof query.report === 'string' ? query.report : ''
+    const format = typeof query.format === 'string' && query.format ? query.format : 'xlsx'
+    if (!isReportKey(report)) throw new BadRequestException('التقرير المطلوب غير معروف')
+    if (!isReportExportFormat(format)) throw new BadRequestException('صيغة التصدير xlsx أو pdf')
+    for (const module of REPORT_MODULES[report]) {
+      if (!(await this.modules.allowedFor(module as ModuleKey, user))) throw new NotFoundException(`Cannot GET ${req.originalUrl ?? req.url}`)
+    }
+    const table = await this.reportTable(report, user, query)
+    if (format === 'pdf' && table.rows.length > REPORT_PDF_MAX_ROWS) throw new BadRequestException(REPORT_PDF_TOO_LARGE)
+    if (table.rows.length > REPORT_XLSX_MAX_ROWS) throw new BadRequestException(REPORT_XLSX_TOO_LARGE)
+    const today = localDateOf(new Date())
+    const buffer = format === 'xlsx' ? await writeReportWorkbook(table)
+      : Buffer.from(await this.pdf.pdf(reportTableHtml(table, { company: await this.companyName(), printedAt: today, printedBy: user.email }, await this.pdf.font())))
+    const fileName = `${table.title}-${today}.${format}`
+    await recordAudit(this.ds.manager, { category: 'EXPORT', action: 'REPORT_EXPORT', entityType: 'screen', entityId: '/reports', actorUserId: user.sub,
+      branchId: user.branchId ?? null, summary: `تصدير ${fileName} (${table.rows.length} صف)`,
+      after: { screen: '/reports', report, format, filename: fileName, rows: table.rows.length } })
+    res.setHeader('Content-Type', REPORT_CONTENT_TYPES[format])
+    res.setHeader('Content-Disposition', `attachment; filename="report-${report}.${format}"; filename*=UTF-8''${encodeURIComponent(fileName)}`)
+    res.setHeader('Cache-Control', 'no-store')
+    res.send(buffer)
+  }
+
+  private async companyName(): Promise<string> {
+    const row = await this.ds.getRepository(RequestsConfig).findOne({ where: { key: 'company.name' } })
+    return row?.value?.trim() || PRODUCT_NAME
+  }
+
+  /**
+   * الحضور والإضافي صف لكل موظف: الفلتر الموحد بمكان الموظف الحالي جوه نطاق القارئ (نفس تضييق اللوحة لنفس الصفوف).
+   * بيتحكم على الفلتر قبل قراءة التقرير، وبيرجّع دالة بتسيب صفوف موظفين الفلتر بس.
+   */
+  private async employeesInOrg(user: JwtPayload, raw: OrgFilterInput) {
+    const org = this.orgFilterOf(user, raw)
+    if (orgFilterIsEmpty(org)) return <T>(rows: T[]) => rows
+    const params: unknown[] = []
+    const found: Array<{ id: number }> = await this.ds.query(
+      `SELECT e.id AS id FROM employees e WHERE 1=1 ${this.scopeSql(user, 'e.branchId', params)} ${this.orgSql('e', org, params)}`, params)
+    const ids = new Set(found.map(row => Number(row.id)))
+    return <T extends { employeeId?: unknown }>(rows: T[]) => rows.filter(row => ids.has(Number(row.employeeId)))
+  }
+
+  // جدول التقرير من دالة مساره بالحرف: أي رفض (صلاحية، نطاق، فلتر) بيطلع من نفس المكان
+  private async reportTable(report: ReportKey, user: JwtPayload, query: Record<string, unknown>): Promise<ReportTable> {
+    const q = (key: string) => (typeof query[key] === 'string' && query[key] !== '' ? String(query[key]) : undefined)
+    const orgInput = { branchId: q('branchId'), departmentIds: q('departmentIds'), teamId: q('teamId') }
+    const dayRange = () => {
+      const range = reportDayRange({ month: q('month'), from: q('from'), to: q('to') })
+      if (!range) throw new BadRequestException('حدد «من تاريخ» و«إلى تاريخ» أو الشهر بصيغة YYYY-MM')
+      return range
+    }
+    switch (report) {
+      case 'headcount': return headcountTable(await this.headcount(user, q('branchId'), q('departmentIds'), q('teamId')))
+      case 'attendance': {
+        const range = dayRange(), keep = await this.employeesInOrg(user, orgInput)
+        return attendanceTable(keep(await this.attendance(user, q('month'), q('from'), q('to'))), range)
+      }
+      case 'leaves': {
+        const year = q('year') ?? ''
+        const report = await this.leaves(user, year, q('branchId'), q('departmentIds'), q('teamId'))
+        const names: Array<{ code: string; nameAr: string }> = await this.ds.query(`SELECT code, nameAr FROM leave_types`)
+        return leavesTable(report, year, new Map(names.map(row => [String(row.code), String(row.nameAr)])))
+      }
+      case 'payroll': return payrollTable(await this.payroll(user, {} as PayrollRunsReportQuery, q('branchId'), q('departmentIds'), q('teamId')))
+      case 'overtime': {
+        const range = dayRange(), keep = await this.employeesInOrg(user, orgInput)
+        return overtimeTable(keep(await this.overtime(user, q('month'), q('from'), q('to'))), range)
+      }
+      case 'requests': return requestsTable(await this.requests(user, q('branchId'), q('departmentIds'), q('teamId')))
+      case 'metrics': return metricsTable(await this.metricValues(user, q('period'), q('branchId'), q('departmentIds'), q('teamId')))
+    }
   }
 }

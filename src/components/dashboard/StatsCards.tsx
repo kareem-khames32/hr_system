@@ -67,6 +67,8 @@ export default function StatsCards() {
       id: 'employees',
       title: 'إجمالي الموظفين',
       value: Number(stats.employees.total).toLocaleString('en-US'),
+      // B2.13: النشطين بتعريف قاموس المؤشرات — نفس رقم «موظفون نشطون» في صفحة التقارير وتصديرها
+      hint: `منهم ${Number(stats.employees.active).toLocaleString('en-US')} نشط`,
       icon: <Users size={24} />,
       iconBg: 'bg-primary-100',
       iconColor: 'text-primary-600',

@@ -23,6 +23,8 @@ import { LoansModule } from './loans/loans.module'
 import { LeaveYearEndModule } from './requests/leave-year-end.module'
 import { DashboardController } from './dashboard/dashboard.controller'
 import { ReportsController } from './reports/reports.controller'
+import { MetricsService } from './reports/metrics.service'
+import { ReportPdfRenderer } from './reports/report-pdf.renderer'
 import { CostCenterReportController } from './reports/cost-center-report.controller'
 import { CostCenterReportService } from './reports/cost-center-report.service'
 import { FinancialReportModule } from './reports/financial-report.module'
@@ -128,6 +130,6 @@ import { dbPacketSize } from './common/sql-packet-size'
     PositionsModule,
   ],
   controllers: [HealthController, DashboardController, ReportsController, CostCenterReportController],
-  providers: [CostCenterReportService],
+  providers: [CostCenterReportService, MetricsService, ReportPdfRenderer],
 })
 export class AppModule {}
