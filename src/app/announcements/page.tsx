@@ -2,17 +2,19 @@
 
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
-import { CheckCircle2, Megaphone, Pin } from 'lucide-react'
-import { can } from '@/lib/api'
+import { Cake, CheckCircle2, Megaphone, Paperclip, Pin } from 'lucide-react'
+import { can, fetchFileObjectUrl, uploadFile } from '@/lib/api'
+import { useFeatureEnabled } from '@/lib/modules'
 import { loadOrgFilterContext } from '@/lib/org-filter'
 import {
-  ANNOUNCEMENT_STATUS_LABELS, announcementAudienceText, branchesAudience, createAnnouncement, fetchAnnouncementReport, fetchAnnouncements,
-  fetchAnnouncementsBoard, markAnnouncementRead, publishAnnouncement, withdrawAnnouncement,
-  type AnnouncementReport, type BoardAnnouncement, type ManagedAnnouncement,
+  ANNOUNCEMENT_OCCASIONS_FEATURE, ANNOUNCEMENT_STATUS_LABELS, announcementAudienceText, branchesAudience, createAnnouncement, fetchAnnouncementOccasions,
+  fetchAnnouncementReport, fetchAnnouncements, fetchAnnouncementsBoard, markAnnouncementRead, occasionDayText, publishAnnouncement, withdrawAnnouncement,
+  type AnnouncementAttachment, type AnnouncementOccasions, type AnnouncementReport, type BoardAnnouncement, type ManagedAnnouncement,
 } from '@/lib/announcements-api'
 
 // B2.16: الإعلانات — اللوحة لكل موظف (الإعلانات السارية اللي هو في جمهورها، المثبّت أولًا)، وقسم الإدارة للي معاه «إدارة الإعلانات»
 // (مسودة ← نشر ← سحب، وتقرير مين قرا). الجمهور من الشاشة: كل الشركة أو فروع محددة.
+// B2.16-ب: مرفق واحد للإعلان (بيترفع مع المسودة وبيتفتح بحكم الإعلان)، وكارت «مناسبات الأسبوع» لما ميزته مفتوحة.
 export default function AnnouncementsPage() {
   const [board, setBoard] = useState<BoardAnnouncement[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -22,6 +24,9 @@ export default function AnnouncementsPage() {
   const [branches, setBranches] = useState<Array<{ id: number; name: string }>>([])
   const [report, setReport] = useState<AnnouncementReport | null>(null)
   const [form, setForm] = useState({ title: '', body: '', branchIds: [] as number[], publishDate: '', expiryDate: '', pinned: false, requiresRead: false })
+  const [attachment, setAttachment] = useState<{ id: number; name: string } | null>(null)
+  const [occasions, setOccasions] = useState<AnnouncementOccasions | null>(null)
+  const occasionsOn = useFeatureEnabled(ANNOUNCEMENT_OCCASIONS_FEATURE)
 
   const fail = (err: unknown, fallback: string) => setError(err instanceof Error ? err.message : fallback)
   const loadBoard = () => fetchAnnouncementsBoard().then((data) => setBoard(data.items)).catch((err) => fail(err, 'تعذر تحميل الإعلانات'))
@@ -35,6 +40,11 @@ export default function AnnouncementsPage() {
       loadOrgFilterContext().then((context) => setBranches(context.branches)).catch(() => undefined)
     }
   }, [])
+  // المناسبات: لما الميزة الفرعية مفتوحة بس (مسارها مش موجود وهي مقفولة)
+  useEffect(() => {
+    if (!occasionsOn) { setOccasions(null); return }
+    fetchAnnouncementOccasions().then(setOccasions).catch(() => setOccasions(null))
+  }, [occasionsOn])
 
   // كل إجراء: تنفيذ ثم تحديث القايمتين، والرفض برسالة الخادم
   const run = async (work: () => Promise<unknown>) => {
@@ -51,9 +61,29 @@ export default function AnnouncementsPage() {
   }
   const save = () => run(async () => {
     await createAnnouncement({ title: form.title, body: form.body, audience: branchesAudience(form.branchIds), publishDate: form.publishDate || null,
-      expiryDate: form.expiryDate || null, pinned: form.pinned, requiresRead: form.requiresRead })
+      expiryDate: form.expiryDate || null, pinned: form.pinned, requiresRead: form.requiresRead, ...(attachment ? { attachmentFileId: attachment.id } : {}) })
     setForm({ title: '', body: '', branchIds: [], publishDate: '', expiryDate: '', pinned: false, requiresRead: false })
+    setAttachment(null)
   })
+  // المرفق: بيترفع بتصنيف «announcement» وبيتربط بالمسودة عند الحفظ
+  const pickAttachment = (file: File | undefined) => {
+    if (!file) return
+    void run(async () => {
+      const uploaded = await uploadFile(file, { entityType: 'announcement' })
+      setAttachment({ id: uploaded.id, name: uploaded.originalName })
+    })
+  }
+  const openAttachment = async (file: AnnouncementAttachment) => {
+    const url = await fetchFileObjectUrl(file.id)
+    if (!url) { setError('تعذر فتح المرفق'); return }
+    window.open(url, '_blank', 'noopener')
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  }
+  const attachmentLink = (file: AnnouncementAttachment) => (
+    <button type="button" onClick={() => void openAttachment(file)} className="text-xs underline text-primary-700 inline-flex items-center gap-1 break-all" data-announcement-attachment={file.id}>
+      <Paperclip size={14} className="shrink-0" /> {file.name}
+    </button>
+  )
   const toggleBranch = (id: number) => setForm((current) => ({ ...current, branchIds: current.branchIds.includes(id) ? current.branchIds.filter((item) => item !== id) : [...current.branchIds, id] }))
   const branchName = (id: number) => branches.find((branch) => branch.id === id)?.name
   const field = 'w-full rounded-lg border border-gray-200 px-3 py-2 text-sm'
@@ -66,6 +96,26 @@ export default function AnnouncementsPage() {
           <p className="text-sm text-gray-500">إعلانات الشركة اللي تخصك</p>
         </div>
         {error && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+
+        {occasions && (occasions.birthdays.length > 0 || occasions.anniversaries.length > 0) && (
+          <div className="card space-y-2" data-announcements-occasions>
+            <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2"><Cake size={18} className="text-primary-600" /> مناسبات زمايل فرعك</h2>
+            <ul className="text-sm text-gray-700 space-y-1">
+              {occasions.birthdays.map((item) => (
+                <li key={`b-${item.employeeId}`} className="flex flex-wrap items-center justify-between gap-2">
+                  <span>عيد ميلاد {item.fullName}</span>
+                  <span className={item.today ? 'text-success-700 font-medium' : 'text-gray-400'}><bdi>{occasionDayText(item)}</bdi></span>
+                </li>
+              ))}
+              {occasions.anniversaries.map((item) => (
+                <li key={`a-${item.employeeId}`} className="flex flex-wrap items-center justify-between gap-2">
+                  <span>{item.fullName} — {item.years === 1 ? 'سنة' : item.years === 2 ? 'سنتين' : `${item.years} سنين`} في الشركة</span>
+                  <span className={item.today ? 'text-success-700 font-medium' : 'text-gray-400'}><bdi>{occasionDayText(item)}</bdi></span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div className="space-y-3" data-announcements-board>
           {board === null && !error && <div className="card text-center text-gray-400 py-8">جارٍ التحميل…</div>}
@@ -80,6 +130,7 @@ export default function AnnouncementsPage() {
                 <span className="text-xs text-gray-400"><bdi>{item.publishDate}</bdi></span>
               </div>
               <p className="text-sm text-gray-700 whitespace-pre-wrap break-words mt-2">{item.body}</p>
+              {item.attachment && <div className="mt-2">{attachmentLink(item.attachment)}</div>}
               <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
                 {item.read ? (
                   <span className="flex items-center gap-1 text-success-700"><CheckCircle2 size={16} /> {item.requiresRead ? 'أقرّيت بالقراءة' : 'مقري'}</span>
@@ -129,6 +180,18 @@ export default function AnnouncementsPage() {
                 </label>
                 <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.pinned} onChange={(e) => setForm({ ...form, pinned: e.target.checked })} /> مثبّت أول اللوحة</label>
                 <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.requiresRead} onChange={(e) => setForm({ ...form, requiresRead: e.target.checked })} /> محتاج إقرار قراءة</label>
+                <div className="md:col-span-2 flex flex-wrap items-center gap-2 text-sm" data-announcement-attach>
+                  <label className="btn-secondary cursor-pointer">
+                    <Paperclip size={14} className="inline" /> {attachment ? 'تغيير المرفق' : 'مرفق (اختياري)'}
+                    <input type="file" className="hidden" disabled={busy} onChange={(e) => { pickAttachment(e.target.files?.[0]); e.target.value = '' }} />
+                  </label>
+                  {attachment && (
+                    <>
+                      <span className="text-gray-700 break-all">{attachment.name}</span>
+                      <button type="button" onClick={() => setAttachment(null)} className="text-xs text-gray-500 hover:text-gray-700">إزالة</button>
+                    </>
+                  )}
+                </div>
                 <div className="md:col-span-2">
                   <button type="button" onClick={save} disabled={busy || form.title.trim().length < 2 || !form.body.trim()} className="btn-primary disabled:opacity-50">حفظ كمسودة</button>
                 </div>
@@ -149,7 +212,7 @@ export default function AnnouncementsPage() {
                   <tbody>
                     {managed.items.map((item) => (
                       <tr key={item.id} className="border-b border-gray-50">
-                        <td className="py-2 px-2 text-gray-800">{item.title}{item.pinned ? ' 📌' : ''}</td>
+                        <td className="py-2 px-2 text-gray-800">{item.title}{item.pinned ? ' 📌' : ''}{item.attachment && <div>{attachmentLink(item.attachment)}</div>}</td>
                         <td className="py-2 px-2 text-gray-600">{announcementAudienceText(item.audience, branchName)}</td>
                         <td className="py-2 px-2 text-gray-600"><bdi>{item.publishDate}</bdi>{item.expiryDate ? <> ← <bdi>{item.expiryDate}</bdi></> : null}</td>
                         <td className="py-2 px-2">{ANNOUNCEMENT_STATUS_LABELS[item.status] ?? item.status}</td>

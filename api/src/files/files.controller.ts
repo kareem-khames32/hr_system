@@ -34,6 +34,7 @@ import { assertLetterFileAccess } from '../letters/letter-access'
 import { assertTaskFileAccess } from '../tasks/task-rules'
 import { assertExecutionProofAccess } from '../requests/execution-tasks'
 import { CommentsService } from '../comments/comments.service'
+import { AnnouncementsService } from '../announcements/announcements.service'
 import { RequireModule } from '../modules-registry/module.guard'
 import {
   classifyUpload, FILE_TYPE_EXTENSIONS, FILE_TYPE_MIME, FILES_ALLOWED_TYPES_KEY, FILES_MAX_SIZE_KEY, FILES_MAX_SIZE_LIMIT_MB,
@@ -59,7 +60,8 @@ export class FilesController {
     private readonly files: Repository<StoredFile>,
     private readonly ds: DataSource,
     private readonly requests: RequestsService,
-    private readonly comments: CommentsService
+    private readonly comments: CommentsService,
+    private readonly announcements: AnnouncementsService
   ) {}
 
   // B2.2: الحد والأنواع من الإعدادات وقت الرفع (files.max_size_mb وfiles.allowed_types)
@@ -81,7 +83,7 @@ export class FilesController {
     @Query('employeeId') employeeId?: string
   ) {
     if (!file) throw new BadRequestException('لم يصل ملف — أرسل الحقل file')
-    if (entityType && !['request', 'employee_photo', 'company_logo', 'document', 'contract', 'policy', 'comment', 'leave_attachment', 'task'].includes(entityType)) {
+    if (entityType && !['request', 'employee_photo', 'company_logo', 'document', 'contract', 'policy', 'comment', 'announcement', 'leave_attachment', 'task'].includes(entityType)) {
       throw new BadRequestException('تصنيف الملف غير صالح')
     }
     for (const value of [entityId, employeeId]) {
@@ -91,6 +93,11 @@ export class FilesController {
     }
     // B2.8: مرفق التعليق بيتربط بتعليقه وقت كتابته (CommentsService.add) — العميل مايحددش رقم كيان ولا موظف
     if (entityType === 'comment' && (entityId !== undefined || employeeId !== undefined)) throw new BadRequestException('مرفق التعليق بيترفع من غير رقم كيان أو موظف')
+    // B2.16-ب: مرفق الإعلان بيتربط بإعلانه من مسار الإعلانات (تحت قفل صفه) — العميل مايحددش رقم كيان ولا موظف؛ ولصاحب صلاحية الإدارة بس
+    if (entityType === 'announcement') {
+      if (entityId !== undefined || employeeId !== undefined) throw new BadRequestException('مرفق الإعلان بيترفع من غير رقم كيان أو موظف')
+      await this.announcements.assertCanUpload(user)
+    }
     const LOGO_RULE = 'رفع شعار الشركة يتطلب صلاحية الإعدادات وملف صورة'
     if (entityType === 'company_logo' && !userHasPerm(user, 'settings.manage')) throw new ForbiddenException(LOGO_RULE)
     // B2.7: ملف سياسة (PDF) — لمدير السياسات بس، ومش تبع موظف. قراءته من مسار السياسات بحق الجمهور، مش من هنا
@@ -127,8 +134,8 @@ export class FilesController {
           size: file.size,
           entityType: entityType || undefined,
           entityId: entityId ? Number(entityId) : undefined,
-          // الافتراضي: الملف تبع موظف رافعه — إلا لو الإدارة حددت غيره. ملف السياسة مش تبع موظف
-          employeeId: entityType === 'policy' ? undefined : employeeId ? Number(employeeId) : (user.employeeId ?? undefined),
+          // الافتراضي: الملف تبع موظف رافعه — إلا لو الإدارة حددت غيره. ملف السياسة ومرفق الإعلان مش تبع موظف
+          employeeId: entityType === 'policy' || entityType === 'announcement' ? undefined : employeeId ? Number(employeeId) : (user.employeeId ?? undefined),
           uploadedBy: user.sub,
         }))
         return { saved: row, hashed: await recordStoredFileHash(em, row.id, sha256) }
@@ -174,6 +181,9 @@ export class FilesController {
     } else if (f.entityType === 'comment') {
       // B2.8: مرفق تعليق — بحكم التعليق نفسه (حق الكيان، والداخلي مش لصاحب الطلب)، مش بملكية الرفع العامة
       await this.comments.assertFileAccess(user, f)
+    } else if (f.entityType === 'announcement') {
+      // B2.16-ب: مرفق إعلان — بحكم الإعلان نفسه (اللي بيديره، أو موظف الإعلان ساري له وهو في جمهوره)، مش بملكية الرفع العامة
+      await this.announcements.assertFileAccess(user, f)
     } else {
     const isOwner = (!!user.employeeId && f.employeeId === user.employeeId) || (!!user.sub && f.uploadedBy === user.sub)
     // صور الموظفين قابلة للعرض لأي مطّلع على الموظفين (ليست مستنداً حساساً)

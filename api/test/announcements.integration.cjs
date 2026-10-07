@@ -1,5 +1,6 @@
 // B2.16 (أ): الإعلانات — إعلان لفرع مايظهرش لفرع تاني، وتقرير القراءة، وإدارة حساب الفروع لإعلانات فروعه بس، وإشعار «إعلان جديد»
 // (وقت التوزيع، ووقت الإرسال، وفي القايمة). HTTP وSQL فعليان في قاعدة اختبار عشوائية تُحذف بعد الانتهاء.
+// B2.16 (ب): مرفق الإعلان بيتقري بحكم الإعلان نفسه (AN-05)، وميزة «أعياد الميلاد وسنوات الخدمة» المقفولة (AN-06).
 // ولا رسالة بريد حقيقية: send متبدّلة على النسخة نفسها.
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
@@ -66,6 +67,34 @@ const inApp = async user => {
   return (listed.items ?? listed).filter(item => item.category === 'announcement')
 }
 const ids = (...users) => users.map(user => user.id).sort((a, b) => a - b)
+// ملف PNG صغير حقيقي (فحص نوع الملف بيقرا المحتوى)
+function png(shade = 255) {
+  const zlib = require('node:zlib')
+  const chunk = (kind, data) => {
+    const length = Buffer.alloc(4); length.writeUInt32BE(data.length)
+    const crc = Buffer.alloc(4); crc.writeUInt32BE(zlib.crc32(Buffer.concat([Buffer.from(kind), data])) >>> 0)
+    return Buffer.concat([length, Buffer.from(kind), data, crc])
+  }
+  const header = Buffer.alloc(13); header.writeUInt32BE(1, 0); header.writeUInt32BE(1, 4); header[8] = 8; header[9] = 2
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', header),
+    chunk('IDAT', zlib.deflateSync(Buffer.from([0, shade, 0, 0]))), chunk('IEND', Buffer.alloc(0))])
+}
+async function upload(user, search = 'entityType=announcement', name = 'memo.png', bytes = png()) {
+  const form = new FormData()
+  form.append('file', new Blob([bytes], { type: 'image/png' }), name)
+  const response = await fetch(`${base}/files/upload?${search}`, { method: 'POST', headers: { Authorization: `Bearer ${jwt.sign(claims(user))}` }, body: form })
+  const text = await response.text()
+  return { status: response.status, body: text ? JSON.parse(text) : null }
+}
+const uploaded = async (user, search, name, bytes) => expect(await upload(user, search, name, bytes), 201).id
+// [الحالة، رسالة الرفض، بايتات الملف] — الملف اللي مش للحساب بنفس رد الملف الغايب
+async function download(user, fileId) {
+  const response = await fetch(`${base}/files/${fileId}`, { headers: { Authorization: `Bearer ${jwt.sign(claims(user))}` } })
+  if (response.status === 200) return [200, '', Buffer.from(await response.arrayBuffer())]
+  return [response.status, [].concat(JSON.parse(await response.text()).message ?? []).join('، '), null]
+}
+const fileRow = async id => (await query('SELECT [entityType], [entityId], [employeeId], [uploadedBy] FROM [stored_files] WHERE [id] = @0', [id]))[0]
+const MISSING_FILE = [404, 'الملف غير موجود', null]
 
 before(async () => {
   assert.equal(env.DB_TYPE || 'mssql', 'mssql'); assert.match(database, /^hr_announcements_test_[a-f0-9]{16}$/); assert.notEqual(database, env.DB_DATABASE)
@@ -230,8 +259,8 @@ test('AN-02: an announcement for one branch does not show to another branch; pin
   assert.deepEqual(await titles(U.root), ['إعلان الشركة', 'إعلان فرع ب'])
   for (const user of [U.admin, U.hr, U.hrA, U.plain, U.gone]) assert.deepEqual(await board(user), { available: true, items: [] })
   const first = (await board(U.a1)).items[0]
-  assert.deepEqual(Object.keys(first).sort(), ['body', 'expiryDate', 'id', 'pinned', 'publishDate', 'read', 'readAt', 'requiresRead', 'title'], 'من غير جمهور ولا حالة ولا مين كتبه')
-  assert.deepEqual([first.pinned, first.read, first.readAt, first.publishDate], [true, false, null, today])
+  assert.deepEqual(Object.keys(first).sort(), ['attachment', 'body', 'expiryDate', 'id', 'pinned', 'publishDate', 'read', 'readAt', 'requiresRead', 'title'], 'من غير جمهور ولا حالة ولا مين كتبه')
+  assert.deepEqual([first.pinned, first.read, first.readAt, first.publishDate, first.attachment], [true, false, null, today, null])
 
   // «أقرّ بالقراءة»: الموظف لنفسه، لإعلان ساري هو في جمهوره، ومرة واحدة
   const read = expect(await call(U.a1, 'POST', `/announcements/${A.a.id}/read`), 201)
@@ -376,4 +405,150 @@ test('AN-04: publishing notifies the audience accounts once, judged again when t
   expect(await call(U.admin, 'PUT', '/modules/announcements', { enabled: true }), 200)
   modules.invalidate()
   assert.equal((await inApp(U.a1)).length > 0, true)
+})
+
+test('AN-05: an announcement attachment is uploaded by a manager, bound to a draft once, and read by the announcement\'s own rule', async () => {
+  await repo('User').save({ email: 'hrB@announcements.invalid', displayName: 'حساب hrB', passwordHash: 'test-only', role: 'employee',
+    permissions: JSON.stringify(['announcements.manage']), isActive: true, branchId: B.b.id }).then(saved => { U.hrB = saved })
+  // الرفع: لصاحب صلاحية الإدارة بس، ومن غير رقم كيان ولا موظف من العميل
+  assert.deepEqual(answer(await upload(U.a1)), [403, rules.ANNOUNCEMENT_UPLOAD_RULE])
+  for (const search of ['entityType=announcement&entityId=1', `entityType=announcement&employeeId=${E.a1.id}`]) expect(await upload(U.hrA, search), 400)
+  const files = () => repo('StoredFile').count({ where: { entityType: 'announcement' } })
+  assert.equal(await files(), 0)
+  const bytes = png(200)
+  const fileId = await uploaded(U.hrA, 'entityType=announcement', 'branch-memo.png', bytes)
+  assert.deepEqual(await fileRow(fileId), { entityType: 'announcement', entityId: null, employeeId: null, uploadedBy: U.hrA.id })
+  // قبل الربط: لرافعه بس
+  assert.deepEqual((await download(U.hrA, fileId)).slice(0, 2), [200, ''])
+  for (const user of [U.hr, U.a1, U.hrB]) assert.deepEqual(await download(user, fileId), MISSING_FILE, user.email)
+
+  // مسودة بمرفقها: الملف اتربط بالإعلان، واسمه وحجمه في العرض
+  const withFile = expect(await call(U.hrA, 'POST', '/announcements', draft('إعلان بمرفق', branches(B.a), { attachmentFileId: fileId })), 201)
+  assert.deepEqual(withFile.attachment, { id: fileId, name: 'branch-memo.png', size: bytes.length })
+  assert.equal((await fileRow(fileId)).entityId, withFile.id)
+  // الملف مابيتربطش مرتين، ولا ملف حد تاني، ولا ملف بتصنيف تاني، ولا رقم غلط — والمسودة المرفوضة مابتتكتبش
+  const count = await repo('Announcement').count()
+  const foreign = await uploaded(U.hr, 'entityType=announcement', 'foreign.png')
+  const comment = await uploaded(U.hrA, 'entityType=comment', 'comment.png')
+  for (const [user, value] of [[U.hrA, fileId], [U.hr, fileId], [U.hrA, foreign], [U.hrA, comment], [U.hrA, 999999], [U.hrA, 'x'], [U.hrA, 0], [U.hrA, -1], [U.hrA, 1.5], [U.hrA, String(fileId)]]) {
+    assert.deepEqual(answer(await call(user, 'POST', '/announcements', draft('مرفق مرفوض', user === U.hr ? null : branches(B.a), { attachmentFileId: value }))),
+      [400, rules.ANNOUNCEMENT_ATTACHMENT_INVALID], `${user.email} → ${value}`)
+  }
+  assert.deepEqual([await repo('Announcement').count(), (await fileRow(foreign)).entityId, (await fileRow(comment)).entityId, (await fileRow(fileId)).entityId], [count, null, null, withFile.id])
+
+  // المسودة: مرفقها للي بيديرها بس (صلاحيته وجمهورها جوه نطاقه) — مش لموظف الفرع، ولا لمدير فرع تاني
+  for (const user of [U.hrA, U.hr, U.admin]) assert.deepEqual((await download(user, fileId)).slice(0, 2), [200, ''], user.email)
+  for (const user of [U.a1, U.hrB, U.b1, U.plain]) assert.deepEqual(await download(user, fileId), MISSING_FILE, user.email)
+  // بعد النشر: موظف الجمهور بيقراه (نفس البايتات)، وبيشوف اسمه على اللوحة؛ فرع تاني وحساب من غير موظف لأ
+  await publish(U.hrA, withFile)
+  const [status, , body] = await download(U.a1, fileId)
+  assert.deepEqual([status, body.equals(bytes)], [200, true])
+  assert.deepEqual((await board(U.a1)).items.find(item => item.id === withFile.id).attachment, { id: fileId, name: 'branch-memo.png', size: bytes.length })
+  for (const user of [U.b1, U.hrB, U.plain, U.gone]) assert.deepEqual(await download(user, fileId), MISSING_FILE, user.email)
+  assert.doesNotMatch(JSON.stringify(await board(U.b1)), /branch-memo/)
+  // المنشور مرفقه مابيتغيّرش (زي نصه)
+  assert.deepEqual(answer(await call(U.hrA, 'PATCH', `/announcements/${withFile.id}`, { attachmentFileId: null })), [400, rules.ANNOUNCEMENT_NOT_DRAFT])
+  assert.equal((await fileRow(fileId)).entityId, withFile.id)
+  // موظف اتنقل برّه الجمهور: المرفق مابقاش له
+  await repo('Employee').update({ id: E.a1.id }, { branchId: B.b.id })
+  assert.deepEqual(await download(U.a1, fileId), MISSING_FILE)
+  await repo('Employee').update({ id: E.a1.id }, { branchId: B.a.id })
+  // مدير الفرع اتنقل نطاقه لفرع تاني: مابقاش يقرا مرفق إعلان فرعه القديم — حتى وهو اللي رفعه
+  await repo('User').update({ id: U.hrA.id }, { branchId: B.b.id })
+  assert.deepEqual(await download({ ...U.hrA, branchId: B.b.id }, fileId), MISSING_FILE)
+  await repo('User').update({ id: U.hrA.id }, { branchId: B.a.id })
+  // السحب: المرفق للإدارة بس
+  expect(await call(U.hrA, 'POST', `/announcements/${withFile.id}/withdraw`), 201)
+  assert.deepEqual(await download(U.a1, fileId), MISSING_FILE)
+  assert.deepEqual((await download(U.hrA, fileId)).slice(0, 2), [200, ''])
+
+  // مسودة: تبديل المرفق وفكه — القديم بيرجع ملف مرفوع مش مربوط (لرافعه بس)
+  const second = await uploaded(U.hrA, 'entityType=announcement', 'second.png'), third = await uploaded(U.hrA, 'entityType=announcement', 'third.png')
+  const editable = await make(U.hrA, 'مسودة بمرفق متغيّر', branches(B.a), { attachmentFileId: second })
+  const swapped = expect(await call(U.hrA, 'PATCH', `/announcements/${editable.id}`, { attachmentFileId: third }), 200)
+  assert.deepEqual([swapped.attachment.id, (await fileRow(second)).entityId, (await fileRow(third)).entityId], [third, null, editable.id])
+  // نفس المرفق تاني = ولا تغيير؛ وتعديل من غير حقل المرفق مابيلمسوش
+  assert.equal(expect(await call(U.hrA, 'PATCH', `/announcements/${editable.id}`, { attachmentFileId: third, title: 'مسودة بمرفق (معدّلة)' }), 200).attachment.id, third)
+  assert.equal(expect(await call(U.hrA, 'PATCH', `/announcements/${editable.id}`, { pinned: true }), 200).attachment.id, third)
+  const cleared = expect(await call(U.hrA, 'PATCH', `/announcements/${editable.id}`, { attachmentFileId: null }), 200)
+  assert.deepEqual([cleared.attachment, (await fileRow(third)).entityId], [null, null])
+  assert.deepEqual(await download(U.hr, third), MISSING_FILE)
+  assert.equal(expect(await call(U.hrA, 'PATCH', `/announcements/${editable.id}`, { attachmentFileId: second }), 200).attachment.id, second)
+  assert.deepEqual(expect(await call(U.hrA, 'GET', '/announcements'), 200).items.find(item => item.id === editable.id).attachment, { id: second, name: 'second.png', size: png().length })
+  // مدير فرع تاني مايربطش ملفه بإعلان برّه نطاقه (الإعلان مش موجود له)
+  const other = await uploaded(U.hrB, 'entityType=announcement', 'branch-b.png')
+  assert.deepEqual(answer(await call(U.hrB, 'PATCH', `/announcements/${editable.id}`, { attachmentFileId: other })), [404, rules.ANNOUNCEMENT_NOT_FOUND])
+  assert.deepEqual([(await fileRow(other)).entityId, (await fileRow(second)).entityId], [null, editable.id])
+
+  // رافع فقد صلاحية الإدارة: ملفه اللي لسه مش مربوط مابقاش له
+  await repo('User').update({ id: U.hrB.id }, { permissions: '[]' })
+  assert.deepEqual(await download({ ...U.hrB, permissions: '[]' }, other), MISSING_FILE)
+  // الموديول اتقفل: ولا مرفق لحد (حتى اللي بيديره)، والرفع مرفوض
+  expect(await call(U.admin, 'PUT', '/modules/announcements', { enabled: false }), 200)
+  modules.invalidate()
+  for (const user of [U.hrA, U.admin]) assert.deepEqual(await download(user, fileId), MISSING_FILE, user.email)
+  assert.deepEqual(answer(await upload(U.hrA)), [403, rules.ANNOUNCEMENT_UPLOAD_RULE])
+  expect(await call(U.admin, 'PUT', '/modules/announcements', { enabled: true }), 200)
+  modules.invalidate()
+  assert.deepEqual((await download(U.hrA, fileId)).slice(0, 2), [200, ''])
+})
+
+test('AN-06: the occasions feature is closed by default; open, it lists branch colleagues\' birthdays and service anniversaries without the birth year', async () => {
+  // الميزة الفرعية مقفولة افتراضيًا: المسار مش موجود
+  for (const user of [U.a1, U.admin]) expect(await call(user, 'GET', '/announcements/occasions'), 404)
+  expect(await call(U.admin, 'PUT', '/modules/features/announcements.occasions', { enabled: true }), 200)
+  modules.invalidate()
+  // يوم وشهر تاريخ معيّن في سنة تانية (29 فبراير في سنة مش كبيسة = 28)
+  const leap = year => (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0
+  const inYear = (day, year) => `${year}-${day.slice(5) === '02-29' && !leap(year) ? '02-28' : day.slice(5)}`
+  const year = Number(today.slice(0, 4))
+  const born = offset => inYear(addDays(today, offset), 1992)
+  const joined = (offset, years) => inYear(addDays(today, offset), Number(addDays(today, offset).slice(0, 4)) - years)
+  const set = (key, birthDate, joinDate) => repo('Employee').update({ id: E[key].id }, { birthDate, joinDate })
+  await set('a1', born(0), joined(0, 4))              // عيد ميلاده وذكرى تعيينه النهارده (4 سنين)
+  await set('a2', born(5), joined(40, 2))             // عيد ميلاده بعد 5 أيام؛ ذكرى تعيينه بعيدة
+  await set('head', born(8), joined(3, 1))            // عيد ميلاده برّه النافذة؛ سنة كاملة بعد 3 أيام
+  await set('quiet', born(7), today)                  // آخر يوم في النافذة؛ اتعيّن النهارده (مفيش سنة كاملة)
+  await set('gone', born(0), joined(0, 6))            // مؤرشف
+  await set('b1', born(0), joined(1, 10))             // فرع تاني
+  await set('b2', born(200), joined(100, 3))
+  const view = expect(await call(U.a1, 'GET', '/announcements/occasions'), 200)
+  assert.deepEqual([view.date, view.windowDays], [today, 7])
+  assert.deepEqual(view.birthdays, [{ employeeId: E.a1.id, fullName: 'موظف إعلانات a1', date: today, today: true },
+    { employeeId: E.a2.id, fullName: 'موظف إعلانات a2', date: addDays(today, 5), today: false }, { employeeId: E.quiet.id, fullName: 'موظف إعلانات quiet', date: addDays(today, 7), today: false }])
+  assert.deepEqual(view.anniversaries, [{ employeeId: E.a1.id, fullName: 'موظف إعلانات a1', date: today, today: true, years: 4 },
+    { employeeId: E.head.id, fullName: 'موظف إعلانات head', date: addDays(today, 3), today: false, years: 1 }])
+  // من غير سنة الميلاد ولا السن ولا تاريخ التعيين، ولا زمايل فرع تاني ولا المؤرشف
+  const text = JSON.stringify(view)
+  assert.doesNotMatch(text, /1992|birthDate|joinDate|age/)
+  assert.doesNotMatch(text, /موظف إعلانات (b1|b2|gone)/)
+  assert.equal(text.includes(String(year - 4)), false, 'ولا سنة التعيين')
+  // كل موظف بزمايل فرعه: فرع (ب) مايشوفش (أ) والعكس؛ ومدير النظام المربوط بموظف في (ب) زيهم
+  for (const user of [U.b1, U.root]) {
+    const other = expect(await call(user, 'GET', '/announcements/occasions'), 200)
+    assert.deepEqual([other.birthdays.map(row => row.employeeId), other.anniversaries.map(row => [row.employeeId, row.years])], [[E.b1.id], [[E.b1.id, 10]]], user.email)
+  }
+  // حساب من غير موظف (حتى بصلاحية الإدارة أو كل الفروع) وحساب موظف مؤرشف: فاضي
+  for (const user of [U.admin, U.hr, U.hrA, U.plain, U.gone]) {
+    assert.deepEqual(expect(await call(user, 'GET', '/announcements/occasions'), 200), { date: today, windowDays: 7, birthdays: [], anniversaries: [] }, user.email)
+  }
+  // موظف اتنقل: بيشوف مناسبات فرعه الجديد، وزمايله القدام مابقوش شايفينه
+  await repo('Employee').update({ id: E.a2.id }, { branchId: B.b.id })
+  // (ب): عيد ميلاد b1 النهارده، وa2 بعد 5 أيام — الأقرب أولًا
+  assert.deepEqual(expect(await call(U.a2, 'GET', '/announcements/occasions'), 200).birthdays.map(row => row.employeeId), [E.b1.id, E.a2.id])
+  assert.deepEqual(expect(await call(U.a1, 'GET', '/announcements/occasions'), 200).birthdays.map(row => row.employeeId), [E.a1.id, E.quiet.id])
+  await repo('Employee').update({ id: E.a2.id }, { branchId: B.a.id })
+  // الميزة اتقفلت تاني، أو الموديول نفسه: المسار مش موجود
+  expect(await call(U.admin, 'PUT', '/modules/features/announcements.occasions', { enabled: false }), 200)
+  modules.invalidate()
+  expect(await call(U.a1, 'GET', '/announcements/occasions'), 404)
+  expect(await call(U.admin, 'PUT', '/modules/features/announcements.occasions', { enabled: true }), 200)
+  expect(await call(U.admin, 'PUT', '/modules/announcements', { enabled: false }), 200)
+  modules.invalidate()
+  expect(await call(U.a1, 'GET', '/announcements/occasions'), 404)
+  // اللوحة نفسها مابتتأثرش بالميزة
+  expect(await call(U.admin, 'PUT', '/modules/announcements', { enabled: true }), 200)
+  expect(await call(U.admin, 'PUT', '/modules/features/announcements.occasions', { enabled: false }), 200)
+  modules.invalidate()
+  assert.equal((await board(U.a1)).available, true)
 })

@@ -1,8 +1,11 @@
 // B2.16: الإعلانات — لوحة الموظف (الإعلانات السارية اللي هو في جمهورها) وإدارة الإعلانات وتقرير القراءة
 import { apiFetch } from './api'
 
+/** مرفق الإعلان (واحد): بيتفتح من /files/:id بحكم الإعلان نفسه */
+export interface AnnouncementAttachment { id: number; name: string; size: number }
 export interface AnnouncementItem {
   id: number; title: string; body: string; publishDate: string; expiryDate: string | null; pinned: boolean; requiresRead: boolean
+  attachment: AnnouncementAttachment | null
 }
 export interface BoardAnnouncement extends AnnouncementItem { read: boolean; readAt: string | null }
 export const fetchAnnouncementsBoard = () => apiFetch<{ available: boolean; items: BoardAnnouncement[] }>('/announcements/board')
@@ -15,6 +18,8 @@ export type AnnouncementAudience = { mode?: string; ids?: Array<number | string>
 export interface ManagedAnnouncement extends AnnouncementItem { status: AnnouncementStatus; audience: AnnouncementAudience; createdAt: string; publishedAt: string | null }
 export interface AnnouncementInput {
   title: string; body: string; audience: AnnouncementAudience; publishDate?: string | null; expiryDate?: string | null; pinned?: boolean; requiresRead?: boolean
+  /** رقم ملف مرفوع بتصنيف «announcement» (null = من غير مرفق) */
+  attachmentFileId?: number | null
 }
 export const fetchAnnouncements = () => apiFetch<{ available: boolean; message: string | null; items: ManagedAnnouncement[] }>('/announcements')
 export const createAnnouncement = (body: AnnouncementInput) => apiFetch<ManagedAnnouncement>('/announcements', { method: 'POST', body: JSON.stringify(body) })
@@ -42,3 +47,15 @@ export function announcementAudienceText(audience: AnnouncementAudience, branchN
   }
   return 'جمهور مخصص'
 }
+
+// B2.16-ب: الميزة الفرعية «أعياد الميلاد وسنوات الخدمة» — زمايل فرعك، باليوم والشهر بس
+export const ANNOUNCEMENT_OCCASIONS_FEATURE = 'announcements.occasions'
+export interface AnnouncementOccasion { employeeId: number; fullName: string; date: string; today: boolean }
+export interface AnnouncementOccasions {
+  date: string; windowDays: number
+  birthdays: AnnouncementOccasion[]
+  anniversaries: Array<AnnouncementOccasion & { years: number }>
+}
+export const fetchAnnouncementOccasions = () => apiFetch<AnnouncementOccasions>('/announcements/occasions')
+/** يوم المناسبة كنص: «النهارده» أو اليوم والشهر (من غير سنة) */
+export const occasionDayText = (item: AnnouncementOccasion): string => (item.today ? 'النهارده' : `${Number(item.date.slice(8, 10))}/${Number(item.date.slice(5, 7))}`)

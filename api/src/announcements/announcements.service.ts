@@ -4,10 +4,12 @@ import { DataSource, In, LessThanOrEqual, type EntityManager } from 'typeorm'
 import { localDateOf } from '../attendance/attendance.service'
 import { recordAudit } from '../audit/audit'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchIdIn, branchScopeOf } from '../auth/guards'
+import { branchIdIn, branchScopeOf, userHasPerm } from '../auth/guards'
 import type { BranchScope } from '../auth/guards'
 import { User } from '../auth/user.entity'
 import { Employee } from '../employees/employee.entity'
+import { StoredFile } from '../files/stored-file.entity'
+import { ModulesService } from '../modules-registry/modules.service'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
@@ -16,13 +18,17 @@ import { isCurrentEmployee } from '../reports/metrics'
 import { audienceNeedsPositions, parseRequestAudience, requestAudienceAllows, type AudiencePositions, type AudienceSubject } from '../requests/request-audience'
 import { Announcement, AnnouncementRead } from './announcement.entities'
 import {
-  ANNOUNCEMENTS_MIGRATION_MISSING, ANNOUNCEMENT_BRANCH_AUDIENCE, ANNOUNCEMENT_NOT_DRAFT, ANNOUNCEMENT_NOT_FOUND, announcementAudienceInScope,
-  announcementAudienceIntact, announcementAudienceJson, announcementBody, announcementDates, announcementLive, announcementTitle, announcementsReady,
+  ANNOUNCEMENTS_MIGRATION_MISSING, ANNOUNCEMENT_ATTACHMENT_INVALID, ANNOUNCEMENT_BRANCH_AUDIENCE, ANNOUNCEMENT_FILE_NOT_FOUND, ANNOUNCEMENT_NOT_DRAFT,
+  ANNOUNCEMENT_NOT_FOUND, ANNOUNCEMENT_UPLOAD_RULE, announcementAttachmentInput, announcementAudienceInScope, announcementAudienceIntact,
+  announcementAudienceJson, announcementBody, announcementDates, announcementLive, announcementTitle, announcementsReady, occasionsOf,
 } from './announcement-rules'
 
 export interface AnnouncementInput {
   title?: unknown; body?: unknown; audience?: unknown; publishDate?: unknown; expiryDate?: unknown; pinned?: unknown; requiresRead?: unknown
+  /** B2.16-ب: رقم ملف مرفوع بتصنيف «announcement» (null = فك المرفق) */
+  attachmentFileId?: unknown
 }
+type Attachment = { id: number; name: string; size: number }
 type Positions = { departmentManagers: Set<number>; teamLeaders: Set<number>; branchManagers: Set<number> }
 type Member = Pick<Employee, 'id' | 'departmentId' | 'teamId' | 'branchId'>
 const day = (value: unknown): string | null => (value == null || value === '' ? null : String(value).slice(0, 10))
@@ -31,7 +37,7 @@ const day = (value: unknown): string | null => (value == null || value === '' ? 
 // وتسجيل القراءة، وتقريرها. حساب الفروع بيدير إعلانات فروعه بس.
 @Injectable()
 export class AnnouncementsService {
-  constructor(@InjectDataSource() private readonly ds: DataSource) {}
+  constructor(@InjectDataSource() private readonly ds: DataSource, private readonly modules: ModulesService) {}
 
   private get repo() { return this.ds.getRepository(Announcement) }
 
@@ -78,8 +84,19 @@ export class AnnouncementsService {
     return employee && isCurrentEmployee(employee) ? employee : null
   }
 
-  private view(row: Announcement) {
-    return { id: row.id, title: row.title, body: row.body, publishDate: day(row.publishDate)!, expiryDate: day(row.expiryDate), pinned: row.pinned === true, requiresRead: row.requiresRead === true }
+  private view(row: Announcement, attachment: Attachment | null) {
+    return { id: row.id, title: row.title, body: row.body, publishDate: day(row.publishDate)!, expiryDate: day(row.expiryDate), pinned: row.pinned === true,
+      requiresRead: row.requiresRead === true, attachment }
+  }
+
+  /** مرفق كل إعلان (واحد): الملف المربوط بيه بتصنيف «announcement» — اسمه وحجمه؛ قراءته من /files/:id بحكم الإعلان (assertFileAccess) */
+  private async attachmentsOf(em: EntityManager, ids: number[]): Promise<Map<number, Attachment>> {
+    const byAnnouncement = new Map<number, Attachment>()
+    if (!ids.length) return byAnnouncement
+    const rows = await em.getRepository(StoredFile).find({ where: { entityType: 'announcement', entityId: In(ids) },
+      select: { id: true, originalName: true, size: true, entityId: true }, order: { id: 'ASC' } })
+    for (const row of rows) if (!byAnnouncement.has(row.entityId)) byAnnouncement.set(row.entityId, { id: row.id, name: row.originalName, size: row.size })
+    return byAnnouncement
   }
 
   // ===== لوحة الإعلانات (الموظف) =====
@@ -96,7 +113,8 @@ export class AnnouncementsService {
     const mine = published.filter(row => this.inAudience(row, employee, user.role, positions))
     const reads = mine.length ? await em.getRepository(AnnouncementRead).find({ where: { employeeId: employee.id, announcementId: In(mine.map(row => row.id)) } }) : []
     const readAt = new Map(reads.map(read => [read.announcementId, read.readAt]))
-    return { available: true, items: mine.map(row => ({ ...this.view(row), read: readAt.has(row.id), readAt: readAt.get(row.id) ?? null })) }
+    const attachments = await this.attachmentsOf(em, mine.map(row => row.id))
+    return { available: true, items: mine.map(row => ({ ...this.view(row, attachments.get(row.id) ?? null), read: readAt.has(row.id), readAt: readAt.get(row.id) ?? null })) }
   }
 
   /**
@@ -155,8 +173,12 @@ export class AnnouncementsService {
     return row
   }
 
-  private manageView(row: Announcement) {
-    return { ...this.view(row), status: row.status, audience: parseRequestAudience(row.audience), createdAt: row.createdAt, publishedAt: row.publishedAt }
+  private manageView(row: Announcement, attachment: Attachment | null) {
+    return { ...this.view(row, attachment), status: row.status, audience: parseRequestAudience(row.audience), createdAt: row.createdAt, publishedAt: row.publishedAt }
+  }
+
+  private async manageViewOf(em: EntityManager, row: Announcement) {
+    return this.manageView(row, (await this.attachmentsOf(em, [row.id])).get(row.id) ?? null)
   }
 
   private fields(user: JwtPayload, input: AnnouncementInput, current: Announcement | null) {
@@ -182,18 +204,21 @@ export class AnnouncementsService {
     if (!(await announcementsReady(this.ds.manager))) return { available: false, message: ANNOUNCEMENTS_MIGRATION_MISSING, items: [] }
     const scope = branchScopeOf(user)
     const rows = (await this.repo.find({ order: { id: 'DESC' }, take: 300 })).filter(row => announcementAudienceInScope(row.audience, scope))
-    return { available: true, message: null, items: rows.map(row => this.manageView(row)) }
+    const attachments = await this.attachmentsOf(this.ds.manager, rows.map(row => row.id))
+    return { available: true, message: null, items: rows.map(row => this.manageView(row, attachments.get(row.id) ?? null)) }
   }
 
   async create(user: JwtPayload, input: AnnouncementInput) {
     await this.assertReady()
     const fields = this.fields(user, input, null)
+    const attachment = announcementAttachmentInput(input.attachmentFileId)
     return this.ds.transaction(async em => {
       const repo = em.getRepository(Announcement)
       const saved = await repo.save(repo.create({ ...fields, status: 'DRAFT', createdByUserId: user.sub, createdAt: new Date(), publishedAt: null }))
+      if (attachment != null) await this.setAttachment(em, user, saved.id, attachment)
       await recordAudit(em, { category: 'SETTINGS', action: 'ANNOUNCEMENT_CREATED', entityType: 'announcement', entityId: saved.id, actorUserId: user.sub,
         branchId: user.branchId ?? null, summary: `إعلان جديد (مسودة): ${saved.title}`, after: { title: saved.title, audience: parseRequestAudience(saved.audience) } })
-      return this.manageView(saved)
+      return this.manageViewOf(em, saved)
     })
   }
 
@@ -203,9 +228,11 @@ export class AnnouncementsService {
       const row = await this.managed(user, id, em, true)
       if (row.status !== 'DRAFT') throw new BadRequestException(ANNOUNCEMENT_NOT_DRAFT)
       const fields = this.fields(user, input, row)
+      const attachment = announcementAttachmentInput(input.attachmentFileId)
       // بالحقول وبرقم الصف — مش حفظ الكيان كله (الصف مقفول من أول المعاملة)
       await em.getRepository(Announcement).update({ id: row.id }, fields)
-      return this.manageView(await em.getRepository(Announcement).findOneOrFail({ where: { id: row.id } }))
+      if (attachment !== undefined) await this.setAttachment(em, user, row.id, attachment)
+      return this.manageViewOf(em, await em.getRepository(Announcement).findOneOrFail({ where: { id: row.id } }))
     })
   }
 
@@ -223,7 +250,7 @@ export class AnnouncementsService {
       await recordAudit(em, { category: 'SETTINGS', action: 'ANNOUNCEMENT_PUBLISHED', entityType: 'announcement', entityId: row.id, actorUserId: user.sub,
         branchId: user.branchId ?? null, summary: `نشر إعلان: ${row.title}`, after: { title: row.title, publishDate: day(row.publishDate), expiryDate: day(row.expiryDate),
           audience: parseRequestAudience(row.audience) } })
-      return this.manageView(await em.getRepository(Announcement).findOneOrFail({ where: { id: row.id } }))
+      return this.manageViewOf(em, await em.getRepository(Announcement).findOneOrFail({ where: { id: row.id } }))
     })
   }
 
@@ -235,8 +262,58 @@ export class AnnouncementsService {
       await em.getRepository(Announcement).update({ id: row.id }, { status: 'WITHDRAWN' })
       await recordAudit(em, { category: 'SETTINGS', action: 'ANNOUNCEMENT_WITHDRAWN', entityType: 'announcement', entityId: row.id, actorUserId: user.sub,
         branchId: user.branchId ?? null, summary: `سحب إعلان: ${row.title}` })
-      return this.manageView(await em.getRepository(Announcement).findOneOrFail({ where: { id: row.id } }))
+      return this.manageViewOf(em, await em.getRepository(Announcement).findOneOrFail({ where: { id: row.id } }))
     })
+  }
+
+  // ===== المرفق (B2.16-ب) =====
+  /**
+   * مرفق الإعلان (واحد): ملف رفعه نفس الحساب بتصنيف «announcement» ولسه مش مربوط — بيتربط بتحديث مشروط (مسودتين في نفس اللحظة: واحدة بس
+   * بتاخده). null بيفك المرفق الحالي (بيرجع ملف مرفوع مش مربوط). المنادي ماسك قفل صف الإعلان، أو الصف لسه جديد جوه معاملته.
+   */
+  private async setAttachment(em: EntityManager, user: JwtPayload, announcementId: number, fileId: number | null) {
+    const current: Array<{ id: number }> = await em.query(`SELECT [id] FROM [stored_files] WHERE [entityType] = N'announcement' AND [entityId] = @0`, [announcementId])
+    if (fileId !== null && current.some(row => Number(row.id) === fileId)) return
+    if (current.length) await em.query(`UPDATE [stored_files] SET [entityId] = NULL WHERE [entityType] = N'announcement' AND [entityId] = @0`, [announcementId])
+    if (fileId === null) return
+    const bound: unknown[] = await em.query(`UPDATE [stored_files] SET [entityId] = @0 OUTPUT INSERTED.[id]
+      WHERE [id] = @1 AND [entityType] = N'announcement' AND [entityId] IS NULL AND [uploadedBy] = @2`, [announcementId, fileId, user.sub])
+    if (!bound.length) throw new BadRequestException(ANNOUNCEMENT_ATTACHMENT_INVALID)
+  }
+
+  /** رفع مرفق إعلان (/files/upload): لصاحب صلاحية الإدارة، والموديول مفتوح له */
+  async assertCanUpload(user: JwtPayload) {
+    if (!userHasPerm(user, 'announcements.manage') || !(await this.modules.allowedFor('announcements', user))) throw new ForbiddenException(ANNOUNCEMENT_UPLOAD_RULE)
+  }
+
+  /**
+   * تحميل مرفق إعلان (/files/:id) بحكم الإعلان نفسه دايمًا، حتى لرافعه (نطاق حسابه ممكن يتغيّر بعد ما رفع): اللي بيدير الإعلان (صلاحيته،
+   * وجمهور الإعلان جوه نطاقه)، أو موظف الإعلان ساري له وهو في جمهوره. قبل الربط: لرافعه بس وبصلاحيته دلوقتي. غير كده نفس رد الملف الغايب.
+   */
+  async assertFileAccess(user: JwtPayload, file: Pick<StoredFile, 'id' | 'uploadedBy' | 'entityId'>) {
+    const missing = new NotFoundException(ANNOUNCEMENT_FILE_NOT_FOUND)
+    if (!(await this.modules.allowedFor('announcements', user))) throw missing
+    const manages = userHasPerm(user, 'announcements.manage')
+    if (!file.entityId) {
+      if (manages && !!user.sub && file.uploadedBy === user.sub) return
+      throw missing
+    }
+    const em = this.ds.manager
+    const row = (await announcementsReady(em)) ? await em.getRepository(Announcement).findOne({ where: { id: file.entityId } }) : null
+    if (!row) throw missing
+    if (manages && announcementAudienceInScope(row.audience, branchScopeOf(user))) return
+    if (!(await this.liveFor(user, row.id))) throw missing
+  }
+
+  // ===== المناسبات (الميزة الفرعية announcements.occasions — B2.16-ب) =====
+  /** زمايل فرع موظف الحساب الحاليين اللي عيد ميلادهم أو ذكرى تعيينهم النهارده أو خلال أيام — باليوم والشهر بس، من غير سنة الميلاد */
+  async occasions(user: JwtPayload) {
+    const em = this.ds.manager, today = localDateOf(new Date())
+    const employee = await this.viewer(em, user)
+    if (!employee?.branchId) return occasionsOf([], today)
+    const colleagues = await em.getRepository(Employee).find({ where: { branchId: employee.branchId, isActive: true },
+      select: { id: true, fullName: true, birthDate: true, joinDate: true, status: true, isActive: true }, order: { id: 'ASC' } })
+    return occasionsOf(colleagues.filter(row => isCurrentEmployee(row)), today)
   }
 
   /** موظفين الجمهور الحاليين في نطاق فروع القارئ (كل الفروع لو null)، ومعاهم دور حساب كل واحد */
@@ -268,7 +345,7 @@ export class AnnouncementsService {
     const branches = new Map((await em.getRepository(Branch).find({ select: { id: true, name: true } })).map(branch => [branch.id, branch.name]))
     const rows = members.map(member => ({ employeeId: member.id, employeeCode: member.employeeCode, fullName: member.fullName,
       branchName: branches.get(member.branchId) ?? null, readAt: readAt.get(member.id) ?? null }))
-    return { announcement: this.manageView(row), summary: { audience: rows.length, read: rows.filter(item => item.readAt !== null).length }, rows }
+    return { announcement: await this.manageViewOf(em, row), summary: { audience: rows.length, read: rows.filter(item => item.readAt !== null).length }, rows }
   }
 
   /** حسابات جمهور الإعلان الساري (لمحرك الإشعارات): الحسابات المفعّلة لموظفين الجمهور الحاليين في كل الفروع */

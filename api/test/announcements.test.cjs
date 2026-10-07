@@ -4,6 +4,7 @@
 //  AU-02) الربط: الموديول (مقفول افتراضيًا، في الباقة الأساسية) وصلاحيته، وحراسة المسارات، والكتابة تحت قفل الصف وبالحقول، وتسجيل القراءة
 //         في معاملة الحكم نفسها، وحدث «إعلان جديد» (وقت التوزيع، ووقت الإرسال، وفي القايمة).
 //  AU-03) الواجهة: الصفحة بلوحتها وقسم الإدارة للي معاه الصلاحية، وبند القايمة، وعنوان الشاشة، ونفس نصوص الخادم.
+//  AU-04) الجزء (ب): المرفق (ربط مشروط تحت قفل الصف، وقراءة بحكم الإعلان)، وميزة المناسبات (الذكرى الجاية، والنافذة، ومن غير سنة الميلاد).
 // Run (من api/): node --test test/announcements.test.cjs
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
@@ -70,6 +71,7 @@ test('AU-02: the module, its permission, guarded routes, writes under the row lo
   const module = MODULES.announcements
   assert.deepEqual([module.nameAr, module.group, module.dependsOn, module.softUses, module.defaultEnabled, module.preset, module.permissions, module.routes, module.jobs ?? []],
     ['الإعلانات', 'people', ['employees'], ['notifications'], false, 'basic', ['announcements.manage'], ['/announcements'], []])
+  assert.deepEqual(Object.keys(module.features), ['announcements.occasions'])
   const { ROLE_PRESETS, PERMISSIONS, PERMISSION_MODULES, PERMISSION_DESCRIPTIONS } = require('../src/auth/permissions')
   assert.equal(PERMISSIONS['announcements.manage'], 'إدارة الإعلانات')
   assert.deepEqual(PERMISSION_MODULES.find(group => group.key === 'announcements'), { key: 'announcements', labelAr: 'الإعلانات', permissions: ['announcements.manage'] })
@@ -90,7 +92,7 @@ test('AU-02: the module, its permission, guarded routes, writes under the row lo
   }
   assert.equal(controller.match(/@Perm\('announcements\.manage'\)/g).length, 6)
   const { EXCEPTIONS } = require('./fixtures/routes-without-perm.cjs')
-  assert.deepEqual([EXCEPTIONS['AnnouncementsController.board'], EXCEPTIONS['AnnouncementsController.markRead']], ['SELF', 'SELF'])
+  assert.deepEqual([EXCEPTIONS['AnnouncementsController.board'], EXCEPTIONS['AnnouncementsController.markRead'], EXCEPTIONS['AnnouncementsController.occasions']], ['SELF', 'SELF', 'SELF'])
 
   const service = read('api/src/announcements/announcements.service.ts')
   // الإدارة: الصف بيتقفل وبيتحكم (موجود + جمهوره جوه نطاق الحساب) في نفس القراءة، والكتابة بالحقول وبرقم الصف
@@ -157,4 +159,87 @@ test('AU-03: the announcements screen — the board for everyone, management for
   assert.match(read('src/components/layout/pageTitles.ts'), /\['\/announcements', 'الإعلانات'\]/)
   // فئة «الإعلانات» باسمها في شاشة الإشعارات
   assert.match(read('src/app/notifications/page.tsx'), /announcement: \{ label: 'الإعلانات', icon: Megaphone \}/)
+})
+
+test('AU-04: the attachment is bound once under the row lock and read by the announcement\'s rule; occasions give the next day without the birth year', () => {
+  // رقم المرفق في المدخل
+  const input = rules.announcementAttachmentInput
+  assert.deepEqual([input(undefined), input(null), input(7)], [undefined, null, 7])
+  for (const bad of ['7', 0, -1, 1.5, NaN, {}, [], true, Number.MAX_SAFE_INTEGER + 1]) refuses(() => input(bad), String(bad))
+  assert.equal(rules.ANNOUNCEMENT_FILE_NOT_FOUND, 'الملف غير موجود', 'نفس رد الملف الغايب في /files/:id')
+
+  const service = read('api/src/announcements/announcements.service.ts')
+  const attach = service.slice(service.indexOf('private async setAttachment('), service.indexOf('async assertCanUpload('))
+  // الربط بتحديث مشروط: ملف بتصنيف الإعلان، لسه مش مربوط، ورفعه نفس الحساب
+  assert.match(attach, /UPDATE \[stored_files\] SET \[entityId\] = @0 OUTPUT INSERTED\.\[id\]\s+WHERE \[id\] = @1 AND \[entityType\] = N'announcement' AND \[entityId\] IS NULL AND \[uploadedBy\] = @2/)
+  assert.match(attach, /if \(!bound\.length\) throw new BadRequestException\(ANNOUNCEMENT_ATTACHMENT_INVALID\)/)
+  // جوه معاملة الكاتب: التعديل تحت قفل الصف، والإنشاء على صف لسه جديد
+  const update = service.slice(service.indexOf('async update('), service.indexOf('async publish('))
+  const order = ['await this.managed(user, id, em, true)', "if (row.status !== 'DRAFT') throw new BadRequestException(ANNOUNCEMENT_NOT_DRAFT)", 'await this.setAttachment(em, user, row.id, attachment)'].map(part => update.indexOf(part))
+  assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), JSON.stringify(order))
+  assert.match(service.slice(service.indexOf('async create('), service.indexOf('async update(')), /if \(attachment != null\) await this\.setAttachment\(em, user, saved\.id, attachment\)/)
+  // القراءة: الموديول مفتوح للحساب، وقبل الربط لرافعه بصلاحيته، وبعده بحكم الإعلان (اللي بيديره، أو ساري وهو في جمهوره) — وكله بنفس الرد
+  const access = service.slice(service.indexOf('async assertFileAccess('), service.indexOf('// ===== المناسبات'))
+  const steps = ["if (!(await this.modules.allowedFor('announcements', user))) throw missing", 'if (manages && !!user.sub && file.uploadedBy === user.sub) return',
+    'if (manages && announcementAudienceInScope(row.audience, branchScopeOf(user))) return', 'if (!(await this.liveFor(user, row.id))) throw missing'].map(part => access.indexOf(part))
+  assert.ok(steps.every((at, index) => at > 0 && (index === 0 || at > steps[index - 1])), JSON.stringify(steps))
+  assert.equal(access.match(/new NotFoundException\(/g).length, 1, 'رد واحد لكل الحالات')
+  const files = read('api/src/files/files.controller.ts')
+  assert.match(files, /if \(entityType === 'announcement'\) \{\s+if \(entityId !== undefined \|\| employeeId !== undefined\) throw new BadRequestException\([^)]*\)\s+await this\.announcements\.assertCanUpload\(user\)/)
+  assert.match(files, /\} else if \(f\.entityType === 'announcement'\) \{[\s\S]{0,200}await this\.announcements\.assertFileAccess\(user, f\)/)
+  assert.match(files, /employeeId: entityType === 'policy' \|\| entityType === 'announcement' \? undefined : /)
+  assert.match(read('api/src/files/files.module.ts'), /imports: \[RequestsModule, CommentsModule, AnnouncementsModule, /)
+
+  // الميزة الفرعية: مقفولة افتراضيًا، ومسارها بحارسها
+  const feature = MODULES.announcements.features['announcements.occasions']
+  assert.deepEqual([feature.default, rules.ANNOUNCEMENT_OCCASIONS_FEATURE, rules.OCCASIONS_WINDOW_DAYS], [false, 'announcements.occasions', 7])
+  assert.match(feature.description, /من غير سنة الميلاد/)
+  assert.equal(require('../src/modules-registry/registry').featureEnabled({ modules: {}, features: {} }, 'announcements.occasions'), false)
+  assert.match(read('api/src/announcements/announcements.controller.ts'), /@RequireFeature\('announcements\.occasions'\)\s+@Get\('occasions'\)/)
+  const occasions = service.slice(service.indexOf('async occasions('), service.indexOf('/** موظفين الجمهور الحاليين'))
+  assert.match(occasions, /where: \{ branchId: employee\.branchId, isActive: true \}/, 'زمايل فرع موظف الحساب بس')
+  assert.match(occasions, /colleagues\.filter\(row => isCurrentEmployee\(row\)\)/)
+
+  // الذكرى الجاية: النهارده محسوب، وبعد ما تعدّي بتيجي السنة الجاية، و29 فبراير في سنة مش كبيسة = 28
+  const next = rules.nextOccurrence
+  assert.deepEqual(next('1990-10-07', '2026-10-07'), { date: '2026-10-07', years: 36 })
+  assert.deepEqual(next('1990-10-08', '2026-10-07'), { date: '2026-10-08', years: 36 })
+  assert.deepEqual(next('1990-10-06', '2026-10-07'), { date: '2027-10-06', years: 37 })
+  assert.deepEqual(next('2020-01-02', '2026-12-30'), { date: '2027-01-02', years: 7 }, 'عبر آخر السنة')
+  assert.deepEqual(next('1992-02-29', '2027-02-27'), { date: '2027-02-28', years: 35 })
+  assert.deepEqual(next('1992-02-29', '2028-02-27'), { date: '2028-02-29', years: 36 })
+  assert.deepEqual(next('1992-02-29', '2027-03-01'), { date: '2028-02-29', years: 36 })
+  assert.deepEqual(next('2026-10-07T00:00:00.000Z', '2026-10-07'), { date: '2026-10-07', years: 0 })
+  for (const none of [null, undefined, '', 'x', '2026-13-01', '1990-02-30', '2026-10-08', '2030-01-01']) assert.equal(next(none, '2026-10-07'), null, String(none))
+
+  // النافذة: النهارده لحد 7 أيام (اليومين جوه)، والأقرب أولًا؛ وسنوات الخدمة سنة كاملة على الأقل
+  const today = '2026-12-28'
+  const view = rules.occasionsOf([
+    { id: 1, fullName: 'أ', birthDate: '1990-12-28', joinDate: '2020-12-28' },
+    { id: 2, fullName: 'ب', birthDate: '1985-01-04', joinDate: '2026-12-28' },   // آخر يوم في النافذة (عبر السنة)؛ اتعيّن النهارده
+    { id: 3, fullName: 'ج', birthDate: '1985-01-05', joinDate: '2026-01-02' },   // برّه النافذة بيوم؛ سنة كاملة بعد 5 أيام
+    { id: 4, fullName: 'د', birthDate: '1999-12-27', joinDate: null },           // عدّى امبارح
+    { id: 5, fullName: 'هـ', birthDate: 'تالف', joinDate: '2031-01-01' },         // قيمة مش تاريخ، وتاريخ تعيين في المستقبل
+    { id: 6, fullName: 'و', birthDate: '2001-12-28', joinDate: '2019-12-30' },
+  ], today)
+  assert.deepEqual([view.date, view.windowDays], [today, 7])
+  assert.deepEqual(view.birthdays, [{ employeeId: 1, fullName: 'أ', date: '2026-12-28', today: true }, { employeeId: 6, fullName: 'و', date: '2026-12-28', today: true },
+    { employeeId: 2, fullName: 'ب', date: '2027-01-04', today: false }])
+  assert.deepEqual(view.anniversaries, [{ employeeId: 1, fullName: 'أ', date: '2026-12-28', today: true, years: 6 }, { employeeId: 6, fullName: 'و', date: '2026-12-30', today: false, years: 7 },
+    { employeeId: 3, fullName: 'ج', date: '2027-01-02', today: false, years: 1 }])
+  assert.doesNotMatch(JSON.stringify(view), /1990|1985|2001|2020|2019|birthDate|joinDate/, 'ولا سنة ميلاد ولا سنة تعيين')
+  assert.deepEqual(rules.occasionsOf([], today), { date: today, windowDays: 7, birthdays: [], anniversaries: [] })
+
+  // الواجهة: المرفق بيترفع بتصنيف الإعلان وبيتبعت رقمه مع المسودة، وبيتفتح من اللوحة؛ والكارت لما الميزة مفتوحة بس
+  const page = read('src/app/announcements/page.tsx'), lib = read('src/lib/announcements-api.ts')
+  assert.match(page, /await uploadFile\(file, \{ entityType: 'announcement' \}\)/)
+  assert.match(page, /\.\.\.\(attachment \? \{ attachmentFileId: attachment\.id \} : \{\}\)/)
+  assert.match(page, /\{item\.attachment && <div className="mt-2">\{attachmentLink\(item\.attachment\)\}<\/div>\}/)
+  assert.match(page, /const url = await fetchFileObjectUrl\(file\.id\)/)
+  assert.match(page, /const occasionsOn = useFeatureEnabled\(ANNOUNCEMENT_OCCASIONS_FEATURE\)/)
+  assert.match(page, /if \(!occasionsOn\) \{ setOccasions\(null\); return \}/, 'المسار مابيتنادهش والميزة مقفولة')
+  assert.match(page, /data-announcements-occasions/)
+  assert.match(lib, /export const ANNOUNCEMENT_OCCASIONS_FEATURE = 'announcements\.occasions'/)
+  assert.match(lib, /apiFetch<AnnouncementOccasions>\('\/announcements\/occasions'\)/)
+  assert.doesNotMatch(lib + page, /birthDate|birthYear/, 'الواجهة ماعندهاش سنة ميلاد تعرضها')
 })

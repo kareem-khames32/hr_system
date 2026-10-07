@@ -12,6 +12,13 @@ export const ANNOUNCEMENT_BODY_MAX = 4000
 export const ANNOUNCEMENT_AUDIENCE_MAX = 2000
 export const ANNOUNCEMENT_BRANCH_AUDIENCE = 'حساب الفروع بينشر لفروعه بس: اختار «فروع محددة» من فروعك في جمهور الإعلان'
 export const ANNOUNCEMENT_NOT_DRAFT = 'الإعلان اتنشر: اسحبه واعمل إعلان جديد بدل ما تعدّله'
+// B2.16-ب: المرفق. رد الملف اللي مش للحساب هو نفس رد الملف الغايب في /files/:id
+export const ANNOUNCEMENT_FILE_NOT_FOUND = 'الملف غير موجود'
+export const ANNOUNCEMENT_ATTACHMENT_INVALID = 'مرفق غير صالح — ارفعه من شاشة الإعلان نفسها'
+export const ANNOUNCEMENT_UPLOAD_RULE = 'رفع مرفق إعلان يتطلب صلاحية إدارة الإعلانات'
+// B2.16-ب: الميزة الفرعية المقفولة «أعياد الميلاد وسنوات الخدمة»
+export const ANNOUNCEMENT_OCCASIONS_FEATURE = 'announcements.occasions'
+export const OCCASIONS_WINDOW_DAYS = 7
 
 let ready: boolean | null = null
 /** جدولي ترحيل 100 موجودين؟ الموجود بيتحفظ (المخطط مابيتشالش). الناقص مابيتحفظش: بيتفحص مع كل نداء لحد ما الترحيل يتطبق. */
@@ -104,4 +111,53 @@ export function announcementAudienceInScope(audience: string | null | undefined,
 export function announcementLive(row: { status: string; publishDate: unknown; expiryDate: unknown }, today: string): boolean {
   const publish = String(row.publishDate ?? '').slice(0, 10), expiry = row.expiryDate ? String(row.expiryDate).slice(0, 10) : null
   return row.status === 'PUBLISHED' && publish <= today && (expiry === null || expiry >= today)
+}
+
+/** رقم ملف المرفق في مدخل المسودة: undefined = مااتبعتش (مايتغيّرش)، null = فك المرفق، وإلا رقم صحيح موجب */
+export function announcementAttachmentInput(value: unknown): number | null | undefined {
+  if (value === undefined) return undefined
+  if (value === null) return null
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) throw new BadRequestException(ANNOUNCEMENT_ATTACHMENT_INVALID)
+  return value
+}
+
+// ===== المناسبات (announcements.occasions) =====
+const leapYear = (year: number): boolean => (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0
+const dayAfter = (day: string, days: number): string => new Date(Date.parse(`${day}T12:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10)
+
+/**
+ * المرة الجاية اللي يوم وشهر التاريخ ده بييجوا فيها من النهارده (النهارده نفسه محسوب)، وعدد السنين اللي هتكون عدّت وقتها.
+ * 29 فبراير في سنة مش كبيسة = 28 فبراير. null لو القيمة مش يوم صحيح أو تاريخ في المستقبل (مالوش ذكرى).
+ */
+export function nextOccurrence(value: unknown, today: string): { date: string; years: number } | null {
+  const text = String(value ?? '').slice(0, 10)
+  if (!isAnnouncementDate(text) || text > today) return null
+  const [year, month, dayOfMonth] = text.split('-').map(Number)
+  const inYear = (target: number) =>
+    `${target}-${String(month).padStart(2, '0')}-${String(month === 2 && dayOfMonth === 29 && !leapYear(target) ? 28 : dayOfMonth).padStart(2, '0')}`
+  const thisYear = Number(today.slice(0, 4))
+  const date = inYear(thisYear) >= today ? inYear(thisYear) : inYear(thisYear + 1)
+  return { date, years: Number(date.slice(0, 4)) - year }
+}
+
+export interface OccasionEmployee { id: number; fullName: string; birthDate?: unknown; joinDate?: unknown }
+export interface Occasion { employeeId: number; fullName: string; date: string; today: boolean }
+
+/**
+ * مناسبات النهارده والأيام الجاية: أعياد الميلاد باليوم والشهر بس (تاريخ المناسبة في السنة دي — من غير سنة الميلاد ولا السن)، وذكرى
+ * التعيين بعدد سنين الخدمة (سنة كاملة على الأقل). الأقرب أولًا.
+ */
+export function occasionsOf(rows: readonly OccasionEmployee[], today: string, windowDays: number = OCCASIONS_WINDOW_DAYS) {
+  const until = dayAfter(today, windowDays)
+  const birthdays: Occasion[] = [], anniversaries: Array<Occasion & { years: number }> = []
+  for (const row of rows) {
+    const birthday = nextOccurrence(row.birthDate, today)
+    if (birthday && birthday.date <= until) birthdays.push({ employeeId: row.id, fullName: row.fullName, date: birthday.date, today: birthday.date === today })
+    const joined = nextOccurrence(row.joinDate, today)
+    if (joined && joined.date <= until && joined.years >= 1) {
+      anniversaries.push({ employeeId: row.id, fullName: row.fullName, date: joined.date, today: joined.date === today, years: joined.years })
+    }
+  }
+  const nearest = <T extends Occasion>(list: T[]): T[] => list.sort((a, b) => a.date.localeCompare(b.date) || a.employeeId - b.employeeId)
+  return { date: today, windowDays, birthdays: nearest(birthdays), anniversaries: nearest(anniversaries) }
 }

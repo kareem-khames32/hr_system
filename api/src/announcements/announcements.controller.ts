@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, UseGuards } from '@nestjs/common'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
-import { RequireModule } from '../modules-registry/module.guard'
+import { RequireFeature, RequireModule } from '../modules-registry/module.guard'
 import { AnnouncementsService, type AnnouncementInput } from './announcements.service'
 
 // B2.16: الإعلانات. الإدارة وتقرير القراءة بصلاحية announcements.manage (وحساب الفروع لإعلانات فروعه بس)؛ واللوحة وتسجيل القراءة
@@ -14,7 +14,8 @@ export class AnnouncementsController {
 
   private input(body: unknown): AnnouncementInput {
     const raw = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {}
-    return { title: raw.title, body: raw.body, audience: raw.audience, publishDate: raw.publishDate, expiryDate: raw.expiryDate, pinned: raw.pinned, requiresRead: raw.requiresRead }
+    return { title: raw.title, body: raw.body, audience: raw.audience, publishDate: raw.publishDate, expiryDate: raw.expiryDate, pinned: raw.pinned, requiresRead: raw.requiresRead,
+      attachmentFileId: raw.attachmentFileId }
   }
 
   // ===== الموظف =====
@@ -26,6 +27,13 @@ export class AnnouncementsController {
   @Post(':id/read')
   markRead(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number) {
     return this.announcements.markRead(user, id)
+  }
+
+  // B2.16-ب: الميزة الفرعية «أعياد الميلاد وسنوات الخدمة» (مقفولة افتراضيًا): مناسبات زمايل فرع الموظف — من غير سنة الميلاد
+  @RequireFeature('announcements.occasions')
+  @Get('occasions')
+  occasions(@CurrentUser() user: JwtPayload) {
+    return this.announcements.occasions(user)
   }
 
   // ===== الإدارة =====

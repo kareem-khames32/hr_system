@@ -25,6 +25,7 @@ const EXCEPTIONS = {
   // B2.16: لوحة الإعلانات وتسجيل القراءة — الموظف لنفسه (الإعلان ساري وهو في جمهوره؛ الفحص في الخدمة)
   'AnnouncementsController.board': 'SELF', // GET /announcements/board
   'AnnouncementsController.markRead': 'SELF', // POST /announcements/:id/read
+  'AnnouncementsController.occasions': 'SELF', // GET /announcements/occasions — B2.16-ب: زمايل فرع الموظف (الميزة الفرعية مقفولة افتراضيًا)
   'AssetsController.myCustody': 'SELF', // GET /custody/mine
   'AttendanceController.myToday': 'SELF', // GET /attendance/my-today
   // B2.1: تصدير صاحب الحساب نفسه من شاشة في سجل التدقيق (مابيقراش أي بيانات)
