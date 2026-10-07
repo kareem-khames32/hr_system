@@ -383,6 +383,43 @@ test('PM-02: النوافذ على 390px — «طلب جديد» بنموذجه�
   assert.deepEqual(problems, [])
 })
 
+test('PM-04: التطبيق قابل للتثبيت — المتصفح مابيلاقيش مانع، وملف التعريف وأيقوناته بيتحمّلوا، وزرار التثبيت بيظهر مع عرض المتصفح بس', { skip }, async () => {
+  await signIn(users.worker)
+  await open('/')
+  // ملف التعريف زي ما المتصفح قراه (من رابطه في رأس الصفحة)
+  const manifest = await page('Page.getAppManifest')
+  assert.deepEqual(manifest.errors, [])
+  assert.equal(manifest.url, `${webOrigin}/manifest.webmanifest`)
+  const parsed = JSON.parse(manifest.data)
+  assert.deepEqual([parsed.name, parsed.display, parsed.dir, parsed.lang, parsed.start_url, parsed.scope], ['Logic Leap HR', 'standalone', 'rtl', 'ar', '/', '/'])
+  // حكم المتصفح نفسه: مفيش مانع للتثبيت (localhost عنوان آمن؛ على السيرفر لازم HTTPS)
+  const { installabilityErrors } = await page('Page.getInstallabilityErrors')
+  assert.deepEqual(installabilityErrors.map(error => error.errorId), [])
+  // الأيقونات وأيقونة iOS بيتحمّلوا صور
+  const icons = await evaluate(`Promise.all(${JSON.stringify([...parsed.icons.map(icon => icon.src), '/apple-icon.png'])}.map(async src => { const response = await fetch(src); return [src, response.status, response.headers.get('content-type')] }))`)
+  assert.deepEqual(icons, [['/icons/icon-192.png', 200, 'image/png'], ['/icons/icon-512.png', 200, 'image/png'], ['/icons/icon-maskable-512.png', 200, 'image/png'], ['/apple-icon.png', 200, 'image/png']])
+  assert.equal(await evaluate(`document.querySelector('link[rel="apple-touch-icon"]')?.getAttribute('href')?.split('?')[0] ?? null`), '/apple-icon.png')
+  // زرار التثبيت: مش موجود لحد ما المتصفح يعرض؛ ومع العرض بيظهر، والضغط بيفتح عرض المتصفح مرة واحدة وبيختفي
+  const button = () => evaluate(`!!document.querySelector('[data-install-app]')`)
+  assert.equal(await button(), false)
+  const offer = `(() => { const event = new Event('beforeinstallprompt', { cancelable: true }); window.__installPrompts = 0
+    event.prompt = async () => { window.__installPrompts += 1 }; event.userChoice = Promise.resolve({ outcome: 'dismissed' }); window.dispatchEvent(event); return event.defaultPrevented })()`
+  assert.equal(await evaluate(offer), true, 'شريط المتصفح الصغير بيتأجل لحد ضغطة الزرار')
+  await sleep(300)
+  assert.equal(await button(), true)
+  await evaluate(`(() => { document.querySelector('[data-install-app]').click(); return true })()`); await sleep(400)
+  assert.deepEqual([await evaluate('window.__installPrompts'), await button()], [1, false])
+  // وبعد ما التطبيق يتثبت العرض بيتشال
+  await evaluate(offer); await sleep(300)
+  assert.equal(await button(), true)
+  await evaluate(`(() => { window.dispatchEvent(new Event('appinstalled')); return true })()`); await sleep(300)
+  assert.equal(await button(), false)
+  // ضابط الحكم: مستند من غير ملف تعريف (صورة الأيقونة نفسها) المتصفح بيقول عليه «مش قابل للتثبيت»
+  await page('Page.navigate', { url: `${webOrigin}/icons/icon-192.png` }); await sleep(800)
+  const bare = await page('Page.getInstallabilityErrors')
+  assert.ok(bare.installabilityErrors.length > 0, 'مستند من غير ملف تعريف لازم يبقى له مانع')
+})
+
 test('PM-03: المدير على 390px — «بانتظار موافقتي» ونافذة الاعتماد، و«مهامي» باللي كلّف بيه', { skip }, async () => {
   await signIn(users.head)
   const problems = []

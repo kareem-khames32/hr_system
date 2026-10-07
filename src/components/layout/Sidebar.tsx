@@ -17,6 +17,7 @@ import { DEFAULT_MODULES, routeAvailable, useModules } from '@/lib/modules'
 import { useBranding } from '@/lib/branding'
 import { BrandLogo } from '@/components/branding/BrandLogo'
 import { PoweredBy } from '@/components/branding/PoweredBy'
+import { InstallAppButton } from './InstallAppButton'
 import {
   LayoutDashboard,
   Users,
@@ -659,6 +660,8 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
             <LogOut size={18} className="text-gray-400" />
           </button>
         </div>
+        {/* B2.12: «ثبّت التطبيق» — بيظهر لما المتصفح يعرض التثبيت بس */}
+        <InstallAppButton className="mt-3" />
         {/* اسم المنتج صغير في الآخر — الاسم الكبير فوق للشركة */}
         <PoweredBy className="mt-3" />
       </div>
