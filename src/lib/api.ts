@@ -40,6 +40,8 @@ export interface CurrentUser {
   mustChangePassword?: boolean
   // B2.17-ج: تطبيق المصادقة إلزامي لدوره ولسه مافعّلش — لازم يفعّله قبل ما يستخدم النظام (/login/totp)
   totpSetupRequired?: boolean
+  // B3.1-ب: موظف الحساب مباشرته لسه جاية (YYYY-MM-DD) — لحد اليوم ده الحساب بيفتح شاشات التهيئة بس (src/lib/preboarding.ts)
+  preboardingUntil?: string
   // «نطاقه: كل الفروع» — مدير النظام فتحه للحساب ده (الخادم هو اللي بيفرضه؛ هنا لإظهار الأزرار بس)
   scopeAllBranches?: boolean
   // B1.2: حساب مربوط بالمجال (AD): كلمة سره في الويندوز، فمالوش «تغيير كلمة المرور» عندنا

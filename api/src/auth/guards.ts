@@ -13,6 +13,7 @@ import { In } from 'typeorm'
 import type { FindOperator } from 'typeorm'
 import type { JwtPayload } from './auth.service'
 import { TOTP_SETUP_MESSAGE, TOTP_SETUP_REQUIRED } from './totp'
+import { ALLOW_PREBOARDING_KEY, PREBOARDING_ONLY, preboardingActive, preboardingMessage } from './preboarding'
 
 // كلمة مرور مؤقتة: التوكن اللي فيه mustChangePassword مايفتحش غير المسارات المعلَّمة بالديكوريتور ده
 // (تغيير كلمة المرور و«مين أنا»). العلامة جوه التوكن متزامنة مع القاعدة: أي تغيير لـ users.mustChangePassword
@@ -54,6 +55,15 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
       !Reflect.getMetadata(ALLOW_PENDING_TOTP_KEY, context.getClass())
     ) {
       throw new ForbiddenException({ statusCode: 403, code: TOTP_SETUP_REQUIRED, message: TOTP_SETUP_MESSAGE })
+    }
+    // B3.1-ب: جلسة في بوابة التهيئة (تاريخ المباشرة لسه جاي) مابتفتحش غير المسارات المعلَّمة بـ@AllowPreboarding()
+    if (
+      preboardingActive(payload as JwtPayload | undefined) &&
+      !Reflect.getMetadata(ALLOW_PREBOARDING_KEY, context.getHandler()) &&
+      !Reflect.getMetadata(ALLOW_PREBOARDING_KEY, context.getClass())
+    ) {
+      throw new ForbiddenException({ statusCode: 403, code: PREBOARDING_ONLY,
+        message: preboardingMessage(String((payload as JwtPayload).preboardingUntil)) })
     }
     return payload
   }

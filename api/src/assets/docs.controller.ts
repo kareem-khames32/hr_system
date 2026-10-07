@@ -17,6 +17,7 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { In, Repository } from 'typeorm'
 import { localDateOf } from '../attendance/attendance.service'
 import { andBranchScopeSql } from '../auth/guards'
+import { AllowPreboarding } from '../auth/preboarding'
 import { currentEmployeeSql } from '../reports/metrics'
 import { FUNCTIONAL_APPROVER_ROLES } from '../requests/approver-resolver.service'
 import { TASK_ROLE_LABELS, tasksTableReady } from '../tasks/task-rules'
@@ -144,6 +145,7 @@ export class DocsController {
     private readonly employees: Repository<Employee>
   ) {}
 
+  @AllowPreboarding()
   @Get()
   async list(
     @CurrentUser() user: JwtPayload,

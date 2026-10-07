@@ -233,6 +233,14 @@ export const MODULES = {
     nameAr: 'التهيئة', group: 'people', dependsOn: ['employees'], softUses: ['documents'],
     description: 'مهام تهيئة الموظف الجديد',
     routes: ['/employees/onboarding'],
+    features: {
+      // B3.1-ب: حساب الموظف اللي مباشرته لسه جاية بيفتح بوابة التهيئة بس — مقفولة لحد ما الشركة تقرر
+      'onboarding.preboarding': {
+        nameAr: 'بوابة التهيئة قبل المباشرة',
+        description: 'حساب الموظف الجديد لحد تاريخ مباشرته بيفتح مستنداته والسياسات ومهامه بس (من غير باقي البوابة ومن غير صلاحيات إدارية)',
+        default: false,
+      },
+    },
   }),
   custody: moduleDef({
     nameAr: 'العهد والأصول', group: 'people', dependsOn: ['employees'], softUses: ['offboarding'],

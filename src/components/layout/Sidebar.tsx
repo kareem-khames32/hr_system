@@ -12,6 +12,7 @@ import {
 } from '@/lib/api'
 import { fetchMyPayrollApprovalsCount } from '@/lib/payroll-approval-chain-api'
 import { fetchMyTasksCount, TASKS_CHANGED_EVENT } from '@/lib/tasks-api'
+import { preboardingPathAllowed, preboardingUntil } from '@/lib/preboarding'
 import { fetchDelegations } from '@/lib/delegations-api'
 import { fetchTeamManager } from '@/lib/manager-api'
 import { DEFAULT_MODULES, routeAvailable, useModules } from '@/lib/modules'
@@ -479,6 +480,8 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
       { id: 'calendar', label: 'التقويم', icon: <Calendar size={20} />, href: '/calendar' },
     ]
 
+    // B3.1-ب: حساب في بوابة التهيئة: شاشات التهيئة بس (مهامي، مستنداتي، سياساتي، الإشعارات)
+    if (preboardingUntil(currentUser)) return portalItems.filter((item) => !!item.href && preboardingPathAllowed(item.href) && available(item.href))
     return [...portalItems.filter((item) => available(item.href)), ...adminItems]
   }, [currentUser, inboxCount, inboxError, delegationEntry, payrollApprovals, tasksCount, teamManager, enabledModules])
 

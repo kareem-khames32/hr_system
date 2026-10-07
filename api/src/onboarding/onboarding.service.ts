@@ -28,6 +28,7 @@ import {
 } from './onboarding.entities'
 import { Grade } from '../assets/assets.entities'
 import { OnboardingTemplate } from './onboarding-template.entity'
+import { PREBOARDING_FEATURE, bindPreboarding } from '../auth/preboarding'
 import { ONBOARDING_CONTRACT_TYPES, ONBOARDING_TEMPLATE_SCOPE_REQUIRED, ONBOARDING_TEMPLATES_MIGRATION_MISSING, matchingOnboardingTemplates,
   onboardingTemplatesReady, templateSpecificity, type OnboardingTemplateScope } from './onboarding-templates'
 
@@ -143,6 +144,20 @@ export class OnboardingService implements OnApplicationBootstrap, OnModuleInit {
       await this.materializeHired(Number((payload as { event?: { payload?: { employeeId?: unknown } } } | null)?.event?.payload?.employeeId))
     })
     this.queue.subscribe('EMPLOYEE_HIRED', ONBOARDING_HIRED_JOB)
+    // B3.1-ب: الدخول بيسأل هنا عن تاريخ مباشرة موظف الحساب (بوابة التهيئة قبل المباشرة)
+    bindPreboarding((employeeId) => this.preboardingUntil(employeeId))
+  }
+
+  /**
+   * B3.1-ب: تاريخ مباشرة الموظف (actualStartDate، وإلا joinDate) لو لسه جاي والموديول والميزة مفتوحين — وإلا null (الجلسة عادية).
+   * منتهي الخدمة والمؤرشف برّه. مفيش حالة موظف جديدة: الحكم بالتاريخ نفسه.
+   */
+  async preboardingUntil(employeeId: number): Promise<string | null> {
+    if (!(await this.modules.isEnabled('onboarding')) || !(await this.modules.isFeatureEnabled(PREBOARDING_FEATURE))) return null
+    const emp = await this.employees.findOne({ where: { id: employeeId }, select: { id: true, joinDate: true, actualStartDate: true, status: true } })
+    if (!emp || ['terminated', 'archived'].includes(emp.status)) return null
+    const start = String(emp.actualStartDate || emp.joinDate || '').slice(0, 10)
+    return /^\d{4}-\d{2}-\d{2}$/.test(start) && start > localDateOf(new Date()) ? start : null
   }
 
   /**

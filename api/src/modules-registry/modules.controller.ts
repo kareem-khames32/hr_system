@@ -1,6 +1,7 @@
 import { Controller, Get, UseGuards } from '@nestjs/common'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard } from '../auth/guards'
+import { AllowPreboarding } from '../auth/preboarding'
 import { AllowDuringPolicyGate } from '../policies/policy-gate.decorator'
 import { RequireModule } from './module.guard'
 import { ModulesService } from './modules.service'
@@ -13,6 +14,7 @@ export class ModulesController {
   constructor(private readonly modules: ModulesService) {}
 
   // من غير صلاحية: كل مستخدم داخل بيقرا المفعّل له هو بس (أسماء موديولات، مفيش بيانات)
+  @AllowPreboarding()
   @AllowDuringPolicyGate()
   @Get('enabled')
   enabled(@CurrentUser() user: JwtPayload) {

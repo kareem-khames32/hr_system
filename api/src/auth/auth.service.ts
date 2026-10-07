@@ -27,6 +27,7 @@ import { newCsrfToken } from './session-cookie'
 import { UserSessionsService } from './user-sessions.service'
 import { TotpService } from './totp.service'
 import { TOTP_CHALLENGE_MARK, TOTP_FACTOR_CHANGED } from './totp'
+import { preboardingActive, preboardingUntilOf } from './preboarding'
 
 // حمولة التوكن — الدور والفرع هما أساس عزل البيانات
 export interface JwtPayload {
@@ -55,6 +56,8 @@ export interface JwtPayload {
   sid?: string
   // B2.17-ج: تطبيق المصادقة إلزامي لدور الحساب ولسه مافعّلش — التوكن مايفتحش غير التفعيل (JwtAuthGuard). بعد التأكيد جلسة جديدة من غيرها
   totpSetupRequired?: boolean
+  // B3.1-ب: تاريخ مباشرة موظف الحساب (YYYY-MM-DD) — لحد اليوم ده التوكن مايفتحش غير بوابة التهيئة (JwtAuthGuard)، ومن غير صلاحيات
+  preboardingUntil?: string
 }
 
 /** B2.17: شكل الجلسة المطلوب من العميل. cookie = التوكن في cookie httpOnly (ومعاه رمز CSRF) بدل جسم الرد */
@@ -80,6 +83,8 @@ export interface SessionResponse {
     domainAccount?: true
     // B2.17-ج: بيتبعت لما يكون true بس — الواجهة بتحوّل لشاشة تفعيل تطبيق المصادقة
     totpSetupRequired?: true
+    // B3.1-ب: بيتبعت للحساب اللي في بوابة التهيئة بس — الواجهة بتعرض شاشات التهيئة لحد التاريخ ده
+    preboardingUntil?: string
   }
   // B2.17: لجلسة الـcookie بس — رمز CSRF بتاعها (الجلسة العادية ردها زي ما هو بالحرف)
   csrfToken?: string
@@ -453,7 +458,10 @@ export class AuthService {
 
   // توكن + بيانات الحساب للواجهة (نفس رد الدخول)
   private async issueSession(user: User, session: SessionMode = {}, context: LoginContext = {}): Promise<SessionResponse> {
-    const permissions = await this.resolvePermissions(user)
+    // B3.1-ب: موظف الحساب مباشرته لسه جاية (والميزة مفتوحة) = جلسة بوابة التهيئة: بتاريخ المباشرة، ومن غير أي صلاحية (دوره بيشتغل
+    // بصلاحياته من أول دخول بعد المباشرة)
+    const preboardingUntil = await preboardingUntilOf(user)
+    const permissions = preboardingUntil ? [] : await this.resolvePermissions(user)
     const mustChangePassword = !!user.mustChangePassword
     // «كل الفروع» من عمود القاعدة بقيمته الحرفية فقط (bit → true)؛ مدير النظام نطاقه كامل بدوره فمايتكتبش له
     const scopeAllBranches = user.role !== 'super_admin' && user.scopeAllBranches === true
@@ -481,6 +489,7 @@ export class AuthService {
       ...(csrf ? { csrf } : {}),
       ...(sid ? { sid } : {}),
       ...(totpSetupRequired ? { totpSetupRequired: true } : {}),
+      ...(preboardingUntil ? { preboardingUntil } : {}),
     }
 
     return {
@@ -498,6 +507,7 @@ export class AuthService {
         ...(branchIds !== null ? { branchIds } : {}),
         ...(user.domainObjectGuid ? { domainAccount: true as const } : {}),
         ...(totpSetupRequired ? { totpSetupRequired: true as const } : {}),
+        ...(preboardingUntil ? { preboardingUntil } : {}),
       },
       ...(csrf ? { csrfToken: csrf } : {}),
     }
@@ -534,6 +544,7 @@ export class AuthService {
         ...(Array.isArray(payload.branchIds) ? { branchIds: payload.branchIds } : {}),
         ...(row?.domainObjectGuid ? { domainAccount: true as const } : {}),
         ...(payload.totpSetupRequired === true ? { totpSetupRequired: true as const } : {}),
+        ...(preboardingActive(payload) ? { preboardingUntil: payload.preboardingUntil } : {}),
       },
       csrfToken: payload.csrf ?? null,
     }

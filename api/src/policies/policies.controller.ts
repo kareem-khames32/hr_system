@@ -4,6 +4,7 @@ import type { Response } from 'express'
 import { pipeline } from 'node:stream'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
+import { AllowPreboarding } from '../auth/preboarding'
 import { fileStorage } from '../files/storage'
 import { STORED_FILE_CHANGED, sha256VerifiedStream } from '../files/stored-file-hash'
 import { RequireModule } from '../modules-registry/module.guard'
@@ -58,24 +59,28 @@ export class PoliciesController {
   constructor(private readonly policies: PoliciesService) {}
 
   // ===== الموظف لنفسه (قبل ':id' حتى لا يلتقطها) =====
+  @AllowPreboarding()
   @AllowDuringPolicyGate()
   @Get('mine')
   mine(@CurrentUser() user: JwtPayload) {
     return this.policies.mine(user)
   }
 
+  @AllowPreboarding()
   @AllowDuringPolicyGate()
   @Get('pending')
   pending(@CurrentUser() user: JwtPayload) {
     return this.policies.pending(user)
   }
 
+  @AllowPreboarding()
   @AllowDuringPolicyGate()
   @Get('versions/:versionId')
   version(@CurrentUser() user: JwtPayload, @Param('versionId', ParseIntPipe) versionId: number) {
     return this.policies.versionContent(user, versionId)
   }
 
+  @AllowPreboarding()
   @AllowDuringPolicyGate()
   @Get('versions/:versionId/file')
   async versionFile(@CurrentUser() user: JwtPayload, @Param('versionId', ParseIntPipe) versionId: number, @Res() res: Response) {
@@ -102,6 +107,7 @@ export class PoliciesController {
     }
   }
 
+  @AllowPreboarding()
   @AllowDuringPolicyGate()
   @Post('versions/:versionId/acknowledge')
   acknowledge(@CurrentUser() user: JwtPayload, @Param('versionId', ParseIntPipe) versionId: number, @Body() dto: AcknowledgeDto) {

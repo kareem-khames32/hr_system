@@ -4,6 +4,7 @@ import { ArrayMaxSize, ArrayMinSize, IsArray, IsInt, Min } from 'class-validator
 import { EntityManager, In, Not, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchIdIn, branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
+import { AllowPreboarding } from '../auth/preboarding'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
@@ -187,6 +188,7 @@ export class HiringDocumentsController {
   }
 
   // «مسوغات التعيين المطلوبة منك» — للموظف نفسه (أي حساب مربوط بموظف): كل نوع مطلوب وهل مرفوع ولا ناقص
+  @AllowPreboarding()
   @Get('mine')
   async mine(@CurrentUser() user: JwtPayload) {
     const employeeId = user.employeeId

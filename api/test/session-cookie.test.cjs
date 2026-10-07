@@ -73,7 +73,7 @@ test('SK-02: the server reads Bearer first with one reader for both the token an
   const service = read('api/src/auth/auth.service.ts')
   // الرمز جوه توكن جلسة الـcookie بس؛ والجلسة العادية ردها وتوكنها زي ما هم
   assert.match(service, /const csrf = session\.cookie \? newCsrfToken\(\) : null/)
-  assert.match(service, /\.\.\.\(csrf \? \{ csrf \} : \{\}\),\n      \.\.\.\(sid \? \{ sid \} : \{\}\),\n      \.\.\.\(totpSetupRequired \? \{ totpSetupRequired: true \} : \{\}\),\n    \}\n\n    return \{\n      accessToken: await this\.jwt\.signAsync\(payload\),/)
+  assert.match(service, /\.\.\.\(csrf \? \{ csrf \} : \{\}\),\n      \.\.\.\(sid \? \{ sid \} : \{\}\),\n      \.\.\.\(totpSetupRequired \? \{ totpSetupRequired: true \} : \{\}\),\n      \.\.\.\(preboardingUntil \? \{ preboardingUntil \} : \{\}\),\n    \}\n\n    return \{\n      accessToken: await this\.jwt\.signAsync\(payload\),/)
   assert.match(service, /\.\.\.\(csrf \? \{ csrfToken: csrf \} : \{\}\),\n    \}\n  \}/)
   assert.match(service, /private async issueSession\(user: User, session: SessionMode = \{\}, context: LoginContext = \{\}\): Promise<SessionResponse>/)
   assert.match(service, /csrfToken: payload\.csrf \?\? null,/)

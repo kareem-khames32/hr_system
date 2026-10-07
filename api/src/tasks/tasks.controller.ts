@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Query, UseGuar
 import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateIf } from 'class-validator'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
+import { AllowPreboarding } from '../auth/preboarding'
 import { RequireModule } from '../modules-registry/module.guard'
 import { FUNCTIONAL_APPROVER_ROLES } from '../requests/approver-resolver.service'
 import { TASK_PRIORITIES, TASK_STATUSES } from './task.entity'
@@ -69,11 +70,13 @@ class TaskStatusDto {
 export class TasksController {
   constructor(private readonly tasks: TasksService) {}
 
+  @AllowPreboarding()
   @Get('mine')
   mine(@CurrentUser() user: JwtPayload) {
     return this.tasks.mine(user)
   }
 
+  @AllowPreboarding()
   @Get('mine/count')
   mineCount(@CurrentUser() user: JwtPayload) {
     return this.tasks.mineCount(user)
@@ -107,6 +110,7 @@ export class TasksController {
     return this.tasks.create(user, dto)
   }
 
+  @AllowPreboarding()
   @Get(':id')
   detail(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number) {
     return this.tasks.detail(user, id)
@@ -123,6 +127,7 @@ export class TasksController {
     return this.tasks.update(user, id, dto)
   }
 
+  @AllowPreboarding()
   @Post(':id/status')
   setStatus(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: TaskStatusDto) {
     return this.tasks.setStatus(user, id, dto)

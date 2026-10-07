@@ -15,6 +15,7 @@ import { ArrayMaxSize, IsArray, IsOptional, IsString, MaxLength } from 'class-va
 import { Between, In, IsNull, LessThanOrEqual, MoreThanOrEqual, Not, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchIdIn, branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, RolesGuard, userHasPerm } from '../auth/guards'
+import { AllowPreboarding } from '../auth/preboarding'
 import { AttendanceDay } from '../attendance/attendance.entities'
 import { AttendanceService } from '../attendance/attendance.service'
 import { currentHolidayAudienceMember, describeHolidayAudience, holidayAudienceMatches, holidayAudienceNames,
@@ -182,6 +183,7 @@ export class PortalController {
   // ===== الإشعارات المشتقة للمستخدم الحالي =====
   // read: قرأها المستخدم (محفوظة في notification_reads)، والمحذوف من قائمته لا يرجع
   @RequireModule('notifications')
+  @AllowPreboarding()
   @Get('notifications')
   async notifications(@CurrentUser() user: JwtPayload) {
     const items = await this.buildNotifications(user)
@@ -204,6 +206,7 @@ export class PortalController {
   // تحديد كمقروء: ids محددة أو (بدونها) كل الإشعارات الظاهرة — مفتاح لا يخص
   // المستخدم حالياً يُتجاهل (لا صفوف لإشعارات غير قائمة)
   @RequireModule('notifications')
+  @AllowPreboarding()
   @Patch('notifications/read')
   async markNotificationsRead(
     @CurrentUser() user: JwtPayload,

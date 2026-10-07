@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { EyeOff, ShieldAlert } from 'lucide-react'
 import { can, CHANGE_PASSWORD_PATH, getCurrentUser, hasSession, POLICY_GATE_PATH, restoreSession, TOTP_SETUP_PATH } from '@/lib/api'
+import { PREBOARDING_HOME, preboardingPathAllowed, preboardingUntil } from '@/lib/preboarding'
 import { fetchPendingPolicies, markPoliciesChecked, policiesCheckedThisSession } from '@/lib/policies-api'
 import { routeAvailable, useModules } from '@/lib/modules'
 import Sidebar from './Sidebar'
@@ -124,6 +125,11 @@ export function AppShell({ children }: MainLayoutProps) {
         window.location.href = TOTP_SETUP_PATH
         return
       }
+      // B3.1-ب: حساب في بوابة التهيئة (مباشرته لسه جاية) فتح شاشة برّه شاشات التهيئة → «مستنداتي» (الخادم قافل الباقي أصلًا)
+      if (preboardingUntil() && !preboardingPathAllowed(pathname)) {
+        window.location.href = PREBOARDING_HOME
+        return
+      }
       setAuthed(true)
     }
     if (hasSession()) {
@@ -210,6 +216,8 @@ export function AppShell({ children }: MainLayoutProps) {
     (Array.isArray(requiredPerm) ? requiredPerm : [requiredPerm]).every((p) => can(p))
   // شاشة موديول مقفول (أو ميزة مقفولة) اتفتحت بالرابط مباشرة: «الصفحة دي مش متاحة» — الخادم برضه بيرجّع 404 لمساراتها
   const available = routeAvailable(pathname, modules)
+  // B3.1-ب: سطر ترحيب لحساب في بوابة التهيئة
+  const startsOn = preboardingUntil()
 
   return (
     <ShellContext.Provider value>
@@ -220,6 +228,12 @@ export function AppShell({ children }: MainLayoutProps) {
         <div className="lg:mr-72">
           <Header onMenuClick={openNav} menuOpen={navOpen} menuButtonRef={menuButtonRef} />
           <main className="p-4 lg:p-8">
+            {startsOn && (
+              <div className="mb-4 rounded-xl border border-primary-100 bg-primary-50 p-4 text-sm text-primary-800">
+                أهلًا بيك — مباشرتك يوم {startsOn}. المتاح لك دلوقتي: مستنداتك، وسياسات الشركة وإقرارك بيها، ومهامك. باقي
+                النظام بيتفتح من يوم المباشرة.
+              </div>
+            )}
             {!available ? (
               <div className="card p-12 text-center max-w-lg mx-auto mt-12">
                 <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">

@@ -19,6 +19,7 @@ import { IsBoolean, IsEmail, IsOptional, IsString, Matches, MaxLength, MinLength
 import { AuthService, JwtPayload } from './auth.service'
 import { AllowPendingPasswordChange, AllowPendingTotpSetup, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from './guards'
 import { jwtLifetimeSeconds } from './jwt-secret'
+import { AllowPreboarding } from './preboarding'
 import { bearerTokenOf, sessionViaCookie } from './jwt.strategy'
 import { CSRF_HEADER, CSRF_MESSAGE, CSRF_TOKEN_INVALID, clearedSessionCookieHeader, csrfMatches, fromFrontendOrigin, sessionCookieHeader, sessionCookieOf,
   sessionCookieOptions } from './session-cookie'
@@ -117,6 +118,7 @@ type CookieResponse = { setHeader(name: string, value: string): unknown }
 type SessionRequest = { headers: Record<string, unknown>; method?: string; ip?: string }
 
 @RequireModule('platform')
+@AllowPreboarding()
 @Controller('auth')
 export class AuthController {
   constructor(private readonly auth: AuthService, private readonly config: ConfigService, private readonly sessions: UserSessionsService,

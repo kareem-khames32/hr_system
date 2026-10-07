@@ -22,6 +22,7 @@ import { memoryStorage } from 'multer'
 import { randomUUID } from 'crypto'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, RolesGuard, userHasPerm } from '../auth/guards'
+import { AllowPreboarding } from '../auth/preboarding'
 import { StoredFile } from './stored-file.entity'
 import { Employee } from '../employees/employee.entity'
 import { Request } from '../requests/entities/request.entity'
@@ -157,6 +158,7 @@ export class FilesController {
   }
 
   // التحميل/المعاينة — صاحب الملف أو من يملك documents.manage
+  @AllowPreboarding()
   @Get(':id')
   async download(
     @CurrentUser() user: JwtPayload,
