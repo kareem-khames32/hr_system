@@ -26,6 +26,7 @@ import { LoginSecurityService, type LoginContext } from './login-security.servic
 import { newCsrfToken } from './session-cookie'
 import { UserSessionsService } from './user-sessions.service'
 import { TotpService } from './totp.service'
+import { TOTP_CHALLENGE_MARK, TOTP_FACTOR_CHANGED } from './totp'
 
 // حمولة التوكن — الدور والفرع هما أساس عزل البيانات
 export interface JwtPayload {
@@ -382,7 +383,8 @@ export class AuthService {
 
   /** التحقق من رمز البريد → الجلسة. كل قواعد الحساب بتتقري من القاعدة من جديد هنا. */
   async verifyTwoFactor(challengeToken: string, code: string, context: LoginContext = {}, session: SessionMode = {}): Promise<SessionResponse> {
-    const challenge = await this.twoFactor.verify(challengeToken, code, (userId, value) => this.totp.verifyLogin(userId, value)).catch(async (error) => {
+    const challenge = await this.twoFactor.verify(challengeToken, code, (userId, value) => this.totp.verifyLogin(userId, value),
+      (userId) => this.totp.enrolled(userId)).catch(async (error) => {
       // B1.3: الرمز الغلط أو المنتهي في السجل (الحساب بيتعرف من الرمز لو صالح)
       await this.security.record({ identifier: '—', method: 'CODE',
         outcome: `CODE_${error?.code ?? 'REJECTED'}`.slice(0, 30), context })
@@ -391,6 +393,8 @@ export class AuthService {
     const user = await this.withPasswordState().where('u.id = :id', { id: challenge.userId }).getOne()
     // الحساب اتعطّل بين إرسال الرمز والتحقق منه؟ مفيش جلسة (نفس قاعدة الدخول)
     if (!user || !user.isActive) throw new UnauthorizedException('بيانات الدخول غير صحيحة')
+    // CRP3D-B17-02: عامل الحساب اتغيّر بين قبول رمز البريد وفتح الجلسة (التطبيق اتفعّل دلوقتي)؟ مفيش جلسة
+    if (challenge.codeHash !== TOTP_CHALLENGE_MARK && (await this.totp.enrolled(user.id))) throw new UnauthorizedException(TOTP_FACTOR_CHANGED)
     await this.users.update({ id: user.id }, { lastLoginAt: new Date() })
     await this.security.record({ userId: user.id, identifier: user.email, method: 'CODE', outcome: 'SUCCESS', context })
     return this.issueSession(user, session, context)
@@ -548,6 +552,15 @@ export class AuthService {
       return
     }
     if (payload?.sid && Number.isSafeInteger(payload.sub)) await this.sessions.revoke(payload.sid, payload.sub, 'LOGOUT')
+  }
+
+  /** رمز CSRF بتاع توكن جلسة سليم التوقيع (null = توكن من غير رمز)؛ undefined = توكن تالف أو منتهي — CRP3D-N02 */
+  async csrfOfToken(token: string): Promise<string | null | undefined> {
+    try {
+      return (await this.jwt.verifyAsync<JwtPayload>(token))?.csrf ?? null
+    } catch {
+      return undefined
+    }
   }
 
   async findById(id: number) {

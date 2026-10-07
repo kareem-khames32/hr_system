@@ -8,6 +8,7 @@ import { MailSendError, MailService, maskEmail } from '../auth/mail.service'
 import { User } from '../auth/user.entity'
 import { CommentsService } from '../comments/comments.service'
 import { AnnouncementsService } from '../announcements/announcements.service'
+import { supersededSql } from '../assets/document-expiry'
 import { isCommentEntity, parseCommentMentions } from '../comments/comment-rules'
 import type { Comment } from '../comments/comment.entity'
 import { definitionCodeOf } from '../common/leave-contract'
@@ -288,9 +289,11 @@ export class NotificationsService implements OnModuleInit {
 
   // ===== B2.15: «مستندك هينتهي» لصاحب المستند =====
   /** المستند لسه بتاريخ الحدث وموظفه لسه حالي؟ (اتجدد أو اتمسح بعد الحدث = مفيش إشعار) */
+  // CRP3D-N01: مستند اتبدّل بمستند أحدث من نفس النوع (نفس حكم التنبيه والتقرير) = مابقاش «هينتهي»: لا بيتوزّع ولا رسالته بتطلع
   private async expiringDocument(documentId: number, expiryDate: string) {
     const [doc]: Array<{ employeeId: number; docType: string; expiryDate: string }> = await this.ds.query(
-      `SELECT d.[employeeId], d.[docType], CONVERT(nvarchar(10), d.[expiryDate], 23) AS [expiryDate] FROM [employee_documents] d WHERE d.[id] = @0`, [documentId])
+      `SELECT d.[employeeId], d.[docType], CONVERT(nvarchar(10), d.[expiryDate], 23) AS [expiryDate] FROM [employee_documents] d
+       WHERE d.[id] = @0 AND NOT ${supersededSql('d')}`, [documentId])
     return doc && doc.expiryDate === expiryDate ? doc : null
   }
 

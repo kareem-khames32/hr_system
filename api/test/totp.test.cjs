@@ -77,7 +77,17 @@ test('TT-03: an enrolled account is asked for the app code before the mail gate;
   const order = ['if (await this.totp.enrolled(user.id)) {', 'const challenge = await this.twoFactor.openTotp(user, method)', 'const gate = await this.twoFactor.gate(user)',
     'return this.issueSession(user, session, context)'].map(part => finish.indexOf(part))
   assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), JSON.stringify(order))
-  assert.match(auth, /this\.twoFactor\.verify\(challengeToken, code, \(userId, value\) => this\.totp\.verifyLogin\(userId, value\)\)/)
+  assert.match(auth, /this\.twoFactor\.verify\(challengeToken, code, \(userId, value\) => this\.totp\.verifyLogin\(userId, value\),\n\s+\(userId\) => this\.totp\.enrolled\(userId\)\)/)
+  // CRP3D-B17-02: حالة رمزها بريد لحساب فعّل التطبيق بعدها — بتبطل مع التفعيل، وبتتحكم وقت التحقق وقبل فتح الجلسة
+  assert.match(auth, /if \(challenge\.codeHash !== TOTP_CHALLENGE_MARK && \(await this\.totp\.enrolled\(user\.id\)\)\) throw new UnauthorizedException\(TOTP_FACTOR_CHANGED\)/)
+  const factor = read('api/src/auth/two-factor.service.ts')
+  assert.match(factor, /if \(totpEnrolled && \(await totpEnrolled\(row\.userId\)\)\) \{\n\s+await this\.challenges\.update\(\{ id: row\.id, consumedAt: IsNull\(\), lockedAt: IsNull\(\) \}, \{ lockedAt: new Date\(\) \}\)\n\s+throw new TwoFactorError\('SUPERSEDED', TOTP_FACTOR_CHANGED\)/)
+  const totpService = read('api/src/auth/totp.service.ts')
+  assert.match(totpService, /UPDATE \[login_challenges\] SET \[lockedAt\] = @1 WHERE \[userId\] = @0 AND \[consumedAt\] IS NULL AND \[lockedAt\] IS NULL AND \[codeHash\] <> @2/)
+  // CRP3D-B17-01: إعادة الضبط بحدود تغيير كلمة المرور، والصف بيتقفل ويتقارن وقت التنفيذ
+  const resetRoute = read('api/src/auth/users.controller.ts')
+  assert.match(resetRoute, /assertManageableScope\(actor, target\)\n\s+const beyond = await this\.takeoverBeyond\(actor, target\)\n\s+if \(beyond\) throw new ForbiddenException\([^\n]+\n\s+return \{ id: target\.id, reset: await this\.totp\.adminReset\(actor, target\) \}/)
+  assert.match(totpService, /FROM \[users\] WITH \(UPDLOCK, ROWLOCK\) WHERE \[id\] = @0', \[target\.id\]\)\n\s+if \(!fresh \|\| accountStamp\(fresh\) !== accountStamp\(target\)\) throw new ConflictException\(TOTP_RESET_ACCOUNT_CHANGED\)/)
   // علامة «فعّل الأول» من مكان واحد: كل جلسة بتتفتح بتتحكم بحالة الحساب وقتها
   const issue = auth.slice(auth.indexOf('private async issueSession('), auth.indexOf('async reissueSession('))
   assert.match(issue, /const totp = await this\.totp\.loginState\(user\)\s+const totpSetupRequired = totp\.required && !totp\.enrolled/)

@@ -302,3 +302,50 @@ test('SR-03: a scheduled report goes to its owner by mail once when due, built w
   // موديول/مهمة التقارير: المهمة متسجلة في قايمة المهام المجدولة
   assert.ok(require('../src/scheduler/scheduled-jobs').SCHEDULED_JOB_IDS.includes('reports.scheduled'))
 })
+
+test('SR-04 (CRP3D): the owner is judged again after the file is built — a file built with a withdrawn scope or right does not go out', async () => {
+  const today = localDateOf(new Date())
+  const wide = await repo('User').save({ email: 'wide@saved-reports.invalid', displayName: 'حساب wide', passwordHash: 'test-only', role: 'employee',
+    permissions: JSON.stringify(['reports.view', 'reports.save']), isActive: true, branchId: null, scopeAllBranches: true })
+  const report = await repo('SavedReport').save({ ownerUserId: wide.id, name: 'قوى كل الفروع', reportKey: 'headcount', filters: '{}', frequency: 'DAILY', format: 'xlsx',
+    lastSentOn: null, lastError: null, createdAt: new Date() })
+  const realBuild = saved.build
+  // تغيير بيحصل بعد أول بناء للملف وقبل الإرسال
+  const during = async change => {
+    let done = false, builds = 0
+    saved.build = async function (...args) { const file = await realBuild.apply(this, args); builds += 1; if (!done) { done = true; await change() } return file }
+    try { return { ...(await saved.sendDue(at(9))), builds } } finally { saved.build = realBuild }
+  }
+  const mails = outbox.length, audits = await scheduledAudits()
+  // من غير تغيير: بناء واحد
+  assert.deepEqual(await during(async () => {}), { due: 1, sent: 1, failed: 0, skipped: null, builds: 1 })
+  assert.deepEqual((await sheetRows(outbox[outbox.length - 1].attachments[0].content))[1], ['الإجمالي', 'الموظفون الحاليون', 5, 5])
+  // النطاق اتضيّق والملف بيتبني: اللي بيطلع ملف اتبنى بالنطاق الجديد (3 مش 5)، وسطر تدقيق واحد للملف اللي طلع
+  await repo('SavedReport').update({ id: report.id }, { lastSentOn: addDays(today, -1) })
+  assert.deepEqual(await during(() => repo('User').update({ id: wide.id }, { scopeAllBranches: false, branchId: branchA.id })), { due: 1, sent: 1, failed: 0, skipped: null, builds: 2 })
+  assert.equal(outbox.length - mails, 2)
+  assert.deepEqual((await sheetRows(outbox[outbox.length - 1].attachments[0].content))[1], ['الإجمالي', 'الموظفون الحاليون', 3, 3])
+  assert.doesNotMatch(JSON.stringify(await sheetRows(outbox[outbox.length - 1].attachments[0].content)), new RegExp(branchB.name))
+  assert.equal(await scheduledAudits() - audits, 2)
+  // صلاحية الجدولة اتسحبت والملف بيتبني: ولا رسالة ولا سطر تدقيق، والسبب متسجّل
+  await repo('SavedReport').update({ id: report.id }, { lastSentOn: addDays(today, -1) })
+  const state = { mails: outbox.length, audits: await scheduledAudits() }
+  assert.deepEqual(await during(() => repo('User').update({ id: wide.id }, { permissions: '["reports.view"]' })), { due: 1, sent: 0, failed: 1, skipped: null, builds: 1 })
+  assert.match(String((await rowOf(report.id)).lastError), /صلاحية التقارير وجدولتها/)
+  // والحساب اتقفل والملف بيتبني
+  await repo('User').update({ id: wide.id }, { permissions: '["reports.view","reports.save"]' })
+  assert.deepEqual(await during(() => repo('User').update({ id: wide.id }, { isActive: false })), { due: 1, sent: 0, failed: 1, skipped: null, builds: 1 })
+  assert.match(String((await rowOf(report.id)).lastError), /مقفول/)
+  await repo('User').update({ id: wide.id }, { isActive: true })
+  // هوية بتتغيّر مع كل بناء: التقرير بيستنى الفحص الجاي (3 محاولات بناء بالكتير)
+  let flips = 0
+  saved.build = async function (...args) {
+    const file = await realBuild.apply(this, args)
+    await repo('User').update({ id: wide.id }, { branchId: ++flips % 2 ? branchB.id : branchA.id })
+    return file
+  }
+  try { assert.deepEqual(await saved.sendDue(at(9)), { due: 1, sent: 0, failed: 1, skipped: null }) } finally { saved.build = realBuild }
+  assert.deepEqual([flips, (await rowOf(report.id)).lastError], [3, rules.SAVED_REPORT_OWNER_CHANGING])
+  assert.deepEqual([outbox.length, await scheduledAudits(), await sentOn(report.id)], [state.mails, state.audits, addDays(today, -1)])
+  await repo('SavedReport').delete({ id: report.id })
+})

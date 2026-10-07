@@ -16,7 +16,7 @@ export { TWO_FACTOR_CONFIG_KEY } from './two-factor-gate'
 import { TWO_FACTOR_CONFIG_KEY } from './two-factor-gate'
 import { TWO_FACTOR_ROLES_KEY, twoFactorRolesOf } from './login-security'
 import { PRODUCT_NAME } from '../settings/product-name'
-import { TOTP_CHALLENGE_MARK, TOTP_CHALLENGE_SENT_TO } from './totp'
+import { TOTP_CHALLENGE_MARK, TOTP_CHALLENGE_SENT_TO, TOTP_FACTOR_CHANGED } from './totp'
 import { TotpLockedError } from './totp.service'
 
 /** B2.17-ج: حكم رمز تطبيق المصادقة لحساب (AuthService بيدّيه) — الحالة المعلّقة نفسها مابتعرفش السر */
@@ -230,7 +230,7 @@ export class TwoFactorService {
    * المقارنة (العدّ والقفل، والاستهلاك) مبني على القراءة الجديدة وعلى تحديث مشروط بها — مش على
    * النسخة اللي دخلنا بيها المقارنة.
    */
-  async verify(token: string, code: string, checkTotp?: TotpCheck): Promise<LoginChallenge> {
+  async verify(token: string, code: string, checkTotp?: TotpCheck, totpEnrolled?: (userId: number) => Promise<boolean>): Promise<LoginChallenge> {
     const row = await this.challenges.findOne({ where: { token: (token ?? '').trim() } })
     // المقارنة حرفية: الـcollation مش حسّاس لحالة الأحرف ولا للمسافات الأخيرة، فتوكن مختلف مايتقبلش
     if (!row || row.token !== (token ?? '').trim()) {
@@ -252,6 +252,12 @@ export class TwoFactorService {
         throw new TwoFactorError('LOCKED', error.message)
       }
     } else {
+      // CRP3D-B17-02: الحساب فعّل تطبيق المصادقة بعد ما الحالة دي اتفتحت برمز بريد: الحالة بطلت (بتتقفل) ومفيش جلسة — الدخول الجاي برمز
+      // التطبيق. التفعيل نفسه بيقفل الحالات المفتوحة، وده للحالة اللي اتفتحت والتفعيل بيتأكد
+      if (totpEnrolled && (await totpEnrolled(row.userId))) {
+        await this.challenges.update({ id: row.id, consumedAt: IsNull(), lockedAt: IsNull() }, { lockedAt: new Date() })
+        throw new TwoFactorError('SUPERSEDED', TOTP_FACTOR_CHANGED)
+      }
       ok = clean.length === OTP.codeLength && (await bcrypt.compare(clean, row.codeHash))
     }
     const fresh = await this.reread(row.id)

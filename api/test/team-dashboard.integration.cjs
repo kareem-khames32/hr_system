@@ -187,3 +187,19 @@ test('TD-03: salaries appear only with the compensation right, and only for memb
   U.member.permissions = '["employees.view","employees.edit"]'
   assert.equal(Number(expect(await call(U.member, 'GET', `/employees/${E.m2.id}`), 200).basicSalary), Number(E.m2.basicSalary))
 })
+
+test('TD-04 (CRP3D): a unit name follows the unit\'s current branch — a department moved outside the reader\'s branches is not named', async () => {
+  const department = await repo('Department').findOneByOrFail({ name: 'قسم الفريق' })
+  const named = async () => {
+    const member = expect(await call(U.lead, 'GET', '/manager/team'), 200).team.find(row => row.id === E.m1.id)
+    return [member.fullName, member.branchName, member.departmentName, member.teamName]
+  }
+  assert.deepEqual(await named(), [E.m1.fullName, B.a.name, 'قسم الفريق', 'فريق القائد'])
+  // القسم اتنقل لفرع برّه نطاق حساب القائد، والموظف لسه في فرعه: المرؤوس ظاهر باسمه وفرعه، من غير اسم القسم ولا الفريق (فرع قسمه)
+  await repo('Department').update({ id: department.id }, { branchId: B.b.id })
+  try {
+    assert.deepEqual(await named(), [E.m1.fullName, B.a.name, null, null])
+    assert.doesNotMatch(JSON.stringify(expect(await call(U.lead, 'GET', '/manager/team'), 200)), /قسم الفريق|فريق القائد/)
+  } finally { await repo('Department').update({ id: department.id }, { branchId: B.a.id }) }
+  assert.deepEqual(await named(), [E.m1.fullName, B.a.name, 'قسم الفريق', 'فريق القائد'])
+})

@@ -267,3 +267,40 @@ test('DX-04: an approved renewal request moves the expiry date of the requester\
   expect(await approve(U.approver, pending.id), 201)
   assert.equal((await docOf(D.d2.id)).expiryDate, addDays(today, 900))
 })
+
+test('DX-05 (CRP3D-N01): an alert for a document that a newer one already replaced is neither dispatched nor mailed', async () => {
+  const notifications = app.get(require('../src/notifications/notifications.service').NotificationsService)
+  const sourceOf = async (doc, days) => {
+    const event = await repo('OutboxEvent').findOneByOrFail({ eventKey: `document-expiring:${doc.id}:${addDays(today, days)}:30` })
+    return { id: String(event.id), type: 'DOCUMENT_EXPIRING', payload: JSON.parse(event.payload) }
+  }
+  const deliveries = doc => ds.query(`SELECT d.[id], d.[status], d.[detail] FROM [notification_deliveries] d INNER JOIN [notifications] n ON n.[id] = d.[notificationId]
+    WHERE n.[entityType] = N'employee_document' AND n.[entityId] = @0 AND n.[recipientUserId] = @1 AND d.[channel] = N'EMAIL'`, [String(doc.id), U.owner.id])
+  // (1) الرسالة اتجهّزت، وبعدها اترفع مستند أحدث من نفس النوع: وقت الإرسال مابتطلعش
+  const old = await repo('EmployeeDocument').save({ employeeId: E.a1.id, docType: 'driver_license', number: 'SECRET-88', expiryDate: addDays(today, 15) })
+  await queue.recordDocumentExpiryEvents(today)
+  assert.ok(await notifications.dispatch(await sourceOf(old, 15)) >= 1)
+  const [pending] = await deliveries(old)
+  assert.equal(pending.status, 'PENDING')
+  await repo('EmployeeDocument').save({ employeeId: E.a1.id, docType: 'driver_license', expiryDate: addDays(today, 400) })
+  assert.equal(expect(await call(U.admin, 'GET', '/documents/expiry?days=30'), 200).rows.some(row => row.id === old.id), false, 'نفس حكم التقرير')
+  const mails = outbox.length
+  await notifications.sendEmail(String(pending.id), { attempt: 1, maxAttempts: 3 })
+  assert.equal(outbox.length, mails)
+  const [skipped] = await deliveries(old)
+  assert.deepEqual([skipped.status, /اتجدد/.test(String(skipped.detail))], ['SKIPPED', true])
+  // (2) المستند اتبدّل قبل التوزيع: ولا إشعار ولا رسالة
+  const second = await repo('EmployeeDocument').save({ employeeId: E.a1.id, docType: 'national_id', expiryDate: addDays(today, 10) })
+  await queue.recordDocumentExpiryEvents(today)
+  const source = await sourceOf(second, 10)
+  await repo('EmployeeDocument').save({ employeeId: E.a1.id, docType: 'national_id', expiryDate: addDays(today, 500) })
+  assert.equal(await notifications.dispatch(source), 0)
+  assert.deepEqual(await deliveries(second), [])
+  // (3) ومستند من غير بديل: رسالته بتطلع زي الأول
+  const plain = await repo('EmployeeDocument').save({ employeeId: E.a1.id, docType: 'work_permit', expiryDate: addDays(today, 8) })
+  await queue.recordDocumentExpiryEvents(today)
+  assert.ok(await notifications.dispatch(await sourceOf(plain, 8)) >= 1)
+  await notifications.sendEmail(String((await deliveries(plain))[0].id), { attempt: 1, maxAttempts: 3 })
+  assert.equal(outbox.length, mails + 1)
+  assert.equal((await deliveries(plain))[0].status, 'SENT')
+})

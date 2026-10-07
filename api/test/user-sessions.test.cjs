@@ -63,7 +63,7 @@ test('UT-02: the session number is random and rides in the token; the guard chec
   assert.match(logout, /payload = await this\.jwt\.verifyAsync<JwtPayload>\(token\)[\s\S]{0,80}catch \{\s+return\s+\}/)
   assert.match(logout, /await this\.sessions\.revoke\(payload\.sid, payload\.sub, 'LOGOUT'\)/)
   const controller = read('api/src/auth/auth.controller.ts')
-  assert.match(controller, /await this\.auth\.endSessionOfToken\(bearerTokenOf\(req\) \?\? cookie\)/)
+  assert.match(controller, /const bearer = bearerTokenOf\(req\)[\s\S]{0,900}await this\.auth\.endSessionOfToken\(bearer \?\? cookie\)/)
   for (const route of ["@Get('sessions')", "@Post('sessions/end-others')", "@Delete('sessions/:id')"]) {
     const at = controller.indexOf(route)
     assert.ok(at > 0 && controller.slice(at - 120, at).includes('@UseGuards(JwtAuthGuard)'), route)

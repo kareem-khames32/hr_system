@@ -1,4 +1,4 @@
-import { BadRequestException, HttpException, Injectable, Logger } from '@nestjs/common'
+import { BadRequestException, ConflictException, HttpException, Injectable, Logger } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource, type EntityManager } from 'typeorm'
@@ -7,10 +7,19 @@ import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { PRODUCT_NAME } from '../settings/product-name'
 import type { JwtPayload } from './auth.service'
 import {
-  TOTP_ALREADY_ENABLED, TOTP_MIGRATION_MISSING, TOTP_NOT_ENABLED, TOTP_NOT_STARTED, TOTP_REQUIRED_FOR_ROLE, TOTP_ROLES_KEY, TOTP_WRONG_CODE, groupedSecret, matchTotp,
+  TOTP_ALREADY_ENABLED, TOTP_CHALLENGE_MARK, TOTP_MIGRATION_MISSING, TOTP_NOT_ENABLED, TOTP_NOT_STARTED, TOTP_REQUIRED_FOR_ROLE, TOTP_ROLES_KEY, TOTP_WRONG_CODE, groupedSecret, matchTotp,
   newTotpSecret, openTotpSecret, otpauthUrl, sealTotpSecret, totpRolesOf,
 } from './totp'
 import { UserTotp } from './user-totp.entity'
+
+/** الحساب اللي بيتعاد ضبطه، بالخانات اللي حق المنفّذ اتحكم عليها (CRP3D-B17-01) */
+export interface TotpResetTarget {
+  id: number; email: string; branchId?: number | null
+  role?: string | null; permissions?: string | null; scopeAllBranches?: boolean | null; scopeBranchIds?: string | null
+}
+export const TOTP_RESET_ACCOUNT_CHANGED = 'بيانات الحساب اتغيّرت — حدّث الصفحة وحاول تاني'
+const accountStamp = (row: TotpResetTarget): string =>
+  JSON.stringify([row.role ?? '', row.permissions ?? '', row.scopeAllBranches === true, row.scopeBranchIds ?? '', row.branchId ?? null])
 
 /** رموز غلط ورا بعض قبل ما التحقق يتقفل، ومدة القفل */
 export const TOTP_MAX_FAILURES = 5
@@ -146,6 +155,10 @@ export class TotpService {
       try { ok = await this.judge(em, row, code) } catch (error) { if (error instanceof TotpLockedError) return error; throw error }
       if (!ok) return 'WRONG' as const
       await em.query('UPDATE [user_totp] SET [confirmedAt] = @1 WHERE [id] = @0', [row.id, new Date()])
+      // CRP3D-B17-02: حالات الدخول المفتوحة برمز بريد للحساب بتتقفل مع التفعيل (في نفس المعاملة): رمز بريد اتبعت قبل التفعيل مايفتحش جلسة
+      // بعد ما الحساب بقى بيدخل برمز التطبيق
+      await em.query('UPDATE [login_challenges] SET [lockedAt] = @1 WHERE [userId] = @0 AND [consumedAt] IS NULL AND [lockedAt] IS NULL AND [codeHash] <> @2',
+        [user.sub, new Date(), TOTP_CHALLENGE_MARK])
       await recordAudit(em, { category: 'LOGIN', action: 'TOTP_ENABLED', entityType: 'user', entityId: user.sub, actorUserId: user.sub, branchId: user.branchId ?? null,
         summary: 'تفعيل التحقق بتطبيق المصادقة' })
       return 'OK' as const
@@ -196,9 +209,14 @@ export class TotpService {
    * إعادة ضبط من المدير (موبايل ضاع): صف الحساب بيتمسح — دخوله الجاي من غير رمز التطبيق، ولو دوره إلزامي بيفعّل من جديد.
    * بيرجّع هل كان فيه حاجة اتمسحت.
    */
-  async adminReset(actor: JwtPayload, target: { id: number; email: string; branchId?: number | null }): Promise<boolean> {
+  async adminReset(actor: JwtPayload, target: TotpResetTarget): Promise<boolean> {
     if (!(await totpReady(this.ds.manager))) return false
     return this.ds.transaction(async em => {
+      // CRP3D-B17-01: حق المنفّذ اتحكم على صف الحساب المقري قبل المعاملة. الصف بيتقفل هنا ويتقارن: دوره أو صلاحياته أو نطاقه اتغيّروا بعد
+      // الحكم = رفض (المحاولة الجاية بتتحكم على الصف الجديد)، وأي تغيير تاني للحساب بيستنى المعاملة دي
+      const [fresh]: TotpResetTarget[] = await em.query(
+        'SELECT [id], [email], [role], [permissions], [scopeAllBranches], [scopeBranchIds], [branchId] FROM [users] WITH (UPDLOCK, ROWLOCK) WHERE [id] = @0', [target.id])
+      if (!fresh || accountStamp(fresh) !== accountStamp(target)) throw new ConflictException(TOTP_RESET_ACCOUNT_CHANGED)
       // الصف بيتقفل ويتقري الأول (رد جملة الحذف في المشغّل مش قايمة صفوف): مفيش صف = مفيش حاجة تتمسح ولا سطر تدقيق
       const row = await this.rowOf(em, target.id, true)
       if (!row) return false

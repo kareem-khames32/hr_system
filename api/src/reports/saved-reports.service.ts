@@ -17,7 +17,7 @@ import { ReportsController } from './reports.controller'
 import { SavedReport } from './saved-report.entity'
 import {
   SAVED_REPORTS_FULL, SAVED_REPORTS_MAX, SAVED_REPORTS_MIGRATION_MISSING, SAVED_REPORT_FREQUENCY_LABELS, SAVED_REPORT_NAME_MAX, SAVED_REPORT_NAME_MIN,
-  SAVED_REPORT_MAIL_FAILED, SAVED_REPORT_NAME_TAKEN, SAVED_REPORT_NOT_FOUND, SAVED_REPORT_PERIOD_REPORTS, SAVED_REPORT_SEND_HOUR, SAVED_REPORT_UNAVAILABLE,
+  SAVED_REPORT_MAIL_FAILED, SAVED_REPORT_NAME_TAKEN, SAVED_REPORT_OWNER_CHANGING, SAVED_REPORT_NOT_FOUND, SAVED_REPORT_PERIOD_REPORTS, SAVED_REPORT_SEND_HOUR, SAVED_REPORT_UNAVAILABLE,
   isSavedReportFrequency, parseSavedFilters,
   previousPeriod, savedFiltersNarrow, savedReportDue, savedReportName, savedReportsReady, type SavedReportFilters,
 } from './saved-reports'
@@ -26,6 +26,9 @@ export interface SavedReportInput {
   name?: unknown; report?: unknown; frequency?: unknown; format?: unknown
   branchId?: unknown; departmentIds?: unknown; teamId?: unknown; period?: unknown
 }
+
+/** هوية صاحب التقرير كنص للمقارنة (الصلاحيات من غير ترتيب) — CRP3D-B13-01 */
+const identityStamp = (owner: JwtPayload): string => JSON.stringify({ ...owner, permissions: [...(owner.permissions ?? [])].sort() })
 
 const sqlErrorNumber = (error: unknown): number =>
   Number((error as { driverError?: { number?: unknown }; number?: unknown })?.driverError?.number ?? (error as { number?: unknown })?.number)
@@ -195,17 +198,31 @@ export class SavedReportsService {
       due += 1
       try {
         // هوية صاحب التقرير دلوقتي (حساب مفعّل بدوره وصلاحياته ونطاقه الحاليين)
-        const account = await users.findOne({ where: { id: row.ownerUserId, isActive: true } })
-        const [owner] = account ? await auth.accountPayloads([account]) : []
-        if (!owner) throw new Error('حساب صاحب التقرير مقفول أو مش موجود')
-        if (!owner.email) throw new Error('حساب صاحب التقرير من غير بريد')
-        if (!userHasPerm(owner, 'reports.view') || !userHasPerm(owner, 'reports.save') || !(await this.modules.allowedFor('reports', owner))) {
-          throw new Error('صاحب التقرير مابقاش معاه صلاحية التقارير وجدولتها')
+        const identity = async () => {
+          const account = await users.findOne({ where: { id: row.ownerUserId, isActive: true } })
+          const [current] = account ? await auth.accountPayloads([account]) : []
+          if (!current) throw new Error('حساب صاحب التقرير مقفول أو مش موجود')
+          if (!current.email) throw new Error('حساب صاحب التقرير من غير بريد')
+          if (!userHasPerm(current, 'reports.view') || !userHasPerm(current, 'reports.save') || !(await this.modules.allowedFor('reports', current))) {
+            throw new Error('صاحب التقرير مابقاش معاه صلاحية التقارير وجدولتها')
+          }
+          return current
         }
-        const file = await this.build(owner, row, this.formatOf(row.format), true).catch((error) => {
+        const render = (as: JwtPayload) => this.build(as, row, this.formatOf(row.format), true).catch((error) => {
           // موديول التقرير اتقفل لصاحبه: رد المسار «مش موجود» مايتعرضش له بنصه
           throw error instanceof NotFoundException ? new Error(SAVED_REPORT_UNAVAILABLE) : error
         })
+        let owner = await identity()
+        let file = await render(owner)
+        // CRP3D-B13-01: الهوية اتغيّرت والملف بيتبني (نطاق اتضيّق، صلاحية اتسحبت، حساب اتقفل)؟ الملف اللي اتبنى بالهوية القديمة مابيطلعش:
+        // الهوية بتتقري تاني بعد البناء وقبل الإرسال، ولو اختلفت الملف بيتبني من جديد بالحالية؛ ولو فضلت تتغيّر التقرير بيستنى الفحص الجاي
+        for (let round = 0; ; round++) {
+          const current = await identity()
+          if (identityStamp(current) === identityStamp(owner)) break
+          if (round >= 2) throw new Error(SAVED_REPORT_OWNER_CHANGING)
+          owner = current
+          file = await render(owner)
+        }
         await mail.send({ to: owner.email, subject: `تقرير مجدول: ${row.name}`,
           text: `مرفق تقرير «${row.name}» (${REPORT_TITLES[row.reportKey as ReportKey] ?? row.reportKey}) بتاريخ ${today}.\nالتقرير اتبنى بصلاحياتك ونطاقك وقت الإرسال.`,
           attachments: [{ filename: file.fileName, content: file.buffer, contentType: file.contentType }] }).catch((error) => {

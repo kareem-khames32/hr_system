@@ -6,6 +6,8 @@ export const SAVED_REPORTS_MIGRATION_MISSING = 'التقارير المحفوظ�
 export const SAVED_REPORT_NOT_FOUND = 'التقرير المحفوظ غير موجود'
 export const SAVED_REPORT_NAME_TAKEN = 'عندك تقرير محفوظ بنفس الاسم'
 /** أسباب تعذّر الإرسال المجدول اللي بتتعرض لصاحب التقرير من غير تفاصيل الخادم */
+/** هوية صاحب التقرير فضلت تتغيّر والملف بيتبني (CRP3D-B13-01) */
+export const SAVED_REPORT_OWNER_CHANGING = 'حساب صاحب التقرير بيتغيّر والتقرير بيتجهّز — هيتبعت في الفحص الجاي'
 export const SAVED_REPORT_MAIL_FAILED = 'تعذّر إرسال البريد؛ هيتجرّب تاني في الفحص الجاي'
 export const SAVED_REPORT_UNAVAILABLE = 'التقرير ده مش متاح لحسابك دلوقتي'
 export const SAVED_REPORT_NAME_MIN = 2

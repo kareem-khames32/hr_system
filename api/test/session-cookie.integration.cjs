@@ -264,3 +264,28 @@ test('SC-06: on HTTPS the cookie is Secure under the __Host- name, and only that
   }
   assert.deepEqual((await cookieLogin('worker')).attributes, ['Path=/', 'HttpOnly', 'SameSite=Strict'])
 })
+
+test('SC-07 (CRP3D-N02): a cookie logout sent from another site is refused unless it carries the session\'s CSRF token', async () => {
+  const session = await cookieLogin('worker')
+  const evil = { Origin: 'https://evil.example' }
+  // من موقع تاني (أو Origin «null») من غير رمز الجلسة أو برمز غلط: مرفوض، ومن غير مسح، والجلسة لسه قايمة
+  for (const headers of [{ ...withSession(session), ...evil }, { ...withSession(session, 'wrong-token'), ...evil }, { ...withSession(session), Origin: 'null' }]) {
+    const refused = await http('POST', '/auth/logout', undefined, headers)
+    assert.deepEqual([refused.status, codeOf(refused), refused.cookies], [403, 'CSRF_TOKEN_INVALID', []])
+  }
+  expect(await http('GET', '/auth/me', undefined, withSession(session)), 200)
+  // من عنوان الواجهة نفسها (حتى من غير الرمز): بيخرج، والجلسة اتنهت من الخادم
+  const own = await http('POST', '/auth/logout', undefined, { ...withSession(session), Origin: 'http://localhost:3000' })
+  assert.deepEqual([own.status, own.cookies.length], [200, 1])
+  expect(await http('GET', '/auth/me', undefined, withSession(session)), 401)
+  // برمز الجلسة من أي عنوان (واجهة ورا عنوان تاني): بيخرج
+  const second = await cookieLogin('worker')
+  const withToken = await http('POST', '/auth/logout', undefined, { ...withSession(second, second.csrf), ...evil })
+  assert.deepEqual([withToken.status, withToken.cookies.length], [200, 1])
+  // cookie تالفة من موقع تاني: بتتمسح (مفيش جلسة تتحمى)؛ وطلب من غير cookie مابيمسحش حاجة
+  assert.equal((await http('POST', '/auth/logout', undefined, { Cookie: 'hr_session=expired-or-broken', ...evil })).cookies.length, 1)
+  assert.deepEqual((await http('POST', '/auth/logout', undefined, evil)).cookies, [])
+  const { fromFrontendOrigin } = require('../src/auth/session-cookie')
+  assert.deepEqual([undefined, '', 'http://localhost:3000', 'http://localhost:3000/', 'https://localhost:3000', 'http://localhost:3001', 'null', 'not a url', 7]
+    .map(origin => fromFrontendOrigin(origin, { FRONTEND_URL: 'http://localhost:3000/' })), [true, true, true, true, false, false, false, false, false])
+})

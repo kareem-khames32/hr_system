@@ -77,8 +77,9 @@ export class TeamService {
       `SELECT e.id AS id, e.employeeCode AS employeeCode, e.fullName AS fullName, e.jobTitle AS jobTitle, e.status AS status, e.isActive AS isActive,
               e.branchId AS branchId, CONVERT(varchar(10), e.probationEndDate, 23) AS probationEndDate, CONVERT(varchar(10), e.contractEnd, 23) AS contractEnd,
               ${finance ? 'CONVERT(varchar(40), e.basicSalary) AS basicSalary,' : ''}
-              b.name AS branchName, d.name AS departmentName, t.name AS teamName
+              b.name AS branchName, d.name AS departmentName, t.name AS teamName, d.branchId AS departmentBranchId, td.branchId AS teamBranchId
        FROM employees e LEFT JOIN branches b ON b.id = e.branchId LEFT JOIN departments d ON d.id = e.departmentId LEFT JOIN teams t ON t.id = e.teamId
+         LEFT JOIN departments td ON td.id = t.departmentId
        WHERE e.id IN (${list})`, params))
     // الفريق = الموظفين الحاليين بس (تعريف قاموس المؤشرات)
     const current = raw.filter(row => isCurrentEmployee(row as { status: string; isActive: unknown })).sort((a, b) => String(a.fullName).localeCompare(String(b.fullName), 'ar'))
@@ -88,11 +89,14 @@ export class TeamService {
     const team: TeamMember[] = current.map(row => {
       // مرؤوس في فرع برّه نطاق فروع الحساب: ظاهر بعلاقة الهيكل (اسمه ومسمّاه وحالته)، من غير أسماء وحداته ومن غير راتبه
       const inScope = inBranchScope(scope, Number(row.branchId))
+      // CRP3D-B14-01: اسم الوحدة بفرعها الحالي — قسم (أو فريق، بفرع قسمه) اتنقل لفرع برّه نطاق الحساب مابيتعرضش اسمه، حتى لو الموظف نفسه جوه النطاق
+      const unitInScope = (branchId: unknown) => inBranchScope(scope, branchId == null ? null : Number(branchId))
       const member: TeamMember = {
         id: Number(row.id), employeeCode: row.employeeCode, fullName: row.fullName, jobTitle: row.jobTitle ?? null,
         status: displayEmployeeStatus(row.status, suspensions.get(Number(row.id)) ?? [], today),
-        branchName: inScope ? row.branchName ?? null : null, departmentName: inScope ? row.departmentName ?? null : null,
-        teamName: inScope ? row.teamName ?? null : null, direct: direct.has(Number(row.id)),
+        branchName: inScope ? row.branchName ?? null : null,
+        departmentName: inScope && unitInScope(row.departmentBranchId) ? row.departmentName ?? null : null,
+        teamName: inScope && unitInScope(row.teamBranchId) ? row.teamName ?? null : null, direct: direct.has(Number(row.id)),
       }
       // الراتب: حق عرض الرواتب بيغطي موظفين نطاق فروع الحساب بس
       if (currencyOf && inScope) Object.assign(member, { basicSalary: row.basicSalary ?? null, currency: currencyOf(row.branchId == null ? null : Number(row.branchId)) })

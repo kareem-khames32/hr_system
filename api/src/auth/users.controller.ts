@@ -426,6 +426,11 @@ export class UsersController {
     if (!target || !inBranchScope(branchScopeOf(actor), target.branchId)) throw new NotFoundException('المستخدم غير موجود')
     if (target.id === actor.sub) throw new BadRequestException('إلغاء تطبيق المصادقة لحسابك من «الأمان» برمز من التطبيق')
     if (target.role === 'super_admin' && actor.role !== 'super_admin') throw new ForbiddenException('إعادة ضبط تطبيق المصادقة لمدير النظام لمدير نظام بس')
+    // CRP3D-B17-01: إلغاء الخطوة التانية نص السيطرة على الحساب، فحدوده حدود تغيير كلمة المرور: حساب «كل الفروع» أو نطاقه فيه فرع برّه نطاق
+    // المنفّذ، أو فيه صلاحية إدارية مش مع المنفّذ = لمدير النظام بس. والحكم ده على الصف المقري هنا: adminReset بيقفل صف الحساب ويرفض لو اتغيّر
+    assertManageableScope(actor, target)
+    const beyond = await this.takeoverBeyond(actor, target)
+    if (beyond) throw new ForbiddenException(`حساب ${target.displayName} فيه ${beyond} — إعادة ضبط تطبيق المصادقة له لمدير النظام بس`)
     return { id: target.id, reset: await this.totp.adminReset(actor, target) }
   }
 

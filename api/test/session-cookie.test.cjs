@@ -94,7 +94,9 @@ test('SK-02: the server reads Bearer first with one reader for both the token an
   // الخروج: من غير حارس، وبيمسح لما الطلب شايل الـcookie بس
   const logout = controller.slice(controller.indexOf("@Post('logout')"), controller.indexOf("@Get('security-status')"))
   assert.doesNotMatch(logout.slice(0, logout.indexOf('logout(')), /UseGuards/)
-  assert.match(logout, /const cookie = sessionCookieOf\(req, options\)[\s\S]{0,260}if \(cookie !== null\) res\.setHeader\('Set-Cookie', clearedSessionCookieHeader\(options\)\)/)
+  assert.match(logout, /const cookie = sessionCookieOf\(req, options\)[\s\S]{0,900}if \(cookie !== null\) res\.setHeader\('Set-Cookie', clearedSessionCookieHeader\(options\)\)/)
+  // CRP3D-N02: خروج بـcookie جلسة سليمة من غير عنوان الواجهة لازم يشيل رمز CSRF بتاعها — قبل إنهاء الجلسة ومسح الـcookie
+  assert.match(logout, /if \(bearer === null && cookie !== null && !fromFrontendOrigin\(req\.headers\.origin\)\) \{\n\s+const csrf = await this\.auth\.csrfOfToken\(cookie\)\n\s+if \(csrf !== undefined && !csrfMatches\(csrf, req\.headers\[CSRF_HEADER\]\)\) throw new ForbiddenException\(\{ statusCode: 403, code: CSRF_TOKEN_INVALID, message: CSRF_MESSAGE \}\)\n\s+\}[\s\S]{0,200}await this\.auth\.endSessionOfToken\(bearer \?\? cookie\)/)
   // بيانات الجلسة مفتوحة لكل بوابات الجلسة (كلمة مؤقتة، تفعيل تطبيق المصادقة، إقرار السياسات): الواجهة بتجيب منها الحساب والرمز
   assert.match(controller, /@UseGuards\(JwtAuthGuard\)\s+@AllowPendingPasswordChange\(\)\s+@AllowPendingTotpSetup\(\)\s+@AllowDuringPolicyGate\(\)\s+@Get\('session'\)/)
   // الخادم بيسمح للواجهة ترسل الـcookie (نفس الإعداد القايم)
@@ -141,7 +143,7 @@ test('SK-03: the web app keeps no token — nothing in storage, no Authorization
     assert.ok(client.includes(`body: JSON.stringify(${body})`), body)
   }
   // الخروج بينادي الخادم (سكربت الصفحة مايقدرش يمسح cookie HttpOnly)
-  assert.match(client, /await fetch\(`\$\{API_BASE\}\/auth\/logout`, await sessionInit\(\{ method: 'POST' \}\)\)/)
+  assert.match(client, /const send = async \(\) => fetch\(`\$\{API_BASE\}\/auth\/logout`, await sessionInit\(\{ method: 'POST' \}\)\)\n[\s\S]{0,200}if \(await csrfRefused\(await send\(\)\)\) \{\n\s+await csrfToken\(true\)\n\s+await send\(\)/)
   assert.match(read('src/components/layout/Sidebar.tsx'), /void logout\(\)\.then\(\(\) => \{ window\.location\.href = '\/login' \}\)/)
   // تبويب جديد: بيانات الحساب بترجع من الخادم قبل ما الواجهة تحوّل لصفحة الدخول
   const layout = read('src/components/layout/MainLayout.tsx')

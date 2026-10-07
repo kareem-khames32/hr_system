@@ -220,7 +220,12 @@ export async function restoreSession(): Promise<CurrentUser | null> {
 /** الخروج: الخادم بيمسح cookie الجلسة (سكربت الصفحة مايقدرش)، وبعدها بيانات الحساب من التخزين */
 export async function logout(): Promise<void> {
   try {
-    await fetch(`${API_BASE}/auth/logout`, await sessionInit({ method: 'POST' }))
+    const send = async () => fetch(`${API_BASE}/auth/logout`, await sessionInit({ method: 'POST' }))
+    // CRP3D-N02: الخادم رفض الخروج عشان رمز CSRF قديم (دخول جديد في تبويب تاني): الرمز الحالي ومحاولة تانية، عشان الـcookie تتمسح
+    if (await csrfRefused(await send())) {
+      await csrfToken(true)
+      await send()
+    }
   } catch {
     /* الخادم مش رادد: بيانات الحساب بتتمسح برضه، والـcookie بتنتهي بمدتها */
   }

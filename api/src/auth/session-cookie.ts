@@ -30,6 +30,20 @@ export function sessionCookieOptions(env: Record<string, unknown> = process.env)
 }
 
 /**
+ * CRP3D-N02: الطلب جاي من صفحة الواجهة نفسها؟ المتصفح بيبعت Origin مع كل POST من موقع تاني، فطلب من غيرها مش صفحة موقع تاني (سكربت
+ * أو أداة، ودول مابيشيلوش cookie حد). Origin مش عنوان الواجهة (أو «null») = لأ.
+ */
+export function fromFrontendOrigin(origin: unknown, env: Record<string, unknown> = process.env): boolean {
+  if (origin === undefined || origin === '') return true
+  if (typeof origin !== 'string') return false
+  try {
+    return new URL(origin).origin === new URL(String(env.FRONTEND_URL ?? '').trim() || 'http://localhost:3000').origin
+  } catch {
+    return false
+  }
+}
+
+/**
  * اسم الـcookie. على HTTPS بالبادئة `__Host-`: المتصفح مابيقبلهاش غير Secure ومن غير Domain وبـPath=/، فنطاق فرعي تاني (أو صفحة
  * HTTP) مايعرفش يزرع cookie بنفس الاسم مكان جلسة المستخدم. على HTTP الاسم العادي (البادئة محتاجة Secure).
  */

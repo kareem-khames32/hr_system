@@ -62,10 +62,12 @@ test('SV-02: the job is registered and goes through tick; mail carries the file;
   assert.match(loop, /users\.findOne\(\{ where: \{ id: row\.ownerUserId, isActive: true \} \}\)/)
   assert.match(loop, /await auth\.accountPayloads\(\[account\]\)/)
   assert.match(loop, /throw new Error\(SAVED_REPORT_MAIL_FAILED\)/, 'تفاصيل خادم البريد مابتتعرضش لصاحب التقرير')
-  assert.match(send, /!userHasPerm\(owner, 'reports\.view'\) \|\| !userHasPerm\(owner, 'reports\.save'\) \|\| !\(await this\.modules\.allowedFor\('reports', owner\)\)/)
+  assert.match(send, /!userHasPerm\(current, 'reports\.view'\) \|\| !userHasPerm\(current, 'reports\.save'\) \|\| !\(await this\.modules\.allowedFor\('reports', current\)\)/)
+  // CRP3D-B13-01: الهوية بتتقري تاني بعد بناء الملف وقبل الإرسال، والملف بيتبني من جديد لو اختلفت (3 مرات بالكتير)
+  assert.match(send, /let owner = await identity\(\)\n\s+let file = await render\(owner\)\n[\s\S]{0,420}for \(let round = 0; ; round\+\+\) \{\n\s+const current = await identity\(\)\n\s+if \(identityStamp\(current\) === identityStamp\(owner\)\) break\n\s+if \(round >= 2\) throw new Error\(SAVED_REPORT_OWNER_CHANGING\)\n\s+owner = current\n\s+file = await render\(owner\)\n\s+\}\n\s+await mail\.send\(/)
   assert.match(send, /if \(!\(await this\.modules\.jobEnabled\('reports\.scheduled'\)\)\) return none\('module'\)/)
   // الترتيب: البريد مفتوح قبل أي بناء، ثم الملف، ثم الرسالة، ثم سطر التدقيق، ثم تسجيل يوم الإرسال
-  const order = ['await this.mailReady()', 'await this.build(owner, row', 'await mail.send(', 'await file.audit()', '{ lastSentOn: today, lastError: null }'].map(part => send.indexOf(part))
+  const order = ['await this.mailReady()', 'let file = await render(owner)', 'await mail.send(', 'await file.audit()', '{ lastSentOn: today, lastError: null }'].map(part => send.indexOf(part))
   assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), JSON.stringify(order))
   assert.match(send, /to: owner\.email/, 'لبريد صاحب التقرير بس')
   // التعديل والحذف بصاحب الصف، وبالحقول المتغيّرة مش حفظ الكيان كله

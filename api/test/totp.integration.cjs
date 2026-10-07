@@ -325,3 +325,78 @@ test('TP-04: a manager resets an account\'s authenticator inside his branches; a
     assert.equal(expect(await login('payroll'), 201).user.totpSetupRequired, true)
   } finally { await config(rules.TOTP_ROLES_KEY, '') }
 })
+
+test('TP-05 (CRP3D): the reset keeps the password-takeover boundary and is re-judged under the account row lock; a mail code opened before enrolment opens nothing after it', async () => {
+  const account = async (key, extra = {}) => {
+    P[key] = passwordOf()
+    U[key] = await repo('User').save({ email: `${key}@totp.invalid`, displayName: `حساب ${key}`, role: 'employee', permissions: '[]', isActive: true, branchId: B.a.id,
+      passwordHash: await bcrypt.hash(P[key], 10), ...extra })
+  }
+  // ===== B17-01: حساب أقوى من المنفّذ — زي تغيير كلمة مروره بالظبط، لمدير النظام بس =====
+  await account('strong', { permissions: JSON.stringify(['settings.manage']) })
+  await account('wide', { scopeBranchIds: JSON.stringify([B.a.id, B.b.id]) })
+  await enroll('strong'); await enroll('wide')
+  const adminA = bearer(expect(await login('adminA'), 201).accessToken), adminAll = bearer(expect(await login('adminAll'), 201).accessToken)
+  const root = bearer(await signIn('admin'))
+  const before = await audits('TOTP_RESET')
+  assert.equal((await http('PATCH', `/users/${U.strong.id}`, { password: passwordOf() }, adminA)).status, 403, 'نفس حد تغيير كلمة المرور')
+  for (const actor of [adminA, adminAll]) {
+    const refused = await http('POST', `/users/${U.strong.id}/totp-reset`, {}, actor)
+    assert.equal(refused.status, 403, JSON.stringify(refused.body))
+    assert.match(messageOf(refused), /«إدارة الإعدادات»|إعادة ضبط تطبيق المصادقة له لمدير النظام بس/)
+  }
+  // حساب نطاقه فيه فرع برّه نطاق المنفّذ
+  const wider = await http('POST', `/users/${U.wide.id}/totp-reset`, {}, adminA)
+  assert.equal(wider.status, 403, JSON.stringify(wider.body)); assert.match(messageOf(wider), /نطاقه فيه فروع برّه نطاقك/)
+  assert.deepEqual([(await rowOf('strong')).confirmedAt instanceof Date, (await rowOf('wide')).confirmedAt instanceof Date, await audits('TOTP_RESET') - before], [true, true, 0])
+  // حساب نطاقه يغطيه بيعيد ضبطه، ومدير النظام بيعيد ضبط الحساب الأقوى
+  assert.equal(expect(await http('POST', `/users/${U.wide.id}/totp-reset`, {}, adminAll), 200).reset, true)
+  assert.equal(expect(await http('POST', `/users/${U.strong.id}/totp-reset`, {}, root), 200).reset, true)
+  assert.equal(await audits('TOTP_RESET') - before, 2)
+  // الحكم اتعمل على صف والحساب اترقّى قبل التنفيذ: المسح بيقفل صف الحساب ويرفض (الصف مابيتمسحش)
+  await enroll('guard')
+  const totp = app.get(require('../src/auth/totp.service').TotpService)
+  const judged = await repo('User').findOneByOrFail({ id: U.guard.id })
+  await repo('User').update({ id: U.guard.id }, { permissions: JSON.stringify(['settings.manage']) })
+  await assert.rejects(totp.adminReset({ sub: U.adminA.id, branchId: B.a.id }, judged), error => error.getStatus?.() === 409 && /بيانات الحساب اتغيّرت/.test(error.message))
+  assert.deepEqual([(await rowOf('guard')).confirmedAt instanceof Date, await audits('TOTP_RESET') - before], [true, 2])
+  await repo('User').update({ id: U.guard.id }, { permissions: '[]' })
+  assert.equal(await totp.adminReset({ sub: U.adminA.id, branchId: B.a.id }, await repo('User').findOneByOrFail({ id: U.guard.id })), true)
+
+  // ===== B17-02: رمز بريد لحالة اتفتحت قبل تفعيل التطبيق =====
+  await account('late')
+  const early = bearer(expect(await login('late'), 201).accessToken)
+  await config('auth.two_factor_enabled', 'true')
+  try {
+    mailbox.length = 0
+    const pending = expect(await login('late'), 201)
+    assert.deepEqual([pending.twoFactor, pending.kind, mailbox.length], [true, undefined, 1])
+    const mailCode = mailbox[0].text.match(/\b\d{6}\b/)[0]
+    const challenge = async () => (await query('SELECT [lockedAt], [consumedAt] FROM [login_challenges] WHERE [token] = @0', [pending.challengeToken]))[0]
+    assert.deepEqual([(await challenge()).lockedAt, (await challenge()).consumedAt], [null, null])
+    // التطبيق اتفعّل من جلسة تانية: حالة البريد المفتوحة اتقفلت مع التفعيل، ورمزها مابيفتحش جلسة
+    const setup = expect(await http('POST', '/auth/totp/setup', undefined, early), 200)
+    expect(await http('POST', '/auth/totp/confirm', { code: codeOf(setup.secret) }, early), 200)
+    S.late = setup.secret; await rewind('late')
+    assert.deepEqual([(await challenge()).lockedAt instanceof Date, (await challenge()).consumedAt], [true, null])
+    const refused = await http('POST', '/auth/login/verify', { challengeToken: pending.challengeToken, code: mailCode })
+    assert.deepEqual([refused.status, 'accessToken' in (refused.body ?? {}), refused.cookies.length], [401, false, 0])
+    // حالة بريد اتفتحت والتفعيل بيتأكد (مااتقفلتش معاه): الحكم وقت التحقق بعامل الحساب دلوقتي، والحالة بتتقفل
+    await query('UPDATE [login_challenges] SET [lockedAt] = NULL WHERE [token] = @0', [pending.challengeToken])
+    assert.deepEqual(answer(await http('POST', '/auth/login/verify', { challengeToken: pending.challengeToken, code: mailCode })), [401, rules.TOTP_FACTOR_CHANGED])
+    assert.deepEqual([(await challenge()).lockedAt instanceof Date, (await challenge()).consumedAt], [true, null])
+    // والدخول الجاي برمز التطبيق (من غير بريد)
+    mailbox.length = 0
+    const next = expect(await login('late'), 201)
+    assert.deepEqual([next.kind, mailbox.length], ['TOTP', 0])
+    expect(await http('POST', '/auth/login/verify', { challengeToken: next.challengeToken, code: codeOf(S.late) }), 200)
+    // حالة تطبيق مفتوحة لحساب مابتتقفلش بتفعيل حساب تاني
+    await rewind('late')
+    const open = expect(await login('late'), 201)
+    await account('later')
+    const other = bearer(jwt.sign({ sub: U.later.id, email: U.later.email, role: 'employee', branchId: B.a.id, employeeId: null, tokenVersion: 0, permissions: [] }))
+    const otherSetup = expect(await http('POST', '/auth/totp/setup', undefined, other), 200)
+    expect(await http('POST', '/auth/totp/confirm', { code: codeOf(otherSetup.secret) }, other), 200)
+    expect(await http('POST', '/auth/login/verify', { challengeToken: open.challengeToken, code: codeOf(S.late) }), 200)
+  } finally { await config('auth.two_factor_enabled', 'false') }
+})

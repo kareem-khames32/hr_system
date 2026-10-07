@@ -22,6 +22,8 @@ export const TOTP_NOT_ENABLED = 'تطبيق المصادقة مش مفعّل ع�
 export const TOTP_REQUIRED_FOR_ROLE = 'تطبيق المصادقة إلزامي لدورك — مايتقفلش'
 export const TOTP_SETUP_MESSAGE = 'لازم تفعّل تطبيق المصادقة الأول قبل ما تستخدم النظام'
 /** علامة حالة الدخول المعلّقة اللي رمزها من تطبيق المصادقة (مكان hash رمز البريد في login_challenges) */
+/** حالة دخول برمز بريد لحساب فعّل التطبيق بعدها (CRP3D-B17-02) */
+export const TOTP_FACTOR_CHANGED = 'الحساب بقى بيدخل برمز تطبيق المصادقة — ابدأ تسجيل الدخول من جديد'
 export const TOTP_CHALLENGE_MARK = 'totp'
 export const TOTP_CHALLENGE_SENT_TO = 'تطبيق المصادقة'
 

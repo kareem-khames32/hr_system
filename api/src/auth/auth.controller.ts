@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Headers,
   HttpCode,
@@ -19,7 +20,8 @@ import { AuthService, JwtPayload } from './auth.service'
 import { AllowPendingPasswordChange, AllowPendingTotpSetup, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from './guards'
 import { jwtLifetimeSeconds } from './jwt-secret'
 import { bearerTokenOf, sessionViaCookie } from './jwt.strategy'
-import { clearedSessionCookieHeader, sessionCookieHeader, sessionCookieOf, sessionCookieOptions } from './session-cookie'
+import { CSRF_HEADER, CSRF_MESSAGE, CSRF_TOKEN_INVALID, clearedSessionCookieHeader, csrfMatches, fromFrontendOrigin, sessionCookieHeader, sessionCookieOf,
+  sessionCookieOptions } from './session-cookie'
 import { UserSessionsService } from './user-sessions.service'
 import { TotpService } from './totp.service'
 import { RequireModule } from '../modules-registry/module.guard'
@@ -174,8 +176,15 @@ export class AuthController {
   async logout(@Req() req: SessionRequest, @Res({ passthrough: true }) res: CookieResponse) {
     const options = sessionCookieOptions()
     const cookie = sessionCookieOf(req, options)
+    const bearer = bearerTokenOf(req)
+    // CRP3D-N02: خروج بـcookie جلسة سليمة لازم ييجي من الواجهة نفسها — برمز CSRF بتاع الجلسة، أو من عنوان الواجهة (Origin): مع
+    // SameSite=None موقع تاني مايعرفش يخرّج المستخدم. cookie تالفة أو منتهية بتتمسح من غير شرط (مفيش جلسة تتحمى)
+    if (bearer === null && cookie !== null && !fromFrontendOrigin(req.headers.origin)) {
+      const csrf = await this.auth.csrfOfToken(cookie)
+      if (csrf !== undefined && !csrfMatches(csrf, req.headers[CSRF_HEADER])) throw new ForbiddenException({ statusCode: 403, code: CSRF_TOKEN_INVALID, message: CSRF_MESSAGE })
+    }
     // B2.17-ب: والجلسة نفسها بتتنهي من الخادم (التوكن اللي الطلب شايله — ترويسة أو cookie)
-    await this.auth.endSessionOfToken(bearerTokenOf(req) ?? cookie)
+    await this.auth.endSessionOfToken(bearer ?? cookie)
     if (cookie !== null) res.setHeader('Set-Cookie', clearedSessionCookieHeader(options))
     return { ok: true }
   }

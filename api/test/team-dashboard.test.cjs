@@ -67,7 +67,11 @@ test('TM-03: the service only reads, uses the standing team definition, and mone
   assert.match(service, /const inScope = inBranchScope\(scope, Number\(row\.branchId\)\)/)
   assert.match(service, /if \(currencyOf && inScope\) Object\.assign\(member, \{ basicSalary:/)
   // وأسماء وحدات المرؤوس اللي برّه نطاق الحساب مابتتبعتش
-  assert.match(service, /branchName: inScope \? row\.branchName \?\? null : null, departmentName: inScope \? row\.departmentName \?\? null : null/)
+  assert.match(service, /branchName: inScope \? row\.branchName \?\? null : null,\n\s+departmentName: inScope && unitInScope\(row\.departmentBranchId\) \? row\.departmentName \?\? null : null,\n\s+teamName: inScope && unitInScope\(row\.teamBranchId\) \? row\.teamName \?\? null : null/)
+  // CRP3D-B14-01: اسم الوحدة بفرعها الحالي (القسم بفرعه، والفريق بفرع قسمه)
+  assert.match(service, /d\.branchId AS departmentBranchId, td\.branchId AS teamBranchId/)
+  assert.match(service, /LEFT JOIN departments td ON td\.id = t\.departmentId/)
+  assert.match(service, /const unitInScope = \(branchId: unknown\) => inBranchScope\(scope, branchId == null \? null : Number\(branchId\)\)/)
   assert.equal(service.split('basicSalary').length - 1, 5, 'الراتب في مكان واحد (النوع، والقراءة، والإسناد)')
   // من غير نوع الإجازة، ولا رقم المستند، ولا بيانات بنك
   assert.doesNotMatch(service, /leaveTypeCode|d\.number|d\.notes|d\.fileRef|iban|bankName/)
