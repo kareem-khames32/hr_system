@@ -31,7 +31,13 @@ import {
   fetchOnboardingTemplate,
   createOnboardingTemplateItem,
   updateOnboardingTemplateItem,
+  fetchOnboardingTemplates,
+  createOnboardingTemplate,
+  updateOnboardingTemplate,
+  fetchBranches,
+  fetchCatalog,
   updateConfig,
+  type ApiOnboardingScopedTemplate,
   type ApiOnboardingEmployee,
   type ApiOnboardingTask,
   type ApiOnboardingTemplateItem,
@@ -718,6 +724,32 @@ const toDraft = (r: ApiOnboardingTemplateItem): TplDraft => ({
   isActive: r.isActive,
 })
 
+// B3.1-أ: نطاق قالب بنطاق بالكلام («فرع المعادي · مندوب مبيعات · دائم»)
+const CONTRACT_TYPE_LABELS: Record<string, string> = {
+  permanent: 'دائم',
+  fixed_term: 'محدد المدة',
+  part_time: 'دوام جزئي',
+  seasonal: 'موسمي',
+}
+const templateScopeText = (t: ApiOnboardingScopedTemplate) =>
+  [
+    t.branchName,
+    t.jobTitle,
+    t.gradeName ? `درجة ${t.gradeName}` : null,
+    t.contractType ? CONTRACT_TYPE_LABELS[t.contractType] ?? t.contractType : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
+interface NewTemplateDraft {
+  name: string
+  branchId: string
+  jobTitle: string
+  gradeId: string
+  contractType: string
+}
+const EMPTY_TEMPLATE: NewTemplateDraft = { name: '', branchId: '', jobTitle: '', gradeId: '', contractType: '' }
+
 // إزاحة صالحة: عدد صحيح من -60 إلى 365 (مرآة تحقق الباك)
 const validOffset = (v: string) => {
   const n = Number(v)
@@ -739,7 +771,7 @@ function TemplateModal({
   const [drafts, setDrafts] = useState<Record<number, TplDraft>>({})
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
-  const [saving, setSaving] = useState<number | 'new' | 'window' | null>(null)
+  const [saving, setSaving] = useState<number | 'new' | 'window' | 'template' | null>(null)
   const [newItem, setNewItem] = useState<TplDraft>({
     label: '',
     party: 'hr',
@@ -749,16 +781,45 @@ function TemplateModal({
   const [windowSaved, setWindowSaved] = useState(String(windowDays))
   const [windowDraft, setWindowDraft] = useState(String(windowDays))
   const [changed, setChanged] = useState(false)
+  // B3.1-أ: القالب المختار (null = القالب العام) وقوالب النطاق — بتظهر بعد ترحيل 103 بس
+  const [templatesReady, setTemplatesReady] = useState(false)
+  const [templates, setTemplates] = useState<ApiOnboardingScopedTemplate[]>([])
+  const [selected, setSelected] = useState<number | null>(null)
+  const [showNew, setShowNew] = useState(false)
+  const [newTpl, setNewTpl] = useState<NewTemplateDraft>(EMPTY_TEMPLATE)
+  const [branches, setBranches] = useState<Array<{ id: number; name: string }>>([])
+  const [titles, setTitles] = useState<Array<{ id: number; title: string; isActive: boolean }>>([])
+  const [grades, setGrades] = useState<Array<{ id: number; name: string; isActive: boolean }>>([])
+  const current = templates.find((t) => t.id === selected) ?? null
 
   useEffect(() => {
-    fetchOnboardingTemplate()
+    fetchOnboardingTemplates()
+      .then((r) => {
+        setTemplatesReady(r.ready)
+        setTemplates(r.templates)
+      })
+      .catch(() => setTemplatesReady(false))
+    fetchBranches()
+      .then((r) => setBranches(r.filter((b) => b.isActive)))
+      .catch(() => setBranches([]))
+    fetchCatalog<{ id: number; title: string; isActive: boolean }>('job-titles')
+      .then((r) => setTitles(r.filter((x) => x.isActive)))
+      .catch(() => setTitles([]))
+    fetchCatalog<{ id: number; name: string; isActive: boolean }>('grades')
+      .then((r) => setGrades(r.filter((x) => x.isActive)))
+      .catch(() => setGrades([]))
+  }, [])
+
+  useEffect(() => {
+    setLoading(true)
+    fetchOnboardingTemplate(selected ?? undefined)
       .then((r) => {
         setRows(r)
         setDrafts(Object.fromEntries(r.map((x) => [x.id, toDraft(x)])))
       })
       .catch((e) => setErr(e instanceof Error ? e.message : 'تعذر تحميل القالب'))
       .finally(() => setLoading(false))
-  }, [])
+  }, [selected])
 
   const isDirty = (r: ApiOnboardingTemplateItem) => {
     const d = drafts[r.id]
@@ -803,6 +864,7 @@ function TemplateModal({
         label: newItem.label.trim(),
         party: newItem.party,
         dueOffsetDays: Number(newItem.dueOffsetDays),
+        ...(selected !== null ? { templateId: selected } : {}),
       })
       setRows((p) => [...p, saved])
       setDrafts((p) => ({ ...p, [saved.id]: toDraft(saved) }))
@@ -834,6 +896,48 @@ function TemplateModal({
     }
   }
 
+  // B3.1-أ: قالب جديد بنطاق — بيبدأ بنسخة من بنود القالب العام المفعّلة وبيتفتح للتعديل
+  const newTplValid =
+    newTpl.name.trim().length >= 2 &&
+    (newTpl.branchId !== '' || newTpl.jobTitle !== '' || newTpl.gradeId !== '' || newTpl.contractType !== '')
+  const createTemplate = async () => {
+    setSaving('template')
+    setErr('')
+    try {
+      const saved = await createOnboardingTemplate({
+        name: newTpl.name.trim(),
+        branchId: newTpl.branchId ? Number(newTpl.branchId) : null,
+        jobTitle: newTpl.jobTitle || null,
+        gradeId: newTpl.gradeId ? Number(newTpl.gradeId) : null,
+        contractType: newTpl.contractType || null,
+      })
+      setTemplates((p) => [...p, saved])
+      setSelected(saved.id)
+      setNewTpl(EMPTY_TEMPLATE)
+      setShowNew(false)
+      setChanged(true)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'تعذر إنشاء القالب')
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  const toggleTemplate = async () => {
+    if (!current) return
+    setSaving('template')
+    setErr('')
+    try {
+      const saved = await updateOnboardingTemplate(current.id, { isActive: !current.isActive })
+      setTemplates((p) => p.map((t) => (t.id === saved.id ? saved : t)))
+      setChanged(true)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'تعذر حفظ القالب')
+    } finally {
+      setSaving(null)
+    }
+  }
+
   const close = () => {
     if (changed) onChanged()
     onClose()
@@ -856,6 +960,116 @@ function TemplateModal({
         <div className="flex-1 overflow-auto p-6 space-y-5">
           {err && (
             <div className="bg-red-50 text-red-700 rounded-xl p-3 text-sm">{err}</div>
+          )}
+
+          {/* B3.1-أ: القالب العام هو الافتراضي، وقالب النطاق للموظف اللي ملفه بيطابقه (الأدق أولًا) */}
+          {templatesReady && (
+            <div className="bg-gray-50 rounded-xl p-4 space-y-3">
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="text-sm text-gray-700">القالب</span>
+                <select
+                  className="input text-sm max-w-full"
+                  value={selected ?? ''}
+                  onChange={(e) => setSelected(e.target.value ? Number(e.target.value) : null)}
+                >
+                  <option value="">القالب العام (لكل الموظفين)</option>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                      {t.isActive ? '' : ' (معطّل)'}
+                    </option>
+                  ))}
+                </select>
+                {current && <span className="text-xs text-gray-500">{templateScopeText(current)}</span>}
+                {current && (
+                  <button
+                    onClick={toggleTemplate}
+                    disabled={saving === 'template'}
+                    className="btn-secondary text-sm disabled:opacity-50"
+                  >
+                    {current.isActive ? 'تعطيل القالب' : 'تفعيل القالب'}
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowNew((v) => !v)}
+                  className="btn-secondary text-sm mr-auto flex items-center gap-1"
+                >
+                  <Plus size={14} />
+                  قالب جديد
+                </button>
+              </div>
+              {showNew && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                  <input
+                    className="input text-sm"
+                    placeholder="اسم القالب (مثال: مبيعات فرع المعادي)"
+                    value={newTpl.name}
+                    maxLength={150}
+                    onChange={(e) => setNewTpl({ ...newTpl, name: e.target.value })}
+                  />
+                  <select
+                    className="input text-sm"
+                    value={newTpl.branchId}
+                    onChange={(e) => setNewTpl({ ...newTpl, branchId: e.target.value })}
+                  >
+                    <option value="">أي فرع</option>
+                    {branches.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className="input text-sm"
+                    value={newTpl.jobTitle}
+                    onChange={(e) => setNewTpl({ ...newTpl, jobTitle: e.target.value })}
+                  >
+                    <option value="">أي مسمى</option>
+                    {titles.map((x) => (
+                      <option key={x.id} value={x.title}>
+                        {x.title}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className="input text-sm"
+                    value={newTpl.gradeId}
+                    onChange={(e) => setNewTpl({ ...newTpl, gradeId: e.target.value })}
+                  >
+                    <option value="">أي درجة</option>
+                    {grades.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.name}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className="input text-sm"
+                    value={newTpl.contractType}
+                    onChange={(e) => setNewTpl({ ...newTpl, contractType: e.target.value })}
+                  >
+                    <option value="">أي نوع تعاقد</option>
+                    {Object.entries(CONTRACT_TYPE_LABELS).map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={createTemplate}
+                    disabled={!newTplValid || saving === 'template'}
+                    title="القالب محتاج اسم ونطاق: فرع أو مسمى أو درجة أو نوع تعاقد"
+                    className="btn-primary text-sm disabled:opacity-50"
+                  >
+                    إنشاء القالب
+                  </button>
+                </div>
+              )}
+              <p className="text-xs text-gray-400">
+                الموظف الجديد بياخد أدق قالب مفعّل بيطابق ملفه (فرعه ومسماه ودرجته ونوع تعاقده)، ولو
+                مفيش قالب مطابق بياخد القالب العام. القالب الجديد بيبدأ بنسخة من بنود القالب العام.
+              </p>
+            </div>
           )}
 
           {/* نافذة الموظف الجديد — مفتاح الإعدادات onboarding.window_days */}

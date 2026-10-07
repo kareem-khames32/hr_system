@@ -8,6 +8,7 @@ import { Team } from '../org/entities/team.entity'
 import { ApproverResolver } from '../requests/approver-resolver.service'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { OnboardingTask, OnboardingTemplateItem } from './onboarding.entities'
+import { OnboardingTemplate } from './onboarding-template.entity'
 import { OnboardingController } from './onboarding.controller'
 import { OnboardingService } from './onboarding.service'
 
@@ -16,6 +17,8 @@ import { OnboardingService } from './onboarding.service'
   imports: [
     TypeOrmModule.forFeature([
       OnboardingTemplateItem,
+      // B3.1-أ: قوالب بالنطاق
+      OnboardingTemplate,
       OnboardingTask,
       Employee,
       User,

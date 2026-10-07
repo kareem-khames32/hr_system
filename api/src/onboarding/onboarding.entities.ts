@@ -42,6 +42,11 @@ export class OnboardingTemplateItem {
   @Column({ default: true })
   isActive: boolean
 
+  // B3.1-أ (ترحيل 103): قالب البند (onboarding_templates.id) — NULL = بند من القالب العام. برّه قراءة وكتابة الكيان: بيتقري
+  // ويتكتب بـSQL بعد فحص وجوده (onboarding-templates.ts)، فالكود شغال قبل الترحيل
+  @Column({ type: 'int', nullable: true, select: false, insert: false, update: false })
+  templateId?: number | null
+
   @CreateDateColumn()
   createdAt: Date
 }

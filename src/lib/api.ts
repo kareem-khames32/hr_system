@@ -1992,11 +1992,26 @@ export const addOnboardingTask = (
   d: { label: string; party: OnboardingParty; dueDate: string }
 ) => post<ApiOnboardingTask>(`/onboarding/${employeeId}/tasks`, d)
 // قالب المهام (settings.manage) — يسري على من تُنسخ قائمته بعد التعديل
-export const fetchOnboardingTemplate = () =>
-  get<ApiOnboardingTemplateItem[]>('/onboarding/template')
+// B3.1-أ: من غير رقم قالب = بنود القالب العام؛ برقم = بنود قالب بنطاق
+export const fetchOnboardingTemplate = (templateId?: number) =>
+  get<ApiOnboardingTemplateItem[]>(`/onboarding/template${templateId ? `?templateId=${templateId}` : ''}`)
 export const createOnboardingTemplateItem = (d: {
-  label: string; party: OnboardingParty; dueOffsetDays: number; sortOrder?: number; isActive?: boolean
+  label: string; party: OnboardingParty; dueOffsetDays: number; sortOrder?: number; isActive?: boolean; templateId?: number
 }) => post<ApiOnboardingTemplateItem>('/onboarding/template', d)
+// B3.1-أ: قوالب التهيئة بالنطاق (فرع، مسمى، درجة، نوع تعاقد) — ready=false لحد ما ترحيل 103 يتطبق
+export interface ApiOnboardingScopedTemplate {
+  id: number; name: string; branchId: number | null; branchName: string | null; jobTitle: string | null
+  gradeId: number | null; gradeName: string | null; contractType: string | null; isActive: boolean; activeItems: number
+}
+export interface OnboardingTemplateScopeInput {
+  branchId?: number | null; jobTitle?: string | null; gradeId?: number | null; contractType?: string | null
+}
+export const fetchOnboardingTemplates = () =>
+  get<{ ready: boolean; templates: ApiOnboardingScopedTemplate[] }>('/onboarding/templates')
+export const createOnboardingTemplate = (d: OnboardingTemplateScopeInput & { name: string }) =>
+  post<ApiOnboardingScopedTemplate>('/onboarding/templates', d)
+export const updateOnboardingTemplate = (id: number, d: OnboardingTemplateScopeInput & { name?: string; isActive?: boolean }) =>
+  patch<ApiOnboardingScopedTemplate>(`/onboarding/templates/${id}`, d)
 export const updateOnboardingTemplateItem = (
   id: number,
   d: Partial<Omit<ApiOnboardingTemplateItem, 'id'>>

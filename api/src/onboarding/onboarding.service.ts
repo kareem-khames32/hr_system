@@ -26,6 +26,10 @@ import {
   OnboardingTaskStatus,
   OnboardingTemplateItem,
 } from './onboarding.entities'
+import { Grade } from '../assets/assets.entities'
+import { OnboardingTemplate } from './onboarding-template.entity'
+import { ONBOARDING_CONTRACT_TYPES, ONBOARDING_TEMPLATE_SCOPE_REQUIRED, ONBOARDING_TEMPLATES_MIGRATION_MISSING, matchingOnboardingTemplates,
+  onboardingTemplatesReady, templateSpecificity, type OnboardingTemplateScope } from './onboarding-templates'
 
 // نافذة «الموظف الجديد» بالأيام من تاريخ الالتحاق — من الإعدادات
 // B2.5: مهمة الطابور اللي بتعمل مهام الموظف وقت تعيينه (مستهلك حدث EMPLOYEE_HIRED)
@@ -95,6 +99,16 @@ export interface OnboardingTemplateInput {
   party?: OnboardingParty
   dueOffsetDays?: number
   sortOrder?: number
+  isActive?: boolean
+}
+
+// B3.1-أ: قالب بنطاق — null بيمسح خانة النطاق (في التعديل)
+export interface OnboardingScopedTemplateInput {
+  name?: string
+  branchId?: number | null
+  jobTitle?: string | null
+  gradeId?: number | null
+  contractType?: string | null
   isActive?: boolean
 }
 
@@ -422,29 +436,95 @@ export class OnboardingService implements OnApplicationBootstrap, OnModuleInit {
   }
 
   // ===== القالب (settings.manage) =====
-  listTemplate() {
-    return this.template.find({ order: { sortOrder: 'ASC', id: 'ASC' } })
+  // B3.1-أ: من غير رقم قالب = بنود القالب العام (السلوك القايم)؛ برقم = بنود قالب بنطاق (في نطاق القارئ وإلا غير موجود)
+  async listTemplate(user: JwtPayload, templateId?: number) {
+    const ready = await onboardingTemplatesReady(this.tasks.manager)
+    if (templateId !== undefined) await this.scopedTemplate(user, templateId)
+    const query = this.template.createQueryBuilder('i').orderBy('i.sortOrder', 'ASC').addOrderBy('i.id', 'ASC')
+    if (ready) query.where(templateId !== undefined ? 'i.templateId = :templateId' : 'i.templateId IS NULL', { templateId })
+    return query.getMany()
   }
 
   async createTemplateItem(
-    dto: OnboardingTemplateInput & { label: string; party: OnboardingParty }
+    user: JwtPayload,
+    dto: OnboardingTemplateInput & { label: string; party: OnboardingParty; templateId?: number }
   ) {
-    const [last] = await this.template.find({ order: { sortOrder: 'DESC' }, take: 1 })
-    return this.template.save(
-      this.template.create({
-        label: this.cleanLabel(dto.label),
-        party: dto.party,
-        dueOffsetDays: dto.dueOffsetDays ?? 0,
-        sortOrder: dto.sortOrder ?? (last?.sortOrder ?? 0) + 10,
-        isActive: dto.isActive ?? true,
-      })
-    )
+    // B3.1-أ: بند لقالب بنطاق (في نطاق المنفّذ)، والترتيب «آخر بند + 10» جوه نفس القالب
+    const templateId = dto.templateId ?? null
+    if (templateId !== null) await this.scopedTemplate(user, templateId)
+    const ready = await onboardingTemplatesReady(this.tasks.manager)
+    return this.tasks.manager.transaction(async (em) => {
+      const items = em.getRepository(OnboardingTemplateItem)
+      const lastQuery = items.createQueryBuilder('i').orderBy('i.sortOrder', 'DESC').take(1)
+      if (ready) lastQuery.where(templateId !== null ? 'i.templateId = :templateId' : 'i.templateId IS NULL', { templateId })
+      const last = await lastQuery.getOne()
+      const saved = await items.save(
+        items.create({
+          label: this.cleanLabel(dto.label),
+          party: dto.party,
+          dueOffsetDays: dto.dueOffsetDays ?? 0,
+          sortOrder: dto.sortOrder ?? (last?.sortOrder ?? 0) + 10,
+          isActive: dto.isActive ?? true,
+        })
+      )
+      // العمود برّه كتابة الكيان (ترحيل 103): بيتكتب هنا في نفس المعاملة
+      if (templateId !== null) await em.query('UPDATE [onboarding_template_items] SET [templateId] = @0 WHERE [id] = @1', [templateId, saved.id])
+      return saved
+    })
+  }
+
+  // ===== B3.1-أ: قوالب بالنطاق (settings.manage) =====
+  // حساب الفروع بيشوف ويدير قوالب فروعه بس (فرع القالب من نطاقه)؛ قالب لكل الفروع أو لفرع برّه نطاقه = غير موجود له
+  async listTemplates(user: JwtPayload) {
+    if (!(await onboardingTemplatesReady(this.tasks.manager))) return { ready: false, templates: [] }
+    const rows = (await this.templates.find({ order: { id: 'ASC' } })).filter((row) => inBranchScope(user, row.branchId))
+    return { ready: true, templates: await this.templateViews(rows) }
+  }
+
+  // القالب الجديد بيبدأ بنسخة من بنود القالب العام المفعّلة (بتتعدّل بعدها من نفس الجدول)
+  async createTemplate(user: JwtPayload, dto: OnboardingScopedTemplateInput & { name: string }) {
+    if (!(await onboardingTemplatesReady(this.tasks.manager))) throw new BadRequestException(ONBOARDING_TEMPLATES_MIGRATION_MISSING)
+    const name = this.cleanTemplateName(dto.name)
+    const scope = await this.cleanTemplateScope(user, { branchId: dto.branchId ?? null, jobTitle: dto.jobTitle ?? null,
+      gradeId: dto.gradeId ?? null, contractType: dto.contractType ?? null })
+    const saved = await this.tasks.manager.transaction(async (em) => {
+      const templates = em.getRepository(OnboardingTemplate)
+      const row = await templates.save(templates.create({ name, ...scope, isActive: true, createdAt: new Date() }))
+      await em.query(
+        `INSERT INTO [onboarding_template_items] ([label], [party], [dueOffsetDays], [sortOrder], [isActive], [createdAt], [templateId])
+         SELECT [label], [party], [dueOffsetDays], [sortOrder], 1, @1, @0 FROM [onboarding_template_items] WHERE [templateId] IS NULL AND [isActive] = 1`,
+        [row.id, new Date()]
+      )
+      return row
+    })
+    return (await this.templateViews([saved]))[0]
+  }
+
+  // بالحقول المبعوتة بس وبرقم الصف. تعطيل القالب مابيغيّرش قوايم الموظفين القايمة
+  async updateTemplate(user: JwtPayload, id: number, dto: OnboardingScopedTemplateInput) {
+    const row = await this.scopedTemplate(user, id)
+    const patch: Partial<OnboardingTemplate> = {}
+    if (dto.name !== undefined) patch.name = this.cleanTemplateName(dto.name)
+    if (dto.branchId !== undefined || dto.jobTitle !== undefined || dto.gradeId !== undefined || dto.contractType !== undefined) {
+      Object.assign(patch, await this.cleanTemplateScope(user, {
+        branchId: dto.branchId !== undefined ? dto.branchId : row.branchId,
+        jobTitle: dto.jobTitle !== undefined ? dto.jobTitle : row.jobTitle,
+        gradeId: dto.gradeId !== undefined ? dto.gradeId : row.gradeId,
+        contractType: dto.contractType !== undefined ? dto.contractType : row.contractType,
+      }))
+    }
+    if (dto.isActive !== undefined) patch.isActive = dto.isActive
+    if (Object.keys(patch).length) await this.templates.update({ id }, patch)
+    return (await this.templateViews([Object.assign(row, patch)]))[0]
   }
 
   // التعديل يسري على من تُنسخ قائمته بعد كده — القوائم القائمة لا تتغير
-  async updateTemplateItem(id: number, dto: OnboardingTemplateInput) {
+  async updateTemplateItem(user: JwtPayload, id: number, dto: OnboardingTemplateInput) {
     const row = await this.template.findOne({ where: { id } })
     if (!row) throw new NotFoundException('بند القالب غير موجود')
+    // B3.1-أ: بند قالب بنطاق بيتعدّل من اللي القالب في نطاقه بس (برّه النطاق = غير موجود)
+    const templateId = await this.templateIdOfItem(id)
+    if (templateId !== null) await this.scopedTemplate(user, templateId, 'بند القالب غير موجود')
     if (dto.label !== undefined) row.label = this.cleanLabel(dto.label)
     if (dto.party !== undefined) row.party = dto.party
     if (dto.dueOffsetDays !== undefined) row.dueOffsetDays = dto.dueOffsetDays
@@ -454,6 +534,79 @@ export class OnboardingService implements OnApplicationBootstrap, OnModuleInit {
   }
 
   // ===== مساعدات =====
+  // B3.1-أ: مخزن القوالب من مدير الكيانات (الجدول من ترحيل 103 — مابيتلمسش قبل فحص وجوده)
+  private get templates() {
+    return this.tasks.manager.getRepository(OnboardingTemplate)
+  }
+
+  /** قالب بنطاق في نطاق الحساب: قبل الترحيل برسالته، ومش موجود أو فرعه برّه نطاق الحساب = غير موجود */
+  private async scopedTemplate(user: JwtPayload, id: number, missing = 'القالب غير موجود') {
+    if (!(await onboardingTemplatesReady(this.tasks.manager))) throw new BadRequestException(ONBOARDING_TEMPLATES_MIGRATION_MISSING)
+    const row = await this.templates.findOne({ where: { id } })
+    if (!row || !inBranchScope(user, row.branchId)) throw new NotFoundException(missing)
+    return row
+  }
+
+  /** قالب البند (العمود برّه قراءة الكيان) — null = بند من القالب العام، أو الترحيل لسه مااتطبقش */
+  private async templateIdOfItem(itemId: number): Promise<number | null> {
+    if (!(await onboardingTemplatesReady(this.tasks.manager))) return null
+    const [row] = await this.tasks.manager.query('SELECT [templateId] FROM [onboarding_template_items] WHERE [id] = @0', [itemId])
+    return row?.templateId == null ? null : Number(row.templateId)
+  }
+
+  private cleanTemplateName(name: string) {
+    const value = String(name ?? '').trim()
+    if (value.length < 2) throw new BadRequestException('اسم القالب حرفان على الأقل')
+    if (value.length > 150) throw new BadRequestException('اسم القالب لا يتجاوز 150 حرف')
+    return value
+  }
+
+  /** نطاق القالب بعد التحقق: خانة واحدة على الأقل، والفرع من نطاق المنفّذ (حساب الفروع مايعملش قالب لكل الفروع)، والدرجة موجودة */
+  private async cleanTemplateScope(user: JwtPayload, input: OnboardingTemplateScope): Promise<OnboardingTemplateScope> {
+    const jobTitle = String(input.jobTitle ?? '').trim().replace(/\s+/g, ' ') || null
+    const scope: OnboardingTemplateScope = { branchId: input.branchId ?? null, jobTitle, gradeId: input.gradeId ?? null, contractType: input.contractType || null }
+    if (jobTitle && jobTitle.length > 100) throw new BadRequestException('المسمى لا يتجاوز 100 حرف')
+    if (scope.contractType && !ONBOARDING_CONTRACT_TYPES.includes(scope.contractType)) {
+      throw new BadRequestException('نوع التعاقد: permanent أو fixed_term أو part_time أو seasonal')
+    }
+    if (templateSpecificity(scope) === 0) throw new BadRequestException(ONBOARDING_TEMPLATE_SCOPE_REQUIRED)
+    if (scope.branchId === null && branchScopeOf(user) !== null) {
+      throw new ForbiddenException('حسابك على فروع محددة — اختار فرع القالب من فروعك')
+    }
+    if (scope.branchId !== null && (!inBranchScope(user, scope.branchId) || !(await this.branches.findOne({ where: { id: scope.branchId } })))) {
+      throw new NotFoundException('الفرع غير موجود')
+    }
+    if (scope.gradeId !== null && !(await this.tasks.manager.getRepository(Grade).findOne({ where: { id: scope.gradeId } }))) {
+      throw new BadRequestException('الدرجة غير موجودة')
+    }
+    return scope
+  }
+
+  private async templateViews(rows: OnboardingTemplate[]) {
+    if (rows.length === 0) return []
+    const em = this.tasks.manager
+    const counts: Array<{ templateId: number; n: number }> = await em.query(
+      'SELECT [templateId], COUNT(*) AS [n] FROM [onboarding_template_items] WHERE [templateId] IS NOT NULL AND [isActive] = 1 GROUP BY [templateId]'
+    )
+    const activeItems = new Map(counts.map((row) => [Number(row.templateId), Number(row.n)]))
+    const branchIds = [...new Set(rows.map((row) => row.branchId).filter((value): value is number => value != null))]
+    const gradeIds = [...new Set(rows.map((row) => row.gradeId).filter((value): value is number => value != null))]
+    const branchName = new Map((branchIds.length ? await this.branches.find({ where: { id: In(branchIds) } }) : []).map((b) => [b.id, b.name]))
+    const gradeName = new Map((gradeIds.length ? await em.getRepository(Grade).find({ where: { id: In(gradeIds) } }) : []).map((g) => [g.id, g.name]))
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      branchId: row.branchId ?? null,
+      branchName: row.branchId != null ? branchName.get(row.branchId) ?? '—' : null,
+      jobTitle: row.jobTitle ?? null,
+      gradeId: row.gradeId ?? null,
+      gradeName: row.gradeId != null ? gradeName.get(row.gradeId) ?? '—' : null,
+      contractType: row.contractType ?? null,
+      isActive: !!row.isActive,
+      activeItems: activeItems.get(row.id) ?? 0,
+    }))
+  }
+
   private async windowDays(): Promise<number> {
     const row = await this.config.findOne({ where: { key: WINDOW_KEY } })
     const n = Math.floor(Number(row?.value))
@@ -474,12 +627,27 @@ export class OnboardingService implements OnApplicationBootstrap, OnModuleInit {
     )
     const missing = candidates.filter((e) => !have.has(e.id))
     if (missing.length === 0) return
-    const items = await this.template.find({
-      where: { isActive: true },
-      order: { sortOrder: 'ASC', id: 'ASC' },
-    })
-    if (items.length === 0) return
+    // B3.1-أ: قالب الموظف = أدق قالب بنطاق مفعّل بيطابق ملفه وفيه بنود مفعّلة، وإلا القالب العام (السلوك القايم، وهو الوحيد قبل ترحيل 103)
+    const ready = await onboardingTemplatesReady(this.tasks.manager)
+    const activeItems = (templateId: number | null) => {
+      const query = this.template.createQueryBuilder('i').where('i.isActive = :active', { active: true }).orderBy('i.sortOrder', 'ASC').addOrderBy('i.id', 'ASC')
+      if (ready) query.andWhere(templateId !== null ? 'i.templateId = :templateId' : 'i.templateId IS NULL', { templateId })
+      return query.getMany()
+    }
+    const general = await activeItems(null)
+    const scoped = ready ? await this.templates.find({ where: { isActive: true } }) : []
+    const scopedItems = new Map<number, OnboardingTemplateItem[]>()
     for (const emp of missing) {
+      let items = general
+      for (const template of matchingOnboardingTemplates(scoped, emp)) {
+        if (!scopedItems.has(template.id)) scopedItems.set(template.id, await activeItems(template.id))
+        const own = scopedItems.get(template.id) ?? []
+        if (own.length) {
+          items = own
+          break
+        }
+      }
+      if (items.length === 0) continue
       await this.withLock(emp.id, async (tasks) => {
         // فحص ثانٍ داخل القفل — نداء متزامن ربما سبقنا
         if ((await tasks.count({ where: { employeeId: emp.id, systemKey: IsNull() } })) > 0) return
