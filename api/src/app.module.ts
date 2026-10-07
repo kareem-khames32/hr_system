@@ -26,6 +26,7 @@ import { ReportsController } from './reports/reports.controller'
 import { MetricsService } from './reports/metrics.service'
 import { ReportPdfRenderer } from './reports/report-pdf.renderer'
 import { SavedReportsModule } from './reports/saved-reports.module'
+import { AnnouncementsModule } from './announcements/announcements.module'
 import { TeamController } from './manager/team.controller'
 import { TeamService } from './manager/team.service'
 import { CostCenterReportController } from './reports/cost-center-report.controller'
@@ -133,6 +134,8 @@ import { dbPacketSize } from './common/sql-packet-size'
     PositionsModule,
     // B2.13-ب: التقارير المحفوظة والمجدولة
     SavedReportsModule,
+    // B2.16: الإعلانات (موديول اختياري مقفول افتراضيًا)
+    AnnouncementsModule,
   ],
   controllers: [HealthController, DashboardController, ReportsController, CostCenterReportController, TeamController],
   providers: [CostCenterReportService, MetricsService, ReportPdfRenderer, TeamService],

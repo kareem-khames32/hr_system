@@ -258,6 +258,15 @@ export const MODULES = {
     // المتقدمين شاشة حقيقية؛ باقي ما تحت /recruitment شاشات عرض (DEMO_ROUTES) لحد ما الموديول الكامل ينزل
     routes: ['/recruitment', '/recruitment/applicants'],
   }),
+  // B2.16: الإعلانات — إعلان لجمهور «مين + فين» بتاريخ نشر وانتهاء، ولوحته في البوابة، وتقرير مين قرا. موديول جديد = مقفول لحد ما
+  // الشركة تفتحه، وفي الباقة الأساسية
+  announcements: moduleDef({
+    nameAr: 'الإعلانات', group: 'people', dependsOn: ['employees'], softUses: ['notifications'], defaultEnabled: false,
+    description: 'إعلان لجمهور محدد (مين + فين) بتاريخ نشر وانتهاء، ولوحة الإعلانات في البوابة، وتقرير مين قرا',
+    permissions: ['announcements.manage'],
+    routes: ['/announcements'],
+  }),
+
   // B2.14: لوحة «فريقي» للمدير الهيكلي (من غير دور إداري) — قراءة بنطاق فريقه في الهيكل. شاشة جديدة بتعرض بيانات موظفين لقارئ جديد:
   // مقفولة لحد ما الشركة تفتحها (زي الوظائف المعتمدة)، وفي الباقة الأساسية
   manager: moduleDef({

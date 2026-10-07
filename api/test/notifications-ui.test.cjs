@@ -36,7 +36,8 @@ test('NU-01: عميل الـAPI على مسارات الخادم نفسها بص
   }
   // قايمة الإشعارات نفسها زي ما هي في PortalController، والمخزّن مصدر زيادة فيها
   const portal = read('api/src/assets/portal.controller.ts')
-  assert.match(portal, /for \(const stored of await storedInAppNotifications\(this\.employees\.manager, user\.sub, ids => this\.comments\.readableComments\(user, ids\)\)\)/)
+  // وحكم كل نوع مخزّن من المنادي: إشارة التعليق بحق قراءة تعليقها، و«إعلان جديد» (B2.16) بإن الإعلان ساري والحساب في جمهوره
+  assert.match(portal, /for \(const stored of await storedInAppNotifications\(this\.employees\.manager, user\.sub, ids => this\.comments\.readableComments\(user, ids\),\s+ids => this\.announcements\.liveIdsFor\(user, ids\)\)\)/)
   assert.ok(portal.indexOf('storedInAppNotifications(this.employees.manager') < portal.indexOf('return items.filter((item) => routeAvailable(item.link, enabled))'))
 })
 

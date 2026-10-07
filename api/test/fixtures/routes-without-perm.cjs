@@ -22,6 +22,9 @@ const EXCEPTIONS = {
   'BrandingController.logo': 'PUBLIC_OK', // GET /branding/logo
   'HealthController.check': 'PUBLIC_OK', // GET /health
   // ===== SELF (26) — خدمة ذاتية: بيشتغل على بيانات صاحب الحساب بس (user.sub / user.employeeId) — دور «موظف» صلاحياته فاضية فمفيش مفتاح ينفع =====
+  // B2.16: لوحة الإعلانات وتسجيل القراءة — الموظف لنفسه (الإعلان ساري وهو في جمهوره؛ الفحص في الخدمة)
+  'AnnouncementsController.board': 'SELF', // GET /announcements/board
+  'AnnouncementsController.markRead': 'SELF', // POST /announcements/:id/read
   'AssetsController.myCustody': 'SELF', // GET /custody/mine
   'AttendanceController.myToday': 'SELF', // GET /attendance/my-today
   // B2.1: تصدير صاحب الحساب نفسه من شاشة في سجل التدقيق (مابيقراش أي بيانات)

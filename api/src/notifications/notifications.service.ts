@@ -7,6 +7,7 @@ import { AuthService, type JwtPayload } from '../auth/auth.service'
 import { MailSendError, MailService, maskEmail } from '../auth/mail.service'
 import { User } from '../auth/user.entity'
 import { CommentsService } from '../comments/comments.service'
+import { AnnouncementsService } from '../announcements/announcements.service'
 import { isCommentEntity, parseCommentMentions } from '../comments/comment-rules'
 import type { Comment } from '../comments/comment.entity'
 import { definitionCodeOf } from '../common/leave-contract'
@@ -59,6 +60,8 @@ export const NOTIFICATION_SOURCE_EVENTS: readonly DomainEventType[] = ['REQUEST_
   'TASK_ASSIGNED', 'TASK_DUE_SOON', 'TASK_OVERDUE',
   // B2.15
   'DOCUMENT_EXPIRING',
+  // B2.16
+  'ANNOUNCEMENT_PUBLISHED',
   // B2.6
   'REQUEST_EXECUTED',
   // B2.8
@@ -118,7 +121,8 @@ export class NotificationsService implements OnModuleInit {
     private readonly modules: ModulesService,
     private readonly config: ConfigService,
     private readonly resolver: ApproverResolver,
-    private readonly comments: CommentsService
+    private readonly comments: CommentsService,
+    private readonly announcements: AnnouncementsService
   ) {}
 
   onModuleInit() {
@@ -177,6 +181,7 @@ export class NotificationsService implements OnModuleInit {
       case 'TASK_OVERDUE': return this.onTask(event)
       case 'COMMENT_MENTION': return this.onCommentMention(event)
       case 'DOCUMENT_EXPIRING': return this.onDocumentExpiring(event)
+      case 'ANNOUNCEMENT_PUBLISHED': return this.onAnnouncementPublished(event)
       default: return 0
     }
   }
@@ -265,6 +270,19 @@ export class NotificationsService implements OnModuleInit {
     return this.deliver({
       event, code: 'payroll.payslip_available', category: 'payroll', kind: 'info', recipients: await this.auth.accountPayloads(users),
       entityType: 'payroll_run', entityId: runId, link: '/my/payslips', values: { 'payslip.period': String(run.period) },
+    })
+  }
+
+  // ===== B2.16: «إعلان جديد» لجمهور الإعلان =====
+  /** الإعلان لسه ساري وقت التوزيع، والمستلمين حسابات موظفين جمهوره دلوقتي (العنوان بس في الإشعار) */
+  private async onAnnouncementPublished(event: SourceEvent): Promise<number> {
+    const id = Number(event.payload?.announcementId)
+    if (!Number.isSafeInteger(id)) return 0
+    const live = await this.announcements.liveAudienceAccounts(id)
+    if (!live) return 0
+    return this.deliver({
+      event, code: 'announcement.published', category: 'announcement', kind: 'info', recipients: await this.auth.accountPayloads(live.accounts),
+      entityType: 'announcement', entityId: id, link: '/announcements', values: { 'announcement.title': live.row.title },
     })
   }
 
@@ -576,6 +594,10 @@ export class NotificationsService implements OnModuleInit {
       const comment = await this.comments.byId(Number(notification.entityId))
       if (!comment || !(await this.comments.readableBy(account, comment))) return 'التعليق مابقاش ظاهر للحساب ده'
       return (await this.mentionHolds(comment, account)) ? null : 'الحساب مابقاش في الدور اللي اتشاور له'
+    }
+    if (notification.entityType === 'announcement') {
+      // B2.16: الإعلان لسه ساري والحساب لسه في جمهوره (اتسحب أو انتهى أو الموظف اتنقل = مفيش رسالة)
+      return (await this.announcements.liveFor(account, Number(notification.entityId))) ? null : 'الإعلان مابقاش ساري أو الحساب مابقاش في جمهوره'
     }
     if (notification.entityType === 'employee_document') {
       // B2.15: المستند لسه بتاريخ الحدث، ولسه مستند موظف الحساب ده

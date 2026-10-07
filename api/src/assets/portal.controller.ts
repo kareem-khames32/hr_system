@@ -34,6 +34,7 @@ import { hiringDocumentsNotification } from './hiring-documents'
 import { NotificationRead } from './notification-read.entity'
 import { storedInAppNotifications } from '../notifications/notification-store'
 import { CommentsService } from '../comments/comments.service'
+import { AnnouncementsService } from '../announcements/announcements.service'
 import { leaveView } from '../common/leave-contract'
 import { ModulesService } from '../modules-registry/modules.service'
 import { routeAvailable } from '../modules-registry/registry'
@@ -94,7 +95,8 @@ export class PortalController {
     private readonly attendance: AttendanceService,
     private readonly leaveAttachments: LeaveAttachmentDeadlineJob,
     private readonly modules: ModulesService,
-    private readonly comments: CommentsService
+    private readonly comments: CommentsService,
+    private readonly announcements: AnnouncementsService
   ) {}
 
   // ===== التقويم: عطلات + إجازات معتمدة في الشهر =====
@@ -584,7 +586,9 @@ export class PortalController {
     // 4) B2.4: الإشعارات المخزّنة من محرك الإشعارات (قسيمتك ظهرت…) — مصدر زيادة بنفس شكل العنصر؛ قراءتها وحذفها في notification_reads
     // بنفس المسارين، والأحداث اللي ليها عنصر محسوب فوق (العدّاد وقرار طلبك) مابتتخزنش للقايمة أصلًا
     // وإشعار الإشارة في تعليق بيظهر طول ما الحساب لسه يقرا تعليقه بهويته دلوقتي (B2.8، Codex CRP2P-B02)
-    for (const stored of await storedInAppNotifications(this.employees.manager, user.sub, ids => this.comments.readableComments(user, ids))) {
+    // و«إعلان جديد» طول ما الإعلان ساري والحساب في جمهوره دلوقتي (B2.16)
+    for (const stored of await storedInAppNotifications(this.employees.manager, user.sub, ids => this.comments.readableComments(user, ids),
+      ids => this.announcements.liveIdsFor(user, ids))) {
       items.push({ ...stored, category: stored.category as NotificationCategory })
     }
 

@@ -574,6 +574,8 @@ test('NT-08: التفضيلات — مقفول = مفيش بريد، وملخص 
     { key: 'comment', label: 'التعليقات والإشارات', inApp: 'ON', email: 'ON' },
     // B2.15: «مستندك هينتهي» بالبريد (جوه النظام العنصر المحسوب القايم)
     { key: 'document', label: 'مستنداتي', inApp: null, email: 'ON' },
+    // B2.16
+    { key: 'announcement', label: 'الإعلانات', inApp: 'ON', email: 'ON' },
   ])
   for (const body of [{ category: 'unknown', channel: 'EMAIL', mode: 'OFF' }, { category: 'approval', channel: 'SMS', mode: 'OFF' }, { category: 'approval', channel: 'EMAIL', mode: 'LATER' },
     { category: 'payroll', channel: 'IN_APP', mode: 'DIGEST' }, { category: 'approval', channel: 'IN_APP', mode: 'OFF' }]) {
@@ -975,7 +977,7 @@ test('NT-11: القوالب وسجل الإرسال لحساب الشركة بس
   const catalog = expectStatus(await request(users.admin, 'GET', '/notifications/templates'), 200)
   assert.equal(catalog.available, true)
   assert.deepEqual(catalog.events.map(event => event.code), ['request.pending_approval', 'request.escalated', 'request.decided', 'request.returned', 'request.confidential', 'payroll.payslip_available',
-    'document.expiring', 'task.assigned', 'task.due_soon', 'task.overdue', 'comment.mentioned'])
+    'document.expiring', 'announcement.published', 'task.assigned', 'task.due_soon', 'task.overdue', 'comment.mentioned'])
   const decided = catalog.events.find(event => event.code === 'request.decided')
   assert.deepEqual([decided.templates.EMAIL.customized, decided.storedInApp, decided.variables.map(variable => variable.key)],
     [false, false, ['request.type', 'request.decision', 'recipient.name', 'company.name', 'link']])

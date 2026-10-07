@@ -38,8 +38,11 @@ export interface StoredNotificationItem { id: string; kind: string; category: st
  * «قسائم راتبي»)، فمسير اتفتح تاني أو موظف اتشال منه إشعاره بيختفي. ونفس الحدث على نفس الكيان أكتر من مرة (اتفتح واتعتمد تاني) = الأحدث بس.
  * و«إشارة لك في تعليق» (لينكه فيه رقم الموضوع) طول ما الحساب لسه يقرا التعليق بهويته دلوقتي: المنادي بيدّي الحكم (readableComments)،
  * ومن غيره إشعارات الإشارة مابتظهرش (Codex CRP2P-B02).
+ * و«إعلان جديد» (B2.16) طول ما الإعلان لسه ساري والحساب لسه في جمهوره: المنادي بيدّي الحكم (liveAnnouncements)، ومن غيره مابيظهرش —
+ * إعلان اتسحب أو انتهى، أو موظف اتنقل برّه جمهوره، عنوانه مابيفضلش في قايمته.
  */
-export async function storedInAppNotifications(em: EntityManager, userId: number, readableComments?: (ids: number[]) => Promise<Set<number>>): Promise<StoredNotificationItem[]> {
+export async function storedInAppNotifications(em: EntityManager, userId: number, readableComments?: (ids: number[]) => Promise<Set<number>>,
+  liveAnnouncements?: (ids: number[]) => Promise<Set<number>>): Promise<StoredNotificationItem[]> {
   if (!(await notificationTablesReady(em))) return []
   const since = new Date(Date.now() - IN_APP_KEEP_DAYS * 86_400_000)
   const seen = new Set<string>(), out: StoredNotificationItem[] = []
@@ -56,8 +59,11 @@ export async function storedInAppNotifications(em: EntityManager, userId: number
      ORDER BY n.[id] DESC`, [userId, since, before])
     const mentioned = rows.filter(row => row.eventCode === 'comment.mentioned').map(row => Number(row.entityId))
     const readable = mentioned.length && readableComments ? await readableComments(mentioned) : new Set<number>()
+    const announced = rows.filter(row => row.eventCode === 'announcement.published').map(row => Number(row.entityId))
+    const live = announced.length && liveAnnouncements ? await liveAnnouncements(announced) : new Set<number>()
     for (const row of rows) {
       if (row.eventCode === 'comment.mentioned' && !readable.has(Number(row.entityId))) continue
+      if (row.eventCode === 'announcement.published' && !live.has(Number(row.entityId))) continue
       const key = `${row.eventCode}:${row.entityType}:${row.entityId}`
       if (seen.has(key)) continue
       seen.add(key)

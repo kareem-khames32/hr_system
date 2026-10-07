@@ -44,6 +44,7 @@ import {
   Briefcase,
   Gift,
   ListChecks,
+  Megaphone,
   ScrollText,
 } from 'lucide-react'
 import clsx from 'clsx'
@@ -472,6 +473,7 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
       // B2.7: سياسات الشركة اللي عليّ وإقراري بيها
       { id: 'my-policies', label: 'سياساتي', icon: <ScrollText size={20} />, href: '/my/policies' },
       { id: 'profile', label: 'ملفي الشخصي', icon: <UserCircle size={20} />, href: '/profile' },
+      { id: 'announcements', label: 'الإعلانات', icon: <Megaphone size={20} />, href: '/announcements' },
       { id: 'notifications', label: 'الإشعارات', icon: <Bell size={20} />, href: '/notifications' },
       { id: 'calendar', label: 'التقويم', icon: <Calendar size={20} />, href: '/calendar' },
     ]

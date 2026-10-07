@@ -25,6 +25,8 @@ export const NOTIFICATION_CATEGORIES = {
   comment: 'التعليقات والإشارات',
   // B2.15
   document: 'مستنداتي',
+  // B2.16
+  announcement: 'الإعلانات',
 } as const
 export type NotificationCategoryCode = keyof typeof NOTIFICATION_CATEGORIES
 export const isNotificationCategory = (value: unknown): value is NotificationCategoryCode =>
@@ -130,6 +132,16 @@ export const NOTIFICATION_EVENTS = {
       IN_APP: { title: 'مستندك هينتهي', body: '«{{document.type}}» هينتهي يوم {{document.expiry}} — راجع الموارد البشرية للتجديد' },
       EMAIL: { title: 'مستندك هينتهي: {{document.type}}',
         body: `${greeting}\n\nمستندك «{{document.type}}» هينتهي يوم {{document.expiry}}. راجع الموارد البشرية لتجديده.\n\nمستنداتك من هنا:\n{{link}}\n\n${closing}` },
+    },
+  },
+  // B2.16: إعلان اتنشر لجمهوره (العنوان بس؛ النص في لوحة الإعلانات)
+  'announcement.published': {
+    label: 'إعلان جديد', category: 'announcement', kind: 'info', storedInApp: true,
+    variables: [{ key: 'announcement.title', label: 'عنوان الإعلان', sample: 'عطلة اليوم الوطني' }, ...COMMON],
+    templates: {
+      IN_APP: { title: 'إعلان جديد', body: '{{announcement.title}}' },
+      EMAIL: { title: 'إعلان جديد: {{announcement.title}}',
+        body: `${greeting}\n\nفيه إعلان جديد: {{announcement.title}}.\n\nاقراه من هنا:\n{{link}}\n\n${closing}` },
     },
   },
   // B2.5 (محرك المهام): جوه النظام العدّاد المحسوب على «مهامي»، والمحرك بيضيف البريد

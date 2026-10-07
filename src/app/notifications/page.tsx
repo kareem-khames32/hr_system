@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
-import { MessageSquare } from 'lucide-react'
+import { Megaphone, MessageSquare } from 'lucide-react'
 import {
   Bell,
   Calendar,
@@ -64,6 +64,8 @@ const CATEGORY_META: Record<string, { label: string; icon: typeof Bell }> = {
   payroll: { label: 'الرواتب', icon: Wallet },
   // B2.8: إشارة لك في تعليق
   comment: { label: 'التعليقات', icon: MessageSquare },
+  // B2.16: إعلان جديد
+  announcement: { label: 'الإعلانات', icon: Megaphone },
 }
 const CATEGORY_ORDER = Object.keys(CATEGORY_META)
 // تصنيف جديد من السيرفر لم تُعرَّف تسميته هنا بعد
