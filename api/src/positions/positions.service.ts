@@ -34,8 +34,27 @@ const GENERATE_LIMIT = 500
  * النص ده، ومفيش وظيفة بتتولّد عليه (الوظيفة قسمها لازم تبع فرعها، زي الإنشاء من الشاشة).
  */
 const FOREIGN_UNIT = 'قسم برّه الفرع'
+const FOREIGN_TEAM = 'فريق برّه الفرع'
 const FOREIGN_UNIT_REASON = 'قسمهم مش تبع فرعهم — صحّح القسم أو الفرع على ملفاتهم الأول'
-const unitName = (department: Department | undefined, branchId: number): string | null => !department ? null : department.branchId === branchId ? department.name : FOREIGN_UNIT
+/**
+ * هوية وحدة (قسم وفريق) في رد لقارئ فرع، بفرع الوحدة **دلوقتي** (Codex CRP3A-B01): القسم بيتعرض — رقمه واسمه — طول ما هو تبع الفرع،
+ * والفريق طول ما قسمه الحالي تبع الفرع. غير كده (اتنقل لفرع تاني، أو اتمسح) **الرقم بيتحجب مع الاسم** والاسم بيتكتب مكانه نص ثابت،
+ * فالوحدة المحجوبة مابتبانش «على مستوى الفرع». القسم المحجوب فريقه من غير اسم (نص القسم كفاية).
+ */
+function unitIdentity(branchId: number, departmentId: number | null, teamId: number | null, departments: Map<number, Department>, teams: Map<number, Team>) {
+  const department = departmentId == null ? undefined : departments.get(departmentId)
+  const departmentShown = !!department && department.branchId === branchId
+  const team = teamId == null ? undefined : teams.get(teamId)
+  const teamShown = departmentShown && !!team && departments.get(team.departmentId)?.branchId === branchId
+  return {
+    departmentId: departmentShown ? departmentId : null,
+    departmentName: departmentId == null ? null : departmentShown ? department!.name : FOREIGN_UNIT,
+    teamId: teamShown ? teamId : null,
+    teamName: teamId == null || !departmentShown ? null : teamShown ? team!.name : FOREIGN_TEAM,
+    /** وحدة الوظيفة (قسمها أو فريقها) مش تبع فرعها دلوقتي */
+    unitHidden: (departmentId != null && !departmentShown) || (teamId != null && !teamShown),
+  }
+}
 
 /** مقعد اتحجز لموظف لسه بيتعمل (جوه معاملة الإنشاء) */
 export interface HireSeat { positionId: number }
@@ -125,6 +144,8 @@ export class PositionsService {
       load(JobTitle, ids(row => row.jobTitleId)), load(Grade, ids(row => row.gradeId)), load(Branch, ids(row => row.branchId)),
       load(Department, ids(row => row.departmentId)), load(Team, ids(row => row.teamId)), load(CostCenter, ids(row => row.costCenterId)),
     ])
+    // قسم كل فريق دلوقتي (الفريق ممكن يكون اتنقل من قسم الوظيفة): هويته بتتحكم بفرع قسمه الحالي
+    for (const [id, row] of await load(Department, [...new Set([...teams.values()].map(team => team.departmentId))].filter(id => !departments.has(id)))) departments.set(id, row)
     return { titles, grades, branches, departments, teams, centers }
   }
 
@@ -135,9 +156,7 @@ export class PositionsService {
       jobTitleId: row.jobTitleId, title: names.titles.get(row.jobTitleId)?.title ?? '—',
       gradeId: row.gradeId, gradeName: row.gradeId ? names.grades.get(row.gradeId)?.name ?? null : null,
       branchId: row.branchId, branchName: names.branches.get(row.branchId)?.name ?? null,
-      departmentId: row.departmentId, departmentName: row.departmentId ? unitName(names.departments.get(row.departmentId), row.branchId) : null,
-      // الفريق بيتسمّى طول ما قسمه تبع فرع الوظيفة
-      teamId: row.teamId, teamName: row.teamId && names.departments.get(row.departmentId ?? 0)?.branchId === row.branchId ? names.teams.get(row.teamId)?.name ?? null : null,
+      ...unitIdentity(row.branchId, row.departmentId, row.teamId, names.departments, names.teams),
       costCenterId: row.costCenterId, costCenterName: row.costCenterId ? names.centers.get(row.costCenterId)?.name ?? null : null,
       headcount: row.headcount, status: row.status, statusLabel: POSITION_STATUS_LABELS[row.status] ?? row.status, budget: budgetText(row.budget),
       ...seatCounts(row, occupied.get(row.id) ?? 0), createdAt: row.createdAt,
@@ -172,34 +191,41 @@ export class PositionsService {
     type Line = { branchId: number; branchName: string | null; departmentId: number | null; departmentName: string | null
       approved: number; occupied: number; vacant: number; over: number; unassigned: number }
     const lines = new Map<string, Line>()
-    const lineOf = (branchId: number, departmentId: number | null): Line => {
-      const key = `${branchId}:${departmentId ?? 0}`
+    // hidden = قسم مش تبع الفرع دلوقتي: سطره من غير رقم وباسم ثابت (كل الأقسام اللي كده في سطر واحد للفرع)
+    const lineOf = (branchId: number, departmentId: number | null, departmentName: string | null, hidden: boolean): Line => {
+      const key = `${branchId}:${hidden ? 'x' : departmentId ?? 0}`
       let line = lines.get(key)
-      if (!line) { line = { branchId, branchName: null, departmentId, departmentName: null, approved: 0, occupied: 0, vacant: 0, over: 0, unassigned: 0 }; lines.set(key, line) }
+      if (!line) {
+        line = { branchId, branchName: null, departmentId: hidden ? null : departmentId, departmentName: hidden ? FOREIGN_UNIT : departmentName, approved: 0, occupied: 0, vacant: 0, over: 0, unassigned: 0 }
+        lines.set(key, line)
+      }
       return line
     }
     for (const row of positions) {
-      const line = lineOf(row.branchId, row.departmentId)
-      line.branchName = row.branchName; line.departmentName = row.departmentName
+      const line = lineOf(row.branchId, row.departmentId, row.departmentName, row.departmentId == null && row.departmentName === FOREIGN_UNIT)
       line.approved += row.approved; line.occupied += row.occupied; line.vacant += row.vacant; line.over += row.over
     }
-    for (const row of loose) lineOf(row.branchId, row.departmentId).unassigned += row.n
-    // أسماء الفروع والأقسام للسطور اللي من غير وظائف (موظفين من غير مقعد بس)
-    const nameless = [...lines.values()].filter(line => line.branchName == null || (line.departmentId != null && line.departmentName == null))
-    if (nameless.length) {
-      const branches = await em.getRepository(Branch).find({ where: { id: In([...new Set(nameless.map(line => line.branchId))]) } })
-      const wanted = [...new Set(nameless.map(line => line.departmentId).filter((id): id is number => id != null))]
-      const departments = wanted.length ? await em.getRepository(Department).find({ where: { id: In(wanted) } }) : []
-      for (const line of nameless) {
-        line.branchName = branches.find(row => row.id === line.branchId)?.name ?? line.branchName
-        if (line.departmentId != null) line.departmentName = unitName(departments.find(row => row.id === line.departmentId), line.branchId) ?? line.departmentName
-      }
+    // موظفين من غير مقعد: قسم الموظف بيتحكم بفرعه دلوقتي زي قسم الوظيفة
+    const homes = new Map<number, Department>()
+    for (const part of idChunks([...new Set(loose.map(row => row.departmentId).filter((id): id is number => id != null))])) {
+      for (const row of await em.getRepository(Department).find({ where: { id: In(part) } })) homes.set(row.id, row)
     }
-    const summary = [...lines.values()].sort((a, b) => a.branchId - b.branchId || (a.departmentId ?? 0) - (b.departmentId ?? 0))
+    for (const row of loose) {
+      const unit = unitIdentity(row.branchId, row.departmentId, null, homes, new Map())
+      lineOf(row.branchId, unit.departmentId, unit.departmentName, unit.unitHidden).unassigned += row.n
+    }
+    const branchNames = new Map<number, string>()
+    for (const part of idChunks([...new Set([...lines.values()].map(line => line.branchId))])) {
+      for (const row of await em.getRepository(Branch).find({ where: { id: In(part) } })) branchNames.set(row.id, row.name)
+    }
+    for (const line of lines.values()) line.branchName = branchNames.get(line.branchId) ?? null
+    // مستوى الفرع أول سطر، وأقسام برّه الفرع آخر سطر
+    const rank = (line: Line) => line.departmentId == null && line.departmentName === FOREIGN_UNIT ? Number.MAX_SAFE_INTEGER : line.departmentId ?? 0
+    const summary = [...lines.values()].sort((a, b) => a.branchId - b.branchId || rank(a) - rank(b))
     return { available: true, canManage, enforce: await this.modules.isFeatureEnabled(POSITIONS_ENFORCE_FEATURE), positions, summary }
   }
 
-  /** وظائف فرع للاختيار في نموذج التعيين: النشطة بس، بأرقامها. فرع برّه النطاق = قايمة فاضية */
+  /** وظائف فرع للاختيار في نموذج التعيين: النشطة بس واللي وحدتها تبع الفرع دلوقتي، بأرقامها. فرع برّه النطاق = قايمة فاضية */
   async options(user: JwtPayload, branchId: unknown) {
     const em = this.ds.manager
     if (!(await positionsReady(em))) return { available: false, enforce: false, positions: [] }
@@ -207,7 +233,7 @@ export class PositionsService {
     const branch = idOf(Number(branchId))
     if (!branch || !inBranchScope(branchScopeOf(user), branch)) return { available: true, enforce, positions: [] }
     const rows = await em.getRepository(ApprovedPosition).find({ where: { branchId: branch, status: 'ACTIVE' }, order: { departmentId: 'ASC', id: 'ASC' } })
-    const positions = (await this.views(em, rows)).map(row => ({ id: row.id, code: row.code, title: row.title, gradeName: row.gradeName, departmentId: row.departmentId,
+    const positions = (await this.views(em, rows)).filter(row => !row.unitHidden).map(row => ({ id: row.id, code: row.code, title: row.title, gradeName: row.gradeName, departmentId: row.departmentId,
       departmentName: row.departmentName, teamId: row.teamId, teamName: row.teamName, headcount: row.headcount, occupied: row.occupied, vacant: row.vacant }))
     return { available: true, enforce, positions }
   }
@@ -298,12 +324,14 @@ export class PositionsService {
       const branch = inBranchScope(branchScopeOf(user), value.branchId) ? await em.getRepository(Branch).findOne({ where: { id: value.branchId } }) : null
       if (!branch) throw new NotFoundException('الفرع غير موجود')
       await this.assertCatalog(em, value)
+      // صف القسم (ثم الفريق) مقفول لآخر المعاملة: نقله لفرع تاني (تعديل الهيكل) يا اتثبّت قبلنا فنشوفه ونرفض، يا بيستنى لحد ما الوظيفة تتحفظ
+      // (Codex CRP3A-B02: فحص من غير قفل بيتقادم قبل الكتابة)
       if (value.departmentId != null) {
-        const department = await em.getRepository(Department).findOne({ where: { id: value.departmentId } })
+        const department = await em.getRepository(Department).findOne({ where: { id: value.departmentId }, lock: { mode: 'pessimistic_write' } })
         if (!department || department.branchId !== value.branchId) throw new BadRequestException('القسم مش تبع الفرع ده')
       }
       if (value.teamId != null) {
-        const team = await em.getRepository(Team).findOne({ where: { id: value.teamId } })
+        const team = await em.getRepository(Team).findOne({ where: { id: value.teamId }, lock: { mode: 'pessimistic_write' } })
         if (!team || team.departmentId !== value.departmentId) throw new BadRequestException('الفريق مش تبع القسم ده')
       }
       const row = await em.getRepository(ApprovedPosition).save(em.getRepository(ApprovedPosition).create({ ...value, createdAt: new Date() }))
@@ -319,8 +347,13 @@ export class PositionsService {
     const saved = await this.ds.transaction(async em => {
       const row = await this.loadScoped(em, user, id, true)
       const before = this.snapshot(row)
+      // الوحدة مابتتغيّرش. والمبعوت بيتقارن باللي القارئ شايفه في الرد (وحدة محجوبة = من غير رقم): رقم قسم أو فريق محجوب مايتخمّنش
+      // من فرق الرد بين «نفس الوحدة» و«وحدة تانية» (Codex CRP3A-B01)
+      const names = await this.names(em, [row])
+      const unit = unitIdentity(row.branchId, row.departmentId, row.teamId, names.departments, names.teams)
+      const shown = { branchId: row.branchId, departmentId: unit.departmentId, teamId: unit.teamId }
       for (const key of ['branchId', 'departmentId', 'teamId'] as const) {
-        if (input[key] !== undefined && (input[key] ?? null) !== (row[key] ?? null)) throw new BadRequestException('وحدة الوظيفة (الفرع والقسم والفريق) مابتتغيّرش: الغي الوظيفة واعمل واحدة جديدة')
+        if (input[key] !== undefined && (input[key] ?? null) !== shown[key]) throw new BadRequestException('وحدة الوظيفة (الفرع والقسم والفريق) مابتتغيّرش: الغي الوظيفة واعمل واحدة جديدة')
       }
       const changes: Partial<ApprovedPosition> = {}
       if (input.jobTitleId !== undefined) {
@@ -458,15 +491,25 @@ export class PositionsService {
     const branches = branchIds.length ? await em.getRepository(Branch).find({ where: { id: In(branchIds) } }) : []
     const wanted = [...new Set(plan.map(group => group.departmentId).filter((id): id is number => id != null))]
     const departments = wanted.length ? await em.getRepository(Department).find({ where: { id: In(wanted) } }) : []
-    const groups = plan.slice(0, GENERATE_LIMIT).map(group => ({
-      branchId: group.branchId, branchName: branches.find(row => row.id === group.branchId)?.name ?? null,
-      departmentId: group.departmentId, departmentName: group.departmentId == null ? null : unitName(departments.find(row => row.id === group.departmentId), group.branchId),
-      title: group.title || null, employees: group.employeeIds.length, action: group.action, reason: group.reason,
-    }))
+    const homes = new Map(departments.map(row => [row.id, row]))
+    const groups = plan.slice(0, GENERATE_LIMIT).map(group => {
+      const unit = unitIdentity(group.branchId, group.departmentId, null, homes, new Map())
+      return { branchId: group.branchId, branchName: branches.find(row => row.id === group.branchId)?.name ?? null, departmentId: unit.departmentId, departmentName: unit.departmentName,
+        title: group.title || null, employees: group.employeeIds.length, action: group.action, reason: group.reason }
+    })
     const creating = plan.filter(group => group.action === 'create')
     return { groups, truncated: plan.length > GENERATE_LIMIT,
       totals: { create: creating.length, createEmployees: creating.reduce((sum, group) => sum + group.employeeIds.length, 0),
         skip: plan.length - creating.length, skipEmployees: plan.filter(group => group.action === 'skip').reduce((sum, group) => sum + group.employeeIds.length, 0) } }
+  }
+
+  /** الموظف شاغل مقعد في وحدته دلوقتي؟ (نفس حكم «المشغول») */
+  private async seatedNow(em: EntityManager, employeeId: number): Promise<boolean> {
+    const rows: unknown[] = await em.query(
+      `SELECT TOP 1 1 AS [seated]
+       FROM [position_holders] [h] INNER JOIN [positions] [p] ON [p].[id] = [h].[positionId] INNER JOIN [employees] [e] ON [e].[id] = [h].[employeeId]
+       WHERE [h].[employeeId] = ${Number(employeeId)} AND ${SEATED_SQL}`)
+    return rows.length > 0
   }
 
   /** معاينة التوليد من الموجود (من غير أي كتابة) */
@@ -477,8 +520,10 @@ export class PositionsService {
   }
 
   /**
-   * تطبيق التوليد: وظيفة نشطة لكل مجموعة «تتعمل» بعدد موظفيها وربطهم بيها. الخطة بتتحسب تاني جوه المعاملة (توليدة واحدة في المرة)، وكل
-   * موظف بيتقفل صفه ويتأكد إنه لسه في المجموعة (شاغل، ونفس الفرع والقسم والمسمى) قبل ما يتربط؛ اللي اتغيّر بيتساب.
+   * تطبيق التوليد: وظيفة نشطة لكل مجموعة «تتعمل» بعدد موظفيها وربطهم بيها. الخطة بتتحسب تاني جوه المعاملة (توليدة واحدة في المرة)،
+   * وبعدها الحكم كله بيتعاد تحت الأقفال قبل أي كتابة (Codex CRP3A): قسم المجموعة بيتقفل صفه ويتأكد إنه لسه تبع فرعها؛ وكل موظف بيتقفل
+   * صفه ويتأكد إنه لسه في المجموعة (شاغل، ونفس الفرع والقسم والمسمى) **ولسه من غير مقعد في وحدته** — اللي اتربط بوظيفة بعد ما الخطة
+   * اتقرت (من الشاشة أو بتعيين) بيتساب على وظيفته.
    */
   async generate(user: JwtPayload) {
     return this.ds.transaction(async em => {
@@ -489,11 +534,17 @@ export class PositionsService {
       let created = 0, linked = 0
       for (const group of plan) {
         if (group.action !== 'create' || group.jobTitleId == null) continue
+        if (group.departmentId != null) {
+          const department = await em.getRepository(Department).findOne({ where: { id: group.departmentId }, lock: { mode: 'pessimistic_write' } })
+          if (!department || department.branchId !== group.branchId) continue
+        }
         const members: number[] = []
         for (const employeeId of group.employeeIds) {
           const person = await em.getRepository(Employee).findOne({ where: { id: employeeId }, lock: { mode: 'pessimistic_write' } })
           if (!person || !occupiesSeat(person.status) || Number(person.branchId) !== group.branchId || (person.departmentId ?? null) !== group.departmentId
             || normalTitle(person.jobTitle) !== group.title) continue
+          // لسه من غير مقعد في وحدته؟ (ربط الموظف من الشاشة بيقفل صفه برضه، فالحكم هنا مابيتقادمش)
+          if (await this.seatedNow(em, person.id)) continue
           members.push(person.id)
         }
         if (!members.length) continue

@@ -63,7 +63,7 @@ export default function PositionsPage() {
                     </thead>
                     <tbody>
                       {data.summary.map(line => (
-                        <tr key={`${line.branchId}:${line.departmentId ?? 0}`} className="border-b border-gray-100" data-positions-summary-row>
+                        <tr key={`${line.branchId}:${line.departmentId ?? line.departmentName ?? 0}`} className="border-b border-gray-100" data-positions-summary-row>
                           <td className="py-2 px-2">{line.branchName ?? '—'}</td>
                           <td className="py-2 px-2">{line.departmentName ?? 'على مستوى الفرع'}</td>
                           <td className="py-2 px-2">{line.approved}</td>

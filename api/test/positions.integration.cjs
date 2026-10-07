@@ -15,8 +15,14 @@
 //  PS-08) قايمة الاختيار في نموذج التعيين: النشطة في الفرع بأرقامها، لصاحب «تعيين موظف جديد»، وفرع برّه النطاق فاضي.
 //  PS-09) التوليد من الموجود: المعاينة (تتعمل / متخطّى بسببه)، والتطبيق (وظيفة بعدد موظفيها ومربوطين)، وآمن للتكرار، وفي النطاق بس.
 //  PS-10) حالة الموديول والإنفاذ بتتقري قبل معاملة التعيين ومعاملة الربط.
-//  PS-11) (آخر الملف) قسم اتنقل لفرع تاني وموظفيه ووظائفه فضلوا: مابيتسمّاش في القايمة ولا التقرير ولا قايمة التعيين ولا معاينة
-//         التوليد (ولا فريقه)، والتوليد مابيعملش وظيفة عليه؛ ولما يرجع لفرعه بيتسمّى تاني.
+//  (آخر الملف — حواجز Codex في P3A)
+//  PS-11) قسم اتنقل لفرع تاني (بمسار تعديل الهيكل) وموظفيه ووظائفه فضلوا: رقمه واسمه — وفريقه — محجوبين في القايمة والتقرير
+//         والتفاصيل ومعاينة التوليد («قسم برّه الفرع»)، ووظائفه برّه قايمة التعيين، والتوليد مابيعملش وظيفة عليه؛ ولما يرجع بيتعرض تاني.
+//  PS-12) فريق اتنقل لوحده لقسم في فرع تاني واتغيّر اسمه: رقمه واسمه الجديد محجوبين («فريق برّه الفرع») وقسم الوظيفة لسه ظاهر؛ ونقله
+//         لقسم تاني في نفس الفرع مابيحجبوش.
+//  PS-13) التوليد واقف بعد ما قرا خطته: موظف اتربط بوظيفة من الشاشة بيفضل عليها، وقسم اتنقل لفرع تاني مابتتعملش وظيفة عليه.
+//  PS-14) إنشاء وظيفة ونقل قسمها لفرع تاني في نفس اللحظة: النقل بيستنى لحد ما الوظيفة تتحفظ (صف القسم مقفول من الفحص للكتابة).
+//  PR-09) الاعتماد مستني قفل الإنشاء والقسم المتثبّت اتنقل لفرع تاني: بيتحكم بعد القفل وبيترفض؛ ونقل بيبدأ بعد الفحص بيستنى الحفظ.
 //  PR-01..05) الجزء (ب) — طلب «وظيفة جديدة / زيادة عدد»: النوع تبع الموديول وحقوله من الخادم؛ والتقديم بمسمى من الكتالوج وعدد صحيح؛
 //         والاعتماد بيعمل وظيفة نشطة على القسم المتثبّت على الطلب أو يزوّد عدد القايمة (والملغية بتتساب)؛ والقسم بيتثبّت وقت التقديم من
 //         قسم مقدّم الطلب (فوق أي قيمة من العميل) فنقله بعدها مابيغيّرش الوحدة؛ وقسم مابقاش في فرع الطلب = الاعتماد مرفوض برسالته؛
@@ -672,7 +678,8 @@ test('PR-04: زيادة العدد — وظيفة قايمة بنفس المسم
   // الزيادة مابتعدّيش حد العدد المعتمد بتاع شاشة الوظائف (10000): الاعتماد مرفوض برسالته والعدد زي ما هو
   expectStatus(await request(users.hrA, 'PATCH', `/positions/${id}`, { headcount: 9999 }), 200)
   const over = expectStatus(await ask(users.fin, { positionTitle: 'مندوب مبيعات', headcount: 2, reason: 'هتعدّي الحد' }), 201)
-  assert.deepEqual(answer(await approve(users.approver, over.id)), [400, refused(`الوظيفة المعتمدة P-${String(id).padStart(4, '0')} عددها 9999: الزيادة المطلوبة هتعدّي الحد (10000)`)])
+  // الرسالة من غير كود الوظيفة ولا عددها (المعتمد ممكن يكون برّه فرعها)
+  assert.deepEqual(answer(await approve(users.approver, over.id)), [400, refused('الزيادة المطلوبة هتعدّي حد العدد المعتمد للوظيفة (10000)')])
   assert.deepEqual((await positionsOf(catalog.seller.id, org.finance.id)).map(row => [row.id, row.headcount]), [[id, 9999]])
   // وعلى الحد بالظبط بتعدّي
   expectStatus(await request(users.hrA, 'PATCH', `/positions/${id}`, { headcount: 9998 }), 200)
@@ -807,11 +814,14 @@ test('PR-06: بانِي الطلبات — الوجهة في قايمته باس
   assert.equal((await typesFor(users.fin)).filter(row => ['HEADCOUNT_NEED', 'POSITION_REQUEST'].includes(row.code)).length, 2)
 })
 
-test('PR-07: اعتمادين في نفس اللحظة لنفس المسمى على نفس القسم — وظيفة واحدة بمجموع العددين؛ وطلب مفتوح والموديول اتقفل بيكمّل سلسلته', async () => {
+test('PR-07: اعتمادين في نفس اللحظة لنفس المسمى على نفس الوحدة — وظيفة واحدة بمجموع العددين؛ وطلب مفتوح والموديول اتقفل بيكمّل سلسلته', async () => {
   const { Repository } = require('typeorm')
   const auditor = await repo('JobTitle').save({ title: 'مراجع حسابات', isActive: true })
-  const first = expectStatus(await ask(users.fin, { positionTitle: 'مراجع حسابات', headcount: 2, reason: 'طلب أول' }), 201)
-  const second = expectStatus(await ask(users.fin, { positionTitle: 'مراجع حسابات', headcount: 3, reason: 'طلب تاني' }), 201)
+  // طلبين على مستوى الفرع (مقدّمهم من غير قسم): مفيش صف قسم يتقفل، فقفل إنشاء الوظائف لوحده اللي بينسّق الاعتمادين
+  users.floater = await account('floater', [], { employeeId: (await employee({ departmentId: null, jobTitle: 'مراجع' })).id })
+  const first = expectStatus(await ask(users.floater, { positionTitle: 'مراجع حسابات', headcount: 2, reason: 'طلب أول' }), 201)
+  const second = expectStatus(await ask(users.floater, { positionTitle: 'مراجع حسابات', headcount: 3, reason: 'طلب تاني' }), 201)
+  assert.deepEqual([await stagedOf(first.id), await stagedOf(second.id)], [[null, 'على مستوى الفرع'], [null, 'على مستوى الفرع']])
   // أول حفظ لوظيفة جديدة بيتأخر: من غير قفل الإنشاء التاني كان هيدوّر (مايلاقيش) ويعمل وظيفة تانية قبل ما الأول يحفظ
   const save = Repository.prototype.save
   let held = false
@@ -823,7 +833,7 @@ test('PR-07: اعتمادين في نفس اللحظة لنفس المسمى ع�
   try { answers = await Promise.all([approve(users.approver, first.id), approve(users.approver, second.id)]) } finally { Repository.prototype.save = save }
   assert.equal(held, true, 'الحفظ المتأخر حصل فعلًا')
   assert.deepEqual(answers.map(response => response.status), [201, 201], JSON.stringify(answers.map(response => response.body?.message)))
-  const rows = await positionsOf(auditor.id, org.finance.id)
+  const rows = (await positionsOf(auditor.id, null)).filter(row => row.branchId === org.branchA.id)
   assert.deepEqual(rows.map(row => [row.headcount, row.status]), [[5, 'ACTIVE']], 'وظيفة واحدة بمجموع العددين')
   const stored = await Promise.all([first, second].map(sent => repo('Request').findOneByOrFail({ id: sent.id })))
   assert.deepEqual(stored.map(row => [row.status, row.destinationRef]), [['COMPLETED', `POS-${rows[0].id}`], ['COMPLETED', `POS-${rows[0].id}`]])
@@ -832,16 +842,16 @@ test('PR-07: اعتمادين في نفس اللحظة لنفس المسمى ع�
   await setModule(false)
   try {
     expectStatus(await approve(users.approver, open.id), 201)
-    assert.deepEqual((await positionsOf(auditor.id, org.finance.id)).map(row => row.headcount), [6])
+    assert.deepEqual((await positionsOf(auditor.id, org.finance.id)).map(row => row.headcount), [1])
   } finally { await setModule(true) }
   // المسمى اتقفل في الكتالوج بعد التقديم: الاعتماد بيتحكم تاني وبيترفض برسالته؛ ولما يتفتح بيعدّي
   const closing = expectStatus(await ask(users.fin, { positionTitle: 'مراجع حسابات', headcount: 1, reason: 'قبل قفل المسمى' }), 201)
   await repo('JobTitle').update({ id: auditor.id }, { isActive: false })
   assert.deepEqual(answer(await approve(users.approver, closing.id)), [400, refused(TITLE_MISSING)])
-  assert.deepEqual((await positionsOf(auditor.id, org.finance.id)).map(row => row.headcount), [6])
+  assert.deepEqual((await positionsOf(auditor.id, org.finance.id)).map(row => row.headcount), [1])
   await repo('JobTitle').update({ id: auditor.id }, { isActive: true })
   expectStatus(await approve(users.approver, closing.id), 201)
-  assert.deepEqual((await positionsOf(auditor.id, org.finance.id)).map(row => row.headcount), [7])
+  assert.deepEqual((await positionsOf(auditor.id, org.finance.id)).map(row => row.headcount), [2])
 })
 
 test('PR-08: قبل الترحيل — التقديم مرفوض برسالة الترحيل، واعتماد طلب مفتوح مرفوض بيها والطلب زي ما هو؛ وبعد الترحيل بيكمّل', async () => {
@@ -864,47 +874,205 @@ test('PR-08: قبل الترحيل — التقديم مرفوض برسالة ا
   assert.equal((await repo('Request').findOneByOrFail({ id: open.id })).status, 'COMPLETED')
 })
 
-test('PS-11: قسم اتنقل لفرع تاني وموظفيه ووظائفه فضلوا — مابيتسمّاش في القايمة والتقرير وقايمة التعيين ومعاينة التوليد، والتوليد مابيعملش وظيفة عليه', async () => {
-  const NAME = 'قسم هيتنقل', FOREIGN = 'قسم برّه الفرع'
+const FOREIGN = 'قسم برّه الفرع', FOREIGN_TEAM = 'فريق برّه الفرع'
+const unitOf = row => [row.departmentId, row.departmentName, row.teamId, row.teamName, row.unitHidden]
+const moveDepartment = async (id, branchId) => expectStatus(await request(users.admin, 'PATCH', `/departments/${id}`, { branchId }), 200)
+const preview = async user => expectStatus(await request(user, 'GET', '/positions/generate'), 200)
+const hireOptions = async user => expectStatus(await request(user, 'GET', `/positions/options?branchId=${org.branchA.id}`), 200)
+/** بوابة لإيقاف مسار عند نقطة: reached بيتحل لما المسار يوصلها، وrelease بيكمّله */
+const gate = () => { let enter, release; const reached = new Promise(resolve => { enter = resolve }), resume = new Promise(resolve => { release = resolve }); return { enter, release, reached, resume } }
+const within = (promise, label, ms = 10000) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(label)), ms))])
+const settledIn = (promise, ms) => Promise.race([promise.then(() => 'done'), new Promise(resolve => setTimeout(() => resolve('waiting'), ms))])
+
+test('PS-11: قسم اتنقل لفرع تاني وموظفيه ووظائفه فضلوا — رقمه واسمه (وفريقه) محجوبين في القايمة والتقرير والتفاصيل ومعاينة التوليد، ووظائفه برّه قايمة التعيين، والتوليد مابيعملش وظيفة عليه', async () => {
+  const NAME = 'قسم هيتنقل', TEAM = 'فريق القسم المنقول'
   const moved = await repo('Department').save({ name: NAME, code: 'PS_MV', branchId: org.branchA.id })
-  const crew = await repo('Team').save({ name: 'فريق القسم المنقول', code: 'PS_MVT', departmentId: moved.id })
+  const crew = await repo('Team').save({ name: TEAM, code: 'PS_MVT', departmentId: moved.id })
   await employee({ departmentId: moved.id, jobTitle: 'محاسب' })
-  const move = branchId => repo('Department').update({ id: moved.id }, { branchId })
-  const lineOf = listed => listed.summary.find(row => row.branchId === org.branchA.id && row.departmentId === moved.id)
-  const groupOf = preview => preview.groups.find(row => row.departmentId === moved.id)
-  const preview = async () => expectStatus(await request(users.hrA, 'GET', '/positions/generate'), 200)
-  // القسم في فرعه: سطر تقريره باسمه (موظف من غير وظيفة)، ومجموعته في التوليد «تتعمل»
-  assert.deepEqual([lineOf(await list(users.hrA)).departmentName, lineOf(await list(users.hrA)).unassigned], [NAME, 1])
-  assert.deepEqual([groupOf(await preview()).action, groupOf(await preview()).departmentName], ['create', NAME])
-  await move(org.branchB.id)
+  const ownLine = listed => listed.summary.find(row => row.departmentId === moved.id)
+  const hiddenLine = listed => listed.summary.find(row => row.branchId === org.branchA.id && row.departmentId === null && row.departmentName === FOREIGN)
+  const ownGroup = plan => plan.groups.find(row => row.departmentId === moved.id)
+  const hiddenGroup = plan => plan.groups.find(row => row.branchId === org.branchA.id && row.departmentId === null && row.departmentName === FOREIGN)
+  // القسم في فرعه: سطر تقريره برقمه واسمه (موظف من غير وظيفة)، ومجموعته في التوليد «تتعمل»
+  const home = await list(users.hrA)
+  assert.deepEqual([ownLine(home).departmentName, ownLine(home).unassigned, hiddenLine(home)], [NAME, 1, undefined])
+  assert.deepEqual([ownGroup(await preview(users.hrA)).action, ownGroup(await preview(users.hrA)).departmentName], ['create', NAME])
+  await moveDepartment(moved.id, org.branchB.id)
   try {
-    // (1) سطر التقرير (من غير وظائف عليه) ومعاينة التوليد: من غير اسمه، والمجموعة متخطّاة بسببها
-    const listed = await list(users.hrA)
-    assert.deepEqual([lineOf(listed).departmentName, lineOf(listed).unassigned], [FOREIGN, 1])
-    const plan = await preview()
-    assert.deepEqual([groupOf(plan).action, groupOf(plan).reason, groupOf(plan).departmentName], ['skip', 'قسمهم مش تبع فرعهم — صحّح القسم أو الفرع على ملفاتهم الأول', FOREIGN])
+    // (1) سطر التقرير (موظف من غير وظيفة) ومعاينة التوليد: من غير رقمه ولا اسمه، والمجموعة متخطّاة بسببها
+    const listed = await list(users.hrA), plan = await preview(users.hrA)
+    assert.deepEqual([ownLine(listed), hiddenLine(listed).departmentId, hiddenLine(listed).unassigned], [undefined, null, 1])
+    assert.equal(ownGroup(plan), undefined, 'رقم القسم مش في المعاينة')
+    assert.deepEqual([hiddenGroup(plan).action, hiddenGroup(plan).reason, hiddenGroup(plan).employees], ['skip', 'قسمهم مش تبع فرعهم — صحّح القسم أو الفرع على ملفاتهم الأول', 1])
     assert.equal(JSON.stringify([listed, plan]).includes(NAME), false)
-  } finally { await move(org.branchA.id) }
-  // (2) وظيفتين عليه (على القسم وعلى فريقه) وهو في فرعه، وبعدين اتنقل: الوظيفتين في قايمة فرعهم من غير اسم القسم ولا الفريق
+  } finally { await moveDepartment(moved.id, org.branchA.id) }
+  // (2) وظيفتين عليه (على القسم وعلى فريقه) وهو في فرعه، وبعدين اتنقل: في قايمة فرعهم من غير هوية القسم ولا الفريق
   const onUnit = await createPosition(users.hrA, { jobTitleId: catalog.seller.id, branchId: org.branchA.id, departmentId: moved.id, headcount: 1 })
   const onTeam = await createPosition(users.hrA, { jobTitleId: catalog.seller.id, branchId: org.branchA.id, departmentId: moved.id, teamId: crew.id, headcount: 1 })
-  assert.deepEqual([onUnit.departmentName, onTeam.departmentName, onTeam.teamName], [NAME, NAME, 'فريق القسم المنقول'])
-  await move(org.branchB.id)
+  assert.deepEqual([unitOf(onUnit), unitOf(onTeam)], [[moved.id, NAME, null, null, false], [moved.id, NAME, crew.id, TEAM, false]])
+  assert.deepEqual((await hireOptions(users.hrA)).positions.filter(row => [onUnit.id, onTeam.id].includes(row.id)).length, 2)
+  await moveDepartment(moved.id, org.branchB.id)
   try {
-    const listed = await list(users.hrA)
-    const rows = [onUnit, onTeam].map(made => listed.positions.find(row => row.id === made.id))
-    assert.deepEqual(rows.map(row => [row.departmentName, row.teamName]), [[FOREIGN, null], [FOREIGN, null]])
-    assert.equal(lineOf(listed).departmentName, FOREIGN)
-    const detail = expectStatus(await request(users.hrA, 'GET', `/positions/${onTeam.id}`), 200)
-    const options = expectStatus(await request(users.hrA, 'GET', `/positions/options?branchId=${org.branchA.id}`), 200)
-    assert.deepEqual([detail.departmentName, detail.teamName], [FOREIGN, null])
-    for (const body of [listed, detail, options, await preview()]) {
-      assert.equal(JSON.stringify(body).includes(NAME), false)
-      assert.equal(JSON.stringify(body).includes('فريق القسم المنقول'), false)
+    for (const reader of [users.hrA, users.admin]) {
+      const listed = await list(reader)
+      assert.deepEqual([onUnit, onTeam].map(made => unitOf(listed.positions.find(row => row.id === made.id))), [[null, FOREIGN, null, null, true], [null, FOREIGN, null, null, true]])
     }
-    // ولحساب كل الفروع برضه: القسم مش تبع فرع الوظيفة
-    assert.equal((await list(users.admin)).positions.find(row => row.id === onUnit.id).departmentName, FOREIGN)
-  } finally { await move(org.branchA.id) }
-  // رجع لفرعه: بيتسمّى تاني
-  assert.deepEqual([(await rowOf(users.hrA, onTeam.id)).departmentName, (await rowOf(users.hrA, onTeam.id)).teamName], [NAME, 'فريق القسم المنقول'])
+    const listed = await list(users.hrA)
+    const detail = expectStatus(await request(users.hrA, 'GET', `/positions/${onTeam.id}`), 200), options = await hireOptions(users.hrA)
+    assert.deepEqual(unitOf(detail), [null, FOREIGN, null, null, true])
+    // السطر المحجوب جامع وظيفتيه وموظفه، ومن غير رقم القسم في أي سطر
+    assert.deepEqual([ownLine(listed), hiddenLine(listed).approved, hiddenLine(listed).unassigned], [undefined, 2, 1])
+    assert.deepEqual(options.positions.filter(row => [onUnit.id, onTeam.id].includes(row.id)), [], 'وظيفة وحدتها برّه الفرع مش في قايمة التعيين')
+    // رقم القسم أو الفريق المحجوب مايتخمّنش من تعديل الوظيفة: الرقم الحقيقي مرفوض زي أي رقم تاني، واللي القارئ شايفه (من غير رقم) مقبول
+    const UNIT_FIXED = 'وحدة الوظيفة (الفرع والقسم والفريق) مابتتغيّرش: الغي الوظيفة واعمل واحدة جديدة'
+    for (const departmentId of [moved.id, org.sales.id]) assert.deepEqual(answer(await request(users.hrA, 'PATCH', `/positions/${onTeam.id}`, { departmentId, headcount: 1 })), [400, UNIT_FIXED])
+    for (const teamId of [crew.id, org.team.id]) assert.deepEqual(answer(await request(users.hrA, 'PATCH', `/positions/${onTeam.id}`, { teamId, headcount: 1 })), [400, UNIT_FIXED])
+    expectStatus(await request(users.hrA, 'PATCH', `/positions/${onTeam.id}`, { departmentId: null, teamId: null, headcount: 1 }), 200)
+    for (const body of [listed, detail, options, await preview(users.hrA)]) {
+      assert.equal(JSON.stringify(body).includes(NAME), false)
+      assert.equal(JSON.stringify(body).includes(TEAM), false)
+    }
+  } finally { await moveDepartment(moved.id, org.branchA.id) }
+  // رجع لفرعه: بيتعرض تاني برقمه واسمه، ورقمه الحقيقي مقبول في التعديل (نفس الوحدة) والتاني مرفوض
+  assert.deepEqual(unitOf(await rowOf(users.hrA, onTeam.id)), [moved.id, NAME, crew.id, TEAM, false])
+  expectStatus(await request(users.hrA, 'PATCH', `/positions/${onTeam.id}`, { departmentId: moved.id, teamId: crew.id, headcount: 1 }), 200)
+  assert.equal((await request(users.hrA, 'PATCH', `/positions/${onTeam.id}`, { departmentId: org.sales.id, headcount: 1 })).status, 400)
+})
+
+test('PS-12: فريق اتنقل لوحده لقسم في فرع تاني واتغيّر اسمه — رقمه واسمه الجديد محجوبين عن فرع الوظيفة وقسمها لسه ظاهر؛ ونقله جوه نفس الفرع مابيحجبوش', async () => {
+  const home = await repo('Department').save({ name: 'قسم الفريق الأصلي', code: 'PS_TH', branchId: org.branchA.id })
+  const squad = await repo('Team').save({ name: 'فريق هيتنقل', code: 'PS_TM', departmentId: home.id })
+  const seat = await createPosition(users.hrA, { jobTitleId: catalog.seller.id, branchId: org.branchA.id, departmentId: home.id, teamId: squad.id, headcount: 1 })
+  assert.deepEqual(unitOf(seat), [home.id, 'قسم الفريق الأصلي', squad.id, 'فريق هيتنقل', false])
+  const moveTeam = async (departmentId, name) => expectStatus(await request(users.admin, 'PATCH', `/teams/${squad.id}`, { departmentId, name }), 200)
+  await moveTeam(org.bDepartment.id, 'اسم الفريق بعد النقل')
+  try {
+    for (const reader of [users.hrA, users.admin]) {
+      const detail = expectStatus(await request(reader, 'GET', `/positions/${seat.id}`), 200)
+      assert.deepEqual(unitOf(detail), [home.id, 'قسم الفريق الأصلي', null, FOREIGN_TEAM, true])
+    }
+    const listed = await list(users.hrA), options = await hireOptions(users.hrA)
+    assert.deepEqual(unitOf(listed.positions.find(row => row.id === seat.id)), [home.id, 'قسم الفريق الأصلي', null, FOREIGN_TEAM, true])
+    assert.equal(options.positions.some(row => row.id === seat.id), false)
+    for (const body of [listed, options, expectStatus(await request(users.hrA, 'GET', `/positions/${seat.id}`), 200)]) assert.equal(JSON.stringify(body).includes('اسم الفريق بعد النقل'), false)
+  } finally { await moveTeam(home.id, 'فريق هيتنقل') }
+  assert.deepEqual(unitOf(await rowOf(users.hrA, seat.id)), [home.id, 'قسم الفريق الأصلي', squad.id, 'فريق هيتنقل', false])
+  // لقسم تاني في نفس الفرع: مفيش فرع تاني، فالفريق ظاهر برقمه واسمه
+  await moveTeam(org.sales.id, 'فريق هيتنقل')
+  try {
+    // من تفاصيل الوظيفة (وظيفة واحدة: قسم الفريق الحالي مش من أقسام الوظائف المحمّلة) ومن القايمة
+    assert.deepEqual(unitOf(expectStatus(await request(users.hrA, 'GET', `/positions/${seat.id}`), 200)), [home.id, 'قسم الفريق الأصلي', squad.id, 'فريق هيتنقل', false])
+    assert.deepEqual(unitOf(await rowOf(users.hrA, seat.id)), [home.id, 'قسم الفريق الأصلي', squad.id, 'فريق هيتنقل', false])
+  } finally { await moveTeam(home.id, 'فريق هيتنقل') }
+})
+
+test('PS-13: التوليد واقف بعد ما قرا خطته — موظف اتربط بوظيفة من الشاشة بيفضل عليها، وقسم اتنقل لفرع تاني مابتتعملش وظيفة عليه', async () => {
+  const title = await repo('JobTitle').save({ title: 'فني تكييف', isActive: true })
+  const unit = await repo('Department').save({ name: 'قسم سباق التوليد', code: 'PS_GR', branchId: org.branchA.id })
+  const leaving = await repo('Department').save({ name: 'قسم هيتنقل والتوليد واقف', code: 'PS_GL', branchId: org.branchA.id })
+  const first = await employee({ departmentId: unit.id, jobTitle: 'فني تكييف' }), second = await employee({ departmentId: unit.id, jobTitle: 'فني تكييف' })
+  const third = await employee({ departmentId: leaving.id, jobTitle: 'فني تكييف' })
+  // وظيفة بمسمى تاني في نفس القسم: الأول هيتربط بيها من الشاشة والتوليد واقف
+  const target = await createPosition(users.hrA, { jobTitleId: catalog.seller.id, branchId: org.branchA.id, departmentId: unit.id, headcount: 1 })
+  const service = app.get(require('../src/positions/positions.service').PositionsService)
+  const original = service.generationPlan, stop = gate()
+  let intercepted = false, pending
+  service.generationPlan = async function (em, ...rest) {
+    const plan = await original.call(this, em, ...rest)
+    if (em.queryRunner?.isTransactionActive && !intercepted) { intercepted = true; stop.enter(); await stop.resume }
+    return plan
+  }
+  try {
+    pending = request(users.hrA, 'POST', '/positions/generate')
+    await within(stop.reached, 'التوليد ماوصلش لخطته')
+    expectStatus(await request(users.hrA, 'POST', `/positions/${target.id}/holders`, { employeeId: first.id }), 201)
+    await moveDepartment(leaving.id, org.branchB.id)
+    stop.release()
+    expectStatus(await pending, 201)
+  } finally { stop.release(); service.generationPlan = original; if (pending) await pending.catch(() => undefined) }
+  const generated = await positionsOf(title.id, unit.id)
+  // الأول على الوظيفة اللي اتربط بيها، والتاني على وظيفة التوليد اللي عددها هو لوحده
+  assert.deepEqual(generated.map(row => row.headcount), [1])
+  assert.deepEqual((await query('SELECT [employeeId], [positionId] FROM [position_holders] WHERE [employeeId] IN (@0, @1) ORDER BY [employeeId]', [first.id, second.id]))
+    .map(row => [row.employeeId, row.positionId]), [[first.id, target.id], [second.id, generated[0].id]])
+  // والقسم اللي اتنقل والتوليد واقف: ولا وظيفة عليه، وموظفه من غير رابط
+  assert.deepEqual(await positionsOf(title.id, leaving.id), [])
+  assert.deepEqual(await query('SELECT [positionId] FROM [position_holders] WHERE [employeeId] = @0', [third.id]), [])
+  await moveDepartment(leaving.id, org.branchA.id)
+})
+
+test('PS-14: إنشاء وظيفة ونقل قسمها لفرع تاني في نفس اللحظة — النقل بيستنى لحد ما الوظيفة تتحفظ', async () => {
+  const { Repository } = require('typeorm')
+  const unit = await repo('Department').save({ name: 'قسم سباق الإنشاء', code: 'PS_CR', branchId: org.branchA.id })
+  const save = Repository.prototype.save, stop = gate()
+  let held = false, creating, moving
+  Repository.prototype.save = async function (...args) {
+    if (!held && this.metadata.name === 'ApprovedPosition') { held = true; stop.enter(); await stop.resume }
+    return save.apply(this, args)
+  }
+  let created
+  try {
+    creating = request(users.hrA, 'POST', '/positions', { jobTitleId: catalog.seller.id, branchId: org.branchA.id, departmentId: unit.id, headcount: 1 })
+    await within(stop.reached, 'الإنشاء ماوصلش للحفظ')
+    // الإنشاء فحص القسم ووقف قبل الحفظ: نقل القسم (المسار الفعلي) مايعدّيش قبل ما الوظيفة تتحفظ
+    moving = request(users.admin, 'PATCH', `/departments/${unit.id}`, { branchId: org.branchB.id })
+    assert.equal(await settledIn(moving, 1500), 'waiting', 'نقل القسم عدّى والوظيفة لسه بتتحفظ')
+    stop.release()
+    created = expectStatus(await creating, 201)
+    expectStatus(await moving, 200)
+  } finally { stop.release(); Repository.prototype.save = save; for (const promise of [creating, moving]) if (promise) await promise.catch(() => undefined) }
+  // الوظيفة اتحفظت على القسم وهو تبع فرعها (النقل اتثبّت بعدها)؛ وبعد النقل بتتعرض من غير هويته — ورد الإنشاء نفسه بيتبني بعد
+  // المعاملة فبيطلع بالحالة دلوقتي
+  assert.deepEqual(await query('SELECT [branchId], [departmentId] FROM [positions] WHERE [id] = @0', [created.id]), [{ branchId: org.branchA.id, departmentId: unit.id }])
+  assert.deepEqual(unitOf(await rowOf(users.hrA, created.id)), [null, FOREIGN, null, null, true])
+  await moveDepartment(unit.id, org.branchA.id)
+})
+
+test('PR-09: الاعتماد مستني قفل الإنشاء والقسم المتثبّت اتنقل لفرع تاني — بيتحكم بعد القفل وبيترفض؛ ونقل بيبدأ بعد الفحص بيستنى الحفظ', async () => {
+  const { Repository } = require('typeorm')
+  const unit = await repo('Department').save({ name: 'قسم سباق الاعتماد', code: 'PR_RC', branchId: org.branchA.id })
+  const person = await employee({ departmentId: unit.id, jobTitle: 'محاسب' })
+  const racer = await account('racer', [], { employeeId: person.id })
+  const title = await repo('JobTitle').save({ title: 'مدقق داخلي', isActive: true })
+  const sent = expectStatus(await ask(racer, { positionTitle: 'مدقق داخلي', headcount: 1, reason: 'سباق الاعتماد' }), 201)
+  assert.deepEqual(await stagedOf(sent.id), [unit.id, 'قسم سباق الاعتماد'])
+  // (1) قفل الإنشاء ممسوك من برّه، والاعتماد واقف عليه، والقسم بيتنقل بالمسار الفعلي
+  const holder = ds.createQueryRunner()
+  await holder.connect(); await holder.startTransaction()
+  let pending
+  try {
+    await holder.query(`DECLARE @r int; EXEC @r = sys.sp_getapplock @Resource = N'hr:positions:generate', @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 5000; SELECT @r AS [result]`)
+    pending = approve(users.approver, sent.id)
+    let blocked = false
+    for (let round = 0; round < 240 && !blocked; round += 1) {
+      blocked = Number((await query('SELECT COUNT(*) AS [n] FROM sys.dm_exec_requests WHERE [database_id] = DB_ID() AND [blocking_session_id] <> 0'))[0].n) > 0
+      if (!blocked) await new Promise(resolve => setTimeout(resolve, 25))
+    }
+    assert.equal(blocked, true, 'الاعتماد وصل لقفل الإنشاء')
+    await moveDepartment(unit.id, org.branchB.id)
+    await holder.commitTransaction()
+    assert.deepEqual(answer(await pending), [400, refused(UNIT_GONE)])
+    assert.deepEqual(await query('SELECT [id] FROM [positions] WHERE [jobTitleId] = @0', [title.id]), [], 'ولا وظيفة اتعملت')
+    assert.notEqual((await repo('Request').findOneByOrFail({ id: sent.id })).status, 'COMPLETED')
+  } finally { if (holder.isTransactionActive) await holder.rollbackTransaction(); await holder.release(); if (pending) await pending.catch(() => undefined) }
+  await moveDepartment(unit.id, org.branchA.id)
+  // (2) الاعتماد فحص القسم ووقف قبل حفظ الوظيفة: نقل القسم بيستنى لحد ما الاعتماد يخلص
+  const save = Repository.prototype.save, stop = gate()
+  let held = false, approving, moving
+  Repository.prototype.save = async function (...args) {
+    if (!held && this.metadata.name === 'ApprovedPosition') { held = true; stop.enter(); await stop.resume }
+    return save.apply(this, args)
+  }
+  try {
+    approving = approve(users.approver, sent.id)
+    await within(stop.reached, 'الاعتماد ماوصلش لحفظ الوظيفة')
+    moving = request(users.admin, 'PATCH', `/departments/${unit.id}`, { branchId: org.branchB.id })
+    assert.equal(await settledIn(moving, 1500), 'waiting', 'نقل القسم عدّى والاعتماد لسه بيحفظ الوظيفة')
+    stop.release()
+    expectStatus(await approving, 201)
+    expectStatus(await moving, 200)
+  } finally { stop.release(); Repository.prototype.save = save; for (const promise of [approving, moving]) if (promise) await promise.catch(() => undefined) }
+  // الوظيفة اتعملت على القسم وهو تبع فرع الطلب
+  assert.deepEqual((await query('SELECT [branchId], [departmentId], [headcount] FROM [positions] WHERE [jobTitleId] = @0', [title.id])), [{ branchId: org.branchA.id, departmentId: unit.id, headcount: 1 }])
+  await moveDepartment(unit.id, org.branchA.id)
 })

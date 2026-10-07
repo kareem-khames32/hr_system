@@ -24,8 +24,8 @@ export const POSITION_REQUEST_REASON = 'اكتب سبب طلب الوظيفة'
 export const POSITION_REQUEST_BRANCH_MOVED = 'مقدّم الطلب اتنقل من فرع الطلب — الوظيفة ماتتطلبش على فرع غير فرعه. اعمل طلب جديد من الفرع الصح'
 export const POSITION_REQUEST_UNIT_GONE = 'القسم اللي الطلب اتقدّم عليه مابقاش موجود في فرع الطلب — ارفض الطلب، أو رجّعه لمقدّمه يقدّمه تاني'
 export const POSITION_REQUEST_BRANCH_LEVEL = 'على مستوى الفرع'
-/** الزيادة اللي هتعدّي حد العدد المعتمد بتاع شاشة الوظائف */
-export const positionRequestOverMessage = (code: string, current: number) => `الوظيفة المعتمدة ${code} عددها ${current}: الزيادة المطلوبة هتعدّي الحد (${POSITION_HEADCOUNT_MAX})`
+/** الزيادة اللي هتعدّي حد العدد المعتمد بتاع شاشة الوظائف — من غير كود الوظيفة ولا عددها: المعتمد ممكن يكون برّه فرعها */
+export const POSITION_REQUEST_OVER = `الزيادة المطلوبة هتعدّي حد العدد المعتمد للوظيفة (${POSITION_HEADCOUNT_MAX})`
 /**
  * مفتاحين بيكتبهم الخادم عند كل تقديم وإعادة تقديم: القسم اللي الوظيفة هتتعمل عليه (رقمه، واسمه للمعتمد). أي قيمة جاية من العميل
  * بتتكتب فوقها — فهُم في قايمة المفاتيح المسموحة عشان الحمولة المتخزّنة تعدّي عند إعادة التقديم، مش عشان العميل يحددهم.
@@ -92,12 +92,15 @@ export async function stagePositionRequest(em: EntityManager, req: Pick<Request,
 
 /**
  * القسم المتثبّت على الطلب وقت التقديم: null = مستوى الفرع، ورقم = قسم لازم لسه موجود وتبع فرع الطلب. طلب من غير تثبيت (حمولة مش من
- * مسار التقديم، فالمفتاح مش موجود) = مرفوض
+ * مسار التقديم، فالمفتاح مش موجود) = مرفوض.
+ * بيتنادى **بعد** قفل إنشاء الوظائف، وصف القسم بيتقفل لآخر المعاملة (Codex CRP3A-B02): قسم اتنقل لفرع تاني والاعتماد مستني القفل
+ * بيتشاف هنا ويترفض؛ ونقل بيبدأ بعد الفحص بيستنى لحد ما الوظيفة تتحفظ.
  */
 async function stagedDepartment(em: EntityManager, req: Pick<Request, 'branchId'>, payload: Record<string, unknown>): Promise<number | null> {
   const staged = payload.positionDepartmentId
   if (staged === null) return null
-  const department = Number.isSafeInteger(staged) && Number(staged) > 0 ? await em.getRepository(Department).findOne({ where: { id: Number(staged) } }) : null
+  const department = Number.isSafeInteger(staged) && Number(staged) > 0
+    ? await em.getRepository(Department).findOne({ where: { id: Number(staged) }, lock: { mode: 'pessimistic_write' } }) : null
   if (!department || department.branchId !== req.branchId) throw new BadRequestException(POSITION_REQUEST_UNIT_GONE)
   return department.id
 }
@@ -105,11 +108,12 @@ async function stagedDepartment(em: EntityManager, req: Pick<Request, 'branchId'
 /** التنفيذ عند الاعتماد النهائي، جوه معاملة الاعتماد: على فرع الطلب والقسم المتثبّت عليه وقت التقديم */
 export async function executePositionRequest(em: EntityManager, req: Request, _type: RequestType, payload: Record<string, unknown>): Promise<{ ref: string; completed: boolean }> {
   if (!(await positionsReady(em))) throw new BadRequestException(POSITIONS_MIGRATION_MISSING)
-  const values = await positionRequestValues(em, payload)
-  const departmentId = await stagedDepartment(em, req, payload)
   const positions = em.getRepository(ApprovedPosition)
   // طلبين معتمدين في نفس اللحظة لنفس المسمى على نفس الوحدة: واحد ورا التاني، فالتاني يلاقي وظيفة الأول ويزوّد عددها بدل ما يعمل وظيفة تانية
   if (!(await lockPositionCreation(em))) throw new ConflictException('إنشاء الوظائف المعتمدة شغال دلوقتي من حد تاني؛ جرّب تاني بعد شوية')
+  // الحكم كله بعد القفل: اللي اتغيّر والاعتماد مستني (المسمى اتقفل، القسم اتنقل) بيتشاف دلوقتي مش بقيمة قديمة
+  const values = await positionRequestValues(em, payload)
+  const departmentId = await stagedDepartment(em, req, payload)
   // وظيفة قايمة (مش ملغية) بنفس المسمى على نفس الوحدة: صفها بيتقفل وعددها بيزيد
   const existing = await positions.createQueryBuilder('p').setLock('pessimistic_write')
     .where('p.jobTitleId = :jobTitleId', { jobTitleId: values.jobTitleId }).andWhere('p.branchId = :branchId', { branchId: req.branchId })
@@ -118,7 +122,7 @@ export async function executePositionRequest(em: EntityManager, req: Request, _t
   if (existing) {
     const before = existing.headcount
     // نفس حد العدد المعتمد بتاع شاشة الوظائف: زيادة تعدّيه مرفوضة برسالتها (والطلب في صندوق المعتمد)
-    if (before + values.headcount > POSITION_HEADCOUNT_MAX) throw new BadRequestException(positionRequestOverMessage(positionCode(existing.id), before))
+    if (before + values.headcount > POSITION_HEADCOUNT_MAX) throw new BadRequestException(POSITION_REQUEST_OVER)
     await positions.update({ id: existing.id }, { headcount: before + values.headcount })
     await recordAudit(em, { category: 'SETTINGS', action: 'POSITION_REQUEST_EXECUTED', entityType: 'position', entityId: existing.id, branchId: existing.branchId,
       summary: `زيادة عدد الوظيفة المعتمدة ${positionCode(existing.id)} من ${before} لـ${before + values.headcount} بطلب معتمد رقم ${req.id}`,

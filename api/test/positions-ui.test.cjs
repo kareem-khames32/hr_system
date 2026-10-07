@@ -41,6 +41,8 @@ test('PU-02: شاشة الوظائف — الأزرار من حكم الخادم
   assert.match(page, /!data\.available \? \(\s+<div className="card text-sm text-amber-900 bg-amber-50 border border-amber-200" data-positions-unavailable>\{data\.message \?\? 'الوظائف المعتمدة مش متاحة دلوقتي'\}<\/div>/)
   for (const column of ['معتمد', 'مشغول', 'شاغر', 'زيادة', 'موظفين من غير وظيفة']) assert.ok(page.includes(`<th className="py-2 px-2 font-medium">${column}</th>`), column)
   for (const marker of ['data-positions-summary-row', 'data-position-row', 'data-positions-enforce', 'data-positions-generate', 'data-position-new']) assert.ok(page.includes(marker), marker)
+  // سطر «قسم برّه الفرع» من غير رقم زي سطر مستوى الفرع: مفتاحه بيفرّق بينهم بالاسم (Codex CRP3A-B01: الرقم محجوب)
+  assert.ok(page.includes('<tr key={`${line.branchId}:${line.departmentId ?? line.departmentName ?? 0}`} className="border-b border-gray-100" data-positions-summary-row>'))
   // الأرقام من الخادم بالحرف (مفيش حساب في الشاشة)
   assert.doesNotMatch(page, /headcount - |occupied - |- row\.occupied/)
   const api = read('src/lib/positions-api.ts')

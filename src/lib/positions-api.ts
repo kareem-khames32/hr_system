@@ -17,6 +17,8 @@ export interface ApiPosition {
   departmentName: string | null
   teamId: number | null
   teamName: string | null
+  /** وحدة الوظيفة (قسمها أو فريقها) مش تبع فرعها دلوقتي: رقمها محجوب واسمها نص ثابت */
+  unitHidden: boolean
   costCenterId: number | null
   costCenterName: string | null
   headcount: number
