@@ -93,13 +93,15 @@ test('الخدمة: تعديل بنفس الرصيد لا يكتب، وتغيي�
       create: row => row,
     }
     const instance = new EmployeesService(employeesRepo, {}, {}, {}, balances, { findOne: async () => null }, {}, {}, {}, {})
-    return { instance, saves }
+    // CRP2W: كتابة الرصيد جوه معاملة المنادي — مدير مصطنع: قفل صف الموظف استعلام من غير نتيجة، والمخزنين زي ما هم
+    const em = { query: async () => [], getRepository: entity => entity?.name === 'Employee' ? employeesRepo : balances }
+    return { instance, saves, em }
   }
   const same = service({ id: 15, openingDays: '5.00', openingTaken: '1.00', openingExpiry: '2026-12-31' })
-  await same.instance.applyOpeningBalance(10, 5, '2026-12-31')
+  await same.instance.openingBalanceIn(same.em, 10, 5, '2026-12-31')
   assert.equal(same.saves.length, 0, 'لا حفظ عند تطابق الأيام والصلاحية')
   const changed = service({ id: 15, openingDays: '5.00', openingTaken: '1.00', openingExpiry: '2026-12-31' })
-  await changed.instance.applyOpeningBalance(10, 7, '2026-12-31')
+  await changed.instance.openingBalanceIn(changed.em, 10, 7, '2026-12-31')
   assert.deepEqual(changed.saves.map(row => [row.openingDays, row.openingTaken, row.openingExpiry]), [[7, 1, '2026-12-31']])
   let reads = 0
   const archive = service(null, { findOne: async () => { reads++; return null } })

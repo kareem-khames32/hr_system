@@ -652,6 +652,9 @@ export class DestinationsService {
     }
     const emp = await em.getRepository(Employee).findOne({
       where: { id: req.requesterId },
+      // CRP2W: المعالج بيحفظ كيان الموظف كله، فبيقراه وصفه مقفول (زي معالج تحديث البيانات): تعديل تاني أو إعادة تعيين في نفس اللحظة يا إما
+      // قبله يا إما بعده — مش قراءة قديمة بتتكتب فوق الجديد
+      lock: { mode: 'pessimistic_write' },
     })
     if (!emp) throw new BadRequestException('الموظف المستهدف غير موجود')
     // المسمى يُكتب في ملف الموظف ويُطبع في المستندات (SEC-EMP-2)
@@ -718,6 +721,9 @@ export class DestinationsService {
   private bankChangeHandler: Handler = async (em, req, _t, payload) => {
     const emp = await em.getRepository(Employee).findOne({
       where: { id: req.requesterId },
+      // CRP2W: المعالج بيحفظ كيان الموظف كله، فبيقراه وصفه مقفول (زي معالج تحديث البيانات): تعديل تاني أو إعادة تعيين في نفس اللحظة يا إما
+      // قبله يا إما بعده — مش قراءة قديمة بتتكتب فوق الجديد
+      lock: { mode: 'pessimistic_write' },
     })
     if (!emp) throw new BadRequestException('الموظف المطلوب تغيير حسابه البنكي غير موجود')
     // نفس regex الـDTO — ويُتحقق منه عند التقديم أيضاً (SEC-EMP-2)
@@ -744,6 +750,9 @@ export class DestinationsService {
   private employeeStatusHandler: Handler = async (em, req, type, payload) => {
     const emp = await em.getRepository(Employee).findOne({
       where: { id: req.requesterId },
+      // CRP2W: المعالج بيحفظ كيان الموظف كله، فبيقراه وصفه مقفول (زي معالج تحديث البيانات): تعديل تاني أو إعادة تعيين في نفس اللحظة يا إما
+      // قبله يا إما بعده — مش قراءة قديمة بتتكتب فوق الجديد
+      lock: { mode: 'pessimistic_write' },
     })
     if (!emp) throw new BadRequestException('الموظف المطلوب تغيير حالته غير موجود')
     const ending = type.code === 'RESIGNATION' || type.code === 'RETIREMENT'

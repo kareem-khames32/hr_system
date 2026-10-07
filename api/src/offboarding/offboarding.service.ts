@@ -1219,7 +1219,8 @@ export class OffboardingService implements OnApplicationBootstrap {
     const old = emp.status
     emp.status = 'active'
     emp.isActive = true
-    await this.employees.save(emp)
+    // CRP2W: الحالة بس — حفظ الكيان كله من قراءة قديمة كان بيكتب باقي أعمدته (تاريخ التعيين وغيره) فوق تعديل اتثبّت بعدها
+    await this.employees.update({ id: emp.id }, { status: 'active', isActive: true })
     kase.status = 'CANCELLED'
     await this.cases.save(kase)
     await recordEmployeeChange(this.history.manager, {

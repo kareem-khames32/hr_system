@@ -362,6 +362,19 @@ export class LeaveBalancesService {
     throw new BadRequestException(`تعذّر تحديد سنة رصيد «${balanceType}» للموظف في ${date}`)
   }
 
+  // CRP2W-B02: صف سنة الرصيد اللي بيغطي التاريخ **للحساب بس**: الموجود، أو صف افتراضي بقيم الإعداد لو ناقص — من غير حفظ. بوابة فحص
+  // الرصيد (assertSufficient) برّه قفل صف الموظف ومعاملة الطلب، فلو عملت الصف كان ممكن يتكتب بمفتاح ذكرى تعيين قديمة بعد إعادة تعيين
+  // ويغيّر استحقاق الفترة الجديدة. الصف الناقص بيتعمل وقت الخصم نفسه (deduct ← ensureAt) تحت القفل وبسياق اتقرا بعده
+  private async entryAt(repo: Repository<LeaveBalance>, employeeId: number, balanceType: BalanceType, date: string, ctx: AccrualContext): Promise<Entry> {
+    const found = await this.resolveAt(repo, employeeId, balanceType, date, ctx)
+    if (found.entry) return found.entry
+    if (!isTyped(balanceType)) throw new BadRequestException(`لا يوجد رصيد «${balanceType}» للموظف في سنة ${date.slice(0, 4)}`)
+    const row = repo.create({ employeeId, balanceType, period: found.key, entitled: ctx.policy[balanceType], taken: 0, openingDays: 0, openingTaken: 0 })
+    // نفس اللي resolveAt كان هيرجّعه بعد حفظ الصف: الصف اللي بيغطي التاريخ، وإلا الصف اللي بالمفتاح
+    const timeline = balanceTimeline([...found.rows, row], ctx.joinDate, this.basisOf(ctx, balanceType))
+    return periodAt(timeline, date) ?? timeline.find((e) => e.row === row) ?? this.entryOf(row, ctx)
+  }
+
   // بوابة الاعتماد تمرر 31 ديسمبر لجزء السنة اللاحقة من إجازة تعدّي السنة (يبدأ 1 يناير)
   private gateSegment(onDate: string) {
     const later = onDate.slice(5) === '12-31'
@@ -506,7 +519,7 @@ export class LeaveBalancesService {
   }
 
   // التحقق قبل التقديم والاعتماد — يرمي برسالة واضحة لو الرصيد غير كافٍ.
-  // صف السنة الناقص يتعمل من الإعدادات (LEV-2)؛ pendingDays = أيام طلبات إجازة
+  // صف السنة الناقص بيتحسب من الإعدادات (LEV-2) من غير ما يتحفظ هنا (CRP2W-B02)؛ pendingDays = أيام طلبات إجازة
   // معلّقة على نفس الرصيد والسنة، محجوزة لحد ما تتنفذ أو تترفض (LEV-3)
   async assertSufficient(
     employeeId: number,
@@ -518,7 +531,7 @@ export class LeaveBalancesService {
     const ctx = await this.accrualContext(employeeId)
     const segment = this.gateSegment(onDate)
     await this.assertOpenService(this.balances.manager, employeeId, segment.start)
-    const entry = await this.ensureAt(this.balances, employeeId, balanceType, segment.start, ctx)
+    const entry = await this.entryAt(this.balances, employeeId, balanceType, segment.start, ctx)
     const measure = this.measureDate(entry, onDate, segment.start, segment.later)
     const view = this.view(entry.row, measure, ctx, false, entry)
     const available = Math.round((view.remaining - pendingDays) * 100) / 100
@@ -718,21 +731,39 @@ export class LeaveBalancesService {
     return this.ensureRowsOf(period, emps, TYPED)
   }
 
-  // موظف اتعيّن بعد السنة مالوش صف فيها، واللي اتعيّن خلالها صفه من يوم تعيينه
+  // تاريخ صف السنة لموظف: اتعيّن بعد السنة مالوش صف فيها (null)، واللي اتعيّن خلالها صفه من يوم تعيينه
+  private yearRowDate(period: string, joinDate: Employee['joinDate']): string | null {
+    const join = joinDate ? String(joinDate).slice(0, 10) : ''
+    if (join > `${period}-12-31`) return null
+    return join > `${period}-01-01` ? join : `${period}-01-01`
+  }
+
+  // موظف اتعيّن بعد السنة مالوش صف فيها، واللي اتعيّن خلالها صفه من يوم تعيينه.
+  // CRP2W-B02: الفحص الأول من غير قفل على الموظفين اللي اتقروا بالجملة؛ والصف الناقص بيتعمل جوه معاملة ماسكة صف موظفه (نفس قفل إعادة
+  // التعيين)، وبتاريخ تعيينه وحالته وصفوفه اللي اتقروا بعد القفل — فمفيش صف بيتكتب بمفتاح تاريخ تعيين قديم
   private async ensureRowsOf(period: string, emps: Array<Pick<Employee, 'id' | 'joinDate' | 'annualLeaveEntitled'>>, types: TypedBalance[]) {
     const settings = await this.accrualSettings()
     let created = 0
     for (const e of emps) {
-      const join = e.joinDate ? String(e.joinDate).slice(0, 10) : ''
-      if (join > `${period}-12-31`) continue
-      const date = join > `${period}-01-01` ? join : `${period}-01-01`
+      const date = this.yearRowDate(period, e.joinDate)
+      if (!date) continue
       const ctx = this.contextOf(e, settings)
       for (const t of types) {
-        const { entry } = await this.resolveAt(this.balances, e.id, t, date, ctx)
-        if (!entry) {
-          await this.ensureAt(this.balances, e.id, t, date, ctx)
-          created++
-        }
+        if ((await this.resolveAt(this.balances, e.id, t, date, ctx)).entry) continue
+        const made = await this.balances.manager.transaction(async (em) => {
+          await this.lockEmployee(em, e.id, true)
+          const now = await em.getRepository(Employee).findOne({
+            where: { id: e.id, status: Not(In(['terminated', 'archived'])) },
+            select: { id: true, joinDate: true, annualLeaveEntitled: true },
+          })
+          const fresh = now ? this.yearRowDate(period, now.joinDate) : null
+          if (!now || !fresh) return false
+          const repo = em.getRepository(LeaveBalance), current = this.contextOf(now, settings)
+          if ((await this.resolveAt(repo, e.id, t, fresh, current)).entry) return false
+          await this.ensureAt(repo, e.id, t, fresh, current)
+          return true
+        })
+        if (made) created++
       }
     }
     return created

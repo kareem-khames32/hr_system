@@ -16,6 +16,12 @@
 //  EP-08) (CRP2V-B-B02) الترحيل السنوي والتجديد اليومي بيحكموا ويكتبوا وصف الموظف ممسوك وبقراءات بعد القفل: مُرحّل الفترة القديمة مايوصلش للجديدة.
 //  EP-09) (CRP2V-B-B03) حساب المسير بيحكم على موظفيه ببيانات اتقرت بعد قفل المالية، واللي دخل النطاق بعد القراءة الأولى بيتقفل هو كمان.
 //  EP-10) (CRP2V-B-B04) مرجع مسير مخفي عن القارئ (شهره أو نهايته) مابيظهرش في قراءة الفترات ولا في رفض إعادة التعيين، ولا بيتخمّن بتجربة تواريخ.
+//  EP-11) (CRP2W-B01) أثر تعديل ملف الموظف على الرصيد (الرصيد الافتتاحي واستحقاق السنوي) جوه معاملة التعديل وتحت صف الموظف: إعادة التعيين
+//         بتستنى، والنتيجة ترتيب كامل — رصيد افتتاحي من الخدمة القديمة مابيوصلش للفترة الجديدة.
+//  EP-12) (CRP2W-B02) فحص الرصيد مابيكتبش صف (الصف الناقص بيتعمل وقت الخصم تحت القفل)، وصفوف السنة الناقصة بتتعمل وصف الموظف ممسوك
+//         وبقراءة بعده: صف بمفتاح ذكرى تعيين قديمة مابيتكتبش بعد إعادة التعيين، واعتماد طلب قديم مابيصرفش بأكتر من المتاح.
+//  EP-13) (CRP2W، مسح الصنف) معالج طلب بيحفظ كيان الموظف كله (حساب بنكي، ترقية، حالة وظيفية) بيقراه وصفه مقفول: اعتماد طلب قديم عبر
+//         إعادة التعيين مابيرجّعش تاريخ التعيين القديم.
 // Run (من api/): node --test test/employment-periods.integration.cjs
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
@@ -25,6 +31,7 @@ require('../node_modules/ts-node').register({ project: path.join(apiRoot, 'tscon
 require('../node_modules/reflect-metadata')
 const sql = require('../node_modules/mssql')
 const env = require('../node_modules/dotenv').parse(fs.readFileSync(path.join(apiRoot, '.env')))
+const { employeeRequiredFields } = require('./helpers/employee-fixture.cjs')
 
 const database = `hr_employment_periods_test_${crypto.randomBytes(8).toString('hex')}`
 const secret = crypto.randomBytes(48).toString('hex')
@@ -844,4 +851,207 @@ test('EP-10: مرجع مسير مخفي عن القارئ مابيظهرش في 
     assert.deepEqual([refusal(early), early.body.message.includes(`${LAST_YEAR}-07-16`)], [[400, 'REHIRE_START_TOO_EARLY'], true])
     expectStatus(await rehire(users.admin, old.emp, { ...good, startDate: `${LAST_YEAR}-07-16` }), 201)
   } finally { await query(`UPDATE [payroll_runs] SET [status] = 'CANCELLED'`) }
+})
+
+test('EP-11: أثر تعديل الملف على الرصيد جوه معاملة التعديل وتحت صف الموظف — رصيد افتتاحي من الخدمة القديمة مابيوصلش للفترة الجديدة', async () => {
+  const lastDay = `${YEAR}-01-31`, start = `${YEAR}-02-01`
+  const employees = app.get(require('../src/employees/employees.service').EmployeesService)
+  const edit = (emp, body) => request(users.admin, 'PATCH', `/employees/${emp.id}`, body)
+  // توقيف تعديل الملف عند دخوله كتابة الرصيد (name)، وإعادة التعيين تيجي وهو واقف: لازم تستنى، والنتيجة ترتيب كامل (التعديل كله ثم إعادة التعيين)
+  async function crossed(name, body) {
+    const old = await settled(lastDay)
+    await balance(old.emp, 'annual', YEAR)
+    const original = employees[name]
+    let entered, release, paused = false, job, rehired
+    const reached = new Promise(resolve => { entered = resolve }), barrier = new Promise(resolve => { release = resolve })
+    employees[name] = async function (em, id, ...rest) {
+      if (!paused && id === old.emp.id) { paused = true; entered(); await barrier }
+      return original.call(this, em, id, ...rest)
+    }
+    try {
+      job = edit(old.emp, body); job.catch(() => undefined)
+      await Promise.race([reached, new Promise((_, reject) => setTimeout(() => reject(new Error(`تعديل الملف ماوصلش لـ${name}`)), 20000))])
+      rehired = rehire(users.hirer, old.emp, { startDate: start, reason: 'رجع والتعديل شغال' })
+      assert.equal(await settledWithin(rehired, 1500), false, 'إعادة التعيين مستنية معاملة التعديل (قفل مالية الموظف)')
+      release()
+      expectStatus(await job, 200)
+      expectStatus(await rehired, 201)
+    } finally {
+      release(); employees[name] = original
+      if (job) await job.catch(() => undefined)
+      if (rehired) await rehired.catch(() => undefined)
+    }
+    return old
+  }
+  // (1) رصيد افتتاحي 10 أيام ورقم عقد (Codex CRP2W-B01): الافتتاحي على صف الخدمة القديمة واتجمّد معاه، والفترة الجديدة من غيره، ورقم العقد
+  //     القديم اتفضّى مع إعادة التعيين — مش نتيجة مخلوطة
+  const opened = await crossed('openingBalanceIn', { openingBalanceDays: 10, openingBalanceExpiry: `${NEXT_YEAR}-12-31`, contractNumber: 'OLD-SERVICE-1' })
+  assert.deepEqual((await balanceRows(opened.emp)).filter(row => row[0] === 'annual'), [['annual', YEAR, 0, 0, 0, 0], ['annual', `P1:${YEAR}`, 0, 10, 0, 0]])
+  assert.deepEqual((({ contractNumber, joinDate }) => [contractNumber, String(joinDate).slice(0, 10)])(await repo('Employee').findOneByOrFail({ id: opened.emp.id })), [null, start])
+  // (2) قفل استحقاق السنوي: المزامنة على صف الخدمة القديمة قبل التجميد
+  const flagged = await crossed('annualEntitlementIn', { annualLeaveEntitled: false })
+  const entitledOf = async emp => (await query(`SELECT [period], CAST([entitled] AS float) AS [entitled] FROM [leave_balances] WHERE [employeeId] = @0 AND [balanceType] = N'annual' ORDER BY [period]`, [emp.id]))
+    .map(row => [row.period, row.entitled])
+  assert.deepEqual(await entitledOf(flagged.emp), [[YEAR, 0], [`P1:${YEAR}`, 0]])
+  // (3) والترتيب التاني كامل هو كمان: تعديل بعد إعادة التعيين بيكتب على الفترة الجديدة، والصف المتجمّد زي ما هو
+  expectStatus(await edit(opened.emp, { openingBalanceDays: 4, openingBalanceExpiry: `${NEXT_YEAR}-12-31` }), 200)
+  assert.deepEqual((await balanceRows(opened.emp)).filter(row => row[0] === 'annual'), [['annual', YEAR, 0, 4, 0, 0], ['annual', `P1:${YEAR}`, 0, 10, 0, 0]])
+  // (4) كتابة الرصيد من تعديل الملف بتاخد صف الموظف (زي باقي كتّاب الرصيد): صف ممسوك = التعديل بيستنى ومفيش حاجة اتكتبت
+  const waiting = await hiredOn('2021-01-01')
+  const holder = await holdEmployeeRow(waiting)
+  let pending
+  try {
+    pending = edit(waiting, { openingBalanceDays: 6, openingBalanceExpiry: `${NEXT_YEAR}-12-31` }); pending.catch(() => undefined)
+    assert.deepEqual([await settledWithin(pending, 1500), (await balanceRows(waiting)).filter(row => row[0] === 'annual')], [false, [['annual', YEAR, 0, 0, 0, 0]]])
+  } finally { await holder.release() }
+  expectStatus(await pending, 200)
+  assert.deepEqual((await balanceRows(waiting)).filter(row => row[0] === 'annual'), [['annual', YEAR, 0, 6, 0, 0]])
+  // وموظف جديد من الشاشة: صفوف سنته ورصيده الافتتاحي زي الأول
+  const created = expectStatus(await request(users.admin, 'POST', '/employees', { ...(await employeeRequiredFields(ds, org.branchA.id)), fullName: 'موظف جديد برصيد افتتاحي',
+    branchId: org.branchA.id, joinDate: TODAY, basicSalary: 5000, currency: 'SAR', openingBalanceDays: 3, openingBalanceExpiry: `${NEXT_YEAR}-12-31` }), 201)
+  assert.deepEqual((await balanceRows(created)).map(row => [row[0], row[1], row[3]]), [['annual', YEAR, 3], ['sick', YEAR, 0]])
+})
+
+test('EP-12: فحص الرصيد مابيكتبش صف، وصفوف السنة الناقصة تحت صف الموظف — صف بمفتاح ذكرى تعيين قديمة مابيتكتبش بعد إعادة التعيين', async () => {
+  const service = leaves(), { Repository } = require('../node_modules/typeorm')
+  const gateDate = `${NEXT_YEAR}-01-31`, start = `${YEAR}-02-01`
+  const rowsOf = async emp => (await balanceRows(emp)).filter(row => !row[1].startsWith('P'))
+  // المتاح زي ما بوابة الفحص بتحسبه (من غير ما تكتب صف): من رسالة رفض طلب أكبر من أي رصيد
+  const availableAt = async (emp, date = gateDate) => {
+    const refused = await service.assertSufficient(emp.id, 'annual', 9999, date).then(() => null, error => error.message)
+    const found = /^الرصيد غير كافٍ: المتبقي ([\d.]+) يوم والمطلوب 9999$/.exec(refused ?? '')
+    assert.ok(found, `رسالة الرفض: ${refused}`)
+    return Number(found[1])
+  }
+  await repo('LeaveType').update({ id: org.annualType.id }, { renewalBasis: 'HIRE_ANNIVERSARY' })
+  await setConfig('leave.accrual_mode', 'daily')
+  try {
+    // (1) فحص رصيد بدأ بسياق الخدمة القديمة (تعيين سبتمبر)، وإعادة التعيين (فبراير) اتثبّتت وهو واقف (Codex CRP2W-B02): الفحص بيكمّل من غير
+    //     ما يكتب صف — فمفيش صف بمفتاح ذكرى سبتمبر بيغيّر استحقاق الفترة الجديدة، والمتاح زي موظف جديد اتعيّن في نفس اليوم
+    const old = await settled(`${LAST_YEAR}-06-30`, { joinDate: '2020-09-01' })
+    const reference = await hiredOn(start)
+    const context = service.accrualContext
+    let entered, release, paused = false, job
+    const reached = new Promise(resolve => { entered = resolve }), barrier = new Promise(resolve => { release = resolve })
+    service.accrualContext = async function (employeeId, ...rest) {
+      const ctx = await context.call(this, employeeId, ...rest)
+      if (!paused && employeeId === old.emp.id) { paused = true; entered(); await barrier }
+      return ctx
+    }
+    try {
+      job = service.assertSufficient(old.emp.id, 'annual', 1, gateDate); job.catch(() => undefined)
+      await Promise.race([reached, new Promise((_, reject) => setTimeout(() => reject(new Error('فحص الرصيد ماوصلش لقراءة السياق')), 20000))])
+      expectStatus(await rehire(users.hirer, old.emp, { startDate: start, reason: 'رجع وفحص الرصيد شغال' }), 201)
+      release()
+      await job.catch(() => undefined)
+    } finally { release(); service.accrualContext = context }
+    assert.deepEqual(await rowsOf(old.emp), await rowsOf(reference), 'صفوف الفترة الجديدة زي المرجع بالحرف')
+    assert.equal((await balanceRows(old.emp)).some(row => row[1] === `${YEAR}-09-01` || row[1] === `${NEXT_YEAR}-09-01`), false, 'مفيش صف بذكرى التعيين القديمة')
+    assert.equal(await availableAt(old.emp), await availableAt(reference), 'المتاح زي الموظف المرجع')
+    assert.deepEqual(await rowsOf(old.emp), await rowsOf(reference), 'والفحص نفسه ماكتبش صف')
+
+    // (2) الفحص نفسه مابيكتبش صف لأي موظف (كان بيعمل صف السنة الناقص)، وحكمه زي ما هو: الكفاية والنقص برسالته، والنوع من غير رصيد برسالته
+    const plain = await hiredOn('2020-03-15')
+    const before = await balanceRows(plain)
+    await service.assertSufficient(plain.id, 'annual', 1, gateDate)
+    await service.assertSufficient(plain.id, 'sick', 5, `${NEXT_YEAR}-06-01`)
+    await assert.rejects(service.assertSufficient(plain.id, 'annual', 300, gateDate), error => error.getStatus?.() === 400 && /^الرصيد غير كافٍ: المتبقي /.test(error.message))
+    await assert.rejects(service.assertSufficient(plain.id, 'hajj', 1, gateDate), error => error.getStatus?.() === 400 && error.message === `لا يوجد رصيد «hajj» للموظف في سنة ${NEXT_YEAR}`)
+    assert.deepEqual(await balanceRows(plain), before, 'ولا صف اتكتب من الفحص')
+    // والصف الناقص بيتعمل وقت الخصم نفسه (تحت قفل صف الموظف): بمفتاح ذكرى تعيينه
+    await ds.transaction(em => service.deduct(em, plain.id, 'annual', 1, gateDate))
+    assert.deepEqual((await balanceRows(plain)).filter(row => row[0] === 'annual' && row[2] === 1).map(row => row[1]), [`${YEAR}-03-15`])
+
+    // (3) اعتماد طلب إجازة معلّق من قبل انتهاء الخدمة، واقف بعد فحص الرصيد وقبل تنفيذه، وإعادة التعيين اتثبّتت (دليل Codex التاني): التنفيذ
+    //     بيتحكم بسياق الفترة الجديدة تحت القفل — مفيش إجازة بتتصرف بأكتر من المتاح للموظف المرجع، ومفيش صف بيفضل من المحاولة
+    const pendingOld = await settled(`${LAST_YEAR}-06-30`, { joinDate: '2020-09-01' })
+    const twin = await hiredOn(start)
+    const type = await repo('RequestType').save({ code: 'EP12_ANNUAL', nameAr: 'إجازة سنوية (اختبار)', category: 'leaves', destinationHandler: 'leave_calendar_balance', affectsBalance: true, isActive: true })
+    const pendingRequest = await repo('Request').save({ typeCode: 'LEAVE', definitionCode: type.code, requesterId: pendingOld.emp.id, createdByUserId: pendingOld.login.id, branchId: org.branchA.id,
+      status: 'UNDER_REVIEW', currentStep: 1, resolvedSteps: JSON.stringify([{ stepOrder: 1, role: 'hr', approverEmployeeId: null, dueAt: null }]),
+      payload: JSON.stringify({ leaveTypeCode: 'ANNUAL', fromDate: `${NEXT_YEAR}-01-29`, toDate: gateDate, days: 3, reason: 'طلب معلّق من قبل انتهاء الخدمة' }) })
+    const approve = () => request(users.admin, 'POST', `/requests/${pendingRequest.id}/act`, { action: 'APPROVE' })
+    const save = Repository.prototype.save
+    let atLeave, go, held = false, acting
+    const leaveReached = new Promise(resolve => { atLeave = resolve }), leaveBarrier = new Promise(resolve => { go = resolve })
+    Repository.prototype.save = async function (row, ...rest) {
+      if (!held && row && row.requestId === pendingRequest.id && row.leaveTypeCode === 'ANNUAL') { held = true; atLeave(); await leaveBarrier }
+      return save.call(this, row, ...rest)
+    }
+    try {
+      acting = approve(); acting.catch(() => undefined)
+      await Promise.race([leaveReached, acting.then(response => { throw new Error('الاعتماد خلص قبل الوقفة: ' + JSON.stringify(response.body)) }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('الاعتماد ماوصلش لحفظ الإجازة')), 20000))])
+      expectStatus(await rehire(users.hirer, pendingOld.emp, { startDate: start, reason: 'رجع والاعتماد شغال' }), 201)
+      go()
+      const crossedOver = await acting
+      // الرفض من الخصم نفسه (تحت قفل صف الموظف وبسياق الفترة الجديدة)، مش من بوابة الفحص اللي عدّت بالسياق القديم
+      assert.match(answer(crossedOver).join(' '), /^400 لم يُعتمد الطلب — الرصيد غير كافٍ عند التنفيذ — المتبقي /, JSON.stringify(crossedOver.body))
+    } finally { go(); Repository.prototype.save = save; if (acting) await acting.catch(() => undefined) }
+    const available = await availableAt(twin, `${NEXT_YEAR}-01-29`)
+    assert.ok(available < 3, `المرجع عنده ${available} يوم`)
+    assert.equal(await availableAt(pendingOld.emp, `${NEXT_YEAR}-01-29`), available)
+    assert.deepEqual([await repo('Leave').countBy({ requestId: pendingRequest.id }), await rowsOf(pendingOld.emp)], [0, await rowsOf(twin)])
+    // وتكرار الاعتماد: بيتحكم زي المرجع (الرصيد مش كفاية) ومفيش إجازة
+    assert.equal((await approve()).status, 400)
+    assert.deepEqual([await repo('Leave').countBy({ requestId: pendingRequest.id }), await rowsOf(pendingOld.emp)], [0, await rowsOf(twin)])
+  } finally {
+    await repo('LeaveType').update({ id: org.annualType.id }, { renewalBasis: 'YEAR_START' })
+    await setConfig('leave.accrual_mode', 'monthly')
+  }
+
+  // (4) صفوف السنة الناقصة (بعد الترحيل والإقفال): الصف بيتعمل وصف موظفه ممسوك، وبتاريخ تعيينه وحالته اللي اتقروا بعد القفل
+  const far = String(Number(NEXT_YEAR) + 1)
+  const moved = await hiredOn('2021-01-01'), ended = await hiredOn('2021-01-01'), steady = await hiredOn('2021-01-01')
+  const yearRows = async emp => (await balanceRows(emp)).filter(row => row[1] === far).map(row => row[0])
+  const holders = [await holdEmployeeRow(moved), await holdEmployeeRow(ended)]
+  let ensuring
+  try {
+    ensuring = service.ensureYearRows(far, [org.branchA.id]); ensuring.catch(() => undefined)
+    assert.deepEqual([await settledWithin(ensuring, 1500), await yearRows(moved), await yearRows(ended)], [false, [], []], 'مستني صف الموظف ومفيش صف اتكتب')
+    // وهو مستني: واحد تاريخ تعيينه بقى بعد السنة دي، والتاني خدمته انتهت — الحكم بعد القفل
+    await holders[0].runner.query(`UPDATE [employees] SET [joinDate] = @1 WHERE [id] = @0`, [moved.id, `${Number(far) + 1}-03-01`])
+    await holders[0].runner.commitTransaction()
+    await holders[1].runner.query(`UPDATE [employees] SET [status] = N'terminated', [isActive] = 0 WHERE [id] = @0`, [ended.id])
+    await holders[1].runner.commitTransaction()
+    await ensuring
+  } finally {
+    for (const holder of holders) await holder.release()
+    if (ensuring) await ensuring.catch(() => undefined)
+  }
+  assert.deepEqual([await yearRows(moved), await yearRows(ended), await yearRows(steady)], [[], [], ['annual', 'sick']])
+})
+
+test('EP-13: معالج طلب بيحفظ كيان الموظف كله بيقراه وصفه مقفول — اعتماد طلب قديم عبر إعادة التعيين مابيرجّعش تاريخ التعيين القديم', async () => {
+  const lastDay = `${YEAR}-01-31`, start = `${YEAR}-02-01`, { Repository } = require('../node_modules/typeorm'), IBAN = 'SA4420000001234567891234'
+  const old = await settled(lastDay)
+  // طلب تغيير حساب بنكي معلّق من قبل انتهاء الخدمة (حالة محفوظة)، واعتماده واقف عند حفظ الموظف — بعد ما قرا صفه
+  const type = await repo('RequestType').save({ code: 'EP13_BANK', nameAr: 'تغيير حساب بنكي (اختبار)', category: 'financial', destinationHandler: 'payroll_bank_secure', isActive: true })
+  const pending = await repo('Request').save({ typeCode: type.code, definitionCode: type.code, requesterId: old.emp.id, createdByUserId: old.login.id, branchId: org.branchA.id,
+    status: 'UNDER_REVIEW', currentStep: 1, resolvedSteps: JSON.stringify([{ stepOrder: 1, role: 'hr', approverEmployeeId: null, dueAt: null }]),
+    payload: JSON.stringify({ iban: IBAN, bankName: 'بنك الاختبار', reason: 'حساب جديد' }) })
+  const save = Repository.prototype.save
+  let entered, release, paused = false, acting, rehired
+  const reached = new Promise(resolve => { entered = resolve }), barrier = new Promise(resolve => { release = resolve })
+  Repository.prototype.save = async function (row, ...rest) {
+    if (!paused && row && row.id === old.emp.id && row.iban === IBAN && row.employeeCode === old.emp.employeeCode) { paused = true; entered(); await barrier }
+    return save.call(this, row, ...rest)
+  }
+  try {
+    acting = request(users.admin, 'POST', `/requests/${pending.id}/act`, { action: 'APPROVE' }); acting.catch(() => undefined)
+    await Promise.race([reached, acting.then(response => { throw new Error('الاعتماد خلص قبل الوقفة: ' + JSON.stringify(response.body).slice(0, 300)) }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('الاعتماد ماوصلش لحفظ الموظف')), 20000))])
+    rehired = rehire(users.hirer, old.emp, { startDate: start, reason: 'رجع واعتماد طلبه القديم شغال' })
+    assert.equal(await settledWithin(rehired, 1500), false, 'إعادة التعيين مستنية صف الموظف (المعالج قراه بقفل)')
+    release()
+    expectStatus(await acting, 201)
+    expectStatus(await rehired, 201)
+  } finally {
+    release(); Repository.prototype.save = save
+    if (acting) await acting.catch(() => undefined)
+    if (rehired) await rehired.catch(() => undefined)
+  }
+  // ترتيب كامل (الاعتماد ثم إعادة التعيين): الحساب البنكي الجديد اتحفظ، وتاريخ التعيين الجديد والحالة زي ما إعادة التعيين كتبتهم
+  assert.deepEqual((({ iban, joinDate, status, isActive }) => [iban, String(joinDate).slice(0, 10), status, isActive])(await repo('Employee').findOneByOrFail({ id: old.emp.id })), [IBAN, start, 'active', true])
+  assert.deepEqual((await periodRows(old.emp)).map(period => [period.periodNo, period.endDate]), [[1, lastDay]])
 })

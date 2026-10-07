@@ -211,9 +211,16 @@ test('بداية الاستحقاق من نوع السنوية: الرصيد و�
   await assert.rejects(db.service.assertSufficient(1, 'annual', 2, '2040-05-01'), /الإجازة السنوية بتبدأ بعد 6 شهر من التعيين — أول يوم مستحق 2040-09-01/)
   // يوم الاستحقاق: 21 × 122 ÷ 366
   await db.service.assertSufficient(1, 'annual', 7, '2040-09-01')
-  assert.equal((await db.service.balanceOf(1, 'annual', '2040-09-01')).remaining, 7)
+  await assert.rejects(db.service.assertSufficient(1, 'annual', 8, '2040-09-01'), /الرصيد غير كافٍ: المتبقي 7 يوم والمطلوب 8/)
+  // CRP2W-B02: الفحص بيحسب على صف افتراضي ومابيكتبوش (الصف بيتعمل وقت الخصم تحت قفل صف الموظف)
+  assert.equal(await db.service.balanceOf(1, 'annual', '2040-09-01'), null)
   // موظف قديم مايتأثرش
   await db.service.assertSufficient(2, 'annual', 21, '2040-02-01')
+  // CRP2W-B02: سنة فاتت من غير صف — الفحص بيحكم باستحقاق النوع زي الصف اللي كان هيتعمل (21 مقبولة و22 لأ)، ومن غير ما يكتب
+  const past = fakeDb([[LeaveType, [annualType(), sickType]], [RequestsConfig, config()], [Employee, [emp({ id: 1, joinDate: '2015-01-01' })]]])
+  await past.service.assertSufficient(1, 'annual', 21, '2021-06-01')
+  await assert.rejects(past.service.assertSufficient(1, 'annual', 22, '2021-06-01'), /الرصيد غير كافٍ: المتبقي 21 يوم والمطلوب 22/)
+  assert.deepEqual(past.rows(LeaveBalance), [])
   // النوع من غير شهور = الإعداد العام (3 شهور)
   const fallback = fakeDb([[LeaveType, [annualType(), sickType]], [RequestsConfig, config({ 'leave.probation_months': '3' })], [Employee, [emp({ id: 1, joinDate: '2040-03-01' })]]])
   await assert.rejects(fallback.service.assertSufficient(1, 'annual', 1, '2040-05-01'), /بعد 3 شهر من التعيين — أول يوم مستحق 2040-06-01/)

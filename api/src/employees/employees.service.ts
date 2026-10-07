@@ -509,12 +509,14 @@ export class EmployeesService {
         payload: { employeeId: result.id, branchId: result.branchId ?? null, joinDate: result.joinDate ?? null } })
       return result
     })
-    // رصيد السنة الحالية تلقائياً — الاستحقاق من الإعدادات
-    await this.ensureCurrentYearBalances(emp.id)
-    // رصيد افتتاحي مُرحّل (اختياري) — طبقة opening على رصيد السنوي، لموظف يستحق السنوي فقط
-    if (dto.annualLeaveEntitled !== false) {
-      await this.applyOpeningBalance(emp.id, openingBalanceDays, openingBalanceExpiry)
-    }
+    await this.employees.manager.transaction(async em => {
+      // رصيد السنة الحالية تلقائياً — الاستحقاق من الإعدادات
+      await this.currentYearBalancesIn(em, emp.id)
+      // رصيد افتتاحي مُرحّل (اختياري) — طبقة opening على رصيد السنوي، لموظف يستحق السنوي فقط
+      if (dto.annualLeaveEntitled !== false) {
+        await this.openingBalanceIn(em, emp.id, openingBalanceDays, openingBalanceExpiry)
+      }
+    })
     // بصمات وصلت بكوده/رقم بصمته قبل تسجيله تُربط به
     await this.relinkPunches(emp)
     // حساب الدخول من الدومين في لحظته (قرار المالك 22 سبتمبر بالليل) — **بعد** ما المعاملة اتثبّتت
@@ -555,17 +557,28 @@ export class EmployeesService {
     }
   }
 
+  // CRP2W-B01 (مراجعة Codex P2W): أثر ملف الموظف على رصيد الإجازات (صفوف السنة الحالية، والرصيد الافتتاحي، واستحقاق السنوي) بيتكتب جوه
+  // معاملة المنادي وتحت صف الموظف (نفس القفل اللي إعادة التعيين وباقي كتّاب الرصيد بياخدوه). في تعديل الملف المعاملة دي هي معاملة التعديل
+  // نفسها (ماسكة قفل مالية الموظف اللي إعادة التعيين بتاخده الأول)، فالتعديل كله يا إما قبل إعادة تعيين يا إما بعدها: رصيد افتتاحي من
+  // الخدمة القديمة مابيتكتبش على صف الفترة الجديدة بعد التجميد
+  private async lockBalanceOwner(em: EntityManager, employeeId: number) {
+    await em.query(`SELECT [id] FROM dbo.employees WITH (UPDLOCK, ROWLOCK) WHERE [id] = @0`, [employeeId])
+  }
+
   // يطبّق الرصيد الافتتاحي المُرحّل كطبقة opening على رصيد السنوي للسنة الحالية
   // (يُستخدم عند التعيين وعند التعديل لموظف قائم انتقل من نظام سابق)
-  private async applyOpeningBalance(
+  private async openingBalanceIn(
+    em: EntityManager,
     employeeId: number,
     days?: number,
     expiry?: string | null
   ) {
     if (!days || Number(days) <= 0) return
-    await this.ensureCurrentYearBalances(employeeId)
+    await this.lockBalanceOwner(em, employeeId)
+    await this.currentYearBalancesIn(em, employeeId)
     const period = String(new Date().getFullYear())
-    const annual = await this.balances.findOne({
+    const balances = em.getRepository(LeaveBalance)
+    const annual = await balances.findOne({
       where: { employeeId, balanceType: 'annual', period },
     })
     if (annual) {
@@ -576,7 +589,7 @@ export class EmployeesService {
       annual.openingDays = next.openingDays
       annual.openingTaken = next.openingTaken
       annual.openingExpiry = next.openingExpiry as any
-      await this.balances.save(annual)
+      await balances.save(annual)
     }
   }
 
@@ -589,14 +602,16 @@ export class EmployeesService {
   }
 
   // يزامن استحقاق السنوي على الرصيد: مقفول = 0، مفتوح = القيمة العامة
-  private async applyAnnualEntitlement(employeeId: number, entitled: boolean) {
+  private async annualEntitlementIn(em: EntityManager, employeeId: number, entitled: boolean) {
+    await this.lockBalanceOwner(em, employeeId)
     const period = String(new Date().getFullYear())
-    const annual = await this.balances.findOne({
+    const balances = em.getRepository(LeaveBalance)
+    const annual = await balances.findOne({
       where: { employeeId, balanceType: 'annual', period },
     })
     if (!annual) return
     annual.entitled = entitled ? await this.configAnnualEntitled() : 0
-    await this.balances.save(annual)
+    await balances.save(annual)
   }
 
   // استحقاق الإجازة المرضية العام من الإعدادات (يوم/سنة) — افتراضياً 180
@@ -609,23 +624,25 @@ export class EmployeesService {
 
   // ينشئ أرصدة السنة الحالية (سنوي/مرضي) إن لم توجد — يُستدعى عند التعيين.
   // الاستحقاقان من سياسة الإجازات — لا أرقام ثابتة في الكود
-  private async ensureCurrentYearBalances(employeeId: number) {
+  private async currentYearBalancesIn(em: EntityManager, employeeId: number) {
+    await this.lockBalanceOwner(em, employeeId)
     const period = String(new Date().getFullYear())
-    const emp = await this.employees.findOne({ where: { id: employeeId } })
+    const emp = await em.getRepository(Employee).findOne({ where: { id: employeeId } })
     // غير مستحق للسنوي → استحقاق 0 (لا يتراكم له رصيد)
     const annualEntitled =
       emp?.annualLeaveEntitled === false ? 0 : await this.configAnnualEntitled()
     const sickEntitled = await this.configSickEntitled()
+    const balances = em.getRepository(LeaveBalance)
     for (const [balanceType, entitled] of [
       ['annual', annualEntitled],
       ['sick', sickEntitled],
     ] as const) {
-      const existing = await this.balances.findOne({
+      const existing = await balances.findOne({
         where: { employeeId, balanceType, period },
       })
       if (!existing) {
-        await this.balances.save(
-          this.balances.create({
+        await balances.save(
+          balances.create({
             employeeId,
             balanceType,
             entitled,
@@ -906,19 +923,16 @@ export class EmployeesService {
         await em.update(User, { employeeId: id }, { ...(result.status !== oldStatus ? { isActive: result.isActive } : {}),
           ...(result.branchId !== beforeChange.branchId ? { branchId: result.branchId } : {}), tokenVersion: () => 'tokenVersion + 1' })
       }
+      // CRP2W-B01: أثر التعديل على رصيد الإجازات جوه المعاملة نفسها (كان بعدها، فإعادة تعيين كانت بتعدّي بين الاتنين):
+      // تبديل استحقاق السنوي → مزامنة رصيد السنوي (0 أو القيمة العامة)
+      if (dto.annualLeaveEntitled !== undefined) await this.annualEntitlementIn(em, id, dto.annualLeaveEntitled)
+      // تعديل رصيد افتتاحي مُرحّل لموظف قائم (انتقل من نظام سابق) — لا يُطبَّق مع «لا يستحق»
+      if (dto.annualLeaveEntitled !== false) await this.openingBalanceIn(em, id, openingBalanceDays, openingBalanceExpiry)
       return result
     })
     // تغيّر رقم البصمة → بصماته اليتيمة السابقة بالرقم الجديد تُربط به
     if ((saved.fingerprintCode ?? '') !== prevCodes) {
       await this.relinkPunches(saved)
-    }
-    // تبديل استحقاق السنوي → مزامنة رصيد السنوي (0 أو القيمة العامة)
-    if (dto.annualLeaveEntitled !== undefined) {
-      await this.applyAnnualEntitlement(id, dto.annualLeaveEntitled)
-    }
-    // تعديل رصيد افتتاحي مُرحّل لموظف قائم (انتقل من نظام سابق) — لا يُطبَّق مع «لا يستحق»
-    if (dto.annualLeaveEntitled !== false) {
-      await this.applyOpeningBalance(id, openingBalanceDays, openingBalanceExpiry)
     }
     return this.attendanceView(saved)
   }
@@ -1046,7 +1060,7 @@ export class EmployeesService {
       return em.findOneByOrFail(Employee, { id })
     })
     // رصيد السنة الحالية للفترة الجديدة — زي الموظف الجديد
-    await this.ensureCurrentYearBalances(id)
+    await this.employees.manager.transaction(em => this.currentYearBalancesIn(em, id))
     return saved
   }
 

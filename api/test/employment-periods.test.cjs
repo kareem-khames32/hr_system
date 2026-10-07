@@ -5,6 +5,8 @@
 //  EU-03) حكم الإتاحة: الحالة، وملف الفترة الحالية (مقفول واحد، من غير مفتوح ولا مجهول)، وإجازة معتمدة بعد آخر يوم عمل، وأول يوم
 //         مقبول (آخر يوم عمل، ودورة الرواتب، ونهاية أي مسير بيغطّي اليوم ده)، والمسير المعلّق، وشهر آخر يوم عمل.
 //  EU-04) مرجع المسير بقاعدة رؤيته: شهر المسير المعلّق للي يشوف المسير بس، وحد تاريخ جاي من مسير مخفي بيقفل الإتاحة من غير تاريخ.
+//  EU-05) (CRP2W، نص الكود) مفيش كاتب لرصيد الإجازات برّه قفل صف الموظف: بوابة الفحص مابتكتبش، وأثر ملف الموظف على الرصيد جوه معاملته،
+//         ومعالجات الطلبات اللي بتحفظ كيان الموظف كله بتقراه بقفل.
 // Run (من api/): node --test test/employment-periods.test.cjs
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
@@ -196,4 +198,48 @@ test('EU-04: مرجع المسير بقاعدة رؤيته — شهر المسي
   // المسير المعلّق والشهر المش محسوم أسبق من الحد المخفي (سببهم بيتحل الأول)
   assert.equal(codeOf(await judge({ ...settledState, pending: [{ id: 12, period: '2025-04' }] }, ended(), '2026-10-06', [1])), 'REHIRE_PENDING_OLD_RUN')
   assert.equal(codeOf(await judge({ cases: [closed()], cycle: '1', covering: [{ id: 20, endDate: '2025-07-15' }], payrollBefore: [{ id: 5 }], members }, ended(), '2026-10-06', [1])), 'REHIRE_LAST_MONTH_OPEN')
+})
+
+test('EU-05: مفيش كاتب لرصيد الإجازات برّه قفل صف الموظف، ومعالجات الطلبات اللي بتحفظ كيان الموظف كله بتقراه بقفل', () => {
+  const fs = require('node:fs')
+  const read = file => fs.readFileSync(path.join(__dirname, '..', 'src', file), 'utf8').replace(/\r\n/g, '\n')
+  const body = (source, start, end) => { const from = source.indexOf(start); assert.ok(from >= 0, start); const to = source.indexOf(end, from + start.length); assert.ok(to > from, end); return source.slice(from, to) }
+  const leaves = read('requests/leave-balances.service.ts')
+  // بوابة الفحص بتحسب على صف افتراضي ومابتحفظش؛ وإنشاء الصف الناقص (ensureAt) من مكانين بس، الاتنين على مخزن معاملة ماسكة صف الموظف
+  const gate = body(leaves, '  async assertSufficient(', '\n  async adjust(')
+  assert.ok(gate.includes('await this.entryAt(this.balances, employeeId, balanceType, segment.start, ctx)') && !gate.includes('ensureAt(') && !/\.save\(/.test(gate))
+  assert.ok(!/\.save\(/.test(body(leaves, '  private async entryAt(', '\n  // بوابة الاعتماد تمرر 31 ديسمبر')))
+  assert.deepEqual([...leaves.matchAll(/this\.ensureAt\(([^,]+),/g)].map(match => match[1]), ['repo', 'repo'])
+  const deduct = body(leaves, '  async deduct(', '\n  // الإرجاع: يعكس بترتيب عكسي')
+  assert.ok(deduct.indexOf('await this.lockEmployee(em, employeeId, false)') < deduct.indexOf('await this.ensureAt(repo,') && deduct.indexOf('await this.lockEmployee(em, employeeId, false)') > 0)
+  const yearRows = body(leaves, '  private async ensureRowsOf(', '\n  // قبل إقفال سنة')
+  assert.ok(yearRows.indexOf('await this.lockEmployee(em, e.id, true)') > 0 && yearRows.indexOf('await this.lockEmployee(em, e.id, true)') < yearRows.indexOf('await this.ensureAt(repo,'))
+  // كل حفظ لصف رصيد في الخدمة على مخزن معاملة (مش المخزن المحقون)
+  assert.equal(/this\.balances\.save\(/.test(leaves), false)
+
+  // ملف الموظف: أثر التعديل على الرصيد جوه معاملة التعديل (قبل ما ترجع)، وتحت صف الموظف، ومفيش كتابة رصيد بالمخزن المحقون
+  const employees = read('employees/employees.service.ts')
+  assert.equal(/this\.balances\./.test(employees), false)
+  const update = body(employees, '  async update(id: number, dto: UpdateEmployeeDto', '\n  // الأرشفة بدل الحذف')
+  const inside = update.slice(0, update.indexOf('      return result\n    })'))
+  assert.ok(inside.includes('await this.annualEntitlementIn(em, id, dto.annualLeaveEntitled)') && inside.includes('await this.openingBalanceIn(em, id, openingBalanceDays, openingBalanceExpiry)'))
+  assert.equal(/openingBalanceIn|annualEntitlementIn|currentYearBalancesIn/.test(update.slice(update.indexOf('      return result\n    })'))), false)
+  for (const name of ['openingBalanceIn', 'annualEntitlementIn', 'currentYearBalancesIn']) {
+    const writer = body(employees, `  private async ${name}(`, '\n  }\n')
+    assert.ok(writer.includes('await this.lockBalanceOwner(em, employeeId)') && writer.indexOf('await this.lockBalanceOwner(em, employeeId)') < writer.indexOf('em.getRepository(LeaveBalance)'), name)
+  }
+  assert.ok(body(employees, '  private async lockBalanceOwner(', '\n  }\n').includes('FROM dbo.employees WITH (UPDLOCK, ROWLOCK) WHERE [id] = @0'))
+
+  // معالجات الطلبات: كل قراءة لصاحب الطلب قبل حفظ كيانه كله بقفل الصف
+  const destinations = read('requests/destinations.service.ts')
+  const reads = [...destinations.matchAll(/findOne\(\{\n\s+where: \{ id: req\.requesterId \},\n([\s\S]*?)\n\s+\}\)/g)].map(match => match[1])
+  assert.equal(reads.length, 4)
+  for (const options of reads) assert.ok(options.includes("lock: { mode: 'pessimistic_write' },"))
+  // وإلغاء ملف الإنهاء بيكتب حالة الموظف بس (مش الكيان كله من قراءة من غير قفل)
+  const offboarding = read('offboarding/offboarding.service.ts')
+  assert.ok(offboarding.includes("await this.employees.update({ id: emp.id }, { status: 'active', isActive: true })") && !/this\.employees\.save\(/.test(offboarding))
+  for (const handler of ['promotionHandler', 'bankChangeHandler', 'employeeStatusHandler']) {
+    const source = body(destinations, `  private ${handler}: Handler = async (`, 'await em.getRepository(Employee).save(emp)')
+    assert.ok(source.includes("lock: { mode: 'pessimistic_write' },"), handler)
+  }
 })
