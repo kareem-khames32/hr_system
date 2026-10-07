@@ -160,11 +160,18 @@ const PORTAL = [
   'src/components/payroll/PayrollApprovalChainStrip.tsx', 'src/components/requests/BonusRequestForm.tsx', 'src/components/requests/DeductionRequestForm.tsx',
   'src/components/OvertimePreview.tsx', 'src/components/OvertimeRequestSummary.tsx', 'src/components/PayrollAttendanceBreakdown.tsx',
   'src/components/PayrollOvertimeBreakdown.tsx', 'src/components/PayrollInstallmentBreakdown.tsx', 'src/components/PayrollObligationBreakdown.tsx',
+  // B2.12 (أ): شاشات البوابة اللي اتبنت في المرحلة 2 ومكوناتها — مهامي، سلفي، مستنداتي، سياساتي (وبوابة الإقرار بعد الدخول)، ملفي الشخصي
+  'src/app/my/tasks/page.tsx', 'src/app/my/loans/page.tsx', 'src/app/my/documents/page.tsx', 'src/app/my/policies/page.tsx', 'src/app/login/policies/page.tsx',
+  'src/app/profile/page.tsx', 'src/components/tasks/TaskCard.tsx', 'src/components/tasks/TaskFormModal.tsx', 'src/components/tasks/TaskLog.tsx',
+  'src/components/tasks/TaskComplianceReport.tsx', 'src/components/comments/CommentsThread.tsx', 'src/components/hr-documents/MyDocumentAcknowledgements.tsx',
+  'src/components/policies/PolicyReader.tsx', 'src/components/payroll/LoanCapSummary.tsx',
 ]
 // شبكات أعمدتها ثابتة عن قصد: أيام الأسبوع السبعة في التقويم، وشريط أرقام الرصيد الثلاثة (استحقاق/مستهلك/متبقٍ) اللي بيساع 390
 const FIXED_GRIDS = new Map([
   ['src/app/calendar/page.tsx', ['grid grid-cols-7 gap-1 mb-2', 'grid grid-cols-7 gap-1']],
   ['src/app/my/leaves/page.tsx', ['grid grid-cols-3 gap-3 text-center']],
+  // B2.12: شريط أرقام السلفة الثلاثة (المعتمد/المسدد/المتبقي) — خاناته min-w-0 وأرقامه بتتكسر، ومقاس في المتصفح على 390 (portal-mobile.e2e)
+  ['src/app/my/loans/page.tsx', ['grid grid-cols-3 gap-2 text-center']],
 ])
 // جدولين عمودين (البند/المبلغ) في القسيمة — بيساعوا الموبايل من غير تمرير
 const NARROW_TABLES = new Map([['src/app/payroll/payslip/[id]/page.tsx', 2]])
@@ -217,9 +224,13 @@ test('MOB-UI-07: الجداول جوّه overflow-x-auto، والنوافذ جو
         assert.ok(panel.includes('h-full') && panel.includes('overflow-y-auto') && panel.includes('w-full'), `${file}: ${panel.join(' ')}`)
         continue
       }
-      assert.ok(overlay.includes('p-4') || overlay.includes('max-lg:p-4'), `${file}: النافذة لازقة في حرف الشاشة (${match[1]})`)
+      // هامش حوالين النافذة على الموبايل: p-4، أو p-3 (نافذة الملف الشخصي: 12px على الموبايل و16px من sm)
+      assert.ok(overlay.some(c => /^(max-lg:)?p-[34]$/.test(c)), `${file}: النافذة لازقة في حرف الشاشة (${match[1]})`)
       assert.ok(panel.includes('w-full'), `${file}: ${panel.join(' ')}`)
-      assert.ok(panel.some(c => /^(max-lg:)?max-h-\[/.test(c)) && panel.some(c => /^(max-lg:)?overflow-y-auto$/.test(c)), `${file}: النافذة من غير max-h وتمرير داخلي (${panel.join(' ')})`)
+      // التمرير الداخلي على النافذة نفسها، أو على جسمها لو هي عمود بعنوان ثابت (flex flex-col وجسمها overflow-y-auto)
+      const scrolls = panel.some(c => /^(max-lg:)?overflow-y-auto$/.test(c))
+        || (panel.includes('flex') && panel.includes('flex-col') && /className="[^"]*\boverflow-y-auto\b[^"]*"/.test(source.slice(match.index, match.index + 2500)))
+      assert.ok(panel.some(c => /^(max-lg:)?max-h-\[/.test(c)) && scrolls, `${file}: النافذة من غير max-h وتمرير داخلي (${panel.join(' ')})`)
     }
   }
 })
