@@ -23,6 +23,8 @@ import { TwoFactorService } from './two-factor.service'
 import { User } from './user.entity'
 import { UserSession } from './user-session.entity'
 import { UserSessionsService } from './user-sessions.service'
+import { UserTotp } from './user-totp.entity'
+import { TotpService } from './totp.service'
 import { UsersController } from './users.controller'
 import { jwtLifetimeSeconds } from './jwt-secret'
 
@@ -41,6 +43,8 @@ import { jwtLifetimeSeconds } from './jwt-secret'
       LoginEvent,
       // B2.17-ب: الجلسات النشطة
       UserSession,
+      // B2.17-ج: سر تطبيق المصادقة
+      UserTotp,
     ]),
     PassportModule,
     JwtModule.registerAsync({
@@ -59,11 +63,11 @@ import { jwtLifetimeSeconds } from './jwt-secret'
     EmployeeLoginAccountController],
   // DirectoryService و MailService نسختين واحدتين: الاختبارات بتستبدل authenticate/send عليهما
   // بـ app.get(...) فمفيش اتصال LDAP ولا SMTP حقيقي في أي اختبار
-  providers: [AuthService, JwtStrategy, DirectoryService, MailService, TwoFactorService, DomainLoginService, LoginSecurityService, UserSessionsService,
+  providers: [AuthService, JwtStrategy, DirectoryService, MailService, TwoFactorService, DomainLoginService, LoginSecurityService, UserSessionsService, TotpService,
     // المزامنة الجماعية: نفس DomainLoginService للإنشاء والربط، فمفيش روتين إنشاء تاني
     DomainSyncService],
   // DomainSyncService مصدَّرة عشان إضافة الموظف (EmployeesModule) تزوّده بحساب دخول في لحظته
   // من **نفس** الخدمة — مفيش روتين إنشاء تاني في النظام
-  exports: [AuthService, DirectoryService, MailService, TwoFactorService, DomainSyncService, LoginSecurityService],
+  exports: [AuthService, DirectoryService, MailService, TwoFactorService, DomainSyncService, LoginSecurityService, TotpService],
 })
 export class AuthModule {}

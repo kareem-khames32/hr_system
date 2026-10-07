@@ -129,8 +129,9 @@ test('RG-03: قايمة الاستثناءات من غير بنود قديمة،
   // B2.14: + مساري لوحة «فريقي» (الحكم بموقع الحساب في الهيكل)
   // B2.16: +3 SELF (لوحة الإعلانات، وتسجيل القراءة، ومناسبات زمايل الفرع — الموظف لنفسه)
   // B2.17: +1 PUBLIC_OK (الخروج) و+1 SELF (بيانات الجلسة)؛ B2.17-ب: +3 SELF («جلساتي» وإنهاؤها)
-  assert.deepEqual(counts, { PUBLIC_OK: 10, SELF: 43, AUTH_ANY_OK: 11, SERVICE_CHECK: 96 })
-  assert.equal(handlers.filter(handler => handler.perms.length === 0).length, 160)
+  // B2.17-ج: +4 SELF (تطبيق المصادقة: الحالة والتفعيل والتأكيد والإلغاء)
+  assert.deepEqual(counts, { PUBLIC_OK: 10, SELF: 47, AUTH_ANY_OK: 11, SERVICE_CHECK: 96 })
+  assert.equal(handlers.filter(handler => handler.perms.length === 0).length, 164)
   // من غير حارس دخول = العام بس
   const open = handlers.filter(handler => !guarded(handler, JwtAuthGuard)).map(handler => handler.id).sort()
   assert.deepEqual(open, Object.keys(EXCEPTIONS).filter(id => EXCEPTIONS[id] === 'PUBLIC_OK').sort())

@@ -38,6 +38,8 @@ export interface CurrentUser {
   permissions?: string[]
   // دخل بكلمة مؤقتة من المدير — لازم يغيّرها قبل ما يستخدم النظام (/login/change-password)
   mustChangePassword?: boolean
+  // B2.17-ج: تطبيق المصادقة إلزامي لدوره ولسه مافعّلش — لازم يفعّله قبل ما يستخدم النظام (/login/totp)
+  totpSetupRequired?: boolean
   // «نطاقه: كل الفروع» — مدير النظام فتحه للحساب ده (الخادم هو اللي بيفرضه؛ هنا لإظهار الأزرار بس)
   scopeAllBranches?: boolean
   // B1.2: حساب مربوط بالمجال (AD): كلمة سره في الويندوز، فمالوش «تغيير كلمة المرور» عندنا
@@ -63,6 +65,8 @@ export const lockedBranchIdOf = (user: CurrentUser | null | undefined): number |
 export const CHANGE_PASSWORD_PATH = '/login/change-password'
 // B2.7: شاشة إقرار السياسات — تحت /login برضه
 export const POLICY_GATE_PATH = '/login/policies'
+// B2.17-ج: شاشة «فعّل تطبيق المصادقة الأول» — تحت /login برضه
+export const TOTP_SETUP_PATH = '/login/totp'
 
 export const getCurrentUser = (): CurrentUser | null => {
   if (typeof window === 'undefined') return null
@@ -285,6 +289,15 @@ export async function apiFetch<T>(
     ) {
       window.location.href = CHANGE_PASSWORD_PATH
     }
+    // B2.17-ج: تطبيق المصادقة إلزامي ولسه مااتفعّلش: الخادم قافل كل حاجة غير التفعيل → وجّه لشاشته
+    if (
+      res.status === 403 &&
+      details?.code === 'TOTP_SETUP_REQUIRED' &&
+      typeof window !== 'undefined' &&
+      !window.location.pathname.startsWith('/login')
+    ) {
+      window.location.href = TOTP_SETUP_PATH
+    }
     // B2.7: سياسة إلزامية عدّت مهلتها: الخادم قافل كل حاجة غير الإقرار → وجّه لشاشته
     if (
       res.status === 403 &&
@@ -319,6 +332,8 @@ export interface TwoFactorChallenge {
   expiresInSeconds: number
   resendAfterSeconds: number
   codeLength: number
+  /** B2.17-ج: الرمز من تطبيق المصادقة على الموبايل (مش رسالة بريد) — مفيش إعادة إرسال */
+  kind?: 'TOTP'
 }
 
 export type LoginOutcome = LoginResponse | TwoFactorChallenge
@@ -826,6 +841,8 @@ export interface ApiUser {
   domainObjectGuid?: string | null
   // B1.3: الحساب مقفول (بعد محاولات دخول غلط) لحد الوقت ده — بيرجع للحساب المقفول بس
   lockedUntil?: string
+  // B2.17-ج: تطبيق المصادقة مفعّل على الحساب — بيرجع للحساب المفعّل بس
+  totpEnabled?: boolean
 }
 
 // ===== مزامنة حسابات الدومين (POST /users/domain-sync) =====
@@ -1358,6 +1375,8 @@ export const fetchBankSheet = (runId: number) => get<ApiBankSheet>(`/payroll/run
 export const fetchUsers = () => get<ApiUser[]>('/users')
 // B1.3: فك قفل حساب اتقفل بعد محاولات دخول غلط
 export const unlockUser = (id: number) => post<{ id: number; unlocked: boolean }>(`/users/${id}/unlock`, {})
+// B2.17-ج: إعادة ضبط تطبيق المصادقة لحساب (الموبايل ضاع)
+export const resetUserTotp = (id: number) => post<{ id: number; reset: boolean }>(`/users/${id}/totp-reset`, {})
 // B1.3: سجل الدخول (الأحدث الأول، 500 بحد أقصى) — available = false قبل ترحيل 078
 export interface ApiLoginEvent {
   id: number; at: string; userId: number | null; displayName: string | null; identifier: string

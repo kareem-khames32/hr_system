@@ -28,6 +28,7 @@ import {
   saveSession,
   ApiError,
   CHANGE_PASSWORD_PATH,
+  TOTP_SETUP_PATH,
   type CurrentUser,
   type TwoFactorChallenge,
 } from '@/lib/api'
@@ -124,7 +125,8 @@ export default function LoginPage() {
       // B2.17: الجلسة نفسها cookie من الخادم — هنا بيانات الحساب ورمز CSRF بس
       saveSession(user, rememberMe, session.csrfToken)
       // كلمة مؤقتة من المدير → لازم يغيّرها الأول قبل ما يدخل النظام
-      window.location.href = user.mustChangePassword ? CHANGE_PASSWORD_PATH : '/'
+      // وبعدها: تطبيق المصادقة إلزامي لدوره ولسه مافعّلش → شاشة التفعيل (B2.17-ج)
+      window.location.href = user.mustChangePassword ? CHANGE_PASSWORD_PATH : user.totpSetupRequired ? TOTP_SETUP_PATH : '/'
     },
     [rememberMe]
   )
@@ -301,11 +303,18 @@ export default function LoginPage() {
                     <ShieldCheck className="h-6 w-6" />
                   </div>
                   <h1 className="mb-2 text-2xl font-extrabold text-gray-900 sm:text-3xl">التحقق بخطوتين</h1>
-                  <p className="mb-6 text-sm leading-6 text-gray-500">
-                    بعتنا رمز من {challenge.codeLength} أرقام على{' '}
-                    <span className="font-medium text-gray-700" dir="ltr">{challenge.sentTo}</span>.
-                    الرمز صالح {Math.round(challenge.expiresInSeconds / 60)} دقائق ولمرة واحدة.
-                  </p>
+                  {challenge.kind === 'TOTP' ? (
+                    /* B2.17-ج: الرمز من تطبيق المصادقة على الموبايل — مفيش رسالة بتتبعت */
+                    <p className="mb-6 text-sm leading-6 text-gray-500" data-login-totp>
+                      افتح تطبيق المصادقة على موبايلك واكتب الرمز الظاهر فيه ({challenge.codeLength} أرقام).
+                    </p>
+                  ) : (
+                    <p className="mb-6 text-sm leading-6 text-gray-500">
+                      بعتنا رمز من {challenge.codeLength} أرقام على{' '}
+                      <span className="font-medium text-gray-700" dir="ltr">{challenge.sentTo}</span>.
+                      الرمز صالح {Math.round(challenge.expiresInSeconds / 60)} دقائق ولمرة واحدة.
+                    </p>
+                  )}
 
                   {error && (
                     <div role="alert" className="mb-4 flex items-center gap-2 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-inset ring-red-600/10">
@@ -369,15 +378,17 @@ export default function LoginPage() {
                   </form>
 
                   <div className="mt-5 flex items-center justify-between gap-3 text-sm">
-                    <button
-                      type="button"
-                      onClick={handleResend}
-                      disabled={cooldown > 0 || isLoading}
-                      className={clsx(linkButtonClass, 'text-teal-700 hover:text-teal-800 disabled:cursor-not-allowed disabled:text-gray-400')}
-                    >
-                      <RotateCw size={16} />
-                      {cooldown > 0 ? `إعادة الإرسال بعد ${cooldown} ثانية` : 'ابعت رمز جديد'}
-                    </button>
+                    {challenge.kind !== 'TOTP' && (
+                      <button
+                        type="button"
+                        onClick={handleResend}
+                        disabled={cooldown > 0 || isLoading}
+                        className={clsx(linkButtonClass, 'text-teal-700 hover:text-teal-800 disabled:cursor-not-allowed disabled:text-gray-400')}
+                      >
+                        <RotateCw size={16} />
+                        {cooldown > 0 ? `إعادة الإرسال بعد ${cooldown} ثانية` : 'ابعت رمز جديد'}
+                      </button>
+                    )}
                     <button type="button" onClick={restart} className={clsx(linkButtonClass, 'text-gray-500 hover:text-gray-700')}>
                       <ArrowRight size={16} />
                       ابدأ من جديد

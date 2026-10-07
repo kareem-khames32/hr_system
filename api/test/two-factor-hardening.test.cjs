@@ -95,7 +95,9 @@ function harness({ configValue = 'true', configThrows = false } = {}) {
       status: () => ({ enabled: false, configured: false, missing: [] }) },
     { async resolveUser() { return { ...identity } } }, mail, loginSecurityBeforeMigration,
     // B2.17-ب: خدمة الجلسات قبل ترحيلها — الجلسة بتتفتح من غير رقم
-    { async open() { return null }, async revoke() {}, async revokeAll() {} })
+    { async open() { return null }, async revoke() {}, async revokeAll() {} },
+    // B2.17-ج: تطبيق المصادقة زي قبل ترحيل 102 (ولا حساب مفعّل ولا دور إلزامي) — مختبر لوحده في totp.integration.cjs
+    { async enrolled() { return false }, async loginState() { return { enrolled: false, required: false } }, async verifyLogin() { return false } })
   return { auth, twoFactor, challenges, stats, sent, get code() { return sent[sent.length - 1] } }
 }
 

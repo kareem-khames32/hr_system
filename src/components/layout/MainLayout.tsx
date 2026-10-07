@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { EyeOff, ShieldAlert } from 'lucide-react'
-import { can, CHANGE_PASSWORD_PATH, getCurrentUser, hasSession, POLICY_GATE_PATH, restoreSession } from '@/lib/api'
+import { can, CHANGE_PASSWORD_PATH, getCurrentUser, hasSession, POLICY_GATE_PATH, restoreSession, TOTP_SETUP_PATH } from '@/lib/api'
 import { fetchPendingPolicies, markPoliciesChecked, policiesCheckedThisSession } from '@/lib/policies-api'
 import { routeAvailable, useModules } from '@/lib/modules'
 import Sidebar from './Sidebar'
@@ -117,6 +117,11 @@ export function AppShell({ children }: MainLayoutProps) {
       // كلمة مؤقتة من المدير لسه ماتغيّرتش → «غيّر كلمة المرور» الأول (الخادم قافل الباقي أصلًا)
       if (getCurrentUser()?.mustChangePassword) {
         window.location.href = CHANGE_PASSWORD_PATH
+        return
+      }
+      // B2.17-ج: تطبيق المصادقة إلزامي لدوره ولسه مافعّلش → شاشة التفعيل الأول
+      if (getCurrentUser()?.totpSetupRequired) {
+        window.location.href = TOTP_SETUP_PATH
         return
       }
       setAuthed(true)

@@ -72,7 +72,9 @@ function authHarness({ configFailure = false, mailFailure = false } = {}) {
     { async record() {}, async lockState() { return { failedLoginCount: 0, lockedUntil: null } }, async lockoutSettings() { return { maxAttempts: 10, minutes: 15 } },
       async registerFailure() { return null }, async reset() { return false }, async assertPassword() {} },
     // B2.17-ب: الجلسات النشطة زي قبل ترحيل 101 (الجلسة من غير رقم) — مختبرة لوحدها في user-sessions.integration.cjs
-    { async open() { return null }, async revoke() {}, async revokeAll() {} })
+    { async open() { return null }, async revoke() {}, async revokeAll() {} },
+    // B2.17-ج: تطبيق المصادقة زي قبل ترحيل 102 (ولا حساب مفعّل ولا دور إلزامي) — مختبر لوحده في totp.integration.cjs
+    { async enrolled() { return false }, async loginState() { return { enrolled: false, required: false } }, async verifyLogin() { return false } })
   return { auth, twoFactor, stats, challenges, get row() { return row }, get code() { return deliveredCode } }
 }
 

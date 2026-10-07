@@ -12,6 +12,8 @@ import { SESSION_KEEP_DAYS, SESSION_NOT_FOUND, SESSION_TOUCH_MINUTES, USER_SESSI
 
 // B2.17-ب: الجلسات النشطة — صف لكل دخول، ورقمه في التوكن. صاحب الحساب بيشوف جلساته المفتوحة وبينهي أي واحدة منها؛ والخروج وتغيير
 // كلمة المرور بينهوها من الخادم. قبل ترحيل 101: الجلسة بتتفتح من غير رقم (زي الأول)، والشاشة بتقول إن الترحيل ناقص.
+// كل وقت هنا بساعة التطبيق (باراميتر Date) — نفس الساعة اللي الكيان بيكتب بيها: مشغّل القاعدة بيكتب ويقرا datetime2 بالتوقيت
+// المحلي للتطبيق، فوقت مكتوب بساعة القاعدة (SYSUTCDATETIME) كان هيتقري مزاح بفرق المنطقة.
 @Injectable()
 export class UserSessionsService {
   private readonly logger = new Logger(UserSessionsService.name)
@@ -45,7 +47,7 @@ export class UserSessionsService {
     // المقارنة بالحرف: ترتيب القاعدة مش حسّاس لحالة الأحرف
     if (!row || row.sid !== sid || Number(row.userId) !== userId || row.revokedAt) return false
     if (Date.now() - new Date(row.lastSeenAt).getTime() > SESSION_TOUCH_MINUTES * 60_000) {
-      await this.ds.query('UPDATE [user_sessions] SET [lastSeenAt] = SYSUTCDATETIME() WHERE [id] = @0 AND [revokedAt] IS NULL', [row.id]).catch(() => undefined)
+      await this.ds.query('UPDATE [user_sessions] SET [lastSeenAt] = @1 WHERE [id] = @0 AND [revokedAt] IS NULL', [row.id, new Date()]).catch(() => undefined)
     }
     return true
   }
@@ -56,8 +58,8 @@ export class UserSessionsService {
     const rows: Array<{ id: number; sid: string; createdAt: Date; lastSeenAt: Date; expiresAt: Date; ip: string | null; userAgent: string | null }> = await this.ds.query(
       `SELECT s.[id], s.[sid], s.[createdAt], s.[lastSeenAt], s.[expiresAt], s.[ip], s.[userAgent]
        FROM [user_sessions] s INNER JOIN [users] u ON u.[id] = s.[userId]
-       WHERE s.[userId] = @0 AND s.[revokedAt] IS NULL AND s.[expiresAt] > SYSUTCDATETIME() AND s.[tokenVersion] = u.[tokenVersion]
-       ORDER BY s.[lastSeenAt] DESC, s.[id] DESC`, [user.sub])
+       WHERE s.[userId] = @0 AND s.[revokedAt] IS NULL AND s.[expiresAt] > @1 AND s.[tokenVersion] = u.[tokenVersion]
+       ORDER BY s.[lastSeenAt] DESC, s.[id] DESC`, [user.sub, new Date()])
     return { available: true, message: null, items: rows.map(row => ({ id: Number(row.id), current: !!user.sid && row.sid === user.sid, createdAt: row.createdAt,
       lastSeenAt: row.lastSeenAt, expiresAt: row.expiresAt, ip: row.ip, device: deviceLabel(row.userAgent) })) }
   }
@@ -67,8 +69,8 @@ export class UserSessionsService {
     if (!(await userSessionsReady(this.ds.manager))) throw new NotFoundException(SESSION_NOT_FOUND)
     return this.ds.transaction(async em => {
       const ended: Array<{ sid: string }> = Number.isSafeInteger(id) && id > 0 ? await em.query(
-        `UPDATE [user_sessions] SET [revokedAt] = SYSUTCDATETIME(), [revokedReason] = N'USER' OUTPUT INSERTED.[sid]
-         WHERE [id] = @0 AND [userId] = @1 AND [revokedAt] IS NULL`, [id, user.sub]) : []
+        `UPDATE [user_sessions] SET [revokedAt] = @2, [revokedReason] = N'USER' OUTPUT INSERTED.[sid]
+         WHERE [id] = @0 AND [userId] = @1 AND [revokedAt] IS NULL`, [id, user.sub, new Date()]) : []
       if (!ended.length) throw new NotFoundException(SESSION_NOT_FOUND)
       const current = !!user.sid && ended[0].sid === user.sid
       await recordAudit(em, { category: 'LOGIN', action: 'SESSION_ENDED', entityType: 'user', entityId: user.sub, actorUserId: user.sub, branchId: user.branchId ?? null,
@@ -82,8 +84,8 @@ export class UserSessionsService {
     if (!(await userSessionsReady(this.ds.manager))) return { ended: 0 }
     return this.ds.transaction(async em => {
       const ended: unknown[] = await em.query(
-        `UPDATE [user_sessions] SET [revokedAt] = SYSUTCDATETIME(), [revokedReason] = N'USER' OUTPUT INSERTED.[id]
-         WHERE [userId] = @0 AND [revokedAt] IS NULL AND [sid] <> @1`, [user.sub, user.sid ?? ''])
+        `UPDATE [user_sessions] SET [revokedAt] = @2, [revokedReason] = N'USER' OUTPUT INSERTED.[id]
+         WHERE [userId] = @0 AND [revokedAt] IS NULL AND [sid] <> @1`, [user.sub, user.sid ?? '', new Date()])
       if (ended.length) {
         await recordAudit(em, { category: 'LOGIN', action: 'SESSIONS_ENDED', entityType: 'user', entityId: user.sub, actorUserId: user.sub, branchId: user.branchId ?? null,
           summary: `إنهاء ${ended.length} جلسة تانية من «جلساتي»`, after: { count: ended.length } })
@@ -95,19 +97,19 @@ export class UserSessionsService {
   /** إنهاء جلسة برقمها (الخروج) — من غير خطأ لو مش موجودة أو منتهية */
   async revoke(sid: string, userId: number, reason: SessionEndReason): Promise<void> {
     if (!(await userSessionsReady(this.ds.manager))) return
-    await this.ds.query(`UPDATE [user_sessions] SET [revokedAt] = SYSUTCDATETIME(), [revokedReason] = @2 WHERE [sid] = @0 AND [userId] = @1 AND [revokedAt] IS NULL`, [sid, userId, reason])
+    await this.ds.query(`UPDATE [user_sessions] SET [revokedAt] = @3, [revokedReason] = @2 WHERE [sid] = @0 AND [userId] = @1 AND [revokedAt] IS NULL`, [sid, userId, reason, new Date()])
   }
 
   /** إنهاء كل جلسات الحساب (تغيير كلمة المرور: الإصدار زاد والتوكنات القديمة ماتت — صفوفها بتتقفل معاها) */
   async revokeAll(userId: number, reason: SessionEndReason, em: EntityManager = this.ds.manager): Promise<void> {
     if (!(await userSessionsReady(em))) return
-    await em.query(`UPDATE [user_sessions] SET [revokedAt] = SYSUTCDATETIME(), [revokedReason] = @1 WHERE [userId] = @0 AND [revokedAt] IS NULL`, [userId, reason])
+    await em.query(`UPDATE [user_sessions] SET [revokedAt] = @2, [revokedReason] = @1 WHERE [userId] = @0 AND [revokedAt] IS NULL`, [userId, reason, new Date()])
   }
 
   /** الصفوف اللي مدتها خلصت من زمان مش لازم تتراكم — تنضيف هادي من غير أي أثر على الدخول */
   private async cleanup(): Promise<void> {
     try {
-      await this.ds.query(`DELETE FROM [user_sessions] WHERE [expiresAt] < DATEADD(day, -${SESSION_KEEP_DAYS}, SYSUTCDATETIME())`)
+      await this.ds.query('DELETE FROM [user_sessions] WHERE [expiresAt] < @0', [new Date(Date.now() - SESSION_KEEP_DAYS * 86_400_000)])
     } catch (error) {
       this.logger.debug(`تعذّر تنضيف الجلسات القديمة: ${(error as Error).message}`)
     }

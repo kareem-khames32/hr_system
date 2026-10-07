@@ -73,7 +73,7 @@ test('SK-02: the server reads Bearer first with one reader for both the token an
   const service = read('api/src/auth/auth.service.ts')
   // الرمز جوه توكن جلسة الـcookie بس؛ والجلسة العادية ردها وتوكنها زي ما هم
   assert.match(service, /const csrf = session\.cookie \? newCsrfToken\(\) : null/)
-  assert.match(service, /\.\.\.\(csrf \? \{ csrf \} : \{\}\),\n      \.\.\.\(sid \? \{ sid \} : \{\}\),\n    \}\n\n    return \{\n      accessToken: await this\.jwt\.signAsync\(payload\),/)
+  assert.match(service, /\.\.\.\(csrf \? \{ csrf \} : \{\}\),\n      \.\.\.\(sid \? \{ sid \} : \{\}\),\n      \.\.\.\(totpSetupRequired \? \{ totpSetupRequired: true \} : \{\}\),\n    \}\n\n    return \{\n      accessToken: await this\.jwt\.signAsync\(payload\),/)
   assert.match(service, /\.\.\.\(csrf \? \{ csrfToken: csrf \} : \{\}\),\n    \}\n  \}/)
   assert.match(service, /private async issueSession\(user: User, session: SessionMode = \{\}, context: LoginContext = \{\}\): Promise<SessionResponse>/)
   assert.match(service, /csrfToken: payload\.csrf \?\? null,/)
@@ -95,7 +95,8 @@ test('SK-02: the server reads Bearer first with one reader for both the token an
   const logout = controller.slice(controller.indexOf("@Post('logout')"), controller.indexOf("@Get('security-status')"))
   assert.doesNotMatch(logout.slice(0, logout.indexOf('logout(')), /UseGuards/)
   assert.match(logout, /const cookie = sessionCookieOf\(req, options\)[\s\S]{0,260}if \(cookie !== null\) res\.setHeader\('Set-Cookie', clearedSessionCookieHeader\(options\)\)/)
-  assert.match(controller, /@UseGuards\(JwtAuthGuard\)\s+@AllowPendingPasswordChange\(\)\s+@AllowDuringPolicyGate\(\)\s+@Get\('session'\)/)
+  // بيانات الجلسة مفتوحة لكل بوابات الجلسة (كلمة مؤقتة، تفعيل تطبيق المصادقة، إقرار السياسات): الواجهة بتجيب منها الحساب والرمز
+  assert.match(controller, /@UseGuards\(JwtAuthGuard\)\s+@AllowPendingPasswordChange\(\)\s+@AllowPendingTotpSetup\(\)\s+@AllowDuringPolicyGate\(\)\s+@Get\('session'\)/)
   // الخادم بيسمح للواجهة ترسل الـcookie (نفس الإعداد القايم)
   assert.match(read('api/src/main.ts'), /origin: config\.get<string>\('FRONTEND_URL', 'http:\/\/localhost:3000'\),\s+credentials: true,/)
 })

@@ -5,6 +5,8 @@ export const LOCKOUT_MAX_ATTEMPTS_KEY = 'auth.lockout.max_attempts'
 export const LOCKOUT_MINUTES_KEY = 'auth.lockout.minutes'
 export const PASSWORD_MIN_LENGTH_KEY = 'auth.password.min_length'
 export const TWO_FACTOR_ROLES_KEY = 'auth.two_factor.roles'
+// B2.17-ج: أكواد الأدوار اللي تطبيق المصادقة إلزامي ليها (نفس القيمة في totp.ts — هنا عشان حراسة الكتابة من غير استيراد دائري)
+const TOTP_ROLES_CONFIG_KEY = 'auth.totp.roles'
 
 export const LOCKOUT_DEFAULTS = { maxAttempts: 10, minutes: 15 } as const
 export const PASSWORD_DEFAULTS = { minLength: 8, maxLength: 128 } as const
@@ -35,7 +37,7 @@ export function loginSecurityConfigError(key: string, value: string): string | n
   if (key === LOCKOUT_MAX_ATTEMPTS_KEY) return whole(3, 100, 'عدد المحاولات قبل القفل')
   if (key === LOCKOUT_MINUTES_KEY) return whole(1, 1440, 'مدة القفل بالدقايق')
   if (key === PASSWORD_MIN_LENGTH_KEY) return whole(8, 64, 'أقل طول لكلمة السر')
-  if (key === TWO_FACTOR_ROLES_KEY) {
+  if (key === TWO_FACTOR_ROLES_KEY || key === TOTP_ROLES_CONFIG_KEY) {
     const raw = String(value).split(',').map(role => role.trim()).filter(Boolean)
     return raw.length === twoFactorRolesOf(value).length && new Set(raw).size === raw.length ? null : 'أكواد الأدوار حروف إنجليزية صغيرة وأرقام و_ مفصولة بفاصلة، من غير تكرار'
   }

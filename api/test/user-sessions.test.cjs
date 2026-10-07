@@ -35,17 +35,18 @@ test('UT-02: the session number is random and rides in the token; the guard chec
   assert.match(service, /sid = crypto\.randomBytes\(24\)\.toString\('hex'\)/)
   assert.match(service, /if \(!\(await userSessionsReady\(this\.ds\.manager\)\)\) return null/, 'قبل الترحيل: الجلسة من غير رقم')
   // قايمة: صاحبها، مااتنهتش، مدتها لسه، وبإصدار الحساب الحالي
-  assert.match(service, /WHERE s\.\[userId\] = @0 AND s\.\[revokedAt\] IS NULL AND s\.\[expiresAt\] > SYSUTCDATETIME\(\) AND s\.\[tokenVersion\] = u\.\[tokenVersion\]/)
+  // (الوقت بساعة التطبيق — باراميتر Date — زي ما الكيان بيكتب)
+  assert.match(service, /WHERE s\.\[userId\] = @0 AND s\.\[revokedAt\] IS NULL AND s\.\[expiresAt\] > @1 AND s\.\[tokenVersion\] = u\.\[tokenVersion\]/)
   const list = service.slice(service.indexOf('async list('), service.indexOf('async end('))
   assert.doesNotMatch(list.slice(list.indexOf('items: rows.map')), /sid: |userAgent: /, 'الرد من غير رقم الجلسة ولا الترويسة الخام')
   // حارس الدخول: بالحرف، ولنفس الحساب، ومااتنهتش
   assert.match(service, /if \(!row \|\| row\.sid !== sid \|\| Number\(row\.userId\) !== userId \|\| row\.revokedAt\) return false/)
   // الإنهاء: تحديث واحد مشروط بصاحب الصف وبإنه لسه قايم، ورد واحد للباقي
   const end = service.slice(service.indexOf('async end('), service.indexOf('async endOthers('))
-  assert.match(end, /UPDATE \[user_sessions\] SET \[revokedAt\] = SYSUTCDATETIME\(\), \[revokedReason\] = N'USER' OUTPUT INSERTED\.\[sid\]\s+WHERE \[id\] = @0 AND \[userId\] = @1 AND \[revokedAt\] IS NULL/)
+  assert.match(end, /UPDATE \[user_sessions\] SET \[revokedAt\] = @2, \[revokedReason\] = N'USER' OUTPUT INSERTED\.\[sid\]\s+WHERE \[id\] = @0 AND \[userId\] = @1 AND \[revokedAt\] IS NULL/)
   assert.match(end, /if \(!ended\.length\) throw new NotFoundException\(SESSION_NOT_FOUND\)/)
   assert.match(end, /category: 'LOGIN', action: 'SESSION_ENDED'/)
-  assert.match(service, /WHERE \[userId\] = @0 AND \[revokedAt\] IS NULL AND \[sid\] <> @1`, \[user\.sub, user\.sid \?\? ''\]/)
+  assert.match(service, /WHERE \[userId\] = @0 AND \[revokedAt\] IS NULL AND \[sid\] <> @1`, \[user\.sub, user\.sid \?\? '', new Date\(\)\]/)
 
   const strategy = read('api/src/auth/jwt.strategy.ts')
   assert.match(strategy, /if \(payload\.sid && !\(await this\.sessions\.active\(payload\.sid, payload\.sub\)\)\) \{\s+throw new UnauthorizedException\(SESSION_ENDED_MESSAGE\)/)

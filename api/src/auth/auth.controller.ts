@@ -16,11 +16,12 @@ import {
 import { ConfigService } from '@nestjs/config'
 import { IsBoolean, IsEmail, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator'
 import { AuthService, JwtPayload } from './auth.service'
-import { AllowPendingPasswordChange, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from './guards'
+import { AllowPendingPasswordChange, AllowPendingTotpSetup, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from './guards'
 import { jwtLifetimeSeconds } from './jwt-secret'
 import { bearerTokenOf, sessionViaCookie } from './jwt.strategy'
 import { clearedSessionCookieHeader, sessionCookieHeader, sessionCookieOf, sessionCookieOptions } from './session-cookie'
 import { UserSessionsService } from './user-sessions.service'
+import { TotpService } from './totp.service'
 import { RequireModule } from '../modules-registry/module.guard'
 import { AllowDuringPolicyGate } from '../policies/policy-gate.decorator'
 
@@ -69,6 +70,17 @@ class VerifyCodeDto extends SessionChoiceDto {
   code: string
 }
 
+// B2.17-ج: رمز تطبيق المصادقة (6 أرقام). remember بس لتأكيد التفعيل (الجلسة الجديدة بشكل الجلسة اللي الطلب جه بيها)
+class TotpCodeDto {
+  @IsString({ message: 'اكتب رمز تطبيق المصادقة' })
+  @Matches(/^\d{6}$/, { message: 'رمز تطبيق المصادقة 6 أرقام' })
+  code: string
+
+  @IsOptional()
+  @IsBoolean({ message: 'remember يقبل true أو false بس' })
+  remember?: boolean
+}
+
 class ResendCodeDto {
   @IsString()
   @MinLength(8, { message: 'طلب الدخول مش معروف — ابدأ من جديد' })
@@ -105,7 +117,8 @@ type SessionRequest = { headers: Record<string, unknown>; method?: string; ip?: 
 @RequireModule('platform')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService, private readonly config: ConfigService, private readonly sessions: UserSessionsService) {}
+  constructor(private readonly auth: AuthService, private readonly config: ConfigService, private readonly sessions: UserSessionsService,
+    private readonly totp: TotpService) {}
 
   /**
    * B2.17: تسليم الجلسة. جلسة cookie = التوكن في cookie httpOnly والرد من غير accessToken (سكربت الصفحة مايشوفوش)؛ غير كده، أو
@@ -209,6 +222,7 @@ export class AuthController {
 
   @UseGuards(JwtAuthGuard)
   @AllowPendingPasswordChange()
+  @AllowPendingTotpSetup()
   @AllowDuringPolicyGate()
   @Get('me')
   me(@CurrentUser() user: JwtPayload) {
@@ -218,16 +232,60 @@ export class AuthController {
   // B2.17: بيانات الحساب ورمز CSRF للجلسة الحالية — الواجهة بتناديه بعد تحديث الصفحة أو في تبويب جديد (مابقاش عندها توكن)
   @UseGuards(JwtAuthGuard)
   @AllowPendingPasswordChange()
+  @AllowPendingTotpSetup()
   @AllowDuringPolicyGate()
   @Get('session')
   session(@CurrentUser() user: JwtPayload) {
     return this.auth.sessionView(user)
   }
 
+  // ===== B2.17-ج: التحقق بتطبيق مصادقة (TOTP) — صاحب الحساب لنفسه =====
+  // الحالة والتفعيل مفتوحين لجلسة «فعّل تطبيق المصادقة الأول» (الأدوار الإلزامية)، ولبوابة السياسات
+  @UseGuards(JwtAuthGuard)
+  @AllowPendingTotpSetup()
+  @AllowDuringPolicyGate()
+  @Get('totp')
+  totpStatus(@CurrentUser() user: JwtPayload) {
+    return this.totp.status(user)
+  }
+
+  // بداية التفعيل: السر ورابط التطبيق بيرجعوا هنا مرة واحدة بس
+  @UseGuards(JwtAuthGuard)
+  @AllowPendingTotpSetup()
+  @AllowDuringPolicyGate()
+  @Post('totp/setup')
+  @HttpCode(200)
+  totpSetup(@CurrentUser() user: JwtPayload) {
+    return this.totp.begin(user)
+  }
+
+  // تأكيد التفعيل برمز من التطبيق → جلسة جديدة (من غير علامة «فعّل الأول»)، بشكل الجلسة اللي الطلب جه بيها
+  @UseGuards(JwtAuthGuard)
+  @AllowPendingTotpSetup()
+  @AllowDuringPolicyGate()
+  @Post('totp/confirm')
+  @HttpCode(200)
+  async totpConfirm(@CurrentUser() user: JwtPayload, @Body() dto: TotpCodeDto, @Req() req: SessionRequest, @Res({ passthrough: true }) res: CookieResponse) {
+    await this.totp.confirm(user, dto.code)
+    const cookie = sessionViaCookie(req)
+    const context = { ip: req.ip ?? null, userAgent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null }
+    return this.deliver(res, await this.auth.reissueSession(user, { cookie }, context), cookie, dto.remember === true)
+  }
+
+  // إلغاء صاحب الحساب لتطبيق المصادقة برمز منه (مرفوض لو إلزامي لدوره)
+  @UseGuards(JwtAuthGuard)
+  @Post('totp/disable')
+  @HttpCode(200)
+  async totpDisable(@CurrentUser() user: JwtPayload, @Body() dto: TotpCodeDto) {
+    await this.totp.disable(user, dto.code)
+    return { enabled: false }
+  }
+
   // صاحب الحساب يغيّر كلمته — ومفتوح لتوكن «لازم يغيّر كلمة المرور المؤقتة»
   // الرد = جلسة جديدة (الإصدار زاد فالتوكن القديم بطل)، بنفس شكل الجلسة اللي الطلب جه بيها (cookie أو توكن)
   @UseGuards(JwtAuthGuard)
   @AllowPendingPasswordChange()
+  @AllowPendingTotpSetup()
   @Post('change-password')
   @HttpCode(200)
   async changePassword(@CurrentUser() user: JwtPayload, @Body() dto: ChangePasswordDto, @Req() req: SessionRequest, @Res({ passthrough: true }) res: CookieResponse) {

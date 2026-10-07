@@ -155,9 +155,10 @@ export class AnnouncementsService {
       // إعلان مش للحساب ده (جمهور تاني، مسودة، مسحوب، منتهي) = نفس رد رقم مش موجود
       if (!seen) throw new NotFoundException(ANNOUNCEMENT_NOT_FOUND)
       await em.query(`INSERT INTO [announcement_reads] ([announcementId], [employeeId], [userId], [readAt])
-        SELECT @0, @1, @2, SYSUTCDATETIME()
+        SELECT @0, @1, @2, @3
         WHERE NOT EXISTS (SELECT 1 FROM [announcement_reads] WITH (UPDLOCK, HOLDLOCK) WHERE [announcementId] = @0 AND [employeeId] = @1)`,
-      [seen.row.id, seen.employee.id, user.sub])
+      // وقت القراءة بساعة التطبيق (زي الكيان): وقت بساعة القاعدة كان هيتقري في التقرير مزاح بفرق المنطقة
+      [seen.row.id, seen.employee.id, user.sub, new Date()])
       const read = await em.getRepository(AnnouncementRead).findOneOrFail({ where: { announcementId: seen.row.id, employeeId: seen.employee.id } })
       return { read: true, readAt: read.readAt }
     })

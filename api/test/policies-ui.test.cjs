@@ -78,7 +78,8 @@ test('PU-02: عميل الـAPI على مسارات الخادم نفسها وب
   const sources = fs.readdirSync(path.join(root, 'api/src'), { recursive: true }).filter(file => String(file).endsWith('.controller.ts')).map(file => [String(file).replace(/\\/g, '/'), read(path.join('api/src', String(file)))])
   assert.deepEqual(sources.filter(([, text]) => text.includes('@AllowDuringPolicyGate()')).map(([file, text]) => [file, count(text, '@AllowDuringPolicyGate()')]).sort(),
     // B2.17: + «بيانات الجلسة» (الواجهة بتجيب منه الحساب ورمز CSRF حتى والحساب مقفول على إقرار)
-    [['auth/auth.controller.ts', 2], ['modules-registry/modules.controller.ts', 1], ['policies/policies.controller.ts', 6]])
+    // B2.17-ج: + حالة تطبيق المصادقة وتفعيله وتأكيده (صاحب دور إلزامي ومقفول على إقرار برضه لازم يقدر يفعّل)
+    [['auth/auth.controller.ts', 5], ['modules-registry/modules.controller.ts', 1], ['policies/policies.controller.ts', 6]])
   assert.match(read('api/src/auth/auth.controller.ts'), /@AllowDuringPolicyGate\(\)\n\s+@Get\('me'\)/)
   assert.match(read('api/src/auth/auth.controller.ts'), /@AllowDuringPolicyGate\(\)\n\s+@Get\('session'\)/)
   assert.match(read('api/src/modules-registry/modules.controller.ts'), /@AllowDuringPolicyGate\(\)\n\s+@Get\('enabled'\)/)

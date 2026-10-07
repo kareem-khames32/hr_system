@@ -25,6 +25,7 @@ import { failureDelayMs, lockedMessage, lockedNow } from './login-security'
 import { LoginSecurityService, type LoginContext } from './login-security.service'
 import { newCsrfToken } from './session-cookie'
 import { UserSessionsService } from './user-sessions.service'
+import { TotpService } from './totp.service'
 
 // حمولة التوكن — الدور والفرع هما أساس عزل البيانات
 export interface JwtPayload {
@@ -51,6 +52,8 @@ export interface JwtPayload {
   // B2.17-ب: رقم الجلسة (user_sessions.sid) — الجلسة اللي صفها اتنهى مابتعدّيش من حارس الدخول. توكن من غير رقم (قبل ترحيل 101،
   // أو متوقّع برّه مسار الدخول) بيتحكم بالإصدار بس زي الأول
   sid?: string
+  // B2.17-ج: تطبيق المصادقة إلزامي لدور الحساب ولسه مافعّلش — التوكن مايفتحش غير التفعيل (JwtAuthGuard). بعد التأكيد جلسة جديدة من غيرها
+  totpSetupRequired?: boolean
 }
 
 /** B2.17: شكل الجلسة المطلوب من العميل. cookie = التوكن في cookie httpOnly (ومعاه رمز CSRF) بدل جسم الرد */
@@ -74,6 +77,8 @@ export interface SessionResponse {
     // B1.2: حساب مربوط بالمجال (AD) — كلمة سره في الويندوز مش عندنا، فالواجهة ماتعرضش له «تغيير كلمة المرور».
     // بيتبعت للحساب المربوط بس (الحساب العادي رده زي ما هو بالحرف)
     domainAccount?: true
+    // B2.17-ج: بيتبعت لما يكون true بس — الواجهة بتحوّل لشاشة تفعيل تطبيق المصادقة
+    totpSetupRequired?: true
   }
   // B2.17: لجلسة الـcookie بس — رمز CSRF بتاعها (الجلسة العادية ردها زي ما هو بالحرف)
   csrfToken?: string
@@ -97,7 +102,8 @@ export class AuthService {
     private readonly domain: DomainLoginService,
     private readonly mail: MailService,
     private readonly security: LoginSecurityService,
-    private readonly sessions: UserSessionsService
+    private readonly sessions: UserSessionsService,
+    private readonly totp: TotpService
   ) {}
 
   // B1.3: تأخير رد المحاولة الغلط (ثانية ثم 2 ثم 4) — AUTH_FAILURE_DELAY_MS بيصغّره في الاختبارات
@@ -325,6 +331,12 @@ export class AuthService {
     identifier: string = user.email,
     session: SessionMode = {}
   ): Promise<LoginResult> {
+    // B2.17-ج: الحساب مفعّل تطبيق المصادقة = الخطوة التانية رمز التطبيق (مكان رمز البريد، ومن غير اعتماد على خادم البريد)
+    if (await this.totp.enrolled(user.id)) {
+      const challenge = await this.twoFactor.openTotp(user, method)
+      await this.security.record({ userId: user.id, identifier, method, outcome: 'TOTP_ASKED', context })
+      return challenge
+    }
     // B1.3: التحقق العام مقفول بس دور الحساب في «التحقق بخطوتين إلزامي لأدوار…» = الرمز مطلوب
     const gate = await this.twoFactor.gate(user)
     if (gate === 'UNKNOWN') {
@@ -370,7 +382,7 @@ export class AuthService {
 
   /** التحقق من رمز البريد → الجلسة. كل قواعد الحساب بتتقري من القاعدة من جديد هنا. */
   async verifyTwoFactor(challengeToken: string, code: string, context: LoginContext = {}, session: SessionMode = {}): Promise<SessionResponse> {
-    const challenge = await this.twoFactor.verify(challengeToken, code).catch(async (error) => {
+    const challenge = await this.twoFactor.verify(challengeToken, code, (userId, value) => this.totp.verifyLogin(userId, value)).catch(async (error) => {
       // B1.3: الرمز الغلط أو المنتهي في السجل (الحساب بيتعرف من الرمز لو صالح)
       await this.security.record({ identifier: '—', method: 'CODE',
         outcome: `CODE_${error?.code ?? 'REJECTED'}`.slice(0, 30), context })
@@ -447,6 +459,9 @@ export class AuthService {
     const csrf = session.cookie ? newCsrfToken() : null
     // B2.17-ب: صف الجلسة ورقمه في التوكن (null قبل ترحيل 101: الجلسة من غير رقم زي الأول)
     const sid = await this.sessions.open(user, context)
+    // B2.17-ج: تطبيق المصادقة إلزامي لدوره ولسه مافعّلش = الجلسة مابتفتحش غير التفعيل
+    const totp = await this.totp.loginState(user)
+    const totpSetupRequired = totp.required && !totp.enrolled
 
     const payload: JwtPayload = {
       sub: user.id,
@@ -461,6 +476,7 @@ export class AuthService {
       ...(branchIds !== null ? { branchIds } : {}),
       ...(csrf ? { csrf } : {}),
       ...(sid ? { sid } : {}),
+      ...(totpSetupRequired ? { totpSetupRequired: true } : {}),
     }
 
     return {
@@ -477,9 +493,21 @@ export class AuthService {
         scopeAllBranches,
         ...(branchIds !== null ? { branchIds } : {}),
         ...(user.domainObjectGuid ? { domainAccount: true as const } : {}),
+        ...(totpSetupRequired ? { totpSetupRequired: true as const } : {}),
       },
       ...(csrf ? { csrfToken: csrf } : {}),
     }
+  }
+
+  /**
+   * B2.17-ج: جلسة جديدة لصاحب الجلسة الحالية بعد ما فعّل تطبيق المصادقة (من غير علامة «فعّل الأول»)، والجلسة اللي كانت مقيّدة بتتنهي.
+   * الحساب بيتقري من القاعدة من جديد (معطّل = مفيش جلسة).
+   */
+  async reissueSession(current: JwtPayload, session: SessionMode = {}, context: LoginContext = {}): Promise<SessionResponse> {
+    const user = await this.withPasswordState().where('u.id = :id', { id: current.sub }).getOne()
+    if (!user || !user.isActive) throw new UnauthorizedException('الحساب معطّل')
+    if (current.sid) await this.sessions.revoke(current.sid, current.sub, 'LOGOUT')
+    return this.issueSession(user, session, context)
   }
 
   /**
@@ -501,6 +529,7 @@ export class AuthService {
         scopeAllBranches: payload.role !== 'super_admin' && payload.scopeAllBranches === true,
         ...(Array.isArray(payload.branchIds) ? { branchIds: payload.branchIds } : {}),
         ...(row?.domainObjectGuid ? { domainAccount: true as const } : {}),
+        ...(payload.totpSetupRequired === true ? { totpSetupRequired: true as const } : {}),
       },
       csrfToken: payload.csrf ?? null,
     }

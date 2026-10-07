@@ -42,6 +42,7 @@ import {
   isCompanyWideUser,
   setTemporaryPassword,
   unlockUser,
+  resetUserTotp,
   setUserPermissions,
   syncDomainUsers,
   updateUser,
@@ -552,6 +553,18 @@ export default function UsersPage() {
     }
   }
 
+  // B2.17-ج: إعادة ضبط تطبيق المصادقة لحساب (الموبايل ضاع)
+  const resetTotp = async (user: ApiUser) => {
+    if (!confirm(`إعادة ضبط تطبيق المصادقة لحساب ${user.displayName}؟ دخوله الجاي هيبقى من غير رمز التطبيق، ولو دوره إلزامي هيفعّله من جديد.`)) return
+    try {
+      await resetUserTotp(user.id)
+      setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, totpEnabled: undefined } : u)))
+      setError(null)
+    } catch (err: any) {
+      setError(err.message)
+    }
+  }
+
   // B1.3: فك قفل حساب اتقفل بعد محاولات دخول غلط
   const unlock = async (user: ApiUser) => {
     if (!confirm(`فك قفل حساب ${user.displayName}؟ عداد المحاولات الغلط هيرجع صفر.`)) return
@@ -885,6 +898,12 @@ export default function UsersPage() {
                       >
                         {statusLabels[statusOf(user)]}
                       </span>
+                      {user.totpEnabled && (
+                        <span className="mt-1 flex items-center gap-1 text-xs text-gray-600" data-user-totp>
+                          تطبيق مصادقة
+                          <button type="button" onClick={() => resetTotp(user)} className="underline text-primary-700">إعادة ضبط</button>
+                        </span>
+                      )}
                       {user.lockedUntil && (
                         <span className="mt-1 flex items-center gap-1 text-xs text-red-700" data-user-locked>
                           مقفول لحد {user.lockedUntil.slice(11, 16)}

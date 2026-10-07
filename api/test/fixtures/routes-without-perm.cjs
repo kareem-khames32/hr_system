@@ -37,6 +37,10 @@ const EXCEPTIONS = {
   'AuthController.endSession': 'SELF', // DELETE /auth/sessions/:id
   'AuthController.me': 'SELF', // GET /auth/me
   'AuthController.mySessions': 'SELF', // GET /auth/sessions
+  'AuthController.totpConfirm': 'SELF', // POST /auth/totp/confirm — B2.17-ج: تطبيق المصادقة لصاحب الحساب نفسه
+  'AuthController.totpDisable': 'SELF', // POST /auth/totp/disable
+  'AuthController.totpSetup': 'SELF', // POST /auth/totp/setup
+  'AuthController.totpStatus': 'SELF', // GET /auth/totp
   'AuthController.session': 'SELF', // GET /auth/session — B2.17: بيانات الحساب ورمز CSRF للجلسة الحالية
   'BonusesController.mine': 'SELF', // GET /bonuses/mine
   'EmployeeSelfPhotoController.setOwnPhoto': 'SELF', // PUT /employees/me/photo

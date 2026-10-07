@@ -120,6 +120,9 @@ test('US-01: every login opens a session whose number rides in the token, and th
   const stale = await seen()
   assert.equal(await alive(desk.token), 200)
   assert.ok(await seen() > stale + 60_000, 'اتحدّث بعد المدة')
+  // وبساعة التطبيق نفسها (اللي الشاشة بتعرضها): «آخر نشاط» دلوقتي، مش مزاح بفرق المنطقة الزمنية
+  assert.ok(Math.abs(await seen() - Date.now()) < 60_000, 'آخر نشاط = دلوقتي')
+  assert.ok(Math.abs(new Date((await mine(desk.token)).items.find(row => row.current).lastSeenAt).getTime() - Date.now()) < 60_000)
   // من غير جلسة: 401
   expect(await http('GET', '/auth/sessions'), 401)
   expect(await http('DELETE', `/auth/sessions/${rows[0].id}`), 401)
@@ -144,7 +147,7 @@ test('US-02: ending one session kills its token only; another account\'s session
   assert.equal(await alive(desk.token), 200)
   assert.equal((await mine(desk.token)).items.some(item => item.id === phoneId), false)
   const [row] = await query('SELECT [revokedReason], [revokedAt] FROM [user_sessions] WHERE [id] = @0', [phoneId])
-  assert.deepEqual([row.revokedReason, row.revokedAt instanceof Date], ['USER', true])
+  assert.deepEqual([row.revokedReason, row.revokedAt instanceof Date, Math.abs(row.revokedAt.getTime() - Date.now()) < 60_000], ['USER', true, true], 'وقت الإنهاء = دلوقتي')
   // مرة تانية على نفس الجلسة: مش موجودة (اتنهت)
   expect(await http('DELETE', `/auth/sessions/${phoneId}`, undefined, bearer(desk.token)), 404)
   assert.equal(await audits('SESSION_ENDED') - before, 1)

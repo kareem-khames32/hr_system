@@ -17,8 +17,8 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common'
-import { InjectRepository } from '@nestjs/typeorm'
-import { In, Not, Repository } from 'typeorm'
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm'
+import { DataSource, In, Not, Repository } from 'typeorm'
 import * as bcrypt from 'bcryptjs'
 import {
   ArrayMaxSize,
@@ -35,6 +35,7 @@ import {
 } from 'class-validator'
 import { Type } from 'class-transformer'
 import { AuthService } from './auth.service'
+import { TotpService, totpReady } from './totp.service'
 import type { JwtPayload } from './auth.service'
 import {
   branchScopeCovers,
@@ -282,7 +283,9 @@ export class UsersController {
     @InjectRepository(Branch) private readonly branches: Repository<Branch>,
     private readonly auth: AuthService,
     private readonly domainSync: DomainSyncService,
-    private readonly security: LoginSecurityService
+    private readonly security: LoginSecurityService,
+    private readonly totp: TotpService,
+    @InjectDataSource() private readonly ds: DataSource
   ) {}
 
   // الدور القابل للإسناد = موجود في جدول roles ومفعّل (المخصصة مسموحة)
@@ -387,6 +390,8 @@ export class UsersController {
     const legacyIds = legacyUnusablePasswordUserIds()
     // B1.3: الحسابات المقفولة دلوقتي (بعد محاولات غلط) — الشاشة بتعرض «مقفول لحد…» وزرار «فك القفل»
     const locked = await this.security.lockedAccounts()
+    // B2.17-ج: الحسابات المفعّلة تطبيق المصادقة — الشاشة بتعرض «تطبيق مصادقة» وزرار «إعادة ضبط»
+    const totpEnabled = await this.totpEnabledIds()
     // لا نُخرج الـ hash أبداً — بس علامة «مستخدم منقول — محتاج باسورد»
     return rows.map(({ passwordHash: _ph, ...rest }) => ({
       ...rest,
@@ -399,7 +404,29 @@ export class UsersController {
       // الشاشة بتعلّمه عشان المالك يفرّق وهو بيسند الأدوار بين حساب المجال وحساب البريد+الكلمة.
       isDomainAccount: !!rest.domainObjectGuid,
       ...(locked.has(rest.id) ? { lockedUntil: locked.get(rest.id)!.toISOString() } : {}),
+      ...(totpEnabled.has(rest.id) ? { totpEnabled: true } : {}),
     }))
+  }
+
+  /** B2.17-ج: أرقام الحسابات اللي تطبيق المصادقة مفعّل عليها (قبل ترحيل 102: ولا حساب) */
+  private async totpEnabledIds(): Promise<Set<number>> {
+    if (!(await totpReady(this.ds.manager))) return new Set()
+    const rows: Array<{ userId: number }> = await this.ds.query('SELECT [userId] FROM [user_totp] WHERE [confirmedAt] IS NOT NULL')
+    return new Set(rows.map(row => Number(row.userId)))
+  }
+
+  /**
+   * B2.17-ج: إعادة ضبط تطبيق المصادقة لحساب (الموبايل ضاع): دخوله الجاي من غير رمز التطبيق، ولو دوره إلزامي بيفعّل من جديد.
+   * الحساب برّه نطاق فروع المنفّذ = مش موجود؛ وحساب مدير نظام مايعيدش ضبطه غير مدير نظام؛ وصاحب الحساب نفسه من «الأمان» برمزه.
+   */
+  @Post(':id/totp-reset')
+  @HttpCode(200)
+  async totpReset(@CurrentUser() actor: JwtPayload, @Param('id', ParseIntPipe) id: number) {
+    const target = await this.users.findOne({ where: { id } })
+    if (!target || !inBranchScope(branchScopeOf(actor), target.branchId)) throw new NotFoundException('المستخدم غير موجود')
+    if (target.id === actor.sub) throw new BadRequestException('إلغاء تطبيق المصادقة لحسابك من «الأمان» برمز من التطبيق')
+    if (target.role === 'super_admin' && actor.role !== 'super_admin') throw new ForbiddenException('إعادة ضبط تطبيق المصادقة لمدير النظام لمدير نظام بس')
+    return { id: target.id, reset: await this.totp.adminReset(actor, target) }
   }
 
   /**

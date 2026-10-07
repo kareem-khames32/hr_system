@@ -12,6 +12,7 @@ import { Reflector } from '@nestjs/core'
 import { In } from 'typeorm'
 import type { FindOperator } from 'typeorm'
 import type { JwtPayload } from './auth.service'
+import { TOTP_SETUP_MESSAGE, TOTP_SETUP_REQUIRED } from './totp'
 
 // كلمة مرور مؤقتة: التوكن اللي فيه mustChangePassword مايفتحش غير المسارات المعلَّمة بالديكوريتور ده
 // (تغيير كلمة المرور و«مين أنا»). العلامة جوه التوكن متزامنة مع القاعدة: أي تغيير لـ users.mustChangePassword
@@ -19,6 +20,11 @@ import type { JwtPayload } from './auth.service'
 export const PASSWORD_CHANGE_REQUIRED = 'PASSWORD_CHANGE_REQUIRED'
 const ALLOW_PENDING_PASSWORD_KEY = 'allowPendingPasswordChange'
 export const AllowPendingPasswordChange = () => SetMetadata(ALLOW_PENDING_PASSWORD_KEY, true)
+
+// B2.17-ج: تطبيق المصادقة إلزامي لدور الحساب ولسه مافعّلش: التوكن اللي فيه totpSetupRequired مايفتحش غير المسارات المعلَّمة
+// بالديكوريتور ده (التفعيل، وبيانات الجلسة، وتغيير كلمة المرور). بعد التأكيد الخادم بيطلّع جلسة جديدة من غير العلامة.
+const ALLOW_PENDING_TOTP_KEY = 'allowPendingTotpSetup'
+export const AllowPendingTotpSetup = () => SetMetadata(ALLOW_PENDING_TOTP_KEY, true)
 
 // حارس JWT الافتراضي
 @Injectable()
@@ -41,6 +47,13 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
         code: PASSWORD_CHANGE_REQUIRED,
         message: 'لازم تغيّر كلمة المرور المؤقتة الأول قبل ما تستخدم النظام',
       })
+    }
+    if (
+      (payload as JwtPayload | undefined)?.totpSetupRequired &&
+      !Reflect.getMetadata(ALLOW_PENDING_TOTP_KEY, context.getHandler()) &&
+      !Reflect.getMetadata(ALLOW_PENDING_TOTP_KEY, context.getClass())
+    ) {
+      throw new ForbiddenException({ statusCode: 403, code: TOTP_SETUP_REQUIRED, message: TOTP_SETUP_MESSAGE })
     }
     return payload
   }

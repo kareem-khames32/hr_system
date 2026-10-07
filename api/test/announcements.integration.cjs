@@ -265,6 +265,7 @@ test('AN-02: an announcement for one branch does not show to another branch; pin
   // «أقرّ بالقراءة»: الموظف لنفسه، لإعلان ساري هو في جمهوره، ومرة واحدة
   const read = expect(await call(U.a1, 'POST', `/announcements/${A.a.id}/read`), 201)
   assert.equal(read.read, true)
+  assert.ok(Math.abs(new Date(read.readAt).getTime() - Date.now()) < 60_000, 'وقت القراءة = دلوقتي (بساعة التطبيق، مش مزاح بفرق المنطقة)')
   assert.deepEqual(expect(await call(U.a1, 'POST', `/announcements/${A.a.id}/read`), 201), read, 'المرة التانية بترجّع نفس الوقت')
   const [twice, again] = await Promise.all([call(U.a2, 'POST', `/announcements/${A.a.id}/read`), call(U.a2, 'POST', `/announcements/${A.a.id}/read`)])
   assert.deepEqual([twice.status, again.status, twice.body.readAt], [201, 201, again.body.readAt])

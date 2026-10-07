@@ -48,7 +48,8 @@ const valid = (value: unknown): value is EnabledModules => {
 // حساب بكلمة مرور مؤقتة مالوش جلسة هنا: الخادم قافل عليه كل حاجة غير «غيّر كلمة المرور»
 const currentSession = (): string | null => {
   const user = getCurrentUser(), mark = sessionMark()
-  return user && mark && !user.mustChangePassword ? `${user.id}:${mark}` : null
+  // B2.17-ج: ونفس الحكاية لجلسة «فعّل تطبيق المصادقة الأول»
+  return user && mark && !user.mustChangePassword && !user.totpSetupRequired ? `${user.id}:${mark}` : null
 }
 
 function cachedFor(session: string): { enabled: EnabledModules; at: number } | null {

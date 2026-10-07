@@ -16,6 +16,11 @@ export { TWO_FACTOR_CONFIG_KEY } from './two-factor-gate'
 import { TWO_FACTOR_CONFIG_KEY } from './two-factor-gate'
 import { TWO_FACTOR_ROLES_KEY, twoFactorRolesOf } from './login-security'
 import { PRODUCT_NAME } from '../settings/product-name'
+import { TOTP_CHALLENGE_MARK, TOTP_CHALLENGE_SENT_TO } from './totp'
+import { TotpLockedError } from './totp.service'
+
+/** B2.17-ج: حكم رمز تطبيق المصادقة لحساب (AuthService بيدّيه) — الحالة المعلّقة نفسها مابتعرفش السر */
+export type TotpCheck = (userId: number, code: string) => Promise<boolean>
 
 /** ثوابت الرمز في مكان واحد — مش مفاتيح إعدادات (المالك رفض تضخيم لوحة الإعدادات). */
 export const OTP = {
@@ -80,6 +85,8 @@ export interface TwoFactorChallengeView {
   expiresInSeconds: number
   resendAfterSeconds: number
   codeLength: number
+  /** B2.17-ج: الرمز من تطبيق المصادقة (مش رسالة بريد) — مفيش إعادة إرسال. رمز البريد من غير الحقل ده (زي ما هو) */
+  kind?: 'TOTP'
 }
 
 const rawCode = (length: number): string => {
@@ -201,6 +208,20 @@ export class TwoFactorService {
   }
 
   /**
+   * B2.17-ج: حالة دخول معلّقة لحساب مفعّل تطبيق المصادقة — نفس الصف والمدة وعدّاد المحاولات والاستهلاك مرة واحدة، من غير رسالة بريد:
+   * مكان hash رمز البريد علامة ثابتة، والرمز بيتحكم بسر الحساب وقت التحقق (verify).
+   */
+  async openTotp(user: User, method: LoginChallengeMethod): Promise<TwoFactorChallengeView> {
+    const now = new Date()
+    await this.challenges.update({ userId: user.id, consumedAt: IsNull(), lockedAt: IsNull() }, { consumedAt: now })
+    const token = crypto.randomBytes(OTP.challengeTokenBytes).toString('hex')
+    await this.challenges.insert({ token, userId: user.id, codeHash: TOTP_CHALLENGE_MARK, method, sentTo: TOTP_CHALLENGE_SENT_TO,
+      expiresAt: new Date(now.getTime() + OTP.ttlSeconds * 1000), attempts: 0, resendCount: 0, lastSentAt: now, consumedAt: null, lockedAt: null, createdAt: now })
+    void this.cleanup()
+    return { twoFactor: true, challengeToken: token, sentTo: TOTP_CHALLENGE_SENT_TO, expiresInSeconds: OTP.ttlSeconds, resendAfterSeconds: 0, codeLength: OTP.codeLength, kind: 'TOTP' }
+  }
+
+  /**
    * التحقق من الرمز. النجاح بيستهلك الحالة (مرة واحدة) ويرجّع الصف عشان auth.service يفتح الجلسة.
    * أي رفض بيرمي TwoFactorError برسالة عربية — ومفيش جلسة في أي حالة رفض.
    *
@@ -209,7 +230,7 @@ export class TwoFactorService {
    * المقارنة (العدّ والقفل، والاستهلاك) مبني على القراءة الجديدة وعلى تحديث مشروط بها — مش على
    * النسخة اللي دخلنا بيها المقارنة.
    */
-  async verify(token: string, code: string): Promise<LoginChallenge> {
+  async verify(token: string, code: string, checkTotp?: TotpCheck): Promise<LoginChallenge> {
     const row = await this.challenges.findOne({ where: { token: (token ?? '').trim() } })
     // المقارنة حرفية: الـcollation مش حسّاس لحالة الأحرف ولا للمسافات الأخيرة، فتوكن مختلف مايتقبلش
     if (!row || row.token !== (token ?? '').trim()) {
@@ -220,7 +241,19 @@ export class TwoFactorService {
       throw new TwoFactorError('EXPIRED', 'انتهت صلاحية الرمز — ابدأ تسجيل الدخول من جديد واطلب رمزًا جديدًا')
     }
     const clean = String(code ?? '').replace(/\D/g, '')
-    const ok = clean.length === OTP.codeLength && (await bcrypt.compare(clean, row.codeHash))
+    // B2.17-ج: حالة رمزها من تطبيق المصادقة بتتحكم بسر الحساب (ومن غير حَكَم مابتتقبلش)؛ وقفل التحقق المؤقت للحساب = قفل للحالة
+    let ok: boolean
+    if (row.codeHash === TOTP_CHALLENGE_MARK) {
+      try {
+        ok = clean.length === OTP.codeLength && !!checkTotp && (await checkTotp(row.userId, clean))
+      } catch (error) {
+        if (!(error instanceof TotpLockedError)) throw error
+        await this.challenges.update({ id: row.id, consumedAt: IsNull(), lockedAt: IsNull() }, { lockedAt: new Date() })
+        throw new TwoFactorError('LOCKED', error.message)
+      }
+    } else {
+      ok = clean.length === OTP.codeLength && (await bcrypt.compare(clean, row.codeHash))
+    }
     const fresh = await this.reread(row.id)
     if (!ok) {
       const { attempts, locked } = await this.countWrongAttempt(row.id, fresh)
@@ -363,6 +396,8 @@ export class TwoFactorService {
     if (!row || row.token !== (token ?? '').trim()) {
       throw new TwoFactorError('UNKNOWN', 'طلب الدخول مش معروف أو انتهى — ابدأ تسجيل الدخول من جديد')
     }
+    // B2.17-ج: رمز تطبيق المصادقة مابيتبعتش — مفيش إعادة إرسال له
+    if (row.codeHash === TOTP_CHALLENGE_MARK) throw new TwoFactorError('RESEND_LIMIT', 'الرمز من تطبيق المصادقة على موبايلك — مفيش رمز بيتبعت')
     // الرفض المبكر زي ما هو: طلب مرفوض مايستهلكش أي شغل تشفير ولا يلمس الصف
     this.assertResendAllowed(row)
     const code = rawCode(OTP.codeLength)
