@@ -418,6 +418,8 @@ const AVAILABLE_HANDLERS: Array<{ key: string; labelAr: string }> = [
   { key: 'custody_transfer', labelAr: 'نقل عهدة لموظف آخر' },
   { key: 'overtime_auto', labelAr: 'اعتماد أوفرتايم مكتشف بالبصمة' },
   { key: 'employee_status', labelAr: 'تغيير حالة وظيفية (استقالة/تقاعد)' },
+  // B2.11-ب (تبع موديول الوظائف المعتمدة)
+  { key: 'positions_headcount', labelAr: 'وظيفة معتمدة جديدة / زيادة عدد' },
   { key: 'leave_calendar', labelAr: 'إجازة تُخصم من الرصيد (وجهة قديمة)' },
   { key: 'leave_calendar_once', labelAr: 'إجازة لمرة واحدة بلا خصم رصيد (حج)' },
   { key: 'leave_balance_restore', labelAr: 'إلغاء/تعديل إجازة واسترداد الرصيد' },

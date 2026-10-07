@@ -165,3 +165,44 @@ test('الشاشة: فتح/قفل الكل، بحث، فلتر فرع، طباع
   assert.match(migration, /COL_LENGTH\(N'dbo\.departments', N'executiveSecretaryEmployeeId'\) IS NULL/)
   assert.doesNotMatch(migration.replace(/^--.*$/gm, ''), /\b(DROP|DELETE|UPDATE)\b/)
 })
+
+// B2.11-ب: الشواغر في الهيكل — من الوظائف المعتمدة (لو معروضة للحساب)
+test('الشواغر في الهيكل: شاغر الوحدة = وظائفها وكل اللي تحتها، والقمة كل شواغر الفروع الظاهرة، ومن غير وظائف الكروت زي ما هي', () => {
+  const chart = model.buildOrgChart({ branches, departments, teams, employees })
+  const seat = (branchId, departmentId, teamId, vacant) => ({ branchId, departmentId, teamId, vacant })
+  const positions = [
+    seat(1, 4, null, 2), seat(1, 4, 1, 1),        // المالية: 2 على القسم و1 على فريق الرواتب
+    seat(1, 3, null, 4),                           // التوظيف (تحت الموارد البشرية)
+    seat(2, 6, 3, 5),                              // فريق الفروع (تحت مبيعات التجزئة تحت المبيعات)
+    seat(1, null, null, 7),                        // مستوى الفرع: مالوش كارت — في القمة بس
+    seat(1, 1, null, 3),                           // على الإدارة التنفيذية نفسها: في القمة بس
+    seat(1, 8, null, 9),                           // قسم متوقف (مش في الهيكل): في القمة بس
+    seat(1, 2, null, 0),                           // وظيفة مليانة
+  ]
+  const all = model.orgVacancies(chart.root, positions)
+  assert.deepEqual(['d4', 't1', 'd2', 'd3', 'd5', 'd6', 't3', 't2', 'd7', 'u2'].map(key => all.get(key)), [3, 1, 4, 4, 5, 5, 5, 0, 0, 0])
+  assert.equal(all.get('x'), 31, 'القمة: كل الشواغر الظاهرة')
+  // فلتر الفرع: شواغر الفرع ده بس
+  const cairo = model.buildOrgChart({ branches, departments, teams, employees, branchId: 1 })
+  const cairoSeats = model.orgVacancies(cairo.root, positions, 1)
+  assert.deepEqual([cairoSeats.get(cairo.root.key), cairoSeats.get('d4'), cairoSeats.get('d5')], [26, 3, undefined])
+  const riyadh = model.buildOrgChart({ branches, departments, teams, employees, branchId: 2 })
+  const riyadhSeats = model.orgVacancies(riyadh.root, positions, 2)
+  assert.deepEqual([riyadhSeats.get(riyadh.root.key), riyadhSeats.get('d5'), riyadhSeats.get('t3')], [5, 5, 5])
+  // الرسم: «شاغر N» على الكارت اللي فيه شواغر بس؛ ومن غير الخريطة (الوظائف مش معروضة للحساب) مفيش ولا كلمة شاغر
+  const state = { expanded: new Set(model.allUnitKeys(chart.root)), membersOpen: new Set(), highlightUnits: new Set(), highlightPeople: new Set(), showBranch: false, onToggle() {}, onToggleMembers() {} }
+  const without = renderToStaticMarkup(React.createElement(OrgChartView, { chart, state }))
+  assert.equal(without.includes('شاغر'), false)
+  const drawn = renderToStaticMarkup(React.createElement(OrgChartView, { chart, state: { ...state, vacant: all } }))
+  const chipOf = key => (drawn.split(`data-org-key="${key}"`)[1] ?? '').split('data-org-key=')[0].match(/شاغر <!-- -->(\d+)|شاغر (\d+)/)
+  assert.deepEqual(['x', 'd4', 't1', 'd3', 't3'].map(key => Number((chipOf(key) ?? []).slice(1).find(Boolean))), [31, 3, 1, 4, 5])
+  assert.equal(chipOf('t2'), null, 'وحدة من غير شواغر: من غير شارة')
+  assert.equal(chipOf('u2'), null)
+  // الشاشة: الشواغر للموديول المفعّل ولصاحب صلاحية العرض بس، وفشل تحميلها مايوقّعش الهيكل، وبناء الهيكل نفسه مابيتغيرش بيها
+  const page = read('src/app/employees/org-chart/page.tsx').replace(/\r\n/g, '\n')
+  assert.ok(page.includes("    if (!positionsOn || !can('positions.view')) { setSeats(null); return }\n"))
+  assert.ok(page.includes('      .then((res) => { if (alive) setSeats(res.available ? res.positions : null) })\n      .catch(() => { if (alive) setSeats(null) })\n'))
+  assert.ok(page.includes("    () => (chart && seats ? orgVacancies(chart.root, seats, branchFilter === 'all' ? null : Number(branchFilter)) : undefined),\n    [chart, seats, branchFilter]\n"))
+  assert.ok(page.includes('    [data, branchFilter]\n'), 'الهيكل بيتبني من بياناته وفلتر الفرع بس (الشواغر مابترجّعش الفتح الافتراضي)')
+  assert.ok(page.includes('                  vacant,\n'))
+})

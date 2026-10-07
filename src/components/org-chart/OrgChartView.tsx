@@ -20,6 +20,8 @@ export interface OrgChartViewState {
   highlightUnits: Set<string>
   highlightPeople: Set<number>
   showBranch: boolean
+  // B2.11-ب: شواغر الوظائف المعتمدة لكل كارت — من غيرها (الوظائف مش معروضة للحساب) الكروت زي ما هي
+  vacant?: Map<string, number>
   onToggle: (key: string) => void
   onToggleMembers: (key: string) => void
 }
@@ -42,6 +44,7 @@ function UnitCard({ unit, state, wide }: { unit: OrgUnit; state: OrgChartViewSta
   const expanded = state.expanded.has(unit.key)
   const membersOpen = state.membersOpen.has(unit.key)
   const highlighted = state.highlightUnits.has(unit.key)
+  const vacant = state.vacant?.get(unit.key) ?? 0
   return (
     <div
       data-org-key={unit.key}
@@ -77,16 +80,23 @@ function UnitCard({ unit, state, wide }: { unit: OrgUnit; state: OrgChartViewSta
         )}
 
         <div className="mt-3 pt-2 border-t border-gray-100 flex items-center justify-between gap-2 text-xs">
-          <button
-            type="button"
-            onClick={() => state.onToggleMembers(unit.key)}
-            disabled={unit.members.length === 0}
-            className="flex items-center gap-1 text-gray-600 hover:text-primary-600 disabled:hover:text-gray-600 disabled:cursor-default"
-            title={unit.members.length ? 'عرض الأعضاء' : undefined}
-          >
-            <Users size={14} className="text-gray-400" />
-            <span className="font-semibold">{unit.headcount}</span> موظف
-          </button>
+          <div className="flex items-center gap-2 min-w-0">
+            <button
+              type="button"
+              onClick={() => state.onToggleMembers(unit.key)}
+              disabled={unit.members.length === 0}
+              className="flex items-center gap-1 text-gray-600 hover:text-primary-600 disabled:hover:text-gray-600 disabled:cursor-default"
+              title={unit.members.length ? 'عرض الأعضاء' : undefined}
+            >
+              <Users size={14} className="text-gray-400" />
+              <span className="font-semibold">{unit.headcount}</span> موظف
+            </button>
+            {vacant > 0 && (
+              <span className="rounded-full bg-amber-50 text-amber-700 font-semibold px-2 py-0.5 whitespace-nowrap" title="شواغر الوظائف المعتمدة في الوحدة وكل اللي تحتها">
+                شاغر {vacant}
+              </span>
+            )}
+          </div>
           {unit.children.length > 0 && (
             <button
               type="button"

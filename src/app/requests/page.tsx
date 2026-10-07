@@ -227,6 +227,7 @@ const handlerLabels: Record<string, string> = {
   custody_return: 'إرجاع عهدة',
   custody_finance: 'العهدة والمالية',
   employee_status: 'تغيير حالة وظيفية',
+  positions_headcount: 'وظيفة معتمدة جديدة / زيادة عدد',
   document_vault: 'خزنة الوثائق',
   expense_register: 'سجل المصروفات',
   training_register: 'سجل التدريب',

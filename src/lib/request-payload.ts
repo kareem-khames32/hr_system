@@ -53,6 +53,10 @@ const fieldLabels: Record<string, string> = {
   contactNumber: 'رقم التواصل',
   purpose: 'الغرض',
   toTitle: 'المسمى الجديد',
+  // طلب «وظيفة جديدة / زيادة عدد» (B2.11-ب) — تسميات غير تسميات بطاقة مقدّم الطلب («المسمى الوظيفي» و«القسم») اللي بتتعرض جنبها عند المعتمد
+  positionTitle: 'المسمى الوظيفي المطلوب',
+  headcount: 'العدد المطلوب',
+  positionDepartment: 'قسم الوظيفة',
   toTeamId: 'الفريق الجديد',
   toEmployeeId: 'الموظف المستلم',
   assignmentId: 'العهدة',
@@ -100,6 +104,7 @@ const fieldKinds: Record<string, RequestFieldKind> = {
   months: 'number',
   newSalary: 'number',
   increase_pct: 'number',
+  headcount: 'number',
   // نص طويل
   reason: 'textarea',
   description: 'textarea',
@@ -124,7 +129,7 @@ export function payloadFieldKind(key: string): RequestFieldKind {
 export const payloadNumberProps = (key: string): { step: string; min: string } =>
   key === 'days' ? { step: '0.5', min: '0' }
     : key === 'hours' ? { step: '0.25', min: '0' }
-    : key === 'months' ? { step: '1', min: '1' }
+    : key === 'months' || key === 'headcount' ? { step: '1', min: '1' }
     : key === 'amount' || key === 'newSalary' ? { step: '0.01', min: '0' }
     : key === 'increase_pct' ? { step: '0.01', min: '0' }
     : /Id$/.test(key) ? { step: '1', min: '1' }
@@ -190,7 +195,8 @@ const labelOf = (k: string): string =>
 export const payloadFieldLabel = labelOf
 
 // حقول يكتبها الخادم للتدقيق (فحص سقف السلفة وقراراته، ومين اختار شهر أول قسط) — تعرضها الشاشة ملخصًا عربيًا مستقلًا، ولا تظهر خامًا في حمولة الطلب.
-export const SERVER_PAYLOAD_KEYS: readonly string[] = ['capCheck', 'capApprovals', 'exceptionalBy', 'firstInstallmentPeriodBy']
+// ورقم قسم طلب «وظيفة جديدة / زيادة عدد»: الخادم بيثبّته مع اسمه عند كل تقديم، والمعتمد بيقرا الاسم («قسم الوظيفة»)
+export const SERVER_PAYLOAD_KEYS: readonly string[] = ['capCheck', 'capApprovals', 'exceptionalBy', 'firstInstallmentPeriodBy', 'positionDepartmentId']
 
 // كل مفاتيح المستخدم بلا حد أقصى ولا فلترة نوع — «مفتاح: قيمة • مفتاح: قيمة»
 // omit: مفاتيح تعرضها الشاشة في أعمدتها الخاصة فقط (لا تُكرَّر) — الباقي كله يظهر

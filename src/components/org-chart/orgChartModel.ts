@@ -294,6 +294,37 @@ export function allUnitKeys(unit: OrgUnit, out: string[] = []): string[] {
   return out
 }
 
+/** وظيفة معتمدة بشاغرها (من الخادم): على فرع، واختياريًا قسم وفريق */
+export interface OrgPositionInput {
+  branchId: number
+  departmentId: number | null
+  teamId: number | null
+  vacant: number
+}
+
+/**
+ * B2.11-ب: شواغر الوظائف المعتمدة على كروت الهيكل (مفتاح الكارت ← عدد الشواغر). شاغر الوحدة = وظائفها ووظائف كل اللي تحتها: الوظيفة على
+ * كارت فريقها، وإلا على كارت قسمها. والقمة = كل شواغر الفروع الظاهرة (فيها وظائف مستوى الفرع والوحدات اللي مالهاش كارت).
+ */
+export function orgVacancies(root: OrgUnit, positions: OrgPositionInput[], branchId?: number | null): Map<string, number> {
+  const seats = positions.filter((p) => branchId == null || p.branchId === branchId)
+  const keys = new Set(allUnitKeys(root))
+  const own = new Map<string, number>()
+  for (const p of seats) {
+    const key = p.teamId != null && keys.has(`t${p.teamId}`) ? `t${p.teamId}` : p.departmentId != null && keys.has(`d${p.departmentId}`) ? `d${p.departmentId}` : null
+    if (key) own.set(key, (own.get(key) ?? 0) + p.vacant)
+  }
+  const result = new Map<string, number>()
+  const fill = (unit: OrgUnit): number => {
+    const total = (own.get(unit.key) ?? 0) + unit.children.reduce((sum, child) => sum + fill(child), 0)
+    result.set(unit.key, total)
+    return total
+  }
+  fill(root)
+  result.set(root.key, seats.reduce((sum, p) => sum + p.vacant, 0))
+  return result
+}
+
 export interface OrgSearchResult {
   units: Set<string> // وحدات مطابقة (اسمها أو رئيسها)
   people: Set<number> // أشخاص مطابقون

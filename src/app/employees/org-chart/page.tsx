@@ -18,6 +18,7 @@ import {
   ZoomOut,
 } from 'lucide-react'
 import {
+  can,
   fetchBranches,
   fetchDepartments,
   fetchEmployees,
@@ -28,11 +29,14 @@ import {
   ApiTeam,
 } from '@/lib/api'
 import { csvDateStamp, downloadCsv } from '@/lib/csv'
+import { useModuleEnabled } from '@/lib/modules'
+import { fetchPositions, type ApiPosition } from '@/lib/positions-api'
 import { OrgChartView } from '@/components/org-chart/OrgChartView'
 import {
   UNIT_KIND_LABELS,
   allUnitKeys,
   buildOrgChart,
+  orgVacancies,
   searchOrgChart,
   type OrgUnit,
 } from '@/components/org-chart/orgChartModel'
@@ -57,6 +61,17 @@ export default function OrgChartPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [membersOpen, setMembersOpen] = useState<Set<string>>(new Set())
   const scrollRef = useRef<HTMLDivElement>(null)
+  // B2.11-ب: الشواغر من الوظائف المعتمدة — للموديول المفعّل ولصاحب صلاحية عرضها بس؛ وفشل تحميلها = الهيكل زي ما هو من غير شواغر
+  const positionsOn = useModuleEnabled('positions')
+  const [seats, setSeats] = useState<ApiPosition[] | null>(null)
+  useEffect(() => {
+    if (!positionsOn || !can('positions.view')) { setSeats(null); return }
+    let alive = true
+    fetchPositions()
+      .then((res) => { if (alive) setSeats(res.available ? res.positions : null) })
+      .catch(() => { if (alive) setSeats(null) })
+    return () => { alive = false }
+  }, [positionsOn])
 
   useEffect(() => {
     const load = async () => {
@@ -100,6 +115,10 @@ export default function OrgChartPage() {
   }, [chart])
 
   const search = useMemo(() => (chart ? searchOrgChart(chart, searchTerm) : null), [chart, searchTerm])
+  const vacant = useMemo(
+    () => (chart && seats ? orgVacancies(chart.root, seats, branchFilter === 'all' ? null : Number(branchFilter)) : undefined),
+    [chart, seats, branchFilter]
+  )
 
   // البحث يفتح الطريق للنتيجة ويعلّمها ويمرّر لها
   useEffect(() => {
@@ -328,6 +347,7 @@ export default function OrgChartPage() {
                   highlightUnits: search?.units ?? new Set(),
                   highlightPeople: search?.people ?? new Set(),
                   showBranch: branchFilter === 'all' && branches.length > 1,
+                  vacant,
                   onToggle: toggle,
                   onToggleMembers: toggleMembers,
                 }}

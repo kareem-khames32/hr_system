@@ -325,6 +325,8 @@ test('MR-09: أنواع الطلبات المزروعة — كل نوع في م�
     payroll: ['SALARY_INCREASE', 'BONUS', 'PER_DIEM', 'DEDUCTION_OBJECTION', 'PAYROLL_DEDUCTION', 'PAYROLL_BONUS', 'BANK_ACCOUNT_CHANGE'],
     expenses: ['EXPENSE_CLAIM'],
     employees: ['PROMOTION', 'TEAM_TRANSFER', 'TITLE_CHANGE', 'CONTRACT_RENEWAL', 'CONTRACT_TYPE_CHANGE', 'PERSONAL_DATA_UPDATE', 'EMERGENCY_CONTACT'],
+    // B2.11-ب: طلب «وظيفة جديدة / زيادة عدد» تبع موديول الوظائف المعتمدة (المقفول افتراضيًا)
+    positions: ['POSITION_REQUEST'],
     // «تسجيل بس» من غير معالج: تبع محرك الطلبات نفسه (أساسي)
     requests: ['SECONDMENT', 'DEPENDENTS_UPDATE', 'DOCUMENT_RENEWAL', 'IT_EQUIPMENT', 'ACCESS_REQUEST', 'FACILITY_CARD', 'TRAINING_REQUEST', 'CERT_REIMBURSEMENT',
       'CONFERENCE', 'EDUCATION_ASSISTANCE', 'GRIEVANCE', 'WHISTLEBLOWING', 'PENALTY_OBJECTION', 'APPRAISAL_OBJECTION', 'SUGGESTION', 'HR_MEETING'],

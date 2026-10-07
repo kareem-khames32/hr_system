@@ -263,6 +263,9 @@ export const MODULES = {
     description: 'وظيفة في قسم أو فريق بعدد معتمد، وتقرير «معتمد / مشغول / شاغر» لكل قسم، وربط الموظف بوظيفته عند التعيين',
     permissions: ['positions.view', 'positions.manage'],
     routes: ['/positions'],
+    // B2.11-ب: طلب «وظيفة جديدة / زيادة عدد» ووجهة تنفيذه (أي نوع طلب وجهته دي بيتبع الموديول)
+    requestTypes: ['POSITION_REQUEST'],
+    requestHandlers: ['positions_headcount'],
     features: {
       'positions.enforce_on_hiring': {
         nameAr: 'التعيين على وظيفة معتمدة بس',

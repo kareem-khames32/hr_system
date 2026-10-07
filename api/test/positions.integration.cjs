@@ -14,6 +14,20 @@
 //         آخر مقعد واحد بس بيعدّي؛ ونفس الحكم على الربط من الشاشة.
 //  PS-08) قايمة الاختيار في نموذج التعيين: النشطة في الفرع بأرقامها، لصاحب «تعيين موظف جديد»، وفرع برّه النطاق فاضي.
 //  PS-09) التوليد من الموجود: المعاينة (تتعمل / متخطّى بسببه)، والتطبيق (وظيفة بعدد موظفيها ومربوطين)، وآمن للتكرار، وفي النطاق بس.
+//  PS-10) حالة الموديول والإنفاذ بتتقري قبل معاملة التعيين ومعاملة الربط.
+//  PS-11) (آخر الملف) قسم اتنقل لفرع تاني وموظفيه ووظائفه فضلوا: مابيتسمّاش في القايمة ولا التقرير ولا قايمة التعيين ولا معاينة
+//         التوليد (ولا فريقه)، والتوليد مابيعملش وظيفة عليه؛ ولما يرجع لفرعه بيتسمّى تاني.
+//  PR-01..05) الجزء (ب) — طلب «وظيفة جديدة / زيادة عدد»: النوع تبع الموديول وحقوله من الخادم؛ والتقديم بمسمى من الكتالوج وعدد صحيح؛
+//         والاعتماد بيعمل وظيفة نشطة على القسم المتثبّت على الطلب أو يزوّد عدد القايمة (والملغية بتتساب)؛ والقسم بيتثبّت وقت التقديم من
+//         قسم مقدّم الطلب (فوق أي قيمة من العميل) فنقله بعدها مابيغيّرش الوحدة؛ وقسم مابقاش في فرع الطلب = الاعتماد مرفوض برسالته؛
+//         ومسودة مقدّمها اتنقل من فرعها ماتتقدّمش؛ ومن غير قسم = وظيفة على مستوى الفرع؛ وإعادة التقديم بتثبّت من جديد؛ وبالنيابة على
+//         قسم صاحب الطلب.
+//  PR-06) بانِي الطلبات (الشركة القايمة بتضيف النوع منه): الوجهة في قايمته باسمها، ونوع جديد بيها بيتقدّم ويتعتمد وينفّذ زي المزروع،
+//         وحقول الباني بتتزوّد على حقول الوجهة، وبيتقفل مع الموديول.
+//  PR-07) اعتمادين في نفس اللحظة لنفس المسمى على نفس القسم = وظيفة واحدة بمجموع العددين (قفل إنشاء الوظائف)؛ وطلب مفتوح والموديول
+//         اتقفل بيكمّل سلسلته وبينفّذ (قاعدة المحرك لكل الموديولات).
+//  PR-08) قبل الترحيل (جدول من الجدولين مش موجود): التقديم مرفوض برسالة الترحيل، واعتماد طلب مفتوح مرفوض بيها والطلب زي ما هو؛ وبعد
+//         الترحيل بيكمّل.
 // Run (من api/): node --test test/positions.integration.cjs
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
@@ -571,4 +585,326 @@ test('PS-10: حالة الموديول والإنفاذ بتتقري قبل مع
     modules.isEnabled = enabled
     modules.isFeatureEnabled = feature
   }
+})
+
+// ===== B2.11 (ب): طلب «وظيفة جديدة / زيادة عدد» =====
+const TITLE_MISSING = 'المسمى الوظيفي ده مش في كتالوج المسميات — اطلب من الموارد البشرية تضيفه الأول'
+const COUNT = 'العدد المطلوب رقم صحيح من 1 لـ1000'
+const REASON = 'اكتب سبب طلب الوظيفة'
+const BRANCH_MOVED = 'مقدّم الطلب اتنقل من فرع الطلب — الوظيفة ماتتطلبش على فرع غير فرعه. اعمل طلب جديد من الفرع الصح'
+const UNIT_GONE = 'القسم اللي الطلب اتقدّم عليه مابقاش موجود في فرع الطلب — ارفض الطلب، أو رجّعه لمقدّمه يقدّمه تاني'
+// المحرك بيلفّ رسالة فشل التنفيذ برسالته («لم يُعتمد… الطلب باقٍ في صندوقك»)
+const refused = message => `لم يُعتمد الطلب — ${message}. الطلب باقٍ في صندوقك: ارفضه أو أرجعه لاستكمال المعلومات`
+// القسم المتثبّت على الطلب (رقمه واسمه) من الحمولة المتخزّنة
+const stagedOf = async id => { const payload = JSON.parse((await repo('Request').findOneByOrFail({ id })).payload); return [payload.positionDepartmentId, payload.positionDepartment] }
+const positionCount = async () => Number((await query('SELECT COUNT(*) AS [n] FROM [positions]'))[0].n)
+const moveSeller = to => repo('Employee').update({ id: emps.s1.id }, to)
+const ask = (user, payload, extra = {}) => request(user, 'POST', '/requests', { typeCode: 'POSITION_REQUEST', payload, submit: true, ...extra })
+const approve = (user, id) => request(user, 'POST', `/requests/${id}/act`, { action: 'APPROVE' })
+const positionsOf = (jobTitleId, departmentId) => query(`SELECT [id], [headcount], [status], [teamId], [branchId] FROM [positions] WHERE [jobTitleId] = @0 AND ${departmentId == null ? '[departmentId] IS NULL' : '[departmentId] = @1'} ORDER BY [id]`,
+  departmentId == null ? [jobTitleId] : [jobTitleId, departmentId])
+
+test('PR-01: نوع الطلب — مقفول مع موديوله، وحقوله من الخادم (المسمى من الكتالوج، والعدد، والسبب)', async () => {
+  const chain = await repo('ApprovalChain').save({ code: 'PR_HR', nameAr: 'سلسلة طلب الوظائف', isActive: true, autoApprove: false })
+  await repo('ApprovalStep').save({ chainId: chain.id, stepOrder: 1, approverRole: 'hr' })
+  made.type = await repo('RequestType').save({ code: 'POSITION_REQUEST', nameAr: 'وظيفة جديدة / زيادة عدد', category: 'employment_status', destinationHandler: 'positions_headcount',
+    approvalChainId: chain.id, isActive: true })
+  users.fin = await account('fin', [], { employeeId: emps.a1.id })
+  users.seller = await account('seller', [], { employeeId: emps.s1.id })
+  users.approver = await account('approver', ['approve.hr', 'requests.view_all'])
+  users.proxy = await account('proxy', ['requests.create_on_behalf', 'employees.view'])
+  const typeFor = async user => expectStatus(await request(user, 'GET', '/requests/types'), 200).find(row => row.code === 'POSITION_REQUEST') ?? null
+  // الموديول مقفول: النوع مش بيتقدّم
+  await setModule(false)
+  assert.notEqual((await ask(users.fin, { positionTitle: 'محاسب', headcount: 1, reason: 'توسّع' })).status, 201)
+  assert.equal(Number((await query(`SELECT COUNT(*) AS [n] FROM [requests] WHERE [typeCode] = N'POSITION_REQUEST'`))[0].n), 0)
+  await setModule(true)
+  const type = await typeFor(users.fin)
+  assert.deepEqual(JSON.parse(type.requiredFields), ['positionTitle', 'headcount', 'reason'])
+  assert.deepEqual(JSON.parse(type.customFields), [
+    { key: 'positionTitle', label: 'المسمى الوظيفي المطلوب', type: 'select', required: true, options: ['محاسب', 'مندوب مبيعات'] },
+    { key: 'headcount', label: 'العدد المطلوب', type: 'number', required: true },
+    { key: 'reason', label: 'سبب الطلب', type: 'text', required: true }])
+  assert.equal(type.destinationSupported, true)
+})
+
+test('PR-02: التقديم — المسمى لازم من الكتالوج (النشط)، والعدد من 1 لـ1000، ومفتاح زيادة مرفوض', async () => {
+  const good = { positionTitle: 'مندوب مبيعات', headcount: 2, reason: 'فريق مبيعات جديد' }
+  for (const [payload, message] of [
+    [{ ...good, positionTitle: 'مسمى مش موجود' }, TITLE_MISSING], [{ ...good, positionTitle: 'مسمى مقفول' }, TITLE_MISSING],
+    [{ ...good, headcount: 0 }, COUNT], [{ ...good, headcount: 1001 }, COUNT], [{ ...good, headcount: 1.5 }, COUNT], [{ ...good, headcount: 'كتير' }, COUNT],
+  ]) assert.deepEqual(answer(await ask(users.fin, payload)), [400, message], JSON.stringify(payload))
+  assert.equal((await ask(users.fin, { ...good, positionTitle: undefined })).status, 400)
+  assert.equal((await ask(users.fin, { ...good, departmentId: org.sales.id })).status, 400, 'القسم مش من الحمولة: من مقدّم الطلب')
+  assert.equal(Number((await query(`SELECT COUNT(*) AS [n] FROM [requests] WHERE [typeCode] = N'POSITION_REQUEST' AND [status] <> N'DRAFT'`))[0].n), 0, 'ولا طلب اتقدّم من المرفوض')
+})
+
+test('PR-03: «الاعتماد بيعمل الوظيفة» — وظيفة نشطة جديدة على قسم مقدّم الطلب في فرع الطلب، والطلب مكتمل بمرجعها', async () => {
+  const before = await audits('POSITION_REQUEST_EXECUTED')
+  // القسم مش من العميل: حتى لو بعت مفتاحَي الخادم بقسم تاني، الخادم بيثبّت قسم مقدّم الطلب فوقهم
+  const sent = expectStatus(await ask(users.fin, { positionTitle: ' مندوب  مبيعات ', headcount: '2', reason: 'فريق مبيعات جديد', positionDepartmentId: org.sales.id, positionDepartment: 'قسم مزوّر' }), 201)
+  assert.deepEqual(await stagedOf(sent.id), [org.finance.id, 'قسم المالية'])
+  assert.deepEqual(await positionsOf(catalog.seller.id, org.finance.id), [], 'قبل الاعتماد مفيش وظيفة')
+  const salesSellers = await positionsOf(catalog.seller.id, org.sales.id)
+  // اللي مش على الخطوة مايعتمدش
+  assert.notEqual((await approve(users.fin, sent.id)).status, 201)
+  const done = expectStatus(await approve(users.approver, sent.id), 201)
+  const [position] = await positionsOf(catalog.seller.id, org.finance.id)
+  assert.deepEqual([position.headcount, position.status, position.teamId, position.branchId], [2, 'ACTIVE', null, org.branchA.id])
+  assert.deepEqual(await positionsOf(catalog.seller.id, org.sales.id), salesSellers, 'القسم اللي العميل بعته ماتلمسش')
+  const stored = await repo('Request').findOneByOrFail({ id: sent.id })
+  assert.deepEqual([stored.status, stored.destinationRef], ['COMPLETED', `POS-${position.id}`])
+  assert.equal(await audits('POSITION_REQUEST_EXECUTED'), before + 1)
+  assert.ok(done)
+  // وظاهرة في شاشة الوظائف بأرقامها
+  assert.deepEqual(counts(await rowOf(users.hrA, position.id)), [2, 0, 2, 0])
+  made.requested = position
+})
+
+test('PR-04: زيادة العدد — وظيفة قايمة بنفس المسمى على نفس القسم عددها بيزيد (حتى المجمّدة)، والملغية بتتساب ووظيفة جديدة بتتعمل', async () => {
+  const id = made.requested.id
+  const logged = await audits('POSITION_REQUEST_EXECUTED')
+  const more = expectStatus(await ask(users.fin, { positionTitle: 'مندوب مبيعات', headcount: 3, reason: 'زيادة عدد' }), 201)
+  expectStatus(await approve(users.approver, more.id), 201)
+  assert.equal(await audits('POSITION_REQUEST_EXECUTED'), logged + 1, 'الزيادة بتتسجّل في سجل التدقيق')
+  assert.deepEqual((await positionsOf(catalog.seller.id, org.finance.id)).map(row => [row.id, row.headcount]), [[id, 5]])
+  assert.equal((await repo('Request').findOneByOrFail({ id: more.id })).destinationRef, `POS-${id}`)
+  // الزيادة مابتعدّيش حد العدد المعتمد بتاع شاشة الوظائف (10000): الاعتماد مرفوض برسالته والعدد زي ما هو
+  expectStatus(await request(users.hrA, 'PATCH', `/positions/${id}`, { headcount: 9999 }), 200)
+  const over = expectStatus(await ask(users.fin, { positionTitle: 'مندوب مبيعات', headcount: 2, reason: 'هتعدّي الحد' }), 201)
+  assert.deepEqual(answer(await approve(users.approver, over.id)), [400, refused(`الوظيفة المعتمدة P-${String(id).padStart(4, '0')} عددها 9999: الزيادة المطلوبة هتعدّي الحد (10000)`)])
+  assert.deepEqual((await positionsOf(catalog.seller.id, org.finance.id)).map(row => [row.id, row.headcount]), [[id, 9999]])
+  // وعلى الحد بالظبط بتعدّي
+  expectStatus(await request(users.hrA, 'PATCH', `/positions/${id}`, { headcount: 9998 }), 200)
+  expectStatus(await approve(users.approver, over.id), 201)
+  assert.deepEqual((await positionsOf(catalog.seller.id, org.finance.id)).map(row => [row.id, row.headcount]), [[id, 10000]])
+  expectStatus(await request(users.hrA, 'PATCH', `/positions/${id}`, { headcount: 5 }), 200)
+  expectStatus(await request(users.hrA, 'PATCH', `/positions/${id}`, { status: 'FROZEN' }), 200)
+  const frozen = expectStatus(await ask(users.fin, { positionTitle: 'مندوب مبيعات', headcount: 1, reason: 'زيادة على مجمّدة' }), 201)
+  expectStatus(await approve(users.approver, frozen.id), 201)
+  assert.deepEqual((await positionsOf(catalog.seller.id, org.finance.id)).map(row => [row.id, row.headcount, row.status]), [[id, 6, 'FROZEN']])
+  expectStatus(await request(users.hrA, 'PATCH', `/positions/${id}`, { status: 'CANCELLED' }), 200)
+  const fresh = expectStatus(await ask(users.fin, { positionTitle: 'مندوب مبيعات', headcount: 4, reason: 'بعد إلغاء القديمة' }), 201)
+  expectStatus(await approve(users.approver, fresh.id), 201)
+  const rows = await positionsOf(catalog.seller.id, org.finance.id)
+  assert.deepEqual(rows.map(row => [row.headcount, row.status]), [[6, 'CANCELLED'], [4, 'ACTIVE']])
+  // مسمى له وظيفة على فريق بس في القسم: الطلب (على مستوى القسم) مابيزوّدهاش — وظيفة جديدة على القسم نفسه
+  const cashier = await repo('JobTitle').save({ title: 'أمين صندوق', isActive: true })
+  const onTeam = await createPosition(users.hrA, { jobTitleId: cashier.id, branchId: org.branchA.id, departmentId: org.finance.id, teamId: org.team.id, headcount: 1 })
+  const forDepartment = expectStatus(await ask(users.fin, { positionTitle: 'أمين صندوق', headcount: 2, reason: 'للقسم مش للفريق' }), 201)
+  expectStatus(await approve(users.approver, forDepartment.id), 201)
+  assert.deepEqual((await positionsOf(cashier.id, org.finance.id)).map(row => [row.id === onTeam.id, row.teamId, row.headcount]), [[true, org.team.id, 1], [false, null, 2]])
+  // مقدّم طلب من قسم تاني: على قسمه هو (وظيفة المحاسب اللي في المبيعات من PS-10 عددها بيزيد، ووظيفة المالية زي ما هي)
+  const salesBefore = await positionsOf(catalog.accountant.id, org.sales.id), financeBefore = await positionsOf(catalog.accountant.id, org.finance.id)
+  const other = expectStatus(await ask(users.seller, { positionTitle: 'محاسب', headcount: 1, reason: 'محاسب للمبيعات' }), 201)
+  expectStatus(await approve(users.approver, other.id), 201)
+  assert.deepEqual((await positionsOf(catalog.accountant.id, org.sales.id)).map(row => [row.id, row.headcount]), salesBefore.map(row => [row.id, row.headcount + 1]))
+  assert.deepEqual(await positionsOf(catalog.accountant.id, org.finance.id), financeBefore)
+})
+
+test('PR-05: القسم متثبّت وقت التقديم — نقل مقدّم الطلب بعدها مابيغيّرش الوحدة؛ وقسم مابقاش في فرع الطلب = الاعتماد مرفوض؛ ومسودة مقدّمها اتنقل من فرعها ماتتقدّمش؛ ومن غير قسم = مستوى الفرع؛ وإعادة التقديم بتثبّت من جديد؛ وبالنيابة على قسم صاحب الطلب', async () => {
+  const sellersNow = async () => (await positionsOf(catalog.seller.id, org.sales.id)).map(row => [row.id, row.headcount])
+  const sellers = await positionsOf(catalog.seller.id, org.sales.id), financeSellers = await positionsOf(catalog.seller.id, org.finance.id)
+  const plus = n => sellers.map(row => [row.id, row.headcount + n])
+  // (1) مقدّم الطلب اتنقل لقسم تاني في نفس الفرع بعد التقديم: الوظيفة على القسم المتثبّت (المبيعات) مش قسمه الجديد (المالية)
+  const sent = expectStatus(await ask(users.seller, { positionTitle: 'مندوب مبيعات', headcount: 2, reason: 'قبل النقل' }), 201)
+  assert.deepEqual(await stagedOf(sent.id), [org.sales.id, 'قسم المبيعات'])
+  const before = await positionCount()
+  await moveSeller({ departmentId: org.finance.id })
+  expectStatus(await approve(users.approver, sent.id), 201)
+  assert.equal(await positionCount(), before, 'وظيفة مندوب المبيعات اللي في المبيعات (من التوليد في PS-09) عددها بيزيد من غير صف جديد')
+  assert.deepEqual(await sellersNow(), plus(2))
+  assert.deepEqual(await positionsOf(catalog.seller.id, org.finance.id), financeSellers, 'قسمه الجديد ماتلمسش')
+  await moveSeller({ departmentId: org.sales.id })
+  // (2) واتنقل لفرع تاني بعد التقديم: الطلب بيتنفّذ على وحدته المتثبّتة برضه (الوظيفة للقسم مش للشخص)؛ ومسودته اللي من فرعه القديم ماتتقدّمش
+  const left = expectStatus(await ask(users.seller, { positionTitle: 'مندوب مبيعات', headcount: 1, reason: 'قبل نقل الفرع' }), 201)
+  const draft = expectStatus(await request(users.seller, 'POST', '/requests', { typeCode: 'POSITION_REQUEST', payload: { positionTitle: 'مندوب مبيعات', headcount: 1, reason: 'مسودة' } }), 201)
+  await moveSeller({ branchId: org.branchB.id, departmentId: org.bDepartment.id })
+  expectStatus(await approve(users.approver, left.id), 201)
+  assert.deepEqual(await sellersNow(), plus(3))
+  assert.deepEqual(await query('SELECT [id] FROM [positions] WHERE [branchId] = @0 AND [jobTitleId] = @1', [org.branchB.id, catalog.seller.id]), [], 'ولا وظيفة على فرعه الجديد')
+  assert.deepEqual(answer(await request(users.seller, 'POST', `/requests/${draft.id}/submit`)), [400, BRANCH_MOVED])
+  assert.equal((await repo('Request').findOneByOrFail({ id: draft.id })).status, 'DRAFT')
+  await moveSeller({ branchId: org.branchA.id, departmentId: org.sales.id })
+  // (3) القسم المتثبّت مابقاش في فرع الطلب: الاعتماد مرفوض برسالته والطلب والوظائف زي ما هم؛ ولما يرجع بيعدّي
+  const gone = expectStatus(await ask(users.seller, { positionTitle: 'مندوب مبيعات', headcount: 1, reason: 'قسم هيتنقل' }), 201)
+  await repo('Department').update({ id: org.sales.id }, { branchId: org.branchB.id })
+  assert.deepEqual(answer(await approve(users.approver, gone.id)), [400, refused(UNIT_GONE)])
+  assert.equal(await positionCount(), before)
+  assert.notEqual((await repo('Request').findOneByOrFail({ id: gone.id })).status, 'COMPLETED')
+  await repo('Department').update({ id: org.sales.id }, { branchId: org.branchA.id })
+  // وطلب حمولته من غير تثبيت (مش من مسار التقديم): مرفوض بنفس الرسالة
+  const bare = JSON.parse((await repo('Request').findOneByOrFail({ id: gone.id })).payload)
+  await repo('Request').update({ id: gone.id }, { payload: JSON.stringify({ positionTitle: bare.positionTitle, headcount: bare.headcount, reason: bare.reason }) })
+  assert.deepEqual(answer(await approve(users.approver, gone.id)), [400, refused(UNIT_GONE)])
+  await repo('Request').update({ id: gone.id }, { payload: JSON.stringify(bare) })
+  expectStatus(await approve(users.approver, gone.id), 201)
+  assert.deepEqual(await sellersNow(), plus(4))
+  // (4) مقدّم طلب من غير قسم، أو قسمه من فرع تاني (الإدارة التنفيذية فوق الفروع): الوظيفة على مستوى فرع الطلب
+  const levelOf = async () => (await positionsOf(catalog.seller.id, null)).filter(row => row.branchId === org.branchA.id && row.status !== 'CANCELLED')
+  const levelBefore = await levelOf()
+  for (const [departmentId, count] of [[null, 2], [org.bDepartment.id, 3]]) {
+    await moveSeller({ departmentId })
+    const level = expectStatus(await ask(users.seller, { positionTitle: 'مندوب مبيعات', headcount: count, reason: 'على مستوى الفرع' }), 201)
+    assert.deepEqual(await stagedOf(level.id), [null, 'على مستوى الفرع'])
+    expectStatus(await approve(users.approver, level.id), 201)
+  }
+  await moveSeller({ departmentId: org.sales.id })
+  const levelAfter = await levelOf(), total = rows => rows.reduce((sum, row) => sum + row.headcount, 0)
+  assert.deepEqual([levelAfter.length, total(levelAfter) - total(levelBefore), levelAfter.every(row => row.teamId == null)], [1, 5, true])
+  assert.deepEqual(await sellersNow(), plus(4), 'قسمه ماتلمسش')
+  // (5) إعادة التقديم بتثبّت من جديد: طلب مرجّع ومقدّمه اتنقل لقسم تاني قبل ما يعيد تقديمه = على قسمه الجديد (وقيمة العميل بتتكتب فوقها)
+  // وظائف المحاسب القايمة في القسم: [رقمها، على فريق؟، عددها] — الطلب بيزوّد وظيفة القسم نفسه (من غير فريق) بس
+  const accountantOf = async departmentId => (await positionsOf(catalog.accountant.id, departmentId)).filter(row => row.status !== 'CANCELLED').map(row => [row.id, row.teamId != null, row.headcount])
+  const grown = (rows, n) => { const first = rows.find(([, onTeam]) => !onTeam); return rows.map(row => row === first ? [row[0], row[1], row[2] + n] : row) }
+  const back = expectStatus(await ask(users.seller, { positionTitle: 'محاسب', headcount: 1, reason: 'هيترجّع' }), 201)
+  assert.deepEqual(await stagedOf(back.id), [org.sales.id, 'قسم المبيعات'])
+  expectStatus(await request(users.approver, 'POST', `/requests/${back.id}/act`, { action: 'RETURN', comment: 'وضّح السبب' }), 201)
+  await moveSeller({ departmentId: org.finance.id })
+  expectStatus(await request(users.seller, 'POST', `/requests/${back.id}/resubmit`, { payload: { reason: 'بعد التوضيح', positionDepartmentId: org.sales.id } }), 201)
+  assert.deepEqual(await stagedOf(back.id), [org.finance.id, 'قسم المالية'])
+  await moveSeller({ departmentId: org.sales.id })
+  const [financeBefore, salesBefore] = [await accountantOf(org.finance.id), await accountantOf(org.sales.id)]
+  expectStatus(await approve(users.approver, back.id), 201)
+  assert.deepEqual(await accountantOf(org.finance.id), grown(financeBefore, 1))
+  assert.deepEqual(await accountantOf(org.sales.id), salesBefore)
+  // (6) بالنيابة: الوظيفة على قسم صاحب الطلب (مش اللي قدّمه)
+  const behalf = expectStatus(await ask(users.proxy, { positionTitle: 'محاسب', headcount: 2, reason: 'بالنيابة عن مدير المالية' }, { onBehalfEmployeeId: emps.a2.id }), 201)
+  assert.deepEqual(await stagedOf(behalf.id), [org.finance.id, 'قسم المالية'])
+  const accountants = await accountantOf(org.finance.id)
+  expectStatus(await approve(users.approver, behalf.id), 201)
+  assert.deepEqual(await accountantOf(org.finance.id), grown(accountants, 2))
+})
+
+test('PR-06: بانِي الطلبات — الوجهة في قايمته باسمها، ونوع جديد بيها بيشتغل زي المزروع وحقول الباني بتتزوّد على حقول الوجهة، وبيتقفل مع الموديول', async () => {
+  const handlers = expectStatus(await request(users.admin, 'GET', '/settings/destination-handlers'), 200)
+  assert.deepEqual(handlers.find(row => row.key === 'positions_headcount'), { key: 'positions_headcount', labelAr: 'وظيفة معتمدة جديدة / زيادة عدد' })
+  expectStatus(await request(users.admin, 'POST', '/settings/request-types', { nameAr: 'احتياج وظيفي', category: 'employment_status', code: 'HEADCOUNT_NEED',
+    destinationHandler: 'positions_headcount', customFields: [{ key: 'neededBy', label: 'مطلوب قبل', type: 'date', required: false }],
+    approvalChainId: made.type.approvalChainId, visibleTo: { mode: 'all', ids: [] } }), 201)
+  const typesFor = async user => expectStatus(await request(user, 'GET', '/requests/types'), 200)
+  const shown = (await typesFor(users.fin)).find(row => row.code === 'HEADCOUNT_NEED')
+  assert.deepEqual(JSON.parse(shown.customFields).map(field => [field.key, field.type]), [['positionTitle', 'select'], ['headcount', 'number'], ['reason', 'text'], ['neededBy', 'date']])
+  assert.deepEqual(JSON.parse(shown.requiredFields), ['positionTitle', 'headcount', 'reason'])
+  assert.equal(shown.destinationSupported, true)
+  const need = payload => request(users.fin, 'POST', '/requests', { typeCode: 'HEADCOUNT_NEED', payload, submit: true })
+  // نفس فحوص التقديم (بالوجهة مش بالكود)
+  assert.deepEqual(answer(await need({ positionTitle: 'مسمى مش موجود', headcount: 1, reason: 'من نوع الباني' })), [400, TITLE_MISSING])
+  // والتلاتة إلزاميين من الوجهة نفسها حتى لو النوع المتسجّل مافيهوش ولا حقل إلزامي
+  assert.deepEqual(answer(await need({ positionTitle: 'محاسب', headcount: 1 })), [400, REASON])
+  assert.deepEqual(answer(await need({ positionTitle: 'محاسب', headcount: 1, reason: '   ' })), [400, REASON])
+  assert.deepEqual(answer(await need({ positionTitle: 'محاسب', reason: 'من غير عدد' })), [400, COUNT])
+  const before = (await positionsOf(catalog.accountant.id, org.finance.id)).find(row => row.status !== 'CANCELLED')
+  const sent = expectStatus(await need({ positionTitle: 'محاسب', headcount: 1, reason: 'من نوع الباني', neededBy: '2026-12-01' }), 201)
+  expectStatus(await approve(users.approver, sent.id), 201)
+  assert.equal((await positionsOf(catalog.accountant.id, org.finance.id)).find(row => row.id === before.id).headcount, before.headcount + 1)
+  assert.equal((await repo('Request').findOneByOrFail({ id: sent.id })).destinationRef, `POS-${before.id}`)
+  // والموديول مقفول: نوع الباني كمان مايتعرضش ومايتقدّمش
+  await setModule(false)
+  assert.equal((await typesFor(users.fin)).some(row => ['HEADCOUNT_NEED', 'POSITION_REQUEST'].includes(row.code)), false)
+  assert.notEqual((await need({ positionTitle: 'محاسب', headcount: 1, reason: 'والموديول مقفول' })).status, 201)
+  await setModule(true)
+  assert.equal((await typesFor(users.fin)).filter(row => ['HEADCOUNT_NEED', 'POSITION_REQUEST'].includes(row.code)).length, 2)
+})
+
+test('PR-07: اعتمادين في نفس اللحظة لنفس المسمى على نفس القسم — وظيفة واحدة بمجموع العددين؛ وطلب مفتوح والموديول اتقفل بيكمّل سلسلته', async () => {
+  const { Repository } = require('typeorm')
+  const auditor = await repo('JobTitle').save({ title: 'مراجع حسابات', isActive: true })
+  const first = expectStatus(await ask(users.fin, { positionTitle: 'مراجع حسابات', headcount: 2, reason: 'طلب أول' }), 201)
+  const second = expectStatus(await ask(users.fin, { positionTitle: 'مراجع حسابات', headcount: 3, reason: 'طلب تاني' }), 201)
+  // أول حفظ لوظيفة جديدة بيتأخر: من غير قفل الإنشاء التاني كان هيدوّر (مايلاقيش) ويعمل وظيفة تانية قبل ما الأول يحفظ
+  const save = Repository.prototype.save
+  let held = false
+  Repository.prototype.save = async function (...args) {
+    if (!held && this.metadata.name === 'ApprovedPosition') { held = true; await new Promise(resolve => setTimeout(resolve, 700)) }
+    return save.apply(this, args)
+  }
+  let answers
+  try { answers = await Promise.all([approve(users.approver, first.id), approve(users.approver, second.id)]) } finally { Repository.prototype.save = save }
+  assert.equal(held, true, 'الحفظ المتأخر حصل فعلًا')
+  assert.deepEqual(answers.map(response => response.status), [201, 201], JSON.stringify(answers.map(response => response.body?.message)))
+  const rows = await positionsOf(auditor.id, org.finance.id)
+  assert.deepEqual(rows.map(row => [row.headcount, row.status]), [[5, 'ACTIVE']], 'وظيفة واحدة بمجموع العددين')
+  const stored = await Promise.all([first, second].map(sent => repo('Request').findOneByOrFail({ id: sent.id })))
+  assert.deepEqual(stored.map(row => [row.status, row.destinationRef]), [['COMPLETED', `POS-${rows[0].id}`], ['COMPLETED', `POS-${rows[0].id}`]])
+  // طلب مفتوح والموديول اتقفل: بيكمّل سلسلته وبينفّذ (قاعدة المحرك: النوع مابيتقدّمش منه جديد، والمفتوح بيكمّل)
+  const open = expectStatus(await ask(users.fin, { positionTitle: 'مراجع حسابات', headcount: 1, reason: 'قبل قفل الموديول' }), 201)
+  await setModule(false)
+  try {
+    expectStatus(await approve(users.approver, open.id), 201)
+    assert.deepEqual((await positionsOf(auditor.id, org.finance.id)).map(row => row.headcount), [6])
+  } finally { await setModule(true) }
+  // المسمى اتقفل في الكتالوج بعد التقديم: الاعتماد بيتحكم تاني وبيترفض برسالته؛ ولما يتفتح بيعدّي
+  const closing = expectStatus(await ask(users.fin, { positionTitle: 'مراجع حسابات', headcount: 1, reason: 'قبل قفل المسمى' }), 201)
+  await repo('JobTitle').update({ id: auditor.id }, { isActive: false })
+  assert.deepEqual(answer(await approve(users.approver, closing.id)), [400, refused(TITLE_MISSING)])
+  assert.deepEqual((await positionsOf(auditor.id, org.finance.id)).map(row => row.headcount), [6])
+  await repo('JobTitle').update({ id: auditor.id }, { isActive: true })
+  expectStatus(await approve(users.approver, closing.id), 201)
+  assert.deepEqual((await positionsOf(auditor.id, org.finance.id)).map(row => row.headcount), [7])
+})
+
+test('PR-08: قبل الترحيل — التقديم مرفوض برسالة الترحيل، واعتماد طلب مفتوح مرفوض بيها والطلب زي ما هو؛ وبعد الترحيل بيكمّل', async () => {
+  const rules = require('../src/positions/position-rules')
+  const MISSING = 'الوظائف المعتمدة محتاجة ترحيل 20261007_097 على قاعدة البيانات'
+  const open = expectStatus(await ask(users.fin, { positionTitle: 'محاسب', headcount: 1, reason: 'قبل ما الجدول يغيب' }), 201)
+  const before = await positionCount()
+  await query(`EXEC sp_rename N'dbo.position_holders', N'position_holders_off'`)
+  rules.resetPositionsCache()
+  try {
+    assert.deepEqual(answer(await ask(users.fin, { positionTitle: 'محاسب', headcount: 1, reason: 'والجدول غايب' })), [400, MISSING])
+    assert.deepEqual(answer(await approve(users.approver, open.id)), [400, refused(MISSING)])
+    assert.equal(await positionCount(), before)
+    assert.notEqual((await repo('Request').findOneByOrFail({ id: open.id })).status, 'COMPLETED')
+  } finally {
+    await query(`EXEC sp_rename N'dbo.position_holders_off', N'position_holders'`)
+    rules.resetPositionsCache()
+  }
+  expectStatus(await approve(users.approver, open.id), 201)
+  assert.equal((await repo('Request').findOneByOrFail({ id: open.id })).status, 'COMPLETED')
+})
+
+test('PS-11: قسم اتنقل لفرع تاني وموظفيه ووظائفه فضلوا — مابيتسمّاش في القايمة والتقرير وقايمة التعيين ومعاينة التوليد، والتوليد مابيعملش وظيفة عليه', async () => {
+  const NAME = 'قسم هيتنقل', FOREIGN = 'قسم برّه الفرع'
+  const moved = await repo('Department').save({ name: NAME, code: 'PS_MV', branchId: org.branchA.id })
+  const crew = await repo('Team').save({ name: 'فريق القسم المنقول', code: 'PS_MVT', departmentId: moved.id })
+  await employee({ departmentId: moved.id, jobTitle: 'محاسب' })
+  const move = branchId => repo('Department').update({ id: moved.id }, { branchId })
+  const lineOf = listed => listed.summary.find(row => row.branchId === org.branchA.id && row.departmentId === moved.id)
+  const groupOf = preview => preview.groups.find(row => row.departmentId === moved.id)
+  const preview = async () => expectStatus(await request(users.hrA, 'GET', '/positions/generate'), 200)
+  // القسم في فرعه: سطر تقريره باسمه (موظف من غير وظيفة)، ومجموعته في التوليد «تتعمل»
+  assert.deepEqual([lineOf(await list(users.hrA)).departmentName, lineOf(await list(users.hrA)).unassigned], [NAME, 1])
+  assert.deepEqual([groupOf(await preview()).action, groupOf(await preview()).departmentName], ['create', NAME])
+  await move(org.branchB.id)
+  try {
+    // (1) سطر التقرير (من غير وظائف عليه) ومعاينة التوليد: من غير اسمه، والمجموعة متخطّاة بسببها
+    const listed = await list(users.hrA)
+    assert.deepEqual([lineOf(listed).departmentName, lineOf(listed).unassigned], [FOREIGN, 1])
+    const plan = await preview()
+    assert.deepEqual([groupOf(plan).action, groupOf(plan).reason, groupOf(plan).departmentName], ['skip', 'قسمهم مش تبع فرعهم — صحّح القسم أو الفرع على ملفاتهم الأول', FOREIGN])
+    assert.equal(JSON.stringify([listed, plan]).includes(NAME), false)
+  } finally { await move(org.branchA.id) }
+  // (2) وظيفتين عليه (على القسم وعلى فريقه) وهو في فرعه، وبعدين اتنقل: الوظيفتين في قايمة فرعهم من غير اسم القسم ولا الفريق
+  const onUnit = await createPosition(users.hrA, { jobTitleId: catalog.seller.id, branchId: org.branchA.id, departmentId: moved.id, headcount: 1 })
+  const onTeam = await createPosition(users.hrA, { jobTitleId: catalog.seller.id, branchId: org.branchA.id, departmentId: moved.id, teamId: crew.id, headcount: 1 })
+  assert.deepEqual([onUnit.departmentName, onTeam.departmentName, onTeam.teamName], [NAME, NAME, 'فريق القسم المنقول'])
+  await move(org.branchB.id)
+  try {
+    const listed = await list(users.hrA)
+    const rows = [onUnit, onTeam].map(made => listed.positions.find(row => row.id === made.id))
+    assert.deepEqual(rows.map(row => [row.departmentName, row.teamName]), [[FOREIGN, null], [FOREIGN, null]])
+    assert.equal(lineOf(listed).departmentName, FOREIGN)
+    const detail = expectStatus(await request(users.hrA, 'GET', `/positions/${onTeam.id}`), 200)
+    const options = expectStatus(await request(users.hrA, 'GET', `/positions/options?branchId=${org.branchA.id}`), 200)
+    assert.deepEqual([detail.departmentName, detail.teamName], [FOREIGN, null])
+    for (const body of [listed, detail, options, await preview()]) {
+      assert.equal(JSON.stringify(body).includes(NAME), false)
+      assert.equal(JSON.stringify(body).includes('فريق القسم المنقول'), false)
+    }
+    // ولحساب كل الفروع برضه: القسم مش تبع فرع الوظيفة
+    assert.equal((await list(users.admin)).positions.find(row => row.id === onUnit.id).departmentName, FOREIGN)
+  } finally { await move(org.branchA.id) }
+  // رجع لفرعه: بيتسمّى تاني
+  assert.deepEqual([(await rowOf(users.hrA, onTeam.id)).departmentName, (await rowOf(users.hrA, onTeam.id)).teamName], [NAME, 'فريق القسم المنقول'])
 })

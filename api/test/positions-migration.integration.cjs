@@ -181,12 +181,16 @@ test('PSM-2: من غير الجدولين الشاشة بتقول الترحيل
     ['DELETE', '/positions/1/holders/1'], ['GET', '/positions/generate'], ['POST', '/positions/generate']]) {
     assert.deepEqual(answer(await request(users.hr, method, route, payload)), [400, MISSING], `${method} ${route}`)
   }
-  // والتعيين زي ما هو: خانة الوظيفة بتتجاهل — حتى والإنفاذ مفعّل
+  // والتعيين زي ما هو: خانة الوظيفة بتتجاهل. والإنفاذ مفعّل والجدولين مش موجودين: التعيين مرفوض برسالة الترحيل (حالة مش معروفة
+  // بتقفل) ومفيش موظف بيتعمل
   const plain = expectStatus(await hire({ positionId: 77 }), 201)
   expectStatus(await request(users.admin, 'PUT', '/modules/features/positions.enforce_on_hiring', { enabled: true }), 200)
   modules.invalidate()
   try {
-    expectStatus(await hire(), 201)
+    const employees = Number((await ds.query('SELECT COUNT(*) AS [n] FROM [employees]'))[0].n)
+    assert.deepEqual(answer(await hire()), [400, MISSING])
+    assert.deepEqual(answer(await hire({ positionId: 77 })), [400, MISSING])
+    assert.equal(Number((await ds.query('SELECT COUNT(*) AS [n] FROM [employees]'))[0].n), employees)
   } finally {
     expectStatus(await request(users.admin, 'PUT', '/modules/features/positions.enforce_on_hiring', { enabled: false }), 200)
     modules.invalidate()
@@ -268,7 +272,8 @@ test('PSM-2: من غير الجدولين الشاشة بتقول الترحيل
   assert.equal(await rules.positionsReady(ds.manager), true)
   assert.deepEqual(await ds.query(`SELECT (SELECT COUNT(*) FROM [${POSITIONS}]) AS [positions], (SELECT COUNT(*) FROM [${HOLDERS}]) AS [holders]`), [{ positions: 0, holders: 0 }])
   const listed = expectStatus(await request(users.hr, 'GET', '/positions'), 200)
-  assert.deepEqual([listed.available, listed.positions, listed.summary.map(line => [line.departmentId, line.approved, line.unassigned])], [true, [], [[made.department.id, 0, 2]]])
+  // موظف واحد من غير وظيفة: اللي اتعيّن قبل الترحيل من غير الإنفاذ (تعيين الإنفاذ اترفض)
+  assert.deepEqual([listed.available, listed.positions, listed.summary.map(line => [line.departmentId, line.approved, line.unassigned])], [true, [], [[made.department.id, 0, 1]]])
   const position = expectStatus(await request(users.hr, 'POST', '/positions', body), 201)
   const hired = expectStatus(await hire({ positionId: position.id }), 201)
   expectStatus(await request(users.hr, 'POST', `/positions/${position.id}/holders`, { employeeId: plain.id }), 201)

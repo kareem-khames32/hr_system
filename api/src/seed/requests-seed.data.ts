@@ -198,6 +198,8 @@ export const typesSeed: TypeSeed[] = [
   { code: 'TITLE_CHANGE', nameAr: 'تغيير مسمى', category: 'employment_status', chain: 'CHAIN_MANAGER_HR', handler: 'employee_update', requiredFields: ['toTitle'], phase: 'P3' },
   { code: 'CONTRACT_RENEWAL', nameAr: 'تجديد عقد', category: 'employment_status', chain: 'CHAIN_HR_EXEC', handler: 'contracts_register', phase: 'P2' },
   { code: 'CONTRACT_TYPE_CHANGE', nameAr: 'تغيير نوع العقد', category: 'employment_status', chain: 'CHAIN_MANAGER_HR', handler: 'contracts_register', phase: 'P3' },
+  // B2.11-ب: طلب وظيفة معتمدة جديدة أو زيادة عددها لقسم مقدّم الطلب (تبع موديول الوظائف المعتمدة — مقفول افتراضيًا)
+  { code: 'POSITION_REQUEST', nameAr: 'وظيفة جديدة / زيادة عدد', category: 'employment_status', chain: 'CHAIN_HR_EXEC', handler: 'positions_headcount', requiredFields: ['positionTitle', 'headcount', 'reason'], phase: 'P3' },
   // D12: الأنواع بلا معالج حقيقي «تسجيل فقط» (none) — القرار والوجهة القديمة في RECORD_ONLY_REQUEST_TYPES
   { code: 'SECONDMENT', nameAr: 'إعارة/انتداب لجهة أخرى', category: 'employment_status', chain: 'CHAIN_HR_EXEC', handler: 'none', phase: 'P3' },
   { code: 'RETIREMENT', nameAr: 'تقاعد', category: 'employment_status', chain: 'CHAIN_HR', handler: 'employee_status', phase: 'P3' },

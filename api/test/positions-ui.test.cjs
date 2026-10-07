@@ -5,6 +5,9 @@
 //  PU-03) النماذج: وحدة الوظيفة بتتبعت عند الإنشاء بس؛ وربط موظف للوظيفة النشطة ولصاحب الإدارة بس؛ والتوليد معاينة ثم تطبيق.
 //  PU-04) خطوة اختيار الوظيفة عند التعيين: لما الموديول مفعّل، وإجبارية مع الإنفاذ (والمليانة مقفولة ومن غير «من غير وظيفة»)، وفشل
 //         تحميل القايمة بيوقّف الحفظ، والرقم بيتبعت حمولة مع الموظف — وسطر الحفظ المثبّت زي ما هو.
+//  PU-05) الجزء (ب) — طلب «وظيفة جديدة / زيادة عدد»: الوجهة تبع الموديول ومتسمّية بالعربي في قايمة الباني وشاشة الطلبات؛ والمعتمد
+//         بيقرا الحقول بأسمائها والعدد خانة رقم صحيح؛ وحقول النموذج من الخادم فوق أي حقول زوّدها الباني؛ والقسم بيتثبّت على الطلب عند
+//         كل تقديم (مفتاحين بيكتبهم الخادم): المعتمد بيقرا اسمه، ومش حقول يحددها الباني ولا العميل.
 // Run (من api/): node --test test/positions-ui.test.cjs
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
@@ -90,4 +93,54 @@ test('PU-04: خطوة اختيار الوظيفة عند التعيين — مع
   assert.deepEqual(positionsOfUnit(options, { departmentId: 10, teamId: null }).map(row => row.id), [1, 2])
   assert.deepEqual(positionsOfUnit(options, { departmentId: null }).map(row => row.id), [1])
   assert.deepEqual(positionsOfUnit(options, { departmentId: 12, teamId: 5 }).map(row => row.id), [1])
+})
+
+test('PU-05: طلب «وظيفة جديدة / زيادة عدد» — وجهته متسمّية وتبع الموديول، والحقول بأسمائها عند المعتمد، وحقول النموذج فوق حقول الباني', () => {
+  const requests = require('../src/positions/position-requests')
+  // أي نوع بالوجهة دي (حتى لو معمول من الباني بكود تاني) تبع موديول الوظائف — فبيتقفل معاه
+  assert.equal(registry.moduleOfRequestType({ code: 'BUILDER_MADE', destinationHandler: requests.POSITION_REQUEST_HANDLER }), 'positions')
+  assert.equal(registry.moduleOfRequestType({ code: requests.POSITION_REQUEST_TYPE, destinationHandler: 'none' }), 'positions')
+  assert.deepEqual([registry.MODULES.positions.requestTypes, registry.MODULES.positions.requestHandlers], [['POSITION_REQUEST'], ['positions_headcount']])
+  // الوجهة بالعربي في قايمة الباني (من الخادم) وفي شاشة الطلبات — مش كود المعالج
+  assert.ok(read('api/src/settings/settings.controller.ts').includes("  { key: 'positions_headcount', labelAr: 'وظيفة معتمدة جديدة / زيادة عدد' },\n"))
+  assert.ok(read('src/app/requests/page.tsx').includes("  positions_headcount: 'وظيفة معتمدة جديدة / زيادة عدد',\n"))
+  // المعتمد بيقرا «المسمى الوظيفي المطلوب» و«العدد المطلوب»، والعدد خانة رقم صحيح من 1
+  const payload = require('../../src/lib/request-payload')
+  // بتسميات غير تسميات بطاقة مقدّم الطلب («المسمى الوظيفي» و«القسم») اللي بتتعرض جنبها في نافذة الاعتماد
+  assert.deepEqual([payload.payloadFieldLabel('positionTitle'), payload.payloadFieldLabel('headcount')], ['المسمى الوظيفي المطلوب', 'العدد المطلوب'])
+  assert.equal(payload.payloadFieldKind('headcount'), 'number')
+  assert.deepEqual(payload.payloadNumberProps('headcount'), { step: '1', min: '1' })
+  assert.match(payload.payloadSummary(JSON.stringify({ positionTitle: 'محاسب', headcount: 2, reason: 'توسّع' })), /المسمى الوظيفي المطلوب: محاسب/)
+  // القسم المتثبّت: المعتمد بيقرا اسمه («قسم الوظيفة»)، ورقمه (اللي الخادم كاتبه مع الاسم) مش معروض
+  assert.equal(payload.payloadFieldLabel('positionDepartment'), 'قسم الوظيفة')
+  assert.ok(payload.SERVER_PAYLOAD_KEYS.includes('positionDepartmentId'))
+  const summary = payload.payloadSummary(JSON.stringify({ positionTitle: 'محاسب', headcount: 2, reason: 'توسّع', positionDepartmentId: 12, positionDepartment: 'قسم المالية' }))
+  assert.match(summary, /قسم الوظيفة: قسم المالية/)
+  assert.doesNotMatch(summary, /12|position/i)
+  // والخادم بيثبّته عند كل تقديم وإعادة تقديم فوق أي قيمة من العميل (المفتاحين مسموحين في الحمولة عشان المتخزّنة تعدّي بس)
+  const service = read('api/src/requests/requests.service.ts')
+  assert.deepEqual([...requests.POSITION_REQUEST_STAGED_KEYS], ['positionDepartmentId', 'positionDepartment'])
+  assert.ok(service.includes("  [POSITION_REQUEST_HANDLER]: ['positionTitle', 'headcount', ...POSITION_REQUEST_STAGED_KEYS],\n"))
+  assert.ok(service.includes('    if (type.destinationHandler === POSITION_REQUEST_HANDLER) req.payload = JSON.stringify(await stagePositionRequest(em, req))\n'))
+  // التثبيت في مسار التقديم نفسه (submitLocked) اللي إعادة التقديم بتعدّي عليه، وقبل حل السلسلة والحفظ
+  const submit = service.slice(service.indexOf('  private async submitLocked('), service.indexOf('  private async leaveTimesInYear('))
+  assert.ok(submit.indexOf('this.assertPayloadKeys(type, req.payload, branchScopeOf(user))') < submit.indexOf('await stagePositionRequest(em, req)'))
+  assert.ok(submit.indexOf('await stagePositionRequest(em, req)') < submit.indexOf('await this.resolveChain(type, req, em, branchScopeOf(user))'))
+  assert.match(service, /      req\.status = 'DRAFT'\n      await em\.getRepository\(Request\)\.save\(req\)\n      return this\.submitLocked\(user, id, em, true\)\n/)
+  // حقول النموذج: التلاتة بتوع الوجهة الأول (والمسمى اختيارات الكتالوج)، وبعدهم حقول الباني — ومفتاح الباني اللي بنفس اسم حقل الوجهة مابيكتبش فوقه
+  const plain = requests.positionRequestFields(['محاسب'], { requiredFields: null, customFields: null })
+  assert.deepEqual(JSON.parse(plain.requiredFields), ['positionTitle', 'headcount', 'reason'])
+  assert.deepEqual(JSON.parse(plain.customFields).map(field => [field.key, field.type, field.required]), [['positionTitle', 'select', true], ['headcount', 'number', true], ['reason', 'text', true]])
+  assert.deepEqual(JSON.parse(plain.customFields)[0].options, ['محاسب'])
+  const built = requests.positionRequestFields(['محاسب'], { requiredFields: JSON.stringify(['neededBy', 'budgetLine']),
+    customFields: JSON.stringify([{ key: 'neededBy', label: 'مطلوب قبل', type: 'date', required: true }, { key: 'headcount', label: 'عدد مغشوش', type: 'text' },
+      { key: 'positionDepartmentId', label: 'قسم من الباني', type: 'number' }]) })
+  assert.deepEqual(JSON.parse(built.requiredFields), ['positionTitle', 'headcount', 'reason', 'neededBy', 'budgetLine'])
+  // ومفتاحَي الخادم مش حقول ولا إلزام يحدده الباني
+  assert.deepEqual(JSON.parse(requests.positionRequestFields([], { requiredFields: JSON.stringify(['positionDepartment']), customFields: JSON.stringify([{ key: 'positionDepartment', label: 'قسم', type: 'text' }]) }).customFields)
+    .map(field => field.key), ['positionTitle', 'headcount', 'reason'])
+  assert.deepEqual(JSON.parse(built.customFields).map(field => [field.key, field.label, field.type]), [['positionTitle', 'المسمى الوظيفي المطلوب', 'select'], ['headcount', 'العدد المطلوب', 'number'],
+    ['reason', 'سبب الطلب', 'text'], ['neededBy', 'مطلوب قبل', 'date'], ['budgetLine', 'budgetLine', 'text']])
+  // إعداد تالف على النوع مايوقّعش النموذج
+  assert.deepEqual(JSON.parse(requests.positionRequestFields([], { requiredFields: '{', customFields: 'x' }).requiredFields), ['positionTitle', 'headcount', 'reason'])
 })

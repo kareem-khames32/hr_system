@@ -70,6 +70,7 @@ import { assertEmployeeSchedulesFitBranch } from '../attendance/attendance-rule-
 import { assertLeaveOutsideSuspension } from '../employees/employee-suspension-overlap'
 import { DATA_PLACEHOLDER_REJECTED, isDataPlaceholder } from '../common/data-placeholders'
 import { applyPersonalDataRequest, PERSONAL_DATA_COLUMNS } from './personal-data-requests'
+import { executePositionRequest, POSITION_REQUEST_HANDLER } from '../positions/position-requests'
 
 // ناتج تنفيذ الوجهة: المرجع الدائم + هل اكتمل فوراً أم ينتظر (سريان/تأكيد استلام)
 export interface DestinationResult {
@@ -1060,6 +1061,8 @@ export class DestinationsService {
     employee_update_promotions: this.promotionHandler,
     employee_update: this.promotionHandler,
     contracts_register: executeContract,
+    // B2.11-ب: «وظيفة جديدة / زيادة عدد» — الاعتماد بيعمل الوظيفة المعتمدة أو يزوّد عددها
+    [POSITION_REQUEST_HANDLER]: executePositionRequest,
     shift_schedule: executeShiftSwap,
     // بيانات شخصية
     employee_record: this.personalDataHandler,

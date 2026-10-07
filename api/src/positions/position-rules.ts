@@ -16,6 +16,17 @@ export async function positionsReady(em: EntityManager): Promise<boolean> {
 }
 /** للاختبارات: نسيان حالة الجدولين */
 export function resetPositionsCache() { ready = null }
+
+/**
+ * قفل إنشاء الوظائف (على مستوى الشركة، لآخر المعاملة): التوليد من الموجود وتنفيذ طلب «وظيفة جديدة / زيادة عدد» واحد ورا التاني — عشان
+ * اتنين مايعملوش وظيفة لنفس المسمى على نفس الوحدة. false = القفل مااتاخدش في مهلته.
+ */
+export async function lockPositionCreation(em: EntityManager): Promise<boolean> {
+  const rows = await em.query(`DECLARE @result int;
+    EXEC @result = sys.sp_getapplock @Resource = N'hr:positions:generate', @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 15000;
+    SELECT @result AS [lockResult];`)
+  return rows.length > 0 && Number(rows[0].lockResult) >= 0
+}
 /** الميزة الفرعية: التعيين لازم على وظيفة معتمدة فيها شاغر (مقفولة افتراضيًا) */
 export const POSITIONS_ENFORCE_FEATURE = 'positions.enforce_on_hiring'
 export const POSITION_STATUS_LABELS: Record<PositionStatus, string> = { ACTIVE: 'نشطة', FROZEN: 'مجمّدة', CANCELLED: 'ملغية' }

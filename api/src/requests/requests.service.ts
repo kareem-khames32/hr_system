@@ -102,6 +102,7 @@ import { ModulesService } from '../modules-registry/modules.service'
 import { moduleOfRequestType } from '../modules-registry/registry'
 import { onePersonControlEnabled } from '../payroll/one-person-controls'
 import { assertPersonalDataKeys, PERSONAL_DATA_HANDLER, validatePersonalDataRequest } from './personal-data-requests'
+import { POSITION_REQUEST_HANDLER, POSITION_REQUEST_STAGED_KEYS, positionRequestFields, positionRequestTitles, stagePositionRequest } from '../positions/position-requests'
 import { recordOutboxEvent } from '../queue/outbox'
 // CR36-B01 وCR37-B01: مرجع المسير في إضافي تفاصيل الطلب ونص أحداثه بقاعدة رؤية المسير
 import { payloadRunIds, payrollRunPeriods, payrollRunRefVisibility, scopeRunRefRows, scrubEventReferences } from '../payroll/payroll-run-visibility'
@@ -161,6 +162,8 @@ const HANDLER_PAYLOAD_KEYS: Record<string, string[]> = {
   // C6: حقول السلفة من العميل + ما يكتبه الخادم عند التقديم والاعتماد (create/resubmit يرفضان الأخيرة من العميل)
   loans_installments: [...LOAN_REQUEST_CLIENT_FIELDS, ...LOAN_REQUEST_SERVER_FIELDS],
   loan_early_settlement: ['loanId', ...EARLY_SETTLEMENT_FIELDS],
+  // B2.11-ب: «وظيفة جديدة / زيادة عدد». القسم مش من العميل: الخادم بيثبّته عند كل تقديم (مفتاحيه هنا عشان الحمولة المتخزّنة تعدّي عند إعادة التقديم)
+  [POSITION_REQUEST_HANDLER]: ['positionTitle', 'headcount', ...POSITION_REQUEST_STAGED_KEYS],
 }
 
 // C4 / الخطوة 27: المكافأة لا تُقترح عبر محرك الطلبات (كانت تُقيد لمقدم الطلب لا للمستفيد، وتسمح بمكافأة للنفس، وبلا فترة).
@@ -225,6 +228,8 @@ export class RequestsService {
     const chains = await this.chains.find()
     const letterTypes = await this.letterTemplates.availableTypeCodes()
     const actualLoanType = await this.types.findOneBy({ code: 'LOAN' })
+    // B2.11-ب: اختيارات خانة المسمى في طلب «وظيفة جديدة / زيادة عدد» من كتالوج المسميات (لو فيه نوع مفعّل بالوجهة دي بس)
+    const positionTitles = (await this.types.count({ where: { isActive: true, destinationHandler: POSITION_REQUEST_HANDLER } })) ? await positionRequestTitles(this.ds.manager) : []
     const every = (
       await this.types.find({
         where: { isActive: true },
@@ -250,6 +255,7 @@ export class RequestsService {
         ? letterTypes.has(t.code)
         : t.autoGeneratesPdf,
       ...this.executionFormFields(t),
+      ...(t.destinationHandler === POSITION_REQUEST_HANDLER ? positionRequestFields(positionTitles, t) : {}),
       ...(t.code === 'RETIREMENT' ? {
         requiredFields: JSON.stringify([...new Set([...JSON.parse(t.requiredFields || '[]'), 'effectiveDate'])]),
       } : {}),
@@ -543,6 +549,9 @@ export class RequestsService {
     await validateEmploymentRequest(em, req, type)
     // «تحديث بيانات شخصية»: نفس فحوص الاعتماد النهائي بدري (الشكل والإلزام والتفرد) — ولا حاجة بتتطبق قبل الاعتماد
     if (type.destinationHandler === PERSONAL_DATA_HANDLER) await validatePersonalDataRequest(em, req)
+    // B2.11-ب: «وظيفة جديدة / زيادة عدد»: المسمى من الكتالوج والعدد (نفس فحوص الاعتماد النهائي بدري)، وقسم الوظيفة بيتثبّت على الطلب
+    // من قسم مقدّمه دلوقتي — عند كل تقديم وإعادة تقديم، فوق أي قيمة جاية من العميل
+    if (type.destinationHandler === POSITION_REQUEST_HANDLER) req.payload = JSON.stringify(await stagePositionRequest(em, req))
     if (type.destinationHandler === 'custody_transfer') {
       const payload = JSON.parse(req.payload || '{}')
       await custodyTransferTarget(em, Number(payload.assignmentId), Number(payload.toEmployeeId), req, user)

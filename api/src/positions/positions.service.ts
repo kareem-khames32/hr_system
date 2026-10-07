@@ -11,7 +11,7 @@ import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
 import { ApprovedPosition, PositionHolder, type PositionStatus } from './position.entities'
 import {
-  cleanBudget, cleanHeadcount, cleanNewPosition, generationKey, inPositionUnit, isPositionStatus, normalTitle, occupiesSeat, positionCode, positionsReady, seatCounts, seatVerdict,
+  cleanBudget, cleanHeadcount, cleanNewPosition, generationKey, inPositionUnit, isPositionStatus, lockPositionCreation, normalTitle, occupiesSeat, positionCode, positionsReady, seatCounts, seatVerdict,
   POSITION_STATUS_LABELS, POSITIONS_ENFORCE_FEATURE, POSITIONS_MIGRATION_MISSING, POSITION_REQUIRED, SEAT_FREEING_STATUSES,
   type EmployeeUnit, type PositionInput, type SeatVerdict,
 } from './position-rules'
@@ -22,13 +22,20 @@ import {
 //  لوحدهم من غير ما مساراتهم تتلمس.
 //  عند التعيين (EmployeesService.create) والربط من الشاشة: الحكم وصف الوظيفة مقفول، فتعيينين على آخر مقعد واحد بس بيعدّي. ترتيب الأقفال
 //  في كل المسارات: صف الوظيفة ثم صف الموظف.
-//  قبل ترحيل 097: الشاشة بتقول إن الترحيل ناقص، والتعيين زي ما هو.
+//  قبل ترحيل 097: الشاشة بتقول إن الترحيل ناقص، والتعيين زي ما هو — إلا والإنفاذ مفعّل: مرفوض برسالة الترحيل.
 
 const FREEING_SQL = SEAT_FREEING_STATUSES.map(status => `N'${status}'`).join(', ')
 /** الموظف [e] شاغل مقعد وظيفته [p]: خدمته ماانتهتش، ولسه في وحدتها */
 const SEATED_SQL = `([e].[status] IS NULL OR [e].[status] NOT IN (${FREEING_SQL})) AND [e].[branchId] = [p].[branchId]
   AND ([p].[departmentId] IS NULL OR [e].[departmentId] = [p].[departmentId]) AND ([p].[teamId] IS NULL OR [e].[teamId] = [p].[teamId])`
 const GENERATE_LIMIT = 500
+/**
+ * قسم مسجّل على وظيفة أو على موظفين وهو مش تبع فرعهم (قسم اتنقل لفرع تاني وهم فضلوا): مابيتسمّاش — اسمه بتاع فرع تاني — وبيتكتب مكانه
+ * النص ده، ومفيش وظيفة بتتولّد عليه (الوظيفة قسمها لازم تبع فرعها، زي الإنشاء من الشاشة).
+ */
+const FOREIGN_UNIT = 'قسم برّه الفرع'
+const FOREIGN_UNIT_REASON = 'قسمهم مش تبع فرعهم — صحّح القسم أو الفرع على ملفاتهم الأول'
+const unitName = (department: Department | undefined, branchId: number): string | null => !department ? null : department.branchId === branchId ? department.name : FOREIGN_UNIT
 
 /** مقعد اتحجز لموظف لسه بيتعمل (جوه معاملة الإنشاء) */
 export interface HireSeat { positionId: number }
@@ -75,12 +82,18 @@ export class PositionsService {
   }
 
   /**
-   * قبل ما صف الموظف الجديد يتعمل: الموديول مقفول أو قبل الترحيل = null والتعيين زي ما هو (الخانة بتتجاهل). غير كده صف الوظيفة بيتقفل
+   * قبل ما صف الموظف الجديد يتعمل: الموديول مقفول = null والتعيين زي ما هو (الخانة بتتجاهل)، وقبل الترحيل كمان إلا والإنفاذ مفعّل (مرفوض). غير كده صف الوظيفة بيتقفل
    * لآخر المعاملة وبيتحكم: في فرع الموظف وقسمه وفريقه، ونشطة، وفيها شاغر لو الإنفاذ مفعّل؛ ومن غير وظيفة والإنفاذ مفعّل مرفوض.
    * mode: من hiringMode() قبل المعاملة.
    */
   async seatForHire(em: EntityManager, mode: HiringMode, positionId: unknown, unit: EmployeeUnit): Promise<HireSeat | null> {
-    if (!mode.active || !(await positionsReady(em))) return null
+    if (!mode.active) return null
+    if (!(await positionsReady(em))) {
+      // قبل الترحيل ومن غير الإنفاذ: التعيين زي ما هو (الخانة بتتجاهل). والإنفاذ مفعّل والجدولين مش موجودين: مرفوض برسالة الترحيل —
+      // حالة مش معروفة بتقفل، مش تعيين بيعدّي من غير الإنفاذ اللي مدير النظام فعّله
+      if (mode.enforce) throw new BadRequestException(POSITIONS_MIGRATION_MISSING)
+      return null
+    }
     const enforce = mode.enforce
     if (positionId === undefined || positionId === null) {
       if (enforce) throw new BadRequestException(POSITION_REQUIRED)
@@ -122,8 +135,9 @@ export class PositionsService {
       jobTitleId: row.jobTitleId, title: names.titles.get(row.jobTitleId)?.title ?? '—',
       gradeId: row.gradeId, gradeName: row.gradeId ? names.grades.get(row.gradeId)?.name ?? null : null,
       branchId: row.branchId, branchName: names.branches.get(row.branchId)?.name ?? null,
-      departmentId: row.departmentId, departmentName: row.departmentId ? names.departments.get(row.departmentId)?.name ?? null : null,
-      teamId: row.teamId, teamName: row.teamId ? names.teams.get(row.teamId)?.name ?? null : null,
+      departmentId: row.departmentId, departmentName: row.departmentId ? unitName(names.departments.get(row.departmentId), row.branchId) : null,
+      // الفريق بيتسمّى طول ما قسمه تبع فرع الوظيفة
+      teamId: row.teamId, teamName: row.teamId && names.departments.get(row.departmentId ?? 0)?.branchId === row.branchId ? names.teams.get(row.teamId)?.name ?? null : null,
       costCenterId: row.costCenterId, costCenterName: row.costCenterId ? names.centers.get(row.costCenterId)?.name ?? null : null,
       headcount: row.headcount, status: row.status, statusLabel: POSITION_STATUS_LABELS[row.status] ?? row.status, budget: budgetText(row.budget),
       ...seatCounts(row, occupied.get(row.id) ?? 0), createdAt: row.createdAt,
@@ -178,7 +192,7 @@ export class PositionsService {
       const departments = wanted.length ? await em.getRepository(Department).find({ where: { id: In(wanted) } }) : []
       for (const line of nameless) {
         line.branchName = branches.find(row => row.id === line.branchId)?.name ?? line.branchName
-        if (line.departmentId != null) line.departmentName = departments.find(row => row.id === line.departmentId)?.name ?? line.departmentName
+        if (line.departmentId != null) line.departmentName = unitName(departments.find(row => row.id === line.departmentId), line.branchId) ?? line.departmentName
       }
     }
     const summary = [...lines.values()].sort((a, b) => a.branchId - b.branchId || (a.departmentId ?? 0) - (b.departmentId ?? 0))
@@ -418,6 +432,11 @@ export class PositionsService {
       group.employeeIds.push(Number(row.id))
     }
     const list = [...groups.values()]
+    // قسم المجموعة لازم يكون تبع فرعها
+    const own = new Set<string>()
+    for (const part of idChunks([...new Set(list.map(group => group.departmentId).filter((id): id is number => id != null))])) {
+      for (const row of await em.getRepository(Department).find({ where: { id: In(part) } })) own.add(`${row.branchId}:${row.id}`)
+    }
     // وظيفة قايمة (مش ملغية) بنفس المسمى على مستوى نفس القسم
     const existing = new Set<string>()
     const titled = [...new Set(list.map(group => group.jobTitleId).filter((id): id is number => id != null))]
@@ -428,6 +447,7 @@ export class PositionsService {
     }
     return list.map(group => {
       const reason = !group.title ? 'من غير مسمى وظيفي على الملف' : group.jobTitleId == null ? 'المسمى مش في كتالوج المسميات'
+        : group.departmentId != null && !own.has(`${group.branchId}:${group.departmentId}`) ? FOREIGN_UNIT_REASON
         : existing.has(`${group.branchId}:${group.departmentId ?? 0}:${group.jobTitleId}`) ? 'فيه وظيفة معتمدة بنفس المسمى في نفس الوحدة — اربطهم بيها من الشاشة' : null
       return { ...group, action: reason ? 'skip' as const : 'create' as const, reason }
     })
@@ -440,7 +460,7 @@ export class PositionsService {
     const departments = wanted.length ? await em.getRepository(Department).find({ where: { id: In(wanted) } }) : []
     const groups = plan.slice(0, GENERATE_LIMIT).map(group => ({
       branchId: group.branchId, branchName: branches.find(row => row.id === group.branchId)?.name ?? null,
-      departmentId: group.departmentId, departmentName: group.departmentId == null ? null : departments.find(row => row.id === group.departmentId)?.name ?? null,
+      departmentId: group.departmentId, departmentName: group.departmentId == null ? null : unitName(departments.find(row => row.id === group.departmentId), group.branchId),
       title: group.title || null, employees: group.employeeIds.length, action: group.action, reason: group.reason,
     }))
     const creating = plan.filter(group => group.action === 'create')
@@ -463,10 +483,7 @@ export class PositionsService {
   async generate(user: JwtPayload) {
     return this.ds.transaction(async em => {
       if (!(await positionsReady(em))) throw new BadRequestException(POSITIONS_MIGRATION_MISSING)
-      const lock = await em.query(`DECLARE @result int;
-        EXEC @result = sys.sp_getapplock @Resource = N'hr:positions:generate', @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 15000;
-        SELECT @result AS [lockResult];`)
-      if (!lock.length || Number(lock[0].lockResult) < 0) throw new ConflictException('توليد الوظائف شغال دلوقتي من حد تاني؛ جرّب تاني بعد شوية')
+      if (!(await lockPositionCreation(em))) throw new ConflictException('توليد الوظائف شغال دلوقتي من حد تاني؛ جرّب تاني بعد شوية')
       const plan = await this.generationPlan(em, branchScopeOf(user))
       const holders = em.getRepository(PositionHolder), positions = em.getRepository(ApprovedPosition)
       let created = 0, linked = 0
