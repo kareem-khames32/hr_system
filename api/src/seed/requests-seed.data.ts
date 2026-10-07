@@ -339,6 +339,10 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'leave.carryover_expiry_months', value: '3' },
   // تهيئة الموظفين الجدد: يظهر الموظف في شاشة التهيئة حتى N يوم من تاريخ التحاقه
   { key: 'onboarding.window_days', value: '90' },
+  // B3.1-ج: مهمة قرار فترة التجربة بتتفتح على المدير قبل النهاية بكام يوم (0 = من غير مهمة)، ومدة التجربة الافتراضية بالأيام لملف
+  // من غير تاريخ نهاية (0 = من غير مدة افتراضية)
+  { key: 'onboarding.probation_notice_days', value: '14' },
+  { key: 'onboarding.probation_days', value: '0' },
   // عملة النظام: SAR أو EGP — كل الشاشات تقرأها
   { key: 'system.currency', value: 'SAR' },
   // دولة النظام الافتراضية: العطلة الرسمية الجديدة بلا دولة صريحة تأخذ الرمز ده.

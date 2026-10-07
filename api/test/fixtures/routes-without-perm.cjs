@@ -167,6 +167,9 @@ const EXCEPTIONS = {
   'PayrollApprovalChainController.runChain': 'SERVICE_CHECK', // GET /payroll/runs/:id/approval-chain
   'PayrollController.payslip': 'SERVICE_CHECK', // GET /payroll/items/:id
   'PortalController.calendar': 'SERVICE_CHECK', // GET /calendar
+  // B3.1-ج: فترات التجربة — القايمة بعرض الموظفين في نطاق الفروع أو للمدير المباشر، والقرار للمدير المباشر أو الموارد البشرية (الحكم في الخدمة)
+  'ProbationController.decide': 'SERVICE_CHECK', // POST /probation/:employeeId/decision
+  'ProbationController.list': 'SERVICE_CHECK', // GET /probation
   'QualificationsController.all': 'SERVICE_CHECK', // GET /employees/:id/qualifications
   'RequestsController.act': 'SERVICE_CHECK', // POST /requests/:id/act
   'RequestsController.cancel': 'SERVICE_CHECK', // POST /requests/:id/cancel

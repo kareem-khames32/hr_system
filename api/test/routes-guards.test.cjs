@@ -130,8 +130,9 @@ test('RG-03: قايمة الاستثناءات من غير بنود قديمة،
   // B2.16: +3 SELF (لوحة الإعلانات، وتسجيل القراءة، ومناسبات زمايل الفرع — الموظف لنفسه)
   // B2.17: +1 PUBLIC_OK (الخروج) و+1 SELF (بيانات الجلسة)؛ B2.17-ب: +3 SELF («جلساتي» وإنهاؤها)
   // B2.17-ج: +4 SELF (تطبيق المصادقة: الحالة والتفعيل والتأكيد والإلغاء)
-  assert.deepEqual(counts, { PUBLIC_OK: 10, SELF: 47, AUTH_ANY_OK: 11, SERVICE_CHECK: 96 })
-  assert.equal(handlers.filter(handler => handler.perms.length === 0).length, 164)
+  // B3.1-ج: +2 SERVICE_CHECK (قايمة فترات التجربة وقرارها — الحق في الخدمة)
+  assert.deepEqual(counts, { PUBLIC_OK: 10, SELF: 47, AUTH_ANY_OK: 11, SERVICE_CHECK: 98 })
+  assert.equal(handlers.filter(handler => handler.perms.length === 0).length, 166)
   // من غير حارس دخول = العام بس
   const open = handlers.filter(handler => !guarded(handler, JwtAuthGuard)).map(handler => handler.id).sort()
   assert.deepEqual(open, Object.keys(EXCEPTIONS).filter(id => EXCEPTIONS[id] === 'PUBLIC_OK').sort())
@@ -241,7 +242,7 @@ test('RG-05: كل مهمة مجدولة بتسأل عن موديولها باس�
   const workFiles = ['attendance/attendance-scheduler.service.ts', 'attendance/device-sync.service.ts', 'offboarding/offboarding.service.ts',
     'payroll/payroll-daily-accrual.scheduler.ts', 'payroll/typed-deductions-scheduler.service.ts', 'requests/leave-attachment-deadline.job.ts',
     'requests/requests-scheduler.service.ts', 'requests/requests.service.ts', 'queue/queue.service.ts', 'notifications/notifications.service.ts',
-    'tasks/tasks.service.ts', 'reports/saved-reports.service.ts'].map(file => path.join(apiRoot, 'src', file))
+    'tasks/tasks.service.ts', 'reports/saved-reports.service.ts', 'onboarding/probation.service.ts'].map(file => path.join(apiRoot, 'src', file))
   for (const file of files) {
     const source = fs.readFileSync(file, 'utf8')
     assert.doesNotMatch(source, /^\s*@Cron\(/m, `${path.relative(apiRoot, file)}: الموعد بيعدي على @Scheduled`)
@@ -256,7 +257,8 @@ test('RG-05: كل مهمة مجدولة بتسأل عن موديولها باس�
   }
   // عدد المواعيد مثبّت (12 + مسح سجل المهام): مهمة جديدة لازم تتسجّل في السجل وتتغطى في modules-enforcement (ME-05). B2.3: + أحداث المستندات
   // B2.4: + الملخص اليومي لإشعارات البريد. B2.5: + تذكير وتصعيد المهام. B2.13: + التقارير المجدولة بالبريد
-  assert.equal(crons, 16)
+  // B3.1-ج: + مهام قرار فترة التجربة
+  assert.equal(crons, 17)
   const registered = registry.MODULE_KEYS.flatMap(key => registry.MODULES[key].jobs)
   assert.deepEqual([...used].sort(), [...registered].sort())
   assert.deepEqual([...scheduled].sort(), [...registered].sort())

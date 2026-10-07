@@ -231,8 +231,10 @@ export const MODULES = {
   // ===== دورة الموظف =====
   onboarding: moduleDef({
     nameAr: 'التهيئة', group: 'people', dependsOn: ['employees'], softUses: ['documents'],
-    description: 'مهام تهيئة الموظف الجديد',
-    routes: ['/employees/onboarding'],
+    description: 'مهام تهيئة الموظف الجديد، وقرار فترة التجربة',
+    routes: ['/employees/onboarding', '/my/probation'],
+    // B3.1-ج: مهمة «قرار فترة التجربة» على المدير قبل نهايتها
+    jobs: ['onboarding.probation-tasks'],
     features: {
       // B3.1-ب: حساب الموظف اللي مباشرته لسه جاية بيفتح بوابة التهيئة بس — مقفولة لحد ما الشركة تقرر
       'onboarding.preboarding': {

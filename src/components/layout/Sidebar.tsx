@@ -22,6 +22,7 @@ import { PoweredBy } from '@/components/branding/PoweredBy'
 import { InstallAppButton } from './InstallAppButton'
 import {
   LayoutDashboard,
+  Hourglass,
   Users,
   Clock,
   Calendar,
@@ -461,6 +462,10 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
         : []),
       { id: 'my-tasks', label: 'مهامي', icon: <ListChecks size={20} />, href: '/my/tasks', badge: tasksCount },
       ...(teamManager ? [{ id: 'my-team', label: 'فريقي', icon: <Users size={20} />, href: '/my/team' } satisfies MenuItem] : []),
+      // B3.1-ج: قرار فترة التجربة — للمدير (مرؤوسيه) وللموارد البشرية (عرض الموظفين)
+      ...(teamManager || can('employees.view')
+        ? [{ id: 'my-probation', label: 'فترات التجربة', icon: <Hourglass size={20} />, href: '/my/probation' } satisfies MenuItem]
+        : []),
       { id: 'my-attendance', label: 'حضوري', icon: <Clock size={20} />, href: '/my/attendance' },
       { id: 'my-leaves', label: 'إجازاتي وأرصدتي', icon: <Calendar size={20} />, href: '/my/leaves' },
       { id: 'my-payslips', label: 'قسائم راتبي', icon: <Wallet size={20} />, href: '/my/payslips' },

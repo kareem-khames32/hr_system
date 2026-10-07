@@ -12,6 +12,7 @@ import { QueueService } from '../queue/queue.service'
 import { NotificationsService } from '../notifications/notifications.service'
 import { TasksService } from '../tasks/tasks.service'
 import { SavedReportsService } from '../reports/saved-reports.service'
+import { ProbationService } from '../onboarding/probation.service'
 import { Scheduled } from './scheduled-jobs'
 import { ScheduledJobsService } from './scheduled-jobs.service'
 
@@ -94,6 +95,12 @@ export class ScheduledJobsRunner {
   @Scheduled('tasks.reminders')
   tasksReminders() {
     return this.jobs.tick('tasks.reminders', () => this.use(TasksService).runReminders())
+  }
+
+  // B3.1-ج: مهمة «قرار فترة التجربة» على مدير كل موظف نهايته قربت
+  @Scheduled('onboarding.probation-tasks')
+  probationTasks() {
+    return this.jobs.tick('onboarding.probation-tasks', () => this.use(ProbationService).raiseDecisionTasks())
   }
 
   // B2.13-ب: التقارير المحفوظة المستحقة النهارده لبريد أصحابها

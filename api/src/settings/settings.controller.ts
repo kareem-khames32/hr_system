@@ -676,6 +676,9 @@ export class SettingsController {
     'payroll.attendance_daily_cap_days': 0,
     'attendance.absence_catchup_max_days': 1, // لحاق الغياب — يوم على الأقل
     'onboarding.window_days': 1, // نافذة شاشة التهيئة — يوم على الأقل
+    // B3.1-ج: أيام مهمة قرار التجربة قبل النهاية، ومدة التجربة الافتراضية (0 = مقفول)
+    'onboarding.probation_notice_days': 0,
+    'onboarding.probation_days': 0,
     'overtime.detection_threshold_hours': 0,
     'overtime.rounding_minutes': 1,
     'overtime.request_backdate_days': 0,

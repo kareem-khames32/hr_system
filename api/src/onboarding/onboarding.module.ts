@@ -11,6 +11,8 @@ import { OnboardingTask, OnboardingTemplateItem } from './onboarding.entities'
 import { OnboardingTemplate } from './onboarding-template.entity'
 import { OnboardingController } from './onboarding.controller'
 import { OnboardingService } from './onboarding.service'
+import { ProbationController } from './probation.controller'
+import { ProbationService } from './probation.service'
 
 // تهيئة الموظفين الجدد: قالب مهام + مهام لكل موظف بجهة مسؤولة وموعد
 @Module({
@@ -29,9 +31,9 @@ import { OnboardingService } from './onboarding.service'
       Branch,
     ]),
   ],
-  controllers: [OnboardingController],
-  providers: [OnboardingService, ApproverResolver],
-  // B2.5: «مهامي» بيقرا مهام التهيئة اللي على جهة الحساب من الخدمة نفسها
-  exports: [OnboardingService],
+  controllers: [OnboardingController, ProbationController],
+  providers: [OnboardingService, ProbationService, ApproverResolver],
+  // B2.5: «مهامي» بيقرا مهام التهيئة اللي على جهة الحساب من الخدمة نفسها. B3.1-ج: والمهمة اليومية بتنادي خدمة فترة التجربة
+  exports: [OnboardingService, ProbationService],
 })
 export class OnboardingModule {}

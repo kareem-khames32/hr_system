@@ -44,6 +44,8 @@ export const SCHEDULED_JOBS = {
     label: 'الملخص اليومي لإشعارات البريد', schedule: 'فحص كل ساعة عند الدقيقة 5 — الإرسال في الساعة المضبوطة (افتراضي 8 الصبح)' },
   'tasks.reminders': { cron: '30 7 * * *', module: 'tasks.reminders', lock: 'tasks.reminders',
     label: 'تذكير المهام وتصعيد المتأخر منها', schedule: 'كل يوم 07:30' },
+  'onboarding.probation-tasks': { cron: '40 7 * * *', module: 'onboarding.probation-tasks', lock: 'onboarding.probation-tasks',
+    label: 'مهام قرار فترة التجربة قبل نهايتها', schedule: 'كل يوم 07:40' },
   'reports.scheduled': { cron: '20 * * * *', module: 'reports.scheduled', lock: 'reports.scheduled',
     label: 'إرسال التقارير المجدولة بالبريد', schedule: 'فحص كل ساعة عند الدقيقة 20 — الإرسال من الساعة 7 الصبح' },
   'scheduler.prune-runs': { cron: '40 3 * * *', module: null, lock: 'scheduler.prune-runs',
