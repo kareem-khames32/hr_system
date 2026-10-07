@@ -38,6 +38,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   [/^\/offboarding\/\d+(\/|$)/, 'ملف إنهاء الخدمة'],
   ['/offboarding', 'إنهاء الخدمة'],
   ['/tasks', 'المهام'],
+  ['/positions', 'الوظائف المعتمدة'],
   ['/policies/reports', 'تقرير الإقرارات'],
   ['/policies', 'مكتبة السياسات'],
   // الحضور والانصراف

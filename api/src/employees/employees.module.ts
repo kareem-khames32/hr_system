@@ -29,6 +29,7 @@ import { EmployeeCustomField, EmployeeCustomValue } from './employee-custom-fiel
 import { EmployeeCustomFieldsController, EmployeeFieldsSettingsController } from './employee-custom-fields.controller'
 import { EmployeeCustomFieldsService } from './employee-custom-fields.service'
 import { EmploymentPeriod } from './employment-period.entity'
+import { PositionsModule } from '../positions/positions.module'
 
 @Module({
   imports: [
@@ -62,6 +63,8 @@ import { EmploymentPeriod } from './employment-period.entity'
     // حساب الدخول من الدومين للموظف الجديد في لحظته — DomainSyncService من AuthModule،
     // فمفيش روتين إنشاء تاني. AuthModule مابيستوردش EmployeesModule (بياخد الكيان لوحده) فمفيش حلقة.
     AuthModule,
+    // B2.11: حكم الوظيفة المعتمدة جوه معاملة إنشاء الموظف. PositionsModule مابيستوردش EmployeesModule فمفيش حلقة.
+    PositionsModule,
   ],
   controllers: [EmployeesController, QualificationsController, EmployeeSelfPhotoController, EmployeeFieldsSettingsController, EmployeeCustomFieldsController],
   providers: [EmployeesService, EmployeeExportService, EmployeeCustomFieldsService],

@@ -47,6 +47,7 @@ import { applyEmployeeSalaryChange, documentInitialEmployeeSalary, employeeSalar
 import { payrollPeriodBounds, payrollPeriodOfDate } from '../payroll/payroll-period'
 import { localDateOf } from '../attendance/attendance.service'
 import { withDeadlockRetry } from '../attendance/device-sync.service'
+import { PositionsService } from '../positions/positions.service'
 import { readSalaryHistory, readSalaryHistoryCurrent, SALARY_HISTORY_MONEY_KEYS,
   salaryHistoryMoney, salaryHistorySchemaMissing } from '../payroll/payroll-salary-history'
 import { AttendanceDay } from '../attendance/attendance.entities'
@@ -127,7 +128,9 @@ export class EmployeesService {
     private readonly attendance: AttendanceService,
     // اختيارية وفي الآخر عن قصد: الاختبارات اللي بتعمل الخدمة بإيدها بترسل عشر حقن،
     // وغياب الخدمة معناه إن التزويد بيتخطّى بصمت — إضافة الموظف مش بتتعطّل أبدًا
-    @Optional() private readonly domainSync?: DomainSyncService
+    @Optional() private readonly domainSync?: DomainSyncService,
+    // B2.11: حكم الوظيفة المعتمدة عند التعيين — اختيارية وفي الآخر زي اللي فوقها: اللي بيعمل الخدمة بإيده من غيرها التعيين عنده زي ما هو
+    @Optional() private readonly positions?: PositionsService
   ) {}
 
   // مرفق العقد → مستند نوعه «عقد» مربوط بالموظف (يظهر في مستنداته)
@@ -472,11 +475,14 @@ export class EmployeesService {
       attendanceChangeReason,
       salaryEffectivePayrollPeriod,
       salaryEvidenceReference,
+      positionId,
       ...empDto
     } = dto as CreateEmployeeDto & {
       openingBalanceDays?: number
       openingBalanceExpiry?: string | null
     }
+    // B2.11: حالة موديول الوظائف المعتمدة وإنفاذه بتتقري قبل المعاملة (قراءتها جواها محتاجة اتصال تاني والمعاملة ماسكة اتصالها)
+    const hiring = this.positions ? await this.positions.hiringMode() : null
     const emp = await this.employees.manager.transaction(async em => {
       await lockAttendanceRuleMutation(em)
       // التفرد جوه المعاملة تحت القفل (CR17-B01)
@@ -484,7 +490,11 @@ export class EmployeesService {
       await this.assertUnique(dto, branchScope, undefined, em)
       const employeeCode = await generateEmployeeCode(em)
       const currency = await readBranchCurrency(em, dto.branchId)
+      // B2.11: الوظيفة المعتمدة بتتحكم وصفها بيتقفل قبل ما صف الموظف يتعمل (نفس ترتيب الربط من شاشة الوظائف: الوظيفة ثم الموظف).
+      // الموديول مقفول أو قبل ترحيل 097 = null والتعيين زي ما هو
+      const seat = hiring ? await this.positions!.seatForHire(em, hiring, positionId, { branchId: dto.branchId, departmentId: dto.departmentId ?? null, teamId: dto.teamId ?? null }) : null
       const result = await em.save(Employee, em.create(Employee, { ...(empDto as Partial<Employee>), employeeCode, currency }))
+      if (seat) await this.positions!.seatHired(em, seat, result.id, actorId)
       {
         const change = attendanceRuleChange({ effectiveFrom: attendanceEffectiveFrom, changeReason: attendanceChangeReason }, true)
         // المصدر قبل إنشاء الموظف لا يحمل إسنادًا سابقًا؛ لا ننسب الدوام الحالي للماضي.

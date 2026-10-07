@@ -10,6 +10,8 @@ import { candidateHireBlock, candidateHireInitial, candidateIdFromSearch } from 
 import { clearEmployeeAddDraft } from '@/lib/employee-add-draft'
 import { saveQualifications } from '@/lib/save-qualifications'
 import { useModuleEnabled } from '@/lib/modules'
+import PositionPickModal from '@/components/positions/PositionPickModal'
+import { fetchPositionOptions, positionsOfUnit, type ApiPositionOption } from '@/lib/positions-api'
 
 export default function AddEmployeePage() {
   const [submitting, setSubmitting] = useState(false)
@@ -40,14 +42,35 @@ export default function AddEmployeePage() {
       .catch((err) => setCandidateError(err instanceof Error ? err.message : 'تعذر تحميل بيانات المرشح'))
   }, [recruitmentOn])
 
-  const handleSubmit = async (payload: EmployeeFormPayload) => {
+  // B2.11: موديول الوظائف المعتمدة مفعّل = خطوة اختيار الوظيفة قبل الحفظ. الإنفاذ مفعّل: إجبارية. غير كده اختيارية، وبتتخطّى لو مفيش
+  // وظائف في وحدة الموظف. الحكم النهائي في الخادم جوه معاملة الإنشاء.
+  const positionsOn = useModuleEnabled('positions')
+  const seat = useRef<number | null>(null)
+  const [seatStep, setSeatStep] = useState<{ payload: EmployeeFormPayload; options: ApiPositionOption[]; enforce: boolean } | null>(null)
+
+  const handleSubmit = async (payload: EmployeeFormPayload, seated = false) => {
     if (creating.current || createdId.current) return
+    if (positionsOn && !seated) {
+      setError('')
+      const unit = payload as { branchId?: number | string | null; departmentId?: number | string | null; teamId?: number | string | null }
+      try {
+        const loaded = unit.branchId ? await fetchPositionOptions(Number(unit.branchId)) : null
+        const options = loaded?.available ? positionsOfUnit(loaded.positions, { departmentId: unit.departmentId ? Number(unit.departmentId) : null, teamId: unit.teamId ? Number(unit.teamId) : null }) : []
+        if (loaded?.available && (loaded.enforce || options.length > 0)) { setSeatStep({ payload, options, enforce: loaded.enforce }); return }
+      } catch (err) {
+        // من غير قايمة الوظائف مانعرفش الإنفاذ مفعّل ولا لأ: الحفظ بيقف برسالته
+        setError(err instanceof Error ? err.message : 'تعذر تحميل الوظائف المعتمدة')
+        return
+      }
+    }
     creating.current = true
     setError('')
     setSubmitting(true)
     try {
       // قوائم المؤهلات تُحفظ بعد إنشاء الموظف (تحتاج employeeId)
       const { qualifications, ...employeeData } = payload
+      // B2.11: الوظيفة اللي اتختارت في خطوة الحفظ (حمولة بس)
+      if (seat.current) Object.assign(employeeData, { positionId: seat.current })
       const emp = candidate ? (await hireCandidate(candidate.id, employeeData)).employee : await createEmployee(employeeData)
       createdId.current = emp.id
       setCreated({ id: emp.id, name: emp.fullName, warning: '' })
@@ -75,6 +98,7 @@ export default function AddEmployeePage() {
   if (candidateId === undefined || (candidateId !== null && !candidate)) return <MainLayout><p role="status" className="flex items-center gap-2 text-gray-600 mt-10 justify-center"><Loader2 size={18} className="animate-spin" />جارٍ التحميل...</p></MainLayout>
 
   return (
+    <>
     <EmployeeForm
       mode="add"
       initial={candidate ? candidateHireInitial(candidate) : undefined}
@@ -84,5 +108,10 @@ export default function AddEmployeePage() {
       submitting={submitting}
       error={error}
     />
+    {seatStep && (
+      <PositionPickModal options={seatStep.options} enforce={seatStep.enforce} onCancel={() => setSeatStep(null)}
+        onPick={positionId => { const step = seatStep; seat.current = positionId; setSeatStep(null); void handleSubmit(step.payload, true) }} />
+    )}
+    </>
   )
 }

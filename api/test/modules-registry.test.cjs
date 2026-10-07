@@ -288,7 +288,11 @@ test('MR-10: صلاحيات تابعة لموديول اختياري ومسار 
   const { PERMISSIONS } = require('../src/auth/permissions')
   assert.deepEqual([...registry.PERMISSIONS_USED_BY_CORE], ['payroll.approve', 'attendance.manage'])
   for (const key of registry.PERMISSIONS_USED_BY_CORE) assert.ok(Object.prototype.hasOwnProperty.call(PERMISSIONS, key), key + ' صلاحية مسجّلة')
-  const all = registry.enabledSnapshot(state()).modules
+  // كل الموديولات مفعّلة (B2.11: فيه موديول مقفول افتراضيًا، فالحالة الفاضية مابقتش «الكل»)
+  const all = registry.enabledSnapshot(state(Object.fromEntries(MODULE_KEYS.map(key => [key, true])))).modules
+  // والموديول المقفول افتراضيًا صلاحياته مخفية من شاشة الأدوار لحد ما يتفعّل
+  const byDefault = registry.enabledSnapshot(state()).modules
+  assert.deepEqual(['positions.view', 'positions.manage', 'employees.view'].map(key => registry.permissionShown(key, byDefault)), [false, false, true])
   const noPayroll = registry.enabledSnapshot(state({ payroll: false })).modules
   const noAttendance = registry.enabledSnapshot(state({ attendance: false })).modules
   assert.deepEqual(['payroll.approve', 'payroll.view', 'loans.repay', 'employees.view'].map(key => registry.permissionShown(key, noPayroll)), [true, false, false, true])

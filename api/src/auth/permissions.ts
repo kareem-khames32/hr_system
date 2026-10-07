@@ -105,6 +105,9 @@ export const PERMISSIONS: Record<string, string> = {
   'request_types.manage': 'بانِي أنواع الطلبات',
   'approval_chains.manage': 'بانِي دورات الاعتماد',
   'candidates.manage': 'المرشحون والتعيين',
+  // B2.11: الوظائف المعتمدة
+  'positions.view': 'عرض الوظائف المعتمدة',
+  'positions.manage': 'إدارة الوظائف المعتمدة',
   'transfers.view': 'لوج النقل بين الفرق',
 }
 
@@ -118,6 +121,7 @@ export const ALL_PERMISSIONS = Object.keys(PERMISSIONS)
 export const PERMISSION_MODULES: Array<{ key: string; labelAr: string; permissions: string[] }> = [
   { key: 'employees', labelAr: 'الموظفون', permissions: ['employees.view', 'employees.create', 'employees.edit', 'employees.archive', 'documents.manage', 'transfers.view'] },
   { key: 'recruitment', labelAr: 'التوظيف', permissions: ['candidates.manage'] },
+  { key: 'positions', labelAr: 'الوظائف المعتمدة', permissions: ['positions.view', 'positions.manage'] },
   { key: 'org', labelAr: 'الهيكل التنظيمي', permissions: ['org.manage'] },
   { key: 'requests', labelAr: 'الطلبات', permissions: ['requests.view_all', 'requests.create_on_behalf'] },
   { key: 'approvals', labelAr: 'خطوات الاعتماد', permissions: ['approve.hr', 'approve.finance', 'approve.it', 'approve.custody', 'approve.payroll', 'approve.executive'] },
@@ -165,6 +169,8 @@ export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   'documents.manage': 'يرفع مستندات الموظفين ويعدّلها، ويصدر الخطابات الرسمية من القوالب',
   'transfers.view': 'يشوف سجل تنقلات الموظفين بين الفرق والأقسام — قراءة بس',
   'candidates.manage': 'يضيف المرشحين ويعدّل مراحلهم ويحوّل المرشح المقبول لموظف',
+  'positions.view': 'يفتح شاشة «الوظائف المعتمدة»: الوظائف وأعدادها وتقرير «معتمد / مشغول / شاغر» لكل قسم وشاغلي كل وظيفة — في نطاق فروعه',
+  'positions.manage': 'يضيف الوظائف المعتمدة ويعدّل عددها وحالتها، ويربط الموظفين بيها ويفكّهم، ويولّدها من الموظفين الحاليين — في نطاق فروعه (الشاشة نفسها بصلاحية «عرض الوظائف المعتمدة»)',
   'org.manage': 'ينشئ الفروع والأقسام والفرق ويعدّلها ويحدّد مديريها',
   'requests.view_all': 'يشوف كل طلبات موظفي نطاقه في كونسول الطلبات — قراءة بس، والقرار لأصحاب خطوات الاعتماد',
   'requests.create_on_behalf': 'يقدّم طلب (إجازة، إذن، سلفة...) باسم موظف تاني في نطاقه',
@@ -340,6 +346,8 @@ export const ROLE_PRESETS: Array<{
       'tasks.manage', 'tasks.view_all',
       // B2.7: زي المهام — في حزمة الكود بس
       'policies.manage', 'policies.report',
+      // B2.11: زي المهام — في حزمة الكود بس (والموديول نفسه مقفول افتراضيًا)
+      'positions.view', 'positions.manage',
       'reports.view', 'dashboard.view_all', 'calendar.view_all',
       'settings.manage', 'request_types.manage', 'approval_chains.manage',
       'candidates.manage', 'transfers.view',

@@ -39,6 +39,7 @@ import {
   UserCircle,
   Inbox,
   UserMinus,
+  Briefcase,
   Gift,
   ListChecks,
   ScrollText,
@@ -96,6 +97,14 @@ const adminMenuDefs: MenuItem[] = [
     icon: <UserMinus size={20} />,
     href: '/offboarding',
     perm: 'offboarding.manage',
+  },
+  // B2.11: الوظائف المعتمدة (الموديول مقفول افتراضيًا: البند بيظهر لما يتفعّل)
+  {
+    id: 'positions',
+    label: 'الوظائف المعتمدة',
+    icon: <Briefcase size={20} />,
+    href: '/positions',
+    perm: 'positions.view',
   },
   // B2.5: قايمة كل المهام العامة في نطاق الحساب («مهامي» لكل حساب في بنود البوابة)
   {

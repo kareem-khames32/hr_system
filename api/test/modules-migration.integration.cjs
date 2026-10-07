@@ -163,11 +163,17 @@ test('MM-1: الملفين LF من غير BOM، من غير عبارة ممنو�
   assert.deepEqual(inserts, ['INSERT INTO dbo.system_modules', 'INSERT INTO dbo.system_modules', 'INSERT INTO dbo.system_module_features'])
   assert.equal((seed.match(/NOT EXISTS \(SELECT 1 FROM dbo\.system_module/g) || []).length, 4)
   assert.deepEqual(migrate.analyze(migrate.discover()).problems, [], 'أكواد THROW فريدة بين كل الملفات والملفين مقبولين')
-  // الموديولات المزروعة = كل الموديولات الاختيارية في السجل بالظبط
+  // الموديولات المزروعة = كل الموديولات الاختيارية اللي كانت في السجل وقت الترحيل بالظبط. واللي اتضاف بعده (B2.11: الوظائف المعتمدة)
+  // مقفول افتراضيًا ومن غير صف: مش في بذرة 077 (ملف معتمد مابيتعدّلش) وحالته من السجل
   const optional = registry.MODULE_KEYS.filter(key => !registry.MODULES[key].core)
-  assert.deepEqual([...optional].sort(), [...BASIC, 'recruitment'].sort())
+  const LATER = ['positions']
+  assert.deepEqual([...optional].sort(), [...BASIC, 'recruitment', ...LATER].sort())
   for (const key of BASIC) assert.equal(registry.MODULES[key].preset, 'basic', key)
-  for (const key of optional) assert.match(seed, new RegExp(`N'${key}'`), `${key} في ترحيل البيانات`)
+  for (const key of optional.filter(key => !LATER.includes(key))) assert.match(seed, new RegExp(`N'${key}'`), `${key} في ترحيل البيانات`)
+  for (const key of LATER) {
+    assert.equal(registry.MODULES[key].defaultEnabled, false, `${key}: مضاف بعد البذرة = مقفول افتراضيًا`)
+    assert.doesNotMatch(seed, new RegExp(`N'${key}'`), `${key} مش في ترحيل البيانات`)
+  }
   // أسماء الكيانات الصريحة هي اللي في الملف
   const names = name => { const meta = ds.getMetadata(name); return [meta.tableName, meta.primaryColumns[0].primaryKeyConstraintName] }
   assert.deepEqual(names('SystemModule'), ['system_modules', 'PK_system_modules'])

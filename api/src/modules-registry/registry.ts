@@ -256,6 +256,21 @@ export const MODULES = {
     // المتقدمين شاشة حقيقية؛ باقي ما تحت /recruitment شاشات عرض (DEMO_ROUTES) لحد ما الموديول الكامل ينزل
     routes: ['/recruitment', '/recruitment/applicants'],
   }),
+  // B2.11: الوظائف المعتمدة — وظيفة في وحدة بعدد معتمد، وتقرير «معتمد / مشغول / شاغر». موديول جديد = مقفول لحد ما الشركة تفعّله
+  // (أول موديول defaultEnabled: false: مفيش حاجة كانت شغالة قبله)
+  positions: moduleDef({
+    nameAr: 'الوظائف المعتمدة', group: 'talent', dependsOn: ['org', 'employees'], softUses: ['recruitment'], preset: 'standard', defaultEnabled: false,
+    description: 'وظيفة في قسم أو فريق بعدد معتمد، وتقرير «معتمد / مشغول / شاغر» لكل قسم، وربط الموظف بوظيفته عند التعيين',
+    permissions: ['positions.view', 'positions.manage'],
+    routes: ['/positions'],
+    features: {
+      'positions.enforce_on_hiring': {
+        nameAr: 'التعيين على وظيفة معتمدة بس',
+        description: 'التعيين لازم يكون على وظيفة معتمدة نشطة فيها شاغر في وحدة الموظف؛ من غير وظيفة أو على وظيفة مليانة مرفوض',
+        default: false,
+      },
+    },
+  }),
 } as const satisfies Record<string, ModuleDef>
 
 export type ModuleKey = keyof typeof MODULES

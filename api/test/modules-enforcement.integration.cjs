@@ -372,7 +372,7 @@ test('ME-07: المزايا الفرعية والباقات', async () => {
   gone(await request(U.hr, 'GET', '/candidates'), 'GET', '/candidates')
   ok(await request(U.hr, 'GET', '/leaves'))
   const standard = await modules.presetDiff('standard')
-  assert.deepEqual(standard.enable.map(row => row.key), ['recruitment']); assert.deepEqual(standard.disable, [])
+  assert.deepEqual(standard.enable.map(row => row.key), ['recruitment', 'positions']); assert.deepEqual(standard.disable, [])
   await modules.applyPreset(admin(), 'standard')
   ok(await request(U.hr, 'GET', '/candidates'))
   assert.deepEqual((await modules.presetDiff('standard')), { preset: 'standard', nameAr: 'القياسية', enable: [], disable: [] })
@@ -572,7 +572,8 @@ test('ME-09: قبل ترحيل 076 (الجداول مش موجودة) — كل �
   assert.ok(ok(await request(U.cairo, 'GET', '/requests/types')).some(type => type.code === 'REMOTE_WORK'))
   // شاشة الموديولات قبل الترحيل: القراية شغالة (الكتالوج على الافتراضي وسجل التغييرات فاضي)، والتغيير بيرفض برسالة واضحة مش خطأ خادم
   const catalog = ok(await request(admin(), 'GET', '/modules/catalog'))
-  assert.ok(catalog.modules.every(row => row.enabled && row.effective), 'كله مفعّل على الافتراضي')
+  assert.ok(catalog.modules.every(row => row.enabled === registry.MODULES[row.key].defaultEnabled && row.effective === row.enabled), 'كل موديول على افتراضيه')
+  assert.deepEqual(catalog.modules.filter(row => !row.enabled).map(row => row.key), ['positions'], 'المقفول افتراضيًا: الوظائف المعتمدة بس (B2.11)')
   assert.deepEqual(ok(await request(admin(), 'GET', '/modules/events')), [])
   ok(await request(admin(), 'GET', '/modules/recruitment/impact'))
   ok(await request(admin(), 'GET', '/modules/presets/standard/diff'))

@@ -22,6 +22,7 @@ const CHECKS = [
   ['094 الحقول المخصصة', '../src/employees/employee-custom-fields', 'customFieldsReady', 'resetCustomFieldsCache', flag],
   ['095 فترات الخدمة', '../src/employees/employment-periods', 'employmentPeriodsReady', 'resetEmploymentPeriodsCache', flag],
   ['096 قواعد المهام', '../src/tasks/task-extras', 'taskExtrasReady', 'resetTaskExtrasCache', flag],
+  ['097 الوظائف المعتمدة', '../src/positions/position-rules', 'positionsReady', 'resetPositionsCache', flag],
 ]
 
 CHECKS.forEach(([name, file, check, reset, rows], index) => {

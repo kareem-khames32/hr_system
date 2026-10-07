@@ -478,6 +478,13 @@ export class CreateEmployeeDto {
   @IsOptional()
   @IsArray()
   documentRefs?: { docType: string; fileRef: string; number?: string }[]
+
+  // B2.11: الوظيفة المعتمدة اللي الموظف بيتعيّن عليها (حمولة بس، مش عمود موظف). بتتجاهل لو موديول الوظائف المعتمدة مقفول
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt({ message: 'رقم الوظيفة المعتمدة مش صحيح' })
+  @Min(1, { message: 'رقم الوظيفة المعتمدة مش صحيح' })
+  positionId?: number
 }
 
 // التعديل: كل الحقول اختيارية بنفس قواعد التحقق

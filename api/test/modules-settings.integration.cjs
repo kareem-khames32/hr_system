@@ -142,7 +142,9 @@ test('MS-02: الكتالوج — الموديولات بمجموعاتها وح
   assert.deepEqual(catalog.modules.map(row => row.key), registry.MODULE_KEYS)
   for (const row of catalog.modules) {
     assert.ok(row.nameAr && row.description && registry.MODULE_GROUPS[row.group], row.key)
-    assert.deepEqual([row.enabled, row.effective, row.audience, row.enabledAt], [true, true, null, null], `${row.key}: من غير صفوف كل الموجود مفعّل`)
+    // من غير صفوف كل موديول على افتراضيه: الموجود قبل نظام الموديولات مفعّل، والوظائف المعتمدة (B2.11) مقفولة
+    const byDefault = registry.MODULES[row.key].defaultEnabled
+    assert.deepEqual([row.enabled, row.effective, row.audience, row.enabledAt], [byDefault, byDefault, null, null], `${row.key}: من غير صفوف كل موديول على افتراضيه`)
   }
   // B2.7: +policies (السياسات والإقرار أساسي زي المهام)
   assert.deepEqual(catalog.modules.filter(row => row.core).map(row => row.key), ['platform', 'org', 'employees', 'self_service', 'requests', 'notifications', 'tasks', 'documents', 'policies', 'reports'])
@@ -217,7 +219,9 @@ test('MS-05: أثر القفل قبل القفل — الطلبات المفتو
 test('MS-06: الباقات — معاينة الفرق من غير كتابة، والتطبيق، وسجل التغييرات', async () => {
   assert.deepEqual(ok(await request(U.admin, 'GET', '/modules/presets/basic/diff')),
     { preset: 'basic', nameAr: 'الأساسية', enable: [], disable: [{ key: 'recruitment', nameAr: 'التوظيف' }] })
-  assert.deepEqual(ok(await request(U.admin, 'GET', '/modules/presets/standard/diff')), { preset: 'standard', nameAr: 'القياسية', enable: [], disable: [] })
+  // القياسية فيها الوظائف المعتمدة (المقفولة افتراضيًا): تطبيقها بيفعّلها
+  assert.deepEqual(ok(await request(U.admin, 'GET', '/modules/presets/standard/diff')),
+    { preset: 'standard', nameAr: 'القياسية', enable: [{ key: 'positions', nameAr: 'الوظائف المعتمدة' }], disable: [] })
   assert.equal(await repo('SystemModule').count(), 0, 'المعاينة مابتكتبش')
   const applied = ok(await request(U.modulesAll, 'POST', '/modules/presets/basic/apply'), 201)
   assert.deepEqual(applied.applied, { preset: 'basic', nameAr: 'الأساسية', enable: [], disable: [{ key: 'recruitment', nameAr: 'التوظيف' }] })
@@ -232,7 +236,7 @@ test('MS-06: الباقات — معاينة الفرق من غير كتابة،
   assert.deepEqual(ok(await request(U.admin, 'POST', '/modules/presets/basic/apply'), 201).applied, { preset: 'basic', nameAr: 'الأساسية', enable: [], disable: [] })
   assert.equal(await repo('SystemModuleEvent').count({ where: { kind: 'module' } }), 1)
   const standard = ok(await request(U.admin, 'POST', '/modules/presets/standard/apply'), 201)
-  assert.deepEqual(standard.applied.enable, [{ key: 'recruitment', nameAr: 'التوظيف' }])
+  assert.deepEqual(standard.applied.enable, [{ key: 'recruitment', nameAr: 'التوظيف' }, { key: 'positions', nameAr: 'الوظائف المعتمدة' }])
   ok(await request(U.hr, 'GET', '/candidates'))
   await clearRows()
 })
@@ -277,13 +281,15 @@ test('MS-08: شاشة الأدوار — صلاحيات الموديول الم�
   const role = await repo('Role').save({ code: 'ms_recruiter', nameAr: 'مسؤول توظيف', permissions: JSON.stringify(['candidates.manage', 'employees.view']), isSystem: false, isActive: true })
   const flags = async () => Object.fromEntries(ok(await request(U.admin, 'GET', '/permissions-registry')).map(row => [row.key, row.moduleEnabled]))
   let enabled = await flags()
-  assert.ok(Object.values(enabled).every(value => value === true), 'كل الموديولات مفعّلة')
+  // صلاحيات الموديول المقفول افتراضيًا (الوظائف المعتمدة) متعلّمة من الأول؛ والباقي موديولاته مفعّلة
+  assert.deepEqual(Object.keys(enabled).filter(key => !enabled[key]).sort(), ['positions.manage', 'positions.view'], 'كل الموديولات مفعّلة غير المقفول افتراضيًا')
   ok(await request(U.admin, 'PUT', '/modules/recruitment', { enabled: false }))
   ok(await request(U.admin, 'PUT', '/modules/loans', { enabled: false }))
   enabled = await flags()
   assert.deepEqual(Object.keys(enabled).filter(key => !enabled[key]).sort(),
     // B1.8: loans.disburse (تسجيل صرف السلفة) من صلاحيات موديول السلف
-    ['candidates.manage', 'loans.cap_override', 'loans.disburse', 'loans.exceptional', 'loans.policies', 'loans.repay', 'loans.write_off'])
+    // B2.11: + صلاحيتي الوظائف المعتمدة (موديولها مقفول افتراضيًا)
+    ['candidates.manage', 'loans.cap_override', 'loans.disburse', 'loans.exceptional', 'loans.policies', 'loans.repay', 'loans.write_off', 'positions.manage', 'positions.view'])
   // الدور لسه شايل الصلاحية، وتعديله بنفس القايمة بيعدّي (الصلاحية محفوظة ومالهاش أثر)
   ok(await request(U.admin, 'PATCH', `/roles/${role.id}`, { permissions: ['employees.view', 'candidates.manage'] }))
   assert.deepEqual(JSON.parse((await repo('Role').findOneByOrFail({ id: role.id })).permissions).sort(), ['candidates.manage', 'employees.view'])
