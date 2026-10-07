@@ -365,9 +365,9 @@ test('ME-07: المزايا الفرعية والباقات', async () => {
   await refused(() => modules.setFeature(admin(), 'no.such_feature', true), 404)
   assert.deepEqual((await repo('SystemModuleEvent').find({ where: { key: demo }, order: { id: 'ASC' } })).map(event => [event.kind, event.enabled]), [['feature', true], ['feature', false]])
 
-  // الباقة الأساسية: التوظيف برّاها (كل الباقي من الموجود جوّاها)
+  // الباقة الأساسية: التوظيف برّاها (كل الباقي من الموجود جوّاها)، وفيها «لوحة فريقي» المقفولة افتراضيًا (B2.14): تطبيقها بيفعّلها
   const basic = await modules.presetDiff('basic')
-  assert.deepEqual(basic.enable, []); assert.deepEqual(basic.disable.map(row => row.key), ['recruitment'])
+  assert.deepEqual(basic.enable, [{ key: 'manager', nameAr: 'لوحة «فريقي»' }]); assert.deepEqual(basic.disable.map(row => row.key), ['recruitment'])
   assert.equal(basic.disable[0].nameAr, 'التوظيف')
   assert.equal(await repo('SystemModule').count(), 0, 'المعاينة مابتكتبش')
   await modules.applyPreset(admin(), 'basic')
@@ -576,7 +576,7 @@ test('ME-09: قبل ترحيل 076 (الجداول مش موجودة) — كل �
   // شاشة الموديولات قبل الترحيل: القراية شغالة (الكتالوج على الافتراضي وسجل التغييرات فاضي)، والتغيير بيرفض برسالة واضحة مش خطأ خادم
   const catalog = ok(await request(admin(), 'GET', '/modules/catalog'))
   assert.ok(catalog.modules.every(row => row.enabled === registry.MODULES[row.key].defaultEnabled && row.effective === row.enabled), 'كل موديول على افتراضيه')
-  assert.deepEqual(catalog.modules.filter(row => !row.enabled).map(row => row.key), ['positions'], 'المقفول افتراضيًا: الوظائف المعتمدة بس (B2.11)')
+  assert.deepEqual(catalog.modules.filter(row => !row.enabled).map(row => row.key), ['manager', 'positions'], 'المقفول افتراضيًا: المضاف بعد نظام الموديولات — لوحة فريقي (B2.14) والوظائف المعتمدة (B2.11)')
   assert.deepEqual(ok(await request(admin(), 'GET', '/modules/events')), [])
   ok(await request(admin(), 'GET', '/modules/recruitment/impact'))
   ok(await request(admin(), 'GET', '/modules/presets/standard/diff'))

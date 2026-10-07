@@ -13,6 +13,7 @@ import {
 import { fetchMyPayrollApprovalsCount } from '@/lib/payroll-approval-chain-api'
 import { fetchMyTasksCount, TASKS_CHANGED_EVENT } from '@/lib/tasks-api'
 import { fetchDelegations } from '@/lib/delegations-api'
+import { fetchTeamManager } from '@/lib/manager-api'
 import { DEFAULT_MODULES, routeAvailable, useModules } from '@/lib/modules'
 import { useBranding } from '@/lib/branding'
 import { BrandLogo } from '@/components/branding/BrandLogo'
@@ -349,6 +350,15 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
   // B2.5: عدد اللي على الحساب في «مهامي» (مهام عامة + تهيئة + إخلاء)
   const [tasksCount, setTasksCount] = useState<number>(0)
   const [tasksRevision, setTasksRevision] = useState(0)
+  // B2.14: بند «فريقي» للي تحته حد في الهيكل بس (والموديول مفعّل). فشل النداء = البند مايظهرش
+  const [teamManager, setTeamManager] = useState(false)
+  const managerOn = enabledModules.modules.includes('manager')
+  useEffect(() => {
+    if (!managerOn || !getCurrentUser()) return setTeamManager(false)
+    let live = true
+    fetchTeamManager().then((manager) => { if (live) setTeamManager(manager) }).catch(() => { if (live) setTeamManager(false) })
+    return () => { live = false }
+  }, [managerOn])
   // B2.6-ب: المعتمد الهيكلي وطرف التفويض بيلاقوا «بانتظار موافقتي» حتى والصندوق فاضي — منها بيسجّل تفويضه قبل إجازته وبيلغيه
   const [delegationEntry, setDelegationEntry] = useState(false)
   useEffect(() => {
@@ -447,6 +457,7 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
           ]
         : []),
       { id: 'my-tasks', label: 'مهامي', icon: <ListChecks size={20} />, href: '/my/tasks', badge: tasksCount },
+      ...(teamManager ? [{ id: 'my-team', label: 'فريقي', icon: <Users size={20} />, href: '/my/team' } satisfies MenuItem] : []),
       { id: 'my-attendance', label: 'حضوري', icon: <Clock size={20} />, href: '/my/attendance' },
       { id: 'my-leaves', label: 'إجازاتي وأرصدتي', icon: <Calendar size={20} />, href: '/my/leaves' },
       { id: 'my-payslips', label: 'قسائم راتبي', icon: <Wallet size={20} />, href: '/my/payslips' },
@@ -466,7 +477,7 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
     ]
 
     return [...portalItems.filter((item) => available(item.href)), ...adminItems]
-  }, [currentUser, inboxCount, inboxError, delegationEntry, payrollApprovals, tasksCount, enabledModules])
+  }, [currentUser, inboxCount, inboxError, delegationEntry, payrollApprovals, tasksCount, teamManager, enabledModules])
 
   const activeHref = activeHrefFor(pathname, menuItems)
   const activeGroup = menuItems.find((item) => item.children?.some((child) => child.href === activeHref))?.id

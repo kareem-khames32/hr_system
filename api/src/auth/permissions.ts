@@ -11,6 +11,8 @@ export const PERMISSIONS: Record<string, string> = {
   'employees.create': 'تعيين موظف جديد',
   'employees.edit': 'تعديل بيانات موظف',
   'employees.archive': 'أرشفة موظف',
+  // B2.14: حق عرض الرواتب والبيانات البنكية في ملف الموظف وتصديره ولوحة فريقي (فوق القاعدة القايمة: payroll.view أو employees.edit)
+  'employees.view_compensation': 'عرض رواتب الموظفين وبياناتهم البنكية',
   // التكوين
   'org.manage': 'إدارة الفروع والأقسام والفرق',
   // الحسابات والأدوار
@@ -121,7 +123,7 @@ export const ALL_PERMISSIONS = Object.keys(PERMISSIONS)
 // الاختبار api/test/roles-scope-presets.test.cjs بيفشل لو صلاحية اتضافت للسجل من غير وحدة أو شرح،
 // فمفيش صلاحية تتوه من الشاشة تاني (approve.custody فضلت بلا أي دور يحملها لحد تدقيق 21 سبتمبر).
 export const PERMISSION_MODULES: Array<{ key: string; labelAr: string; permissions: string[] }> = [
-  { key: 'employees', labelAr: 'الموظفون', permissions: ['employees.view', 'employees.create', 'employees.edit', 'employees.archive', 'documents.manage', 'transfers.view'] },
+  { key: 'employees', labelAr: 'الموظفون', permissions: ['employees.view', 'employees.create', 'employees.edit', 'employees.archive', 'employees.view_compensation', 'documents.manage', 'transfers.view'] },
   { key: 'recruitment', labelAr: 'التوظيف', permissions: ['candidates.manage'] },
   { key: 'positions', labelAr: 'الوظائف المعتمدة', permissions: ['positions.view', 'positions.manage'] },
   { key: 'org', labelAr: 'الهيكل التنظيمي', permissions: ['org.manage'] },
@@ -168,6 +170,7 @@ export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   'employees.create': 'يعيّن موظف جديد ويدخّل بياناته وراتبه الأول',
   'employees.edit': 'يعدّل بيانات الموظف وعقده ومؤهلاته ويوقفه عن العمل، ويعدّل كذا موظف مرة واحدة من ملف إكسل',
   'employees.archive': 'يأرشف موظف (يخرجه من الخدمة) ويرجّعه على رأس العمل',
+  'employees.view_compensation': 'يشوف الراتب والبدلات وبيانات البنك لموظفين نطاقه في الملف والتصدير ولوحة «فريقي» — للي مش معاه «عرض مسيرات الرواتب» ولا «تعديل بيانات موظف» (الاتنين بيشوفوها أصلًا)',
   'documents.manage': 'يرفع مستندات الموظفين ويعدّلها، ويصدر الخطابات الرسمية من القوالب',
   'transfers.view': 'يشوف سجل تنقلات الموظفين بين الفرق والأقسام — قراءة بس',
   'candidates.manage': 'يضيف المرشحين ويعدّل مراحلهم ويحوّل المرشح المقبول لموظف',

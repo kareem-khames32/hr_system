@@ -4,9 +4,13 @@ import type { EmployeeStatusHistory } from '../requests/entities/employment.enti
 import type { Employee } from './employee.entity'
 import { historyWithLegacyLabels, FINANCIAL_CHANGE_FIELDS, LOGIN_ACCOUNT_FIELD } from './employee-change-log'
 
-/** يشوف الراتب والبدلات والبنك لكل الموظفين في نطاقه (مش ملفه هو بس) — نفس القاعدة للقراءة والتصدير. */
+/**
+ * يشوف الراتب والبدلات والبنك لكل الموظفين في نطاقه (مش ملفه هو بس) — نفس القاعدة للقراءة والتصدير ولوحة «فريقي».
+ * B2.14: مفتاح employees.view_compensation بيزوّد على القاعدة القايمة (payroll.view أو employees.edit)، فمحدش بيخسر حاجة ومن غير
+ * ترحيل لأدوار الشركة؛ المفتاح للي محتاج يشوف الرواتب من غير الصلاحيتين دول.
+ */
 export function canSeeEmployeesFinance(user: JwtPayload) {
-  return userHasPerm(user, 'payroll.view') || userHasPerm(user, 'employees.edit')
+  return userHasPerm(user, 'employees.view_compensation') || userHasPerm(user, 'payroll.view') || userHasPerm(user, 'employees.edit')
 }
 
 export function canReadEmployeeFinance(user: JwtPayload, employeeId: number) {

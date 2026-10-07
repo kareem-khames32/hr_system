@@ -41,6 +41,9 @@ const EXCEPTIONS = {
   'TasksController.mine': 'SELF', // GET /tasks/mine
   'TasksController.mineCount': 'SELF', // GET /tasks/mine/count
   'TasksController.team': 'SELF', // GET /tasks/team
+  // B2.14: لوحة «فريقي» — الحكم بموقع الحساب في الهيكل (تحته حد ولا لأ)، واللي مالوش فريق مابياخدش بيانات
+  'TeamController.overview': 'SERVICE_CHECK', // GET /manager/team
+  'TeamController.status': 'SERVICE_CHECK', // GET /manager/status
   'TasksController.assignees': 'SELF', // GET /tasks/assignees
   // B2.7: «سياساتي» و«اللي مستنيني» والإقرار — الموظف لنفسه بس (الإقرار باسم صاحب الحساب، ومحدش بيقرّ عن حد)
   'PoliciesController.mine': 'SELF', // GET /policies/mine

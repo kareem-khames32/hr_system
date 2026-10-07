@@ -161,7 +161,7 @@ const PORTAL = [
   'src/components/OvertimePreview.tsx', 'src/components/OvertimeRequestSummary.tsx', 'src/components/PayrollAttendanceBreakdown.tsx',
   'src/components/PayrollOvertimeBreakdown.tsx', 'src/components/PayrollInstallmentBreakdown.tsx', 'src/components/PayrollObligationBreakdown.tsx',
   // B2.12 (أ): شاشات البوابة اللي اتبنت في المرحلة 2 ومكوناتها — مهامي، سلفي، مستنداتي، سياساتي (وبوابة الإقرار بعد الدخول)، ملفي الشخصي
-  'src/app/my/tasks/page.tsx', 'src/app/my/loans/page.tsx', 'src/app/my/documents/page.tsx', 'src/app/my/policies/page.tsx', 'src/app/login/policies/page.tsx',
+  'src/app/my/tasks/page.tsx', 'src/app/my/team/page.tsx', 'src/app/my/loans/page.tsx', 'src/app/my/documents/page.tsx', 'src/app/my/policies/page.tsx', 'src/app/login/policies/page.tsx',
   'src/app/profile/page.tsx', 'src/components/tasks/TaskCard.tsx', 'src/components/tasks/TaskFormModal.tsx', 'src/components/tasks/TaskLog.tsx',
   'src/components/tasks/TaskComplianceReport.tsx', 'src/components/comments/CommentsThread.tsx', 'src/components/hr-documents/MyDocumentAcknowledgements.tsx',
   'src/components/policies/PolicyReader.tsx', 'src/components/payroll/LoanCapSummary.tsx',

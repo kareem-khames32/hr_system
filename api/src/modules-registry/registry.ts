@@ -89,7 +89,7 @@ export const MODULES = {
   employees: moduleDef({
     nameAr: 'الموظفين والملف والعقود والحركة', group: 'core', core: true, dependsOn: ['org'],
     description: 'ملف الموظف وبياناته وعقوده ونقله وترقيته وإيقافه وأرشفته',
-    permissions: ['employees.view', 'employees.create', 'employees.edit', 'employees.archive', 'transfers.view'],
+    permissions: ['employees.view', 'employees.create', 'employees.edit', 'employees.archive', 'transfers.view', 'employees.view_compensation'],
     routes: ['/employees', '/settings/job-titles', '/settings/grades', '/settings/employee-fields'],
     requestHandlers: ['employee_update_promotions', 'transfers_effective_date', 'employee_update', 'contracts_register', 'employee_record', 'employee_record_auto'],
     jobs: ['requests.scheduled-transfers'],
@@ -257,6 +257,14 @@ export const MODULES = {
     // المتقدمين شاشة حقيقية؛ باقي ما تحت /recruitment شاشات عرض (DEMO_ROUTES) لحد ما الموديول الكامل ينزل
     routes: ['/recruitment', '/recruitment/applicants'],
   }),
+  // B2.14: لوحة «فريقي» للمدير الهيكلي (من غير دور إداري) — قراءة بنطاق فريقه في الهيكل. شاشة جديدة بتعرض بيانات موظفين لقارئ جديد:
+  // مقفولة لحد ما الشركة تفتحها (زي الوظائف المعتمدة)، وفي الباقة الأساسية
+  manager: moduleDef({
+    nameAr: 'لوحة «فريقي»', group: 'people', dependsOn: ['employees'], softUses: ['attendance', 'leave', 'tasks'], defaultEnabled: false,
+    description: 'المدير الهيكلي بيشوف فريقه: حضورهم النهارده، وإجازاتهم القريبة، وعقد أو تجربة أو مستند مين هينتهي، والمستني منه',
+    routes: ['/my/team'],
+  }),
+
   // B2.11: الوظائف المعتمدة — وظيفة في وحدة بعدد معتمد، وتقرير «معتمد / مشغول / شاغر». موديول جديد = مقفول لحد ما الشركة تفعّله
   // (أول موديول defaultEnabled: false: مفيش حاجة كانت شغالة قبله)
   positions: moduleDef({

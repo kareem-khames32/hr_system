@@ -217,24 +217,27 @@ test('MS-05: أثر القفل قبل القفل — الطلبات المفتو
 })
 
 test('MS-06: الباقات — معاينة الفرق من غير كتابة، والتطبيق، وسجل التغييرات', async () => {
+  // الأساسية فيها «لوحة فريقي» (B2.14) المقفولة افتراضيًا: تطبيقها بيفعّلها
   assert.deepEqual(ok(await request(U.admin, 'GET', '/modules/presets/basic/diff')),
-    { preset: 'basic', nameAr: 'الأساسية', enable: [], disable: [{ key: 'recruitment', nameAr: 'التوظيف' }] })
-  // القياسية فيها الوظائف المعتمدة (المقفولة افتراضيًا): تطبيقها بيفعّلها
+    { preset: 'basic', nameAr: 'الأساسية', enable: [{ key: 'manager', nameAr: 'لوحة «فريقي»' }], disable: [{ key: 'recruitment', nameAr: 'التوظيف' }] })
+  // القياسية فيها الوظائف المعتمدة (المقفولة افتراضيًا) ومعاها كل الأساسية: تطبيقها بيفعّلهم
   assert.deepEqual(ok(await request(U.admin, 'GET', '/modules/presets/standard/diff')),
-    { preset: 'standard', nameAr: 'القياسية', enable: [{ key: 'positions', nameAr: 'الوظائف المعتمدة' }], disable: [] })
+    { preset: 'standard', nameAr: 'القياسية', enable: [{ key: 'manager', nameAr: 'لوحة «فريقي»' }, { key: 'positions', nameAr: 'الوظائف المعتمدة' }], disable: [] })
   assert.equal(await repo('SystemModule').count(), 0, 'المعاينة مابتكتبش')
   const applied = ok(await request(U.modulesAll, 'POST', '/modules/presets/basic/apply'), 201)
-  assert.deepEqual(applied.applied, { preset: 'basic', nameAr: 'الأساسية', enable: [], disable: [{ key: 'recruitment', nameAr: 'التوظيف' }] })
+  assert.deepEqual(applied.applied, { preset: 'basic', nameAr: 'الأساسية', enable: [{ key: 'manager', nameAr: 'لوحة «فريقي»' }], disable: [{ key: 'recruitment', nameAr: 'التوظيف' }] })
+  assert.equal(moduleOf(applied.catalog, 'manager').enabled, true)
   assert.equal(moduleOf(applied.catalog, 'recruitment').enabled, false)
   assert.equal((await request(U.hr, 'GET', '/candidates')).status, 404)
   // صف صريح لكل موديول اختياري بعد التطبيق
   const optional = registry.MODULE_KEYS.filter(key => !registry.MODULES[key].core)
   assert.deepEqual((await repo('SystemModule').find()).map(row => row.key).sort(), [...optional].sort())
   // الحدث للي اتغيّر بس، ومعاه حدث الباقة
-  assert.deepEqual(ok(await request(U.admin, 'GET', '/modules/events')).map(row => [row.kind, row.key, row.enabled]), [['module', 'recruitment', false], ['preset', 'basic', null]])
+  assert.deepEqual(ok(await request(U.admin, 'GET', '/modules/events')).map(row => [row.kind, row.key, row.enabled]).sort((a, b) => `${a[0]}:${a[1]}`.localeCompare(`${b[0]}:${b[1]}`)),
+    [['module', 'manager', true], ['module', 'recruitment', false], ['preset', 'basic', null]])
   // تطبيق نفس الباقة تاني: مفيش تغيير ولا أحداث موديولات
   assert.deepEqual(ok(await request(U.admin, 'POST', '/modules/presets/basic/apply'), 201).applied, { preset: 'basic', nameAr: 'الأساسية', enable: [], disable: [] })
-  assert.equal(await repo('SystemModuleEvent').count({ where: { kind: 'module' } }), 1)
+  assert.equal(await repo('SystemModuleEvent').count({ where: { kind: 'module' } }), 2)
   const standard = ok(await request(U.admin, 'POST', '/modules/presets/standard/apply'), 201)
   assert.deepEqual(standard.applied.enable, [{ key: 'recruitment', nameAr: 'التوظيف' }, { key: 'positions', nameAr: 'الوظائف المعتمدة' }])
   ok(await request(U.hr, 'GET', '/candidates'))

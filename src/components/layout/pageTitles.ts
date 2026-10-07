@@ -6,6 +6,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/requests', 'طلباتي'],
   ['/approvals-inbox', 'بانتظار موافقتي'],
   ['/my/tasks', 'مهامي'],
+  ['/my/team', 'فريقي'],
   ['/my/policies', 'سياساتي'],
   ['/my/attendance', 'حضوري'],
   ['/my/leaves', 'إجازاتي وأرصدتي'],
