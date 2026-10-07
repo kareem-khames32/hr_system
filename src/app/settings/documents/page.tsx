@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { DocTypeExpirySettings } from '@/components/documents/DocTypeExpirySettings'
 import Link from 'next/link'
 import {
   ArrowRight,
@@ -623,6 +624,9 @@ export default function DocumentTypesPage() {
             </div>
           </div>
         )}
+
+        {/* B2.15: له تاريخ انتهاء، وأيام التنبيه، والمسؤول عن التجديد لكل نوع */}
+        {can('settings.manage') && <DocTypeExpirySettings canWrite={canWrite} refreshKey={types.map((type) => `${type.id}:${type.nameAr}:${type.isActive}`).join('|')} />}
       </div>
     </MainLayout>
   )

@@ -42,6 +42,17 @@ export class DocType {
   // وتهيئته ماتكتملش من غيره. النوع المعطَّل مابيتحسبش حتى لو عليه العلامة
   @Column({ default: false })
   requiredForHiring: boolean
+
+  // B2.15 (ترحيل 099): إعدادات انتهاء النوع — «له تاريخ انتهاء» (التاريخ إلزامي)، وأيام التنبيه قبل الانتهاء («60,30,7»؛ الفاضي = 30)،
+  // والدور المسؤول عن التجديد (مهمة عليه). برّه الكيان للقراءة والكتابة (الكود بيشتغل قبل الترحيل): assets/document-expiry.ts
+  @Column({ type: 'bit', nullable: true, select: false, insert: false, update: false })
+  hasExpiry?: boolean | null
+
+  @Column({ type: 'nvarchar', length: 100, nullable: true, select: false, insert: false, update: false })
+  alertDays?: string | null
+
+  @Column({ type: 'nvarchar', length: 40, nullable: true, select: false, insert: false, update: false })
+  ownerRole?: string | null
 }
 
 // مستندات الموظف — بصلاحية وتنبيه انتهاء
@@ -72,6 +83,10 @@ export class EmployeeDocument {
 
   @Column({ length: 500, nullable: true })
   notes: string
+
+  // B2.15 (ترحيل 099): مهمة تجديد المستند المفتوحة (tasks.id). برّه الكيان للقراءة والكتابة: assets/document-expiry.ts
+  @Column({ type: 'int', nullable: true, select: false, insert: false, update: false })
+  renewalTaskId?: number | null
 }
 
 // العطلات الرسمية

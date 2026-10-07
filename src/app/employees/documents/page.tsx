@@ -39,6 +39,7 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import {
+  can,
   fetchDocuments,
   fetchEmployees,
   createDocument,
@@ -52,6 +53,7 @@ import { useOrgFilter } from '@/components/OrgFilter'
 import { uploadPrefillFromSearch } from '@/lib/hiring-documents-api'
 import { EmployeePicker } from '@/components/EmployeePicker'
 import { formatDate } from '@/lib/dates'
+import { DocumentExpiryReport } from '@/components/documents/DocumentExpiryReport'
 
 interface DocumentRow {
   id: number
@@ -417,6 +419,9 @@ export default function DocumentsPage() {
         {error && (
           <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>
         )}
+
+        {/* B2.15: المنتهي واللي هينتهي بالفرع والمسؤول عن التجديد */}
+        {can('documents.manage') && <DocumentExpiryReport />}
 
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4">

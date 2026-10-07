@@ -57,6 +57,8 @@ export const NOTIFICATIONS_MAIL_PAUSE_MS = 60_000
 export const NOTIFICATION_SOURCE_EVENTS: readonly DomainEventType[] = ['REQUEST_STEP_PENDING', 'REQUEST_APPROVED', 'REQUEST_REJECTED', 'REQUEST_RETURNED', 'PAYROLL_RUN_APPROVED',
   // B2.5
   'TASK_ASSIGNED', 'TASK_DUE_SOON', 'TASK_OVERDUE',
+  // B2.15
+  'DOCUMENT_EXPIRING',
   // B2.6
   'REQUEST_EXECUTED',
   // B2.8
@@ -174,6 +176,7 @@ export class NotificationsService implements OnModuleInit {
       case 'TASK_DUE_SOON':
       case 'TASK_OVERDUE': return this.onTask(event)
       case 'COMMENT_MENTION': return this.onCommentMention(event)
+      case 'DOCUMENT_EXPIRING': return this.onDocumentExpiring(event)
       default: return 0
     }
   }
@@ -262,6 +265,28 @@ export class NotificationsService implements OnModuleInit {
     return this.deliver({
       event, code: 'payroll.payslip_available', category: 'payroll', kind: 'info', recipients: await this.auth.accountPayloads(users),
       entityType: 'payroll_run', entityId: runId, link: '/my/payslips', values: { 'payslip.period': String(run.period) },
+    })
+  }
+
+  // ===== B2.15: «مستندك هينتهي» لصاحب المستند =====
+  /** المستند لسه بتاريخ الحدث وموظفه لسه حالي؟ (اتجدد أو اتمسح بعد الحدث = مفيش إشعار) */
+  private async expiringDocument(documentId: number, expiryDate: string) {
+    const [doc]: Array<{ employeeId: number; docType: string; expiryDate: string }> = await this.ds.query(
+      `SELECT d.[employeeId], d.[docType], CONVERT(nvarchar(10), d.[expiryDate], 23) AS [expiryDate] FROM [employee_documents] d WHERE d.[id] = @0`, [documentId])
+    return doc && doc.expiryDate === expiryDate ? doc : null
+  }
+
+  private async onDocumentExpiring(event: SourceEvent): Promise<number> {
+    const documentId = Number(event.payload?.documentId), expiryDate = String(event.payload?.expiryDate ?? '')
+    if (!Number.isSafeInteger(documentId) || !/^\d{4}-\d{2}-\d{2}$/.test(expiryDate)) return 0
+    const doc = await this.expiringDocument(documentId, expiryDate)
+    if (!doc) return 0
+    const [type]: Array<{ nameAr: string }> = await this.ds.query('SELECT [nameAr] FROM [doc_types] WHERE [code] = @0', [doc.docType])
+    const users = await this.ds.getRepository(User).find({ where: { isActive: true, employeeId: Number(doc.employeeId) } })
+    return this.deliver({
+      event, code: 'document.expiring', category: 'document', kind: 'warning', recipients: await this.auth.accountPayloads(users),
+      entityType: 'employee_document', entityId: documentId, link: '/my/documents',
+      values: { 'document.type': type?.nameAr ?? String(doc.docType), 'document.expiry': doc.expiryDate },
     })
   }
 
@@ -551,6 +576,12 @@ export class NotificationsService implements OnModuleInit {
       const comment = await this.comments.byId(Number(notification.entityId))
       if (!comment || !(await this.comments.readableBy(account, comment))) return 'التعليق مابقاش ظاهر للحساب ده'
       return (await this.mentionHolds(comment, account)) ? null : 'الحساب مابقاش في الدور اللي اتشاور له'
+    }
+    if (notification.entityType === 'employee_document') {
+      // B2.15: المستند لسه بتاريخ الحدث، ولسه مستند موظف الحساب ده
+      const expiryDate = String((await this.sourcePayload(notification))?.expiryDate ?? '')
+      const doc = await this.expiringDocument(Number(notification.entityId), expiryDate)
+      return doc && Number(doc.employeeId) === Number(user.employeeId ?? 0) ? null : 'المستند اتجدد أو مابقاش لموظف الحساب ده'
     }
     if (notification.entityType === 'payroll_run') {
       // نفس شرط «قسائم راتبي»: مسير معتمد أو مصروف ليه بند لموظف الحساب

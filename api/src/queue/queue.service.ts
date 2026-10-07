@@ -1,3 +1,4 @@
+import { raiseDocumentAlerts } from '../assets/document-expiry'
 import { Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { DataSource, type EntityManager } from 'typeorm'
 import * as os from 'os'
@@ -148,19 +149,13 @@ export class QueueService {
     // موديول المستندات أساسي فدايمًا مفعّل، والفحص هنا زي باقي دوال الشغل المجدولة (النداء المباشر واللحاق)
     if (!(await this.modules.jobEnabled('documents.expiry-events'))) return 0
     if (!(await queueTablesReady(this.ds.manager))) return 0
-    return this.ds.transaction(async em => {
-      const docs: Array<{ id: number; employeeId: number; expiryDate: string; branchId: number | null }> = await em.query(`SELECT d.[id], d.[employeeId],
-          CONVERT(nvarchar(10), d.[expiryDate], 23) AS [expiryDate], e.[branchId]
-        FROM [employee_documents] d INNER JOIN [employees] e ON e.[id] = d.[employeeId]
-        WHERE d.[expiryDate] IS NOT NULL AND d.[expiryDate] >= CONVERT(date, @0, 23) AND d.[expiryDate] <= DATEADD(day, @1, CONVERT(date, @0, 23)) AND e.[isActive] = 1
-        ORDER BY d.[expiryDate], d.[id]`, [today, windowDays])
-      let created = 0
-      for (const doc of docs) {
-        if (await recordOutboxEvent(em, { type: 'DOCUMENT_EXPIRING', entityType: 'employee_document', entityId: doc.id, key: `document-expiring:${doc.id}:${doc.expiryDate}`,
-          payload: { documentId: Number(doc.id), employeeId: Number(doc.employeeId), expiryDate: doc.expiryDate, branchId: doc.branchId == null ? null : Number(doc.branchId) } })) created++
-      }
-      return created
-    })
+    // B2.15: التنبيه بأيام نوع المستند (الافتراضي نفس النافذة: 30 يوم)، ومعاه مهمة التجديد على المسؤول — assets/document-expiry.ts
+    return (await this.documentAlerts(today)).events
+  }
+
+  /** شغل المهمة بعد بواباتها: حدث لكل مستند وصل ليوم تنبيه، ومهمة تجديد لو النوع له مسؤول */
+  documentAlerts(today: string) {
+    return raiseDocumentAlerts(this.ds, today)
   }
 
   /**

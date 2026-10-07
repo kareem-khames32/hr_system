@@ -80,8 +80,8 @@ before(async () => {
     status: 'APPROVED', ...extra })
   await repo('Leave').save([leave('m3', 0, 2), leave('m2', 10, 11), leave('m1', 3, 4, { status: 'CANCELLED' }), leave('m1', 40, 41), leave('o1', 1, 2)])
   // المستندات: إقامة m1 هتنتهي بعد 10 أيام؛ ومستند بعد النافذة، ومستند موظف برّه الفريق
-  await repo('EmployeeDocument').save([{ employeeId: E.m1.id, docType: 'إقامة', number: 'SECRET-123', expiryDate: addDays(today, 10) },
-    { employeeId: E.m2.id, docType: 'جواز سفر', expiryDate: addDays(today, 100) }, { employeeId: E.o1.id, docType: 'إقامة', expiryDate: addDays(today, 3) }])
+  await repo('EmployeeDocument').save([{ employeeId: E.m1.id, docType: 'iqama', number: 'SECRET-123', expiryDate: addDays(today, 10) },
+    { employeeId: E.m2.id, docType: 'جواز سفر', expiryDate: addDays(today, 100) }, { employeeId: E.o1.id, docType: 'iqama', expiryDate: addDays(today, 3) }])
 }, { timeout: 180000 })
 
 after(async t => {

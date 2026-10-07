@@ -23,6 +23,8 @@ export const NOTIFICATION_CATEGORIES = {
   task: 'المهام',
   // B2.8
   comment: 'التعليقات والإشارات',
+  // B2.15
+  document: 'مستنداتي',
 } as const
 export type NotificationCategoryCode = keyof typeof NOTIFICATION_CATEGORIES
 export const isNotificationCategory = (value: unknown): value is NotificationCategoryCode =>
@@ -117,6 +119,17 @@ export const NOTIFICATION_EVENTS = {
       IN_APP: { title: 'قسيمة راتبك متاحة', body: 'قسيمة {{payslip.period}} متاحة في «قسائم راتبي»' },
       EMAIL: { title: 'قسيمة راتبك متاحة: {{payslip.period}}',
         body: `${greeting}\n\nقسيمة راتب {{payslip.period}} متاحة الآن في «قسائم راتبي».\n\nافتحها من هنا:\n{{link}}\n\n${closing}` },
+    },
+  },
+  // B2.15: مستند الموظف وصل ليوم تنبيه قبل انتهائه (بياناته هو: نوع المستند وتاريخ انتهائه). جوه النظام العنصر المحسوب القايم
+  // («مستند ينتهي خلال 60 يومًا» في قايمة الإشعارات)، والمحرك بيضيف البريد
+  'document.expiring': {
+    label: 'مستندك هينتهي', category: 'document', kind: 'warning', storedInApp: false,
+    variables: [{ key: 'document.type', label: 'نوع المستند', sample: 'إقامة' }, { key: 'document.expiry', label: 'تاريخ الانتهاء', sample: '2026-11-15' }, ...COMMON],
+    templates: {
+      IN_APP: { title: 'مستندك هينتهي', body: '«{{document.type}}» هينتهي يوم {{document.expiry}} — راجع الموارد البشرية للتجديد' },
+      EMAIL: { title: 'مستندك هينتهي: {{document.type}}',
+        body: `${greeting}\n\nمستندك «{{document.type}}» هينتهي يوم {{document.expiry}}. راجع الموارد البشرية لتجديده.\n\nمستنداتك من هنا:\n{{link}}\n\n${closing}` },
     },
   },
   // B2.5 (محرك المهام): جوه النظام العدّاد المحسوب على «مهامي»، والمحرك بيضيف البريد

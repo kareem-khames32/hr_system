@@ -18,9 +18,10 @@ const used = text => [...text.matchAll(TOKEN)].map(match => match[1])
 
 test('NE-01: الكتالوج متسق — فئة معروفة، وقالب لكل قناة، والنص الافتراضي بمتغيرات الحدث بس', () => {
   assert.deepEqual(events.NOTIFICATION_EVENT_CODES, ['request.pending_approval', 'request.escalated', 'request.decided', 'request.returned', 'request.confidential', 'payroll.payslip_available',
-    'task.assigned', 'task.due_soon', 'task.overdue', 'comment.mentioned'])
+    // B2.15: «مستندك هينتهي» (بريد؛ جوه النظام العنصر المحسوب القايم)
+    'document.expiring', 'task.assigned', 'task.due_soon', 'task.overdue', 'comment.mentioned'])
   assert.deepEqual([...events.NOTIFICATION_CHANNELS], ['IN_APP', 'EMAIL'])
-  assert.deepEqual(Object.keys(events.NOTIFICATION_CATEGORIES), ['approval', 'request', 'payroll', 'task', 'comment'])
+  assert.deepEqual(Object.keys(events.NOTIFICATION_CATEGORIES), ['approval', 'request', 'payroll', 'task', 'comment', 'document'])
   for (const code of events.NOTIFICATION_EVENT_CODES) {
     const def = events.notificationEventDef(code)
     assert.ok(events.isNotificationCategory(def.category), code)

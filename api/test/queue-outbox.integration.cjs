@@ -262,7 +262,8 @@ test('QO-05: الأحداث الست من مصادرها الحقيقية في �
   assert.equal(await queue.recordDocumentExpiryEvents(today), 0, 'التشغيل التاني مابيكررش')
   const expiring = await events('DOCUMENT_EXPIRING')
   const mine = expiring.filter(row => row.entityId === String(soon.id))
-  assert.deepEqual([mine.length, mine[0].eventKey], [1, `document-expiring:${soon.id}:${plus(10)}`])
+  // B2.15: المفتاح بيشيل يوم التنبيه (الافتراضي 30) — مرة واحدة لكل يوم تنبيه
+  assert.deepEqual([mine.length, mine[0].eventKey], [1, `document-expiring:${soon.id}:${plus(10)}:30`])
   // التجديد بتاريخ جديد = حدث جديد
   await repo('EmployeeDocument').update(soon.id, { expiryDate: plus(20) })
   assert.equal(await queue.recordDocumentExpiryEvents(today), 1)

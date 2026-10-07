@@ -107,8 +107,9 @@ export class TeamService {
         `SELECT l.employeeId AS employeeId, CONVERT(varchar(10), l.fromDate, 23) AS fromDate, CONVERT(varchar(10), l.toDate, 23) AS toDate, l.days AS days, l.period AS period
          FROM leaves l WHERE l.status = 'APPROVED' AND l.toDate >= @0 AND l.fromDate <= @1 AND l.employeeId IN (${list})`, params), [today, until]),
       !memberIds.length ? [] : this.byIds<Record<string, any>>(memberIds, (list, params) => this.ds.query(
-        `SELECT d.employeeId AS employeeId, d.docType AS docType, CONVERT(varchar(10), d.expiryDate, 23) AS expiryDate
-         FROM employee_documents d
+        // اسم النوع من كتالوج أنواع المستندات (المستند بيشيل الكود)؛ نص قديم من غير نوع في الكتالوج بيتعرض زي ما هو
+        `SELECT d.employeeId AS employeeId, COALESCE(dt.nameAr, d.docType) AS docType, CONVERT(varchar(10), d.expiryDate, 23) AS expiryDate
+         FROM employee_documents d LEFT JOIN doc_types dt ON dt.code = d.docType
          WHERE d.expiryDate IS NOT NULL AND d.expiryDate >= DATEADD(day, -@1, CONVERT(date, @0, 23)) AND d.expiryDate <= DATEADD(day, @2, CONVERT(date, @0, 23))
            AND d.employeeId IN (${list})`, params), [today, TEAM_WINDOW_DAYS, DOCUMENT_EXPIRY_WINDOW_DAYS]),
       this.use(RequestsService).inbox(user),
