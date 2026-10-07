@@ -6,7 +6,7 @@
 // «الإدارة التنفيذية» مابتسحبش أقسام فروع تانية تحتها)؛ الفريق = الفريق نفسه بالظبط. كل مستوى مختار بيضيّق زيادة.
 // موظف مش معروف في الشجرة والفلتر شغال = مش مطابق (مايظهرش صف مش متأكدين من مكانه).
 
-import { apiFetch, getToken } from './api'
+import { apiFetch, sessionMark } from './api'
 import { branchLocalSubtree, isAdministration, unitPathLabel } from './department-tree'
 
 export interface OrgFilterBranch { id: number; name: string }
@@ -61,7 +61,7 @@ const FRESH_MS = 60_000
 interface CacheEntry { key: string; data: OrgFilterContext | null; at: number; pending: Promise<OrgFilterContext> | null }
 let cache: CacheEntry | null = null
 
-const sessionKey = () => getToken() ?? ''
+const sessionKey = () => sessionMark() ?? ''
 
 export const fetchOrgFilterContext = () => apiFetch<OrgFilterContext>('/org/filter-context')
 

@@ -1,4 +1,4 @@
-import { ApiError, apiFetch, clearSession, getToken } from './api'
+import { ApiError, apiFetch, clearSession, hasSession, sessionInit } from './api'
 
 export type HrDocumentCategory = 'contract' | 'acknowledgement' | 'certificate' | 'general'
 export interface HrDocumentContent { title: string; greeting: string; body: string; closing: string; footer: string }
@@ -61,20 +61,20 @@ export const acknowledgeHrDocument = (id: number, contentHash: string) => json<{
 export const cancelHrDocumentAck = (id: number) => json<IssuedHrDocument>(`/issued/${id}/acknowledgement/cancel`, 'POST', {})
 
 async function pdf(path: string, input?: unknown): Promise<Blob> {
-  const token = getToken()
+  const signedIn = hasSession()
   let response: Response
   try {
-    response = await fetch(API_BASE + PREFIX + path, {
+    response = await fetch(API_BASE + PREFIX + path, await sessionInit({
       method: input === undefined ? 'GET' : 'POST',
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(input === undefined ? {} : { 'Content-Type': 'application/json' }) },
+      headers: input === undefined ? {} : { 'Content-Type': 'application/json' },
       body: input === undefined ? undefined : JSON.stringify(input),
-    })
+    }))
   } catch {
     // انقطاع الاتصال: رسالة مفهومة بدل نص المتصفح الإنجليزي
     throw new ApiError(0, 'تعذر الاتصال بالخادم — تحقق من الاتصال ثم أعد المحاولة')
   }
   if (!response.ok) {
-    if (response.status === 401 && token && typeof window !== 'undefined') {
+    if (response.status === 401 && signedIn && typeof window !== 'undefined') {
       clearSession()
       if (!window.location.pathname.startsWith('/login')) window.location.href = '/login?expired=1'
     }

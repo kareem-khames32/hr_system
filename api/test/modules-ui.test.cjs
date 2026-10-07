@@ -49,10 +49,11 @@ const ModuleGate = require('../../src/components/ModuleGate').default
 
 const admin = { id: 7, email: 'admin@x.test', displayName: 'مدير النظام', role: 'super_admin', branchId: null, employeeId: null, permissions: ['*'] }
 const employee = { id: 8, email: 'e@x.test', displayName: 'موظف', role: 'employee', branchId: 1, employeeId: 21, permissions: [] }
-const tokenOf = user => `header.payload.signature-of-user-${user.id}-0123456789abcdef`
-const sessionOf = user => `${user.id}:${tokenOf(user).slice(-24)}`
+// B2.17: علامة الجلسة (مش توكن) هي اللي في التخزين
+const markOf = user => `mark-of-user-${user.id}-0123456789abcdef`
+const sessionOf = user => `${user.id}:${markOf(user)}`
 function signIn(user, enabled) {
-  localStorage.setItem('hr_access_token', tokenOf(user)); localStorage.setItem('hr_current_user', JSON.stringify(user))
+  localStorage.setItem('hr_session_mark', markOf(user)); localStorage.setItem('hr_current_user', JSON.stringify(user))
   if (enabled) sessionStorage.setItem('hr_enabled_modules', JSON.stringify({ session: sessionOf(user), enabled }))
 }
 const state = (moduleRows = {}, featureRows = {}) => registry.enabledSnapshot({ modules: moduleRows, features: featureRows })

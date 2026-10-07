@@ -1,6 +1,6 @@
 // B2.7-أ: مكتبة السياسات والإقرار — الإدارة (سياسة، نسخة، سحب، تقرير)، والموظف («سياساتي»، «اللي مستنيني»، قراءة نسخة، إقرار).
 // مسارات نسبية (لا @/) عشان الاختبارات تقرا الملف مباشرة.
-import { ApiError, apiFetch, getToken, uploadFile } from './api'
+import { ApiError, apiFetch, sessionInit, sessionMark as currentSessionMark, uploadFile } from './api'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'
 
@@ -126,12 +126,11 @@ export const fetchPolicyVersion = (versionId: number) => apiFetch<ApiPolicyConte
 export const acknowledgePolicy = (versionId: number, contentHash: string) =>
   send<{ id: number; acknowledgedAt: string; already: boolean }>('POST', `/policies/versions/${versionId}/acknowledge`, { contentHash })
 
-/** ملف النسخة (PDF) كرابط محلي للعارض — المسار محتاج التوكن، فمايتفتحش مباشرة. اللي ينادي بيلغي الرابط بعد ما يخلص */
+/** ملف النسخة (PDF) كرابط محلي للعارض — المسار محتاج الجلسة، فمايتفتحش مباشرة. اللي ينادي بيلغي الرابط بعد ما يخلص */
 export async function fetchPolicyFileUrl(versionId: number): Promise<string> {
-  const token = getToken()
   let response: Response
   try {
-    response = await fetch(`${API_BASE}/policies/versions/${versionId}/file`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+    response = await fetch(`${API_BASE}/policies/versions/${versionId}/file`, await sessionInit())
   } catch {
     throw new ApiError(0, 'تعذر الاتصال بالخادم — تحقق من الاتصال ثم أعد المحاولة')
   }
@@ -150,7 +149,7 @@ export async function fetchPolicyFileUrl(versionId: number): Promise<string> {
 // الفحص عند الدخول مرة لكل دخول: العلامة قيمتها آخر التوكن الحالي، فدخول جديد (توكن جديد) بيعرض الشاشة تاني. و«بعدين» (جوه مهلة السماح)
 // بيحط نفس العلامة. لو تخزين المتصفح مقفول مفيش فحص عند الدخول (اللي عدّى مهلته الخادم قافله في كل الأحوال)
 const CHECKED_KEY = 'hr_policies_checked'
-const sessionMark = () => (getToken() ?? '').slice(-24)
+const sessionMark = () => currentSessionMark() ?? ''
 export const policiesCheckedThisSession = (): boolean => {
   try { return typeof window !== 'undefined' && !!sessionMark() && sessionStorage.getItem(CHECKED_KEY) === sessionMark() } catch { return true }
 }

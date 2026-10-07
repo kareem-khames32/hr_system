@@ -5,7 +5,7 @@
 // عملة النظام، وعملة فرع موظف الحساب، ورقم كل فرع في نطاقه وعملته.
 // الاستخدام: const c = useCurrency(employee?.branchId) ثم `${amount.toLocaleString()} ${c}` — ومن غير فرع = عملة الشاشة العامة.
 import { useEffect, useState } from 'react'
-import { apiFetch, getCurrentUser, getToken, type CurrentUser } from './api'
+import { apiFetch, getCurrentUser, sessionMark, type CurrentUser } from './api'
 // نفس قاعدة الخادم بالحرف (ملف صرف مشترك): دولة الفرع ← عملته، ومن غير دولة ← عملة النظام
 export { branchCurrency } from '../../api/src/org/branch-currency'
 
@@ -49,8 +49,8 @@ const validContext = (value: unknown): value is CurrencyContext => {
 // الكاش مربوط بالجلسة نفسها (رقم الحساب + آخر التوكن): دخول جديد — حتى لنفس الحساب بعد نقله لفرع تاني — بيقرا سياق جديد
 // (مراجعة Codex الجولة 20: CR20-N02)، وحساب تاني في نفس التبويب مايورثش سياق اللي قبله
 const currentSession = (): string | null => {
-  const user = getCurrentUser(), token = getToken()
-  return user && token ? `${user.id}:${token.slice(-24)}` : null
+  const user = getCurrentUser(), mark = sessionMark()
+  return user && mark ? `${user.id}:${mark}` : null
 }
 
 function cachedFor(session: string): CurrencyContext | null {

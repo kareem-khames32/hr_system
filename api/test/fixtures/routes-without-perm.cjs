@@ -15,6 +15,7 @@ const EXCEPTIONS = {
   'AttendanceController.ingest': 'PUBLIC_OK', // POST /attendance/punches
   'AuthController.domainLogin': 'PUBLIC_OK', // POST /auth/login/domain
   'AuthController.login': 'PUBLIC_OK', // POST /auth/login
+  'AuthController.logout': 'PUBLIC_OK', // POST /auth/logout — B2.17: بيمسح cookie الجلسة (حتى المنتهية)، ولما الطلب نفسه شايلها بس
   'AuthController.loginOptions': 'PUBLIC_OK', // GET /auth/login/options
   'AuthController.resend': 'PUBLIC_OK', // POST /auth/login/resend
   'AuthController.verify': 'PUBLIC_OK', // POST /auth/login/verify
@@ -33,6 +34,7 @@ const EXCEPTIONS = {
   'AttendanceExemptionsController.mine': 'SELF', // GET /attendance-exemptions/mine
   'AuthController.changePassword': 'SELF', // POST /auth/change-password
   'AuthController.me': 'SELF', // GET /auth/me
+  'AuthController.session': 'SELF', // GET /auth/session — B2.17: بيانات الحساب ورمز CSRF للجلسة الحالية
   'BonusesController.mine': 'SELF', // GET /bonuses/mine
   'EmployeeSelfPhotoController.setOwnPhoto': 'SELF', // PUT /employees/me/photo
   'FinancialExemptionsController.mine': 'SELF', // GET /payroll/exemptions/mine

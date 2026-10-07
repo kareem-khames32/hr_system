@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common'
+import { ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { InjectRepository } from '@nestjs/typeorm'
 import { PassportStrategy } from '@nestjs/passport'
@@ -8,6 +8,13 @@ import type { JwtPayload } from './auth.service'
 import { branchScopeCovers, branchScopeOf, effectiveBranchScope } from './guards'
 import { User } from './user.entity'
 import { auditRequestContext } from '../audit/audit'
+import { CSRF_HEADER, CSRF_MESSAGE, CSRF_TOKEN_INVALID, csrfMatches, csrfSafeMethod, sessionCookieOf } from './session-cookie'
+
+type SessionRequest = { headers: Record<string, unknown>; method?: string }
+// نفس قارئ ترويسة Bearer اللي كان شغال بالحرف — وهو اللي بيحكم «الجلسة جاية منين» في المكانين (القراءة وحكم CSRF)
+const bearerFromHeader = ExtractJwt.fromAuthHeaderAsBearerToken()
+/** B2.17: الجلسة جاية من cookie المتصفح (مفيش توكن في ترويسة Bearer)؟ دي اللي طلب الكتابة فيها محتاج رمز CSRF */
+export const sessionViaCookie = (req: SessionRequest): boolean => bearerFromHeader(req as never) === null && sessionCookieOf(req) !== null
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -17,16 +24,18 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     private readonly users: Repository<User>
   ) {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      // B2.17: ترويسة Bearer أولًا (السكربتات والاختبارات — زي ما هي)، وإلا cookie الجلسة (المتصفح)
+      jwtFromRequest: (req: SessionRequest) => bearerFromHeader(req as never) ?? sessionCookieOf(req),
       ignoreExpiration: false,
       // بلا قيمة افتراضية — validateEnv يضمن وجوده وطوله وقت الإقلاع
       secretOrKey: config.getOrThrow<string>('JWT_SECRET'),
+      passReqToCallback: true,
     })
   }
 
   // إبطال فوري: نتحقق من الحساب في القاعدة كل طلب — نشط؟ وإصدار التوكن مطابق؟
   // (تغيير الدور/الصلاحيات أو التعطيل يزيد tokenVersion فيبطل التوكن القديم فوراً)
-  async validate(payload: JwtPayload) {
+  async validate(req: SessionRequest, payload: JwtPayload) {
     const user = await this.users.findOne({
       where: { id: payload.sub },
       select: ['id', 'isActive', 'tokenVersion', 'scopeAllBranches', 'scopeBranchIds', 'branchId'],
@@ -52,6 +61,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       if (!branchScopeCovers(current, branchScopeOf(payload))) {
         throw new UnauthorizedException('انتهت صلاحية الجلسة — سجّل الدخول من جديد')
       }
+    }
+    // B2.17: الـcookie المتصفح بيبعتها لوحده، فطلب الكتابة بيها لازم يثبت إنه من صفحتنا: رمز CSRF بتاع الجلسة نفسها في
+    // ترويسة (موقع تاني مايعرفش يقراه ولا يحط ترويسة). طلب Bearer من غير الشرط: الترويسة نفسها مابتتبعتش من موقع تاني.
+    if (sessionViaCookie(req) && !csrfSafeMethod(req.method) && !csrfMatches(payload.csrf, req.headers[CSRF_HEADER])) {
+      throw new ForbiddenException({ statusCode: 403, code: CSRF_TOKEN_INVALID, message: CSRF_MESSAGE })
     }
     // B2.1: صاحب الطلب لسجل التدقيق (التغييرات اللي مالهاش عمود «مين» بتاخده من هنا)
     const audit = auditRequestContext.getStore()

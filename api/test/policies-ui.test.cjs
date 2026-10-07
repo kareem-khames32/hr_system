@@ -77,8 +77,10 @@ test('PU-02: عميل الـAPI على مسارات الخادم نفسها وب
   assert.ok(controller.includes("@AllowDuringPolicyGate()\n  @Perm('policies.manage')\n  @Post(':id/withdraw')\n  withdraw("))
   const sources = fs.readdirSync(path.join(root, 'api/src'), { recursive: true }).filter(file => String(file).endsWith('.controller.ts')).map(file => [String(file).replace(/\\/g, '/'), read(path.join('api/src', String(file)))])
   assert.deepEqual(sources.filter(([, text]) => text.includes('@AllowDuringPolicyGate()')).map(([file, text]) => [file, count(text, '@AllowDuringPolicyGate()')]).sort(),
-    [['auth/auth.controller.ts', 1], ['modules-registry/modules.controller.ts', 1], ['policies/policies.controller.ts', 6]])
+    // B2.17: + «بيانات الجلسة» (الواجهة بتجيب منه الحساب ورمز CSRF حتى والحساب مقفول على إقرار)
+    [['auth/auth.controller.ts', 2], ['modules-registry/modules.controller.ts', 1], ['policies/policies.controller.ts', 6]])
   assert.match(read('api/src/auth/auth.controller.ts'), /@AllowDuringPolicyGate\(\)\n\s+@Get\('me'\)/)
+  assert.match(read('api/src/auth/auth.controller.ts'), /@AllowDuringPolicyGate\(\)\n\s+@Get\('session'\)/)
   assert.match(read('api/src/modules-registry/modules.controller.ts'), /@AllowDuringPolicyGate\(\)\n\s+@Get\('enabled'\)/)
   // والبوابة معترض عام بيرفض بكود، وبيعدّي المعلَّم، ومابيفحصش حساب من غير موظف، وكلمة السر المؤقتة الأول
   const gate = read('api/src/policies/policy-gate.ts')
@@ -98,21 +100,21 @@ test('PU-03: ربط البوابة في الواجهة — التحويل بكو
   // شاشة الإقرار تحت ‎/login: من غير إطار النظام ومن غير حارسه
   assert.match(layout, /const BARE_PATHS = \['\/login'\]/)
   assert.match(layout, /if \(!authed \|\| bare \|\| policiesCheckedThisSession\(\)\) return\n\s+let cancelled = false\n\s+fetchPendingPolicies\(\)\n\s+\.then\(\(pending\) => \{\n\s+if \(cancelled\) return\n\s+if \(pending\.policies\.length\) window\.location\.href = POLICY_GATE_PATH\n\s+else markPoliciesChecked\(\)\n\s+\}\)\n\s+\.catch\(\(\) => undefined\)/)
-  // العلامة قيمتها آخر التوكن: دخول جديد بيعرض الشاشة تاني، و«بعدين» بيحطها؛ وتخزين مقفول = من غير فحص عند الدخول
+  // العلامة قيمتها علامة الجلسة (B2.17: مفيش توكن في التخزين): دخول جديد بيعرض الشاشة تاني، و«بعدين» بيحطها؛ وتخزين مقفول = من غير فحص عند الدخول
   const ui = require('../../src/lib/policies-api')
   const stored = new Map()
   const storage = { getItem: key => stored.has(key) ? stored.get(key) : null, setItem: (key, value) => stored.set(key, String(value)), removeItem: key => stored.delete(key) }
   const previous = { window: global.window, localStorage: global.localStorage, sessionStorage: global.sessionStorage }
   try {
     global.window = {}; global.localStorage = storage; global.sessionStorage = storage
-    const tokenKey = /const TOKEN_KEY = '([^']+)'/.exec(client)[1]
-    assert.equal(ui.policiesCheckedThisSession(), false, 'من غير توكن: مفيش علامة')
-    stored.set(tokenKey, 'header.payload.first-login-signature-0001')
+    const tokenKey = /const MARK_KEY = '([^']+)'/.exec(client)[1]
+    assert.equal(ui.policiesCheckedThisSession(), false, 'من غير جلسة: مفيش علامة')
+    stored.set(tokenKey, 'first-login-mark-0001')
     assert.equal(ui.policiesCheckedThisSession(), false)
     ui.markPoliciesChecked()
     assert.equal(ui.policiesCheckedThisSession(), true)
-    stored.set(tokenKey, 'header.payload.second-login-signature-0002')
-    assert.equal(ui.policiesCheckedThisSession(), false, 'دخول جديد = توكن جديد = الفحص تاني')
+    stored.set(tokenKey, 'second-login-mark-0002')
+    assert.equal(ui.policiesCheckedThisSession(), false, 'دخول جديد = علامة جديدة = الفحص تاني')
     global.sessionStorage = { getItem: () => { throw new Error('blocked') }, setItem: () => { throw new Error('blocked') } }
     assert.equal(ui.policiesCheckedThisSession(), true, 'تخزين مقفول: من غير فحص عند الدخول (ومن غير لفّة تحويل)')
     assert.doesNotThrow(() => ui.markPoliciesChecked())

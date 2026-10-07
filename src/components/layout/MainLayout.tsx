@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { EyeOff, ShieldAlert } from 'lucide-react'
-import { can, CHANGE_PASSWORD_PATH, getCurrentUser, getToken, POLICY_GATE_PATH } from '@/lib/api'
+import { can, CHANGE_PASSWORD_PATH, getCurrentUser, hasSession, POLICY_GATE_PATH, restoreSession } from '@/lib/api'
 import { fetchPendingPolicies, markPoliciesChecked, policiesCheckedThisSession } from '@/lib/policies-api'
 import { routeAvailable, useModules } from '@/lib/modules'
 import Sidebar from './Sidebar'
@@ -109,19 +109,34 @@ export function AppShell({ children }: MainLayoutProps) {
   // الموديولات المفعّلة للمستخدم (الإعدادات ← الموديولات) — بتتقري مرة للجلسة؛ null لحد ما تتقري
   const modules = useModules()
 
-  // حارس الدخول: كل شاشات النظام تمر من هنا — بلا توكن → صفحة اللوجين
+  // حارس الدخول: كل شاشات النظام تمر من هنا — بلا جلسة → صفحة اللوجين
   useEffect(() => {
     if (bare) return
-    if (!getToken()) {
-      window.location.href = '/login'
+    let cancelled = false
+    const enter = () => {
+      // كلمة مؤقتة من المدير لسه ماتغيّرتش → «غيّر كلمة المرور» الأول (الخادم قافل الباقي أصلًا)
+      if (getCurrentUser()?.mustChangePassword) {
+        window.location.href = CHANGE_PASSWORD_PATH
+        return
+      }
+      setAuthed(true)
+    }
+    if (hasSession()) {
+      enter()
       return
     }
-    // كلمة مؤقتة من المدير لسه ماتغيّرتش → «غيّر كلمة المرور» الأول (الخادم قافل الباقي أصلًا)
-    if (getCurrentUser()?.mustChangePassword) {
-      window.location.href = CHANGE_PASSWORD_PATH
-      return
+    // B2.17: تبويب جديد أو تخزين اتمسح — الجلسة ممكن تكون لسه قايمة في cookie المتصفح: بيانات الحساب بترجع من الخادم
+    void restoreSession().then((user) => {
+      if (cancelled) return
+      if (!user) {
+        window.location.href = '/login'
+        return
+      }
+      enter()
+    })
+    return () => {
+      cancelled = true
     }
-    setAuthed(true)
   }, [bare, pathname])
 
   // B2.7: سياسة إلزامية مااقرّش بيها → شاشة الإقرار، مرة مع كل دخول (جوه المهلة فيها «بعدين»؛ بعد المهلة الخادم قافل الباقي أصلًا).

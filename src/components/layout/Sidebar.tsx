@@ -5,9 +5,9 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   can,
-  clearSession,
   fetchInbox,
   getCurrentUser,
+  logout,
   type CurrentUser,
 } from '@/lib/api'
 import { fetchMyPayrollApprovalsCount } from '@/lib/payroll-approval-chain-api'
@@ -664,8 +664,8 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
           )}
           <button
             onClick={() => {
-              clearSession()
-              window.location.href = '/login'
+              // B2.17: الخادم بيمسح cookie الجلسة، وبعدها بيانات الحساب من المتصفح
+              void logout().then(() => { window.location.href = '/login' })
             }}
             title="تسجيل الخروج"
             className="p-2 hover:bg-gray-200 rounded-lg transition-colors"

@@ -7,8 +7,9 @@ import {
   changeMyPassword,
   clearSession,
   getCurrentUser,
-  getToken,
+  hasSession,
   isSessionRemembered,
+  logout as endSession,
   saveSession,
 } from '@/lib/api'
 import { useBranding } from '@/lib/branding'
@@ -33,7 +34,7 @@ export default function ChangePasswordPage() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!getToken()) {
+    if (!hasSession()) {
       window.location.href = '/login'
       return
     }
@@ -63,9 +64,10 @@ export default function ChangePasswordPage() {
     setError(null)
     try {
       const remembered = isSessionRemembered()
-      const { accessToken, user } = await changeMyPassword(current, next)
+      // الخادم بدّل cookie الجلسة بالجديدة (الإصدار زاد)؛ هنا بيانات الحساب ورمز CSRF بس
+      const { user, csrfToken } = await changeMyPassword(current, next, remembered)
       clearSession()
-      saveSession(accessToken, user, remembered)
+      saveSession(user, remembered, csrfToken)
       window.location.href = '/'
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -79,8 +81,7 @@ export default function ChangePasswordPage() {
   }
 
   const logout = () => {
-    clearSession()
-    window.location.href = '/login'
+    void endSession().then(() => { window.location.href = '/login' })
   }
 
   if (!ready) {

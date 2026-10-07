@@ -19,7 +19,8 @@ function storage() {
 global.window = { location: { pathname: '/', href: '/' } }
 global.localStorage = storage()
 global.sessionStorage = storage()
-const signIn = user => { localStorage.setItem('hr_access_token', `token-${user.id}`); localStorage.setItem('hr_current_user', JSON.stringify(user)) }
+// B2.17: الجلسة cookie عند الخادم — في التخزين بيانات الحساب وعلامة الجلسة بس (مفيش توكن)
+const signIn = user => { localStorage.setItem('hr_session_mark', `mark-${user.id}`); localStorage.setItem('hr_current_user', JSON.stringify(user)) }
 const employee = { id: 11, email: 'e@x.test', displayName: 'موظف', role: 'employee', branchId: 1, employeeId: 21, permissions: [] }
 const branchHr = { id: 12, email: 'h@x.test', displayName: 'hr', role: 'hr', branchId: 2, employeeId: 22, permissions: ['employees.view'], branchIds: [2] }
 const admin = { id: 13, email: 'a@x.test', displayName: 'admin', role: 'super_admin', branchId: null, employeeId: null, permissions: ['*'] }
@@ -76,11 +77,11 @@ test('السياق بيتقري لموظف من غير أي صلاحية، وي�
     assert.equal(await currency.loadCurrency(), 'ج.م', 'الموظف بيشوف عملة فرعه (كانت «ر.س» لأي حد من غير settings.manage)')
     assert.equal(calls.length, 1)
     assert.equal(new URL(calls[0].url).pathname, '/api/settings/currency-context')
-    assert.equal(calls[0].options.headers.Authorization, `Bearer token-${employee.id}`)
+    assert.deepEqual([calls[0].options.credentials, calls[0].options.headers.Authorization], ['include', undefined], 'بالـcookie ومن غير توكن في ترويسة')
     assert.equal(await currency.loadCurrency(2), 'ر.س')
     assert.equal(calls.length, 1, 'من كاش الجلسة')
-    // الكاش مربوط بالجلسة (الحساب + آخر التوكن) — دخول جديد لنفس الحساب بيقرا سياق جديد (مراجعة Codex الجولة 20: CR20-N02)
-    assert.equal(JSON.parse(sessionStorage.getItem('hr_currency_context')).session, `${employee.id}:token-${employee.id}`)
+    // الكاش مربوط بالجلسة (الحساب + علامة الجلسة) — دخول جديد لنفس الحساب بيقرا سياق جديد (مراجعة Codex الجولة 20: CR20-N02)
+    assert.equal(JSON.parse(sessionStorage.getItem('hr_currency_context')).session, `${employee.id}:mark-${employee.id}`)
     currency.invalidateCurrency()
     assert.equal(sessionStorage.getItem('hr_currency_context'), null)
     await currency.loadCurrencyContext()

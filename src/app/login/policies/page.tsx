@@ -5,7 +5,7 @@
 // جوه مهلة السماح فيه «بعدين». بعد المهلة مفيش «بعدين»، والخادم نفسه قافل أي نداء تاني لحد الإقرار.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { LogOut, ScrollText } from 'lucide-react'
-import { ApiError, can, clearSession, getCurrentUser, getToken, isCompanyWideUser } from '@/lib/api'
+import { ApiError, can, clearSession, getCurrentUser, hasSession, isCompanyWideUser, logout as endSession } from '@/lib/api'
 import { useBranding } from '@/lib/branding'
 import { BrandLogo } from '@/components/branding/BrandLogo'
 import { BrandBackdrop } from '@/components/branding/BrandBackdrop'
@@ -45,14 +45,14 @@ export default function PolicyGatePage() {
   }, [])
 
   useEffect(() => {
-    if (!getToken()) { window.location.href = '/login'; return }
+    if (!hasSession()) { window.location.href = '/login'; return }
     setName(getCurrentUser()?.displayName ?? '')
     // السحب لمدير السياسات اللي نطاقه كل الفروع (نفس حكم الخادم)
     setManager(can('policies.manage') && isCompanyWideUser(getCurrentUser()))
     void load()
   }, [load])
 
-  const logout = () => { clearSession(); window.location.href = '/login' }
+  const logout = () => { void endSession().then(() => { window.location.href = '/login' }) }
   const withdraw = async (policyId: number) => {
     // مرة واحدة: العلامة في ref، فضغطتين ورا بعض قبل ما الشاشة تترسم تاني مايبعتوش طلبين
     if (running.current) return

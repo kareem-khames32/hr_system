@@ -10,7 +10,7 @@ import {
   AlertTriangle, ArrowRight, CheckCircle2, Download, FileSpreadsheet, Info, Loader2, RefreshCw, Upload, XCircle,
 } from 'lucide-react'
 import {
-  ApiError, can, fetchBranches, fetchDepartments, fetchEmployees, fetchTeams, getCurrentUser, getToken, lockedBranchIdOf,
+  ApiError, can, fetchBranches, fetchDepartments, fetchEmployees, fetchTeams, getCurrentUser, lockedBranchIdOf, sessionInit,
   type ApiBranch, type ApiDepartment, type ApiEmployee, type ApiTeam,
 } from '@/lib/api'
 import { branchScopeOfUser, type BranchScope } from '@/lib/branch-scope'
@@ -57,12 +57,9 @@ const GENERIC: Record<number, string> = {
   413: 'حجم الملف أكبر من المسموح (5 ميجا)',
 }
 async function request(path: string, init: RequestInit): Promise<Response> {
-  const token = getToken()
   let res: Response
   try {
-    res = await fetch(`${API_BASE}/employees/bulk-update/${path}`, {
-      ...init, headers: { ...(init.headers ?? {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    })
+    res = await fetch(`${API_BASE}/employees/bulk-update/${path}`, await sessionInit(init))
   } catch {
     throw new ApiError(0, 'تعذر الاتصال بالخادم — تحقق من الاتصال ثم أعد المحاولة')
   }

@@ -1,5 +1,5 @@
 // B2.14: لوحة «فريقي» للمدير الهيكلي — قراءة بنطاق فريق صاحب الحساب في الهيكل (الخادم بيحكم بموقعه؛ مفيش مفتاح صلاحية)
-import { apiFetch, getToken } from './api'
+import { apiFetch, sessionMark } from './api'
 
 export interface TeamMember {
   id: number; employeeCode: string; fullName: string; jobTitle: string | null; status: string
@@ -33,7 +33,7 @@ export const fetchTeamOverview = () => apiFetch<TeamOverview | { manager: false 
 // بند «فريقي» في القايمة: سؤال واحد للجلسة (بمفتاح التوكن) — مش مع كل انتقال
 let statusCache: { token: string | null; value: Promise<boolean> } | null = null
 export function fetchTeamManager(): Promise<boolean> {
-  const token = getToken()
+  const token = sessionMark()
   if (!statusCache || statusCache.token !== token) {
     const value = apiFetch<{ manager: boolean }>('/manager/status').then((result) => result.manager === true)
     statusCache = { token, value }

@@ -119,8 +119,10 @@ export default function LoginPage() {
   }, [challenge])
 
   const enterSystem = useCallback(
-    (accessToken: string, user: CurrentUser) => {
-      saveSession(accessToken, user, rememberMe)
+    (session: { user: CurrentUser; csrfToken?: string | null }) => {
+      const user = session.user
+      // B2.17: الجلسة نفسها cookie من الخادم — هنا بيانات الحساب ورمز CSRF بس
+      saveSession(user, rememberMe, session.csrfToken)
       // كلمة مؤقتة من المدير → لازم يغيّرها الأول قبل ما يدخل النظام
       window.location.href = user.mustChangePassword ? CHANGE_PASSWORD_PATH : '/'
     },
@@ -137,7 +139,7 @@ export default function LoginPage() {
     setNotice(null)
     try {
       const outcome =
-        mode === 'domain' ? await domainLogin(username, password) : await login(email, password)
+        mode === 'domain' ? await domainLogin(username, password, rememberMe) : await login(email, password, rememberMe)
       if (isTwoFactorChallenge(outcome)) {
         // التحقق بخطوتين مفتوح: مفيش جلسة لحد ما الرمز يتأكد
         setChallenge(outcome)
@@ -147,7 +149,7 @@ export default function LoginPage() {
         setIsLoading(false)
         return
       }
-      enterSystem(outcome.accessToken, outcome.user)
+      enterSystem(outcome)
     } catch (err) {
       setError(asMessage(err, 'تعذّر الاتصال بالخادم — تأكد أن الـ API يعمل'))
       setIsLoading(false)
@@ -161,8 +163,8 @@ export default function LoginPage() {
     setError(null)
     setNotice(null)
     try {
-      const session = await verifyLoginCode(challenge.challengeToken, code)
-      enterSystem(session.accessToken, session.user)
+      const session = await verifyLoginCode(challenge.challengeToken, code, rememberMe)
+      enterSystem(session)
     } catch (err) {
       setError(asMessage(err, 'تعذّر التحقق من الرمز — أعد المحاولة'))
       setCode('')

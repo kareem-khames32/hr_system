@@ -23,6 +23,7 @@ import { User } from './user.entity'
 import { PRODUCT_NAME } from '../settings/product-name'
 import { failureDelayMs, lockedMessage, lockedNow } from './login-security'
 import { LoginSecurityService, type LoginContext } from './login-security.service'
+import { newCsrfToken } from './session-cookie'
 
 // حمولة التوكن — الدور والفرع هما أساس عزل البيانات
 export interface JwtPayload {
@@ -43,7 +44,13 @@ export interface JwtPayload {
   // فروع النطاق صريحة للحساب اللي مش «كل الفروع» (effectiveBranchScope: المختارة بعلامات صح، أو فرعه، أو [] = ولا فرع).
   // التوكن القديم من غيرها = فرعه (branchId) بس. تغيير الفروع المختارة بيزوّد tokenVersion زي «كل الفروع».
   branchIds?: number[]
+  // B2.17: رمز CSRF بتاع جلسة الـcookie — طلب الكتابة بالـcookie لازم يبعته في ترويسة X-CSRF-Token (JwtStrategy).
+  // توكن Bearer (السكربتات والاختبارات) من غيره
+  csrf?: string
 }
+
+/** B2.17: شكل الجلسة المطلوب من العميل. cookie = التوكن في cookie httpOnly (ومعاه رمز CSRF) بدل جسم الرد */
+export interface SessionMode { cookie?: boolean }
 
 /** الجلسة المفتوحة — نفس شكل رد الدخول الحالي بالحرف (الواجهة بتقرأه كما هو). */
 export interface SessionResponse {
@@ -64,6 +71,8 @@ export interface SessionResponse {
     // بيتبعت للحساب المربوط بس (الحساب العادي رده زي ما هو بالحرف)
     domainAccount?: true
   }
+  // B2.17: لجلسة الـcookie بس — رمز CSRF بتاعها (الجلسة العادية ردها زي ما هو بالحرف)
+  csrfToken?: string
 }
 
 /** رد الدخول: جلسة كاملة (التحقق بخطوتين مقفول) أو حالة معلَّقة تنتظر الرمز (مفتوح). */
@@ -239,7 +248,7 @@ export class AuthService {
    * التحقق بخطوتين مقفول (الافتراضي) → الرد جلسة كاملة زي ما هو بالحرف.
    * مفتوح → الرد حالة معلَّقة بس (مفيش accessToken)، والجلسة بتتفتح بعد verifyTwoFactor.
    */
-  async login(email: string, password: string, context: LoginContext = {}): Promise<LoginResult> {
+  async login(email: string, password: string, context: LoginContext = {}, session: SessionMode = {}): Promise<LoginResult> {
     const identifier = String(email ?? '').toLowerCase().trim()
     const user = await this.withPasswordState()
       .where('u.email = :email', { email: identifier })
@@ -268,14 +277,14 @@ export class AuthService {
       throw new UnauthorizedException('بيانات الدخول غير صحيحة')
     }
     await this.security.reset(user.id)
-    return this.finishLogin(user, 'PASSWORD', user.email, context, identifier)
+    return this.finishLogin(user, 'PASSWORD', user.email, context, identifier, session)
   }
 
   /**
    * الدخول بحساب الشركة: المجال بيثبت الهوية، وبعدها نطابق الموظف ونعمل/نربط الحساب في لحظته.
    * الصلاحيات والأدوار ونطاق الفروع من جداولنا — مفيش مجموعة AD بتتقري ولا بتمنح حاجة.
    */
-  async domainLogin(username: string, password: string, context: LoginContext = {}): Promise<LoginResult> {
+  async domainLogin(username: string, password: string, context: LoginContext = {}, session: SessionMode = {}): Promise<LoginResult> {
     let directoryUser
     const identifier = String(username ?? '').trim()
     try {
@@ -295,7 +304,7 @@ export class AuthService {
     }
     const user = await this.domain.resolveUser(directoryUser)
     // صندوق البريد من AD الأول (322 موظف بريدهم عندنا @maharah.local) وإلا بريد الحساب
-    return this.finishLogin(user, 'DOMAIN', directoryUser.mail ?? user.email, context, identifier)
+    return this.finishLogin(user, 'DOMAIN', directoryUser.mail ?? user.email, context, identifier, session)
   }
 
   /**
@@ -308,7 +317,8 @@ export class AuthService {
     method: 'PASSWORD' | 'DOMAIN',
     address: string,
     context: LoginContext = {},
-    identifier: string = user.email
+    identifier: string = user.email,
+    session: SessionMode = {}
   ): Promise<LoginResult> {
     // B1.3: التحقق العام مقفول بس دور الحساب في «التحقق بخطوتين إلزامي لأدوار…» = الرمز مطلوب
     const gate = await this.twoFactor.gate(user)
@@ -324,7 +334,7 @@ export class AuthService {
     if (gate === 'DISABLED') {
       await this.users.update({ id: user.id }, { lastLoginAt: new Date() })
       await this.security.record({ userId: user.id, identifier, method, outcome: 'SUCCESS', context })
-      return this.issueSession(user)
+      return this.issueSession(user, session)
     }
     try {
       const challenge = await this.twoFactor.open(user, method, address)
@@ -354,7 +364,7 @@ export class AuthService {
   }
 
   /** التحقق من رمز البريد → الجلسة. كل قواعد الحساب بتتقري من القاعدة من جديد هنا. */
-  async verifyTwoFactor(challengeToken: string, code: string, context: LoginContext = {}): Promise<SessionResponse> {
+  async verifyTwoFactor(challengeToken: string, code: string, context: LoginContext = {}, session: SessionMode = {}): Promise<SessionResponse> {
     const challenge = await this.twoFactor.verify(challengeToken, code).catch(async (error) => {
       // B1.3: الرمز الغلط أو المنتهي في السجل (الحساب بيتعرف من الرمز لو صالح)
       await this.security.record({ identifier: '—', method: 'CODE',
@@ -366,7 +376,7 @@ export class AuthService {
     if (!user || !user.isActive) throw new UnauthorizedException('بيانات الدخول غير صحيحة')
     await this.users.update({ id: user.id }, { lastLoginAt: new Date() })
     await this.security.record({ userId: user.id, identifier: user.email, method: 'CODE', outcome: 'SUCCESS', context })
-    return this.issueSession(user)
+    return this.issueSession(user, session)
   }
 
   /** إعادة إرسال الرمز لنفس محاولة الدخول (بمهلة وحد أعلى) — مفيش جلسة بتتفتح هنا. */
@@ -385,7 +395,7 @@ export class AuthService {
   }
 
   // تغيير كلمة المرور من صاحب الحساب — الطريق الوحيد المفتوح لتوكن «لازم يغيّر» (غير «مين أنا»)
-  async changePassword(userId: number, currentPassword: string, newPassword: string) {
+  async changePassword(userId: number, currentPassword: string, newPassword: string, session: SessionMode = {}) {
     const user = await this.withPasswordState().where('u.id = :id', { id: userId }).getOne()
     if (!user || !user.isActive) {
       throw new UnauthorizedException('الحساب معطّل')
@@ -415,17 +425,19 @@ export class AuthService {
         tokenVersion,
       }
     )
-    return this.issueSession({ ...user, mustChangePassword: false, passwordChangedAt, tokenVersion })
+    return this.issueSession({ ...user, mustChangePassword: false, passwordChangedAt, tokenVersion }, session)
   }
 
   // توكن + بيانات الحساب للواجهة (نفس رد الدخول)
-  private async issueSession(user: User): Promise<SessionResponse> {
+  private async issueSession(user: User, session: SessionMode = {}): Promise<SessionResponse> {
     const permissions = await this.resolvePermissions(user)
     const mustChangePassword = !!user.mustChangePassword
     // «كل الفروع» من عمود القاعدة بقيمته الحرفية فقط (bit → true)؛ مدير النظام نطاقه كامل بدوره فمايتكتبش له
     const scopeAllBranches = user.role !== 'super_admin' && user.scopeAllBranches === true
     // غير كده الفروع صريحة في التوكن (حتى لو فرع واحد أو فاضية) — نفس حساب effectiveBranchScope بالحرف
     const branchIds = effectiveBranchScope(user)
+    // B2.17: جلسة الـcookie بتشيل رمز CSRF بتاعها جوه التوكن نفسه (مربوط بيها، ومن غير جدول)
+    const csrf = session.cookie ? newCsrfToken() : null
 
     const payload: JwtPayload = {
       sub: user.id,
@@ -438,6 +450,7 @@ export class AuthService {
       ...(mustChangePassword ? { mustChangePassword: true } : {}),
       ...(scopeAllBranches ? { scopeAllBranches: true } : {}),
       ...(branchIds !== null ? { branchIds } : {}),
+      ...(csrf ? { csrf } : {}),
     }
 
     return {
@@ -455,6 +468,31 @@ export class AuthService {
         ...(branchIds !== null ? { branchIds } : {}),
         ...(user.domainObjectGuid ? { domainAccount: true as const } : {}),
       },
+      ...(csrf ? { csrfToken: csrf } : {}),
+    }
+  }
+
+  /**
+   * B2.17: بيانات الحساب للواجهة من الجلسة الحالية (نفس شكل user في رد الدخول: الهوية من التوكن نفسه، والاسم من القاعدة) ورمز
+   * CSRF بتاعها. الواجهة بتناديه بعد تحديث الصفحة أو في تبويب جديد — مابقاش عندها توكن تقرا منه.
+   */
+  async sessionView(payload: JwtPayload) {
+    const row = await this.users.findOne({ where: { id: payload.sub }, select: ['id', 'displayName', 'domainObjectGuid'] })
+    return {
+      user: {
+        id: payload.sub,
+        email: payload.email,
+        displayName: row?.displayName ?? '',
+        role: payload.role,
+        branchId: payload.branchId ?? null,
+        employeeId: payload.employeeId ?? null,
+        permissions: payload.permissions ?? [],
+        mustChangePassword: payload.mustChangePassword === true,
+        scopeAllBranches: payload.role !== 'super_admin' && payload.scopeAllBranches === true,
+        ...(Array.isArray(payload.branchIds) ? { branchIds: payload.branchIds } : {}),
+        ...(row?.domainObjectGuid ? { domainAccount: true as const } : {}),
+      },
+      csrfToken: payload.csrf ?? null,
     }
   }
 

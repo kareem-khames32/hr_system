@@ -1,5 +1,6 @@
 // طبقة الاتصال بالباك إند — مصدر واحد لكل نداءات الـ API
-// التوكن يُحفظ في localStorage (تذكرني) أو sessionStorage (جلسة فقط)
+// B2.17: الجلسة cookie من الخادم (HttpOnly): المتصفح بيبعتها لوحده، والواجهة مابتشوفش التوكن ولا بتحفظه.
+// اللي بيتحفظ هنا بيانات الحساب بس — localStorage (تذكرني) أو sessionStorage (جلسة فقط) — للعرض وإظهار الأزرار؛ الحكم للخادم.
 import type { EmployeeStatus, AttendanceStatus, CustodyStatus, OvertimeStatus, LeaveStatus, LeavePeriod, LoanStatus, TransferStatus, LetterStatus, BalanceType, LeaveTypeCode } from '../../api/src/common/domain-status'
 import type { OvertimeEvidence } from '../../api/src/attendance/overtime-evidence'
 import { clearEmployeeAddDrafts } from './employee-add-draft'
@@ -11,8 +12,20 @@ import type { PayrollCalendarChange } from './payroll-calendar-api'
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'
 
-const TOKEN_KEY = 'hr_access_token'
 const USER_KEY = 'hr_current_user'
+// علامة الجلسة: نص عشوائي بيتولد في المتصفح مع كل دخول (مش سر ولا توكن) — مفتاح الكاشات المربوطة بالجلسة
+const MARK_KEY = 'hr_session_mark'
+// قبل B2.17 التوكن كان بيتحفظ هنا: بيتمسح من أي متصفح لسه فيه
+const LEGACY_TOKEN_KEY = 'hr_access_token'
+if (typeof window !== 'undefined') {
+  try {
+    for (const store of [localStorage, sessionStorage]) {
+      // جلسة من قبل التحديث: توكنها مابقاش بيتقري، فبيانات حسابها بتتمسح معاه (المستخدم بيسجّل دخول مرة)
+      if (store.getItem(LEGACY_TOKEN_KEY) !== null) store.removeItem(USER_KEY)
+      store.removeItem(LEGACY_TOKEN_KEY)
+    }
+  } catch { /* التخزين مقفول */ }
+}
 
 export interface CurrentUser {
   id: number
@@ -51,13 +64,6 @@ export const CHANGE_PASSWORD_PATH = '/login/change-password'
 // B2.7: شاشة إقرار السياسات — تحت /login برضه
 export const POLICY_GATE_PATH = '/login/policies'
 
-export const getToken = (): string | null => {
-  if (typeof window === 'undefined') return null
-  return (
-    localStorage.getItem(TOKEN_KEY) ?? sessionStorage.getItem(TOKEN_KEY)
-  )
-}
-
 export const getCurrentUser = (): CurrentUser | null => {
   if (typeof window === 'undefined') return null
   const raw =
@@ -70,20 +76,43 @@ export const getCurrentUser = (): CurrentUser | null => {
   }
 }
 
+/** فيه جلسة محفوظة في المتصفح ده؟ (بيانات الحساب — الجلسة نفسها cookie عند الخادم وهو اللي بيحكم) */
+export const hasSession = (): boolean => getCurrentUser() !== null
+
+/** علامة الجلسة الحالية (بتتغيّر مع كل دخول) — للكاشات المربوطة بالجلسة. null = مفيش جلسة */
+export const sessionMark = (): string | null => {
+  if (typeof window === 'undefined') return null
+  return localStorage.getItem(MARK_KEY) ?? sessionStorage.getItem(MARK_KEY)
+}
+const newSessionMark = (): string =>
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+
+// رمز CSRF بتاع الجلسة: في الذاكرة بس (من رد الدخول، أو من الخادم بعد تحديث الصفحة)
+let csrf: string | null = null
+let csrfPending: Promise<string | null> | null = null
+
 export const saveSession = (
-  token: string,
   user: CurrentUser,
-  remember: boolean
+  remember: boolean,
+  csrfToken?: string | null
 ) => {
+  // جلسة واحدة في المتصفح: بيانات جلسة أقدم في المخزن التاني بتتمسح (القراءة بتبدأ بـlocalStorage، فحساب قديم هناك كان هيسبق الجديد)
+  for (const other of [localStorage, sessionStorage]) {
+    other.removeItem(USER_KEY)
+    other.removeItem(MARK_KEY)
+  }
   const store = remember ? localStorage : sessionStorage
-  store.setItem(TOKEN_KEY, token)
   store.setItem(USER_KEY, JSON.stringify(user))
+  store.setItem(MARK_KEY, newSessionMark())
+  csrf = csrfToken ?? null
 }
 
 export const clearSession = () => {
+  csrf = null
   for (const store of [localStorage, sessionStorage]) {
-    store.removeItem(TOKEN_KEY)
+    store.removeItem(LEGACY_TOKEN_KEY)
     store.removeItem(USER_KEY)
+    store.removeItem(MARK_KEY)
     clearEmployeeAddDrafts(store)
     // سياق العملة (src/lib/currency.ts) تبع الجلسة — الخروج بيمسحه (والكاش كمان مربوط بالتوكن، فدخول جديد بيقرا سياق جديد)
     store.removeItem('hr_currency_context')
@@ -131,22 +160,90 @@ let routeMissingListener: (() => void) | null = null
 export const onApiRouteMissing = (listener: () => void) => { routeMissingListener = listener }
 const isRouteMissing = (status: number, message: string) => status === 404 && /^Cannot [A-Z]+ \//.test(message)
 
-// نداء عام — يضيف التوكن تلقائياً ويرمي ApiError برسالة السيرفر
+/** بيانات الجلسة الحالية من الخادم (الحساب ورمز CSRF) — null لو مفيش جلسة قايمة */
+async function fetchSession(): Promise<{ user: CurrentUser; csrfToken: string | null } | null> {
+  try {
+    const res = await fetch(`${API_BASE}/auth/session`, { credentials: 'include' })
+    return res.ok ? ((await res.json()) as { user: CurrentUser; csrfToken: string | null }) : null
+  } catch {
+    return null
+  }
+}
+
+/** رمز CSRF للجلسة: من الذاكرة، وإلا من الخادم مرة واحدة (بعد تحديث الصفحة الذاكرة بتفضى). refresh = اسأل الخادم تاني */
+async function csrfToken(refresh = false): Promise<string | null> {
+  if (csrf && !refresh) return csrf
+  if (!csrfPending) {
+    csrfPending = fetchSession().then((session) => session?.csrfToken ?? null).finally(() => { csrfPending = null })
+  }
+  csrf = await csrfPending
+  return csrf
+}
+
+const CSRF_HEADER = 'X-CSRF-Token'
+const isWrite = (method: string | undefined) => !['GET', 'HEAD', 'OPTIONS'].includes((method ?? 'GET').toUpperCase())
+
+/**
+ * خيارات fetch لنداء على الخادم بالجلسة: cookie الجلسة (credentials)، ورمز CSRF لطلبات الكتابة. كل نداء مباشر بـfetch على
+ * الخادم بيعدّي من هنا (رفع وتنزيل الملفات)، وapiFetch نفسه.
+ */
+export async function sessionInit(init: RequestInit = {}): Promise<RequestInit> {
+  const token = isWrite(init.method) && hasSession() ? await csrfToken() : null
+  return { ...init, credentials: 'include', headers: { ...(token ? { [CSRF_HEADER]: token } : {}), ...(init.headers as Record<string, string> | undefined) } }
+}
+
+/** الخادم رفض الطلب عشان رمز CSRF؟ (دخول جديد في تبويب تاني بيغيّر الرمز) */
+async function csrfRefused(res: Response): Promise<boolean> {
+  if (res.status !== 403) return false
+  try {
+    return ((await res.clone().json()) as { code?: string } | null)?.code === 'CSRF_TOKEN_INVALID'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * تبويب جديد أو تخزين اتمسح والجلسة لسه قايمة في cookie المتصفح: بيانات الحساب بترجع من الخادم وتتحفظ لجلسة التبويب.
+ * null = مفيش جلسة (روح صفحة الدخول).
+ */
+export async function restoreSession(): Promise<CurrentUser | null> {
+  const session = await fetchSession()
+  if (!session?.user) return null
+  saveSession(session.user, false, session.csrfToken)
+  return session.user
+}
+
+/** الخروج: الخادم بيمسح cookie الجلسة (سكربت الصفحة مايقدرش)، وبعدها بيانات الحساب من التخزين */
+export async function logout(): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/auth/logout`, await sessionInit({ method: 'POST' }))
+  } catch {
+    /* الخادم مش رادد: بيانات الحساب بتتمسح برضه، والـcookie بتنتهي بمدتها */
+  }
+  clearSession()
+}
+
+// نداء عام — بالجلسة (cookie) ويرمي ApiError برسالة السيرفر
 export async function apiFetch<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const token = getToken()
+  const signedIn = hasSession()
+  const send = async () => fetch(`${API_BASE}${path}`, await sessionInit({
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options.headers as Record<string, string> | undefined),
+    },
+  }))
   let res: Response
   try {
-    res = await fetch(`${API_BASE}${path}`, {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...options.headers,
-      },
-    })
+    res = await send()
+    // الخادم رفض قبل ما ينفّذ حاجة عشان رمز CSRF قديم: نجيب الرمز الحالي ونعيد الطلب مرة واحدة
+    if (signedIn && isWrite(options.method) && (await csrfRefused(res))) {
+      await csrfToken(true)
+      res = await send()
+    }
   } catch (error) {
     // انقطاع الشبكة/الخادم: «Failed to fetch» الإنجليزية كانت تظهر كما هي في الشاشات
     if (error instanceof DOMException && error.name === 'AbortError') throw error
@@ -154,12 +251,12 @@ export async function apiFetch<T>(
   }
 
   if (!res.ok) {
-    // انتهاء الجلسة/توكن غير صالح (401 ومعنا توكن): امسح الجلسة ووجّه لصفحة
+    // انتهاء الجلسة أو جلسة غير صالحة (401 ومعنا جلسة محفوظة): امسح الجلسة ووجّه لصفحة
     // الدخول بدل تناثر «Unauthorized» في كل ويدجت. نستثني نداء تسجيل الدخول
     // نفسه (401 هناك = بيانات خاطئة تُعرض كما هي)
     if (
       res.status === 401 &&
-      token &&
+      signedIn &&
       !path.includes('/auth/login') &&
       typeof window !== 'undefined'
     ) {
@@ -207,9 +304,10 @@ export async function apiFetch<T>(
 }
 
 // ===== Auth =====
+// B2.17: الجلسة نفسها في cookie من الخادم — الرد بيانات الحساب ورمز CSRF بس (من غير توكن)
 export interface LoginResponse {
-  accessToken: string
   user: CurrentUser
+  csrfToken?: string | null
 }
 
 // التحقق بخطوتين مفتوح: الرد مش جلسة — حالة معلَّقة بتنتظر الرمز اللي وصل على البريد
@@ -229,24 +327,25 @@ export type LoginOutcome = LoginResponse | TwoFactorChallenge
 export const isTwoFactorChallenge = (value: LoginOutcome): value is TwoFactorChallenge =>
   (value as TwoFactorChallenge).twoFactor === true
 
-export const login = (email: string, password: string) =>
+// «جلسة cookie» دايمًا من الواجهة؛ remember = الـcookie بتفضل لآخر مدة الجلسة («تذكرني»)
+export const login = (email: string, password: string, remember = false) =>
   apiFetch<LoginOutcome>('/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, cookieSession: true, remember }),
   })
 
 // «الدخول بحساب الشركة» — الاسم بس (name) أو الـUPN كامل (name@maharah.local)، والخادم بيطبّعه
-export const domainLogin = (username: string, password: string) =>
+export const domainLogin = (username: string, password: string, remember = false) =>
   apiFetch<LoginOutcome>('/auth/login/domain', {
     method: 'POST',
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, cookieSession: true, remember }),
   })
 
 // الخطوة الثانية للمسارين: الرمز → جلسة
-export const verifyLoginCode = (challengeToken: string, code: string) =>
+export const verifyLoginCode = (challengeToken: string, code: string, remember = false) =>
   apiFetch<LoginResponse>('/auth/login/verify', {
     method: 'POST',
-    body: JSON.stringify({ challengeToken, code }),
+    body: JSON.stringify({ challengeToken, code, cookieSession: true, remember }),
   })
 
 // رمز جديد لنفس محاولة الدخول (بمهلة وحد أعلى يفرضهم الخادم)
@@ -326,15 +425,15 @@ export const sendMailTest = (to: string) =>
   })
 
 // صاحب الحساب يغيّر كلمته (ومنها الكلمة المؤقتة) — الرد جلسة جديدة
-export const changeMyPassword = (currentPassword: string, newPassword: string) =>
+export const changeMyPassword = (currentPassword: string, newPassword: string, remember = false) =>
   apiFetch<LoginResponse>('/auth/change-password', {
     method: 'POST',
-    body: JSON.stringify({ currentPassword, newPassword }),
+    body: JSON.stringify({ currentPassword, newPassword, remember }),
   })
 
 // الجلسة الحالية محفوظة في localStorage (تذكرني) ولا sessionStorage؟ — عشان الجلسة الجديدة تتحفظ في نفس المكان
 export const isSessionRemembered = (): boolean =>
-  typeof window !== 'undefined' && localStorage.getItem(TOKEN_KEY) !== null
+  typeof window !== 'undefined' && localStorage.getItem(USER_KEY) !== null
 
 // اختصارات الأفعال — كل نداءات النظام من هنا
 const get = <T>(path: string) => apiFetch<T>(path)
@@ -1602,12 +1701,11 @@ export const publishLetterTemplate = (id: number, version: number) =>
 export const bindLetterTemplate = (requestTypeCode: string, templateId: number) =>
   patch<ApiLetterTemplateBinding>(`/letters/template-bindings/${encodeURIComponent(requestTypeCode)}`, { templateId })
 export const previewLetterTemplate = async (draft: ApiLetterTemplateDraft): Promise<Blob> => {
-  const token = getToken()
-  const response = await fetch(`${API_BASE}/letters/templates/preview`, {
+  const response = await fetch(`${API_BASE}/letters/templates/preview`, await sessionInit({
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ draft }),
-  })
+  }))
   if (!response.ok) {
     let message = `تعذر إنشاء معاينة الخطاب (${response.status})`
     try {
@@ -1943,25 +2041,18 @@ export const uploadFile = async (
   if (meta?.employeeId) p.set('employeeId', String(meta.employeeId))
   const fd = new FormData()
   fd.append('file', file)
-  const token = getToken()
-  const res = await fetch(`${API_BASE}/files/upload?${p.toString()}`, {
-    method: 'POST',
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-    body: fd,
-  })
+  const res = await fetch(`${API_BASE}/files/upload?${p.toString()}`, await sessionInit({ method: 'POST', body: fd }))
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
     throw new ApiError(res.status, body.message ?? 'فشل رفع الملف')
   }
   return res.json()
 }
-// رابط معاينة/تحميل ملف مخزّن (يتطلب توكن — استخدمه مع fetch أو افتحه بجلسة)
+// رابط معاينة/تحميل ملف مخزّن (بالجلسة — استخدمه مع fetch وsessionInit)
 export const fileDownloadUrl = (id: number) => `${API_BASE}/files/${id}`
 
 export const downloadLetter = async (id: number) => {
-  const res = await fetch(`${API_BASE}/letters/${id}/download`, {
-    headers: { Authorization: `Bearer ${getToken()}` },
-  })
+  const res = await fetch(`${API_BASE}/letters/${id}/download`, await sessionInit())
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
     throw new ApiError(res.status, body.message ?? 'تعذّر تحميل الخطاب')
@@ -1980,9 +2071,7 @@ export const exportEmployeesXlsx = async (employeeIds: number[]) => {
   let res: Response
   try {
     // GET (قراءة بس) بأرقام الموظفين بترتيب الشاشة: ids=12,5,9
-    res = await fetch(`${API_BASE}/employees/export?ids=${employeeIds.join(',')}`, {
-      headers: { Authorization: `Bearer ${getToken()}` },
-    })
+    res = await fetch(`${API_BASE}/employees/export?ids=${employeeIds.join(',')}`, await sessionInit())
   } catch {
     throw new ApiError(0, 'تعذر الاتصال بالخادم — تحقق من الاتصال ثم أعد المحاولة')
   }
@@ -2005,11 +2094,11 @@ export const exportEmployeesXlsx = async (employeeIds: number[]) => {
   setTimeout(() => URL.revokeObjectURL(url), 10000)
 }
 
-// B2.13: تنزيل ملف بيتبني في الخادم (تصدير تقرير) بتوكن الجلسة — الاسم من رأس الرد، ورسالة الرفض من الخادم
+// B2.13: تنزيل ملف بيتبني في الخادم (تصدير تقرير) بالجلسة — الاسم من رأس الرد، ورسالة الرفض من الخادم
 export const downloadApiFile = async (path: string, fallbackName: string, failMessage: string) => {
   let res: Response
   try {
-    res = await fetch(`${API_BASE}${path}`, { headers: { Authorization: `Bearer ${getToken()}` } })
+    res = await fetch(`${API_BASE}${path}`, await sessionInit())
   } catch {
     throw new ApiError(0, 'تعذر الاتصال بالخادم — تحقق من الاتصال ثم أعد المحاولة')
   }
@@ -2031,14 +2120,11 @@ export const downloadApiFile = async (path: string, fallbackName: string, failMe
   setTimeout(() => URL.revokeObjectURL(url), 10000)
 }
 
-// جلب ملف كـ blob URL بالتوكن — لعرض الصور في <img> (اللي مبيبعتش الهيدر)
+// جلب ملف كـ blob URL بالجلسة — لعرضه أو فتحه من غير ما رابط الخادم يظهر
 // النتيجة تُلغى بـ URL.revokeObjectURL عند التفريغ
 export const fetchFileObjectUrl = async (id: number): Promise<string | null> => {
-  const token = getToken()
   try {
-    const res = await fetch(`${API_BASE}/files/${id}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    })
+    const res = await fetch(`${API_BASE}/files/${id}`, await sessionInit())
     if (!res.ok) return null
     const blob = await res.blob()
     return URL.createObjectURL(blob)

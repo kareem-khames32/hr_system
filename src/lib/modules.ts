@@ -4,7 +4,7 @@
 // بتتقري مرة للجلسة من GET /modules/enabled (بعد جمهور التفعيل) وتتخزن؛ الفرض الحقيقي في الخادم (الموديول المقفول بيرجع 404).
 // الاستخدام: const enabled = useModules() ثم routeAvailable(path, enabled)، أو useModuleEnabled('recruitment').
 import { useCallback, useEffect, useState } from 'react'
-import { apiFetch, getCurrentUser, getToken, onApiRouteMissing } from './api'
+import { apiFetch, getCurrentUser, onApiRouteMissing, sessionMark } from './api'
 // نفس سجل الخادم بالحرف (ملف بيانات صرف مشترك): الموديولات ومساراتها والمزايا والباقات
 import { enabledSnapshot, routeAvailable } from '../../api/src/modules-registry/registry'
 export {
@@ -47,8 +47,8 @@ const valid = (value: unknown): value is EnabledModules => {
 // الكاش مربوط بالجلسة نفسها (رقم الحساب + آخر التوكن): دخول جديد بيقرا من جديد، وحساب تاني في نفس التبويب مايورثش.
 // حساب بكلمة مرور مؤقتة مالوش جلسة هنا: الخادم قافل عليه كل حاجة غير «غيّر كلمة المرور»
 const currentSession = (): string | null => {
-  const user = getCurrentUser(), token = getToken()
-  return user && token && !user.mustChangePassword ? `${user.id}:${token.slice(-24)}` : null
+  const user = getCurrentUser(), mark = sessionMark()
+  return user && mark && !user.mustChangePassword ? `${user.id}:${mark}` : null
 }
 
 function cachedFor(session: string): { enabled: EnabledModules; at: number } | null {
