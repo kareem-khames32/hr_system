@@ -35,6 +35,8 @@ export const POSITION_BUDGET_MAX = 999_999_999_999.99
 
 export const POSITION_NOT_IN_BRANCH = 'الوظيفة المعتمدة غير موجودة في فرع الموظف'
 export const POSITION_OTHER_UNIT = 'الوظيفة دي تبع قسم أو فريق غير اللي الموظف فيه'
+/** وظيفة قسمها مابقاش تبع فرعها أو فريقها مابقاش تبع قسمها (تعديل في الهيكل): مفيش إسناد جديد عليها — من غير أسماء ولا أرقام */
+export const POSITION_UNIT_MOVED = 'وحدة الوظيفة دي اتغيّرت في الهيكل ومابقتش تبع فرعها: مفيش تعيين ولا ربط عليها. الغِ الوظيفة واعمل واحدة على الوحدة الصح'
 export const POSITION_REQUIRED = 'اختار الوظيفة المعتمدة: التعيين من غير وظيفة معتمدة مقفول (من إعدادات الموديولات)'
 export const positionClosedMessage = (status: PositionStatus) => `الوظيفة دي ${POSITION_STATUS_LABELS[status] ?? 'مش نشطة'}: مفيش تعيين عليها`
 export const positionFullMessage = (headcount: number, occupied: number) => `الوظيفة دي مليانة: معتمد لها ${headcount} ومشغول ${occupied}`

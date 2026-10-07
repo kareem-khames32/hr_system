@@ -91,18 +91,24 @@ export async function stagePositionRequest(em: EntityManager, req: Pick<Request,
 }
 
 /**
- * القسم المتثبّت على الطلب وقت التقديم: null = مستوى الفرع، ورقم = قسم لازم لسه موجود وتبع فرع الطلب. طلب من غير تثبيت (حمولة مش من
- * مسار التقديم، فالمفتاح مش موجود) = مرفوض.
- * بيتنادى **بعد** قفل إنشاء الوظائف، وصف القسم بيتقفل لآخر المعاملة (Codex CRP3A-B02): قسم اتنقل لفرع تاني والاعتماد مستني القفل
- * بيتشاف هنا ويترفض؛ ونقل بيبدأ بعد الفحص بيستنى لحد ما الوظيفة تتحفظ.
+ * رقم القسم المتثبّت على الطلب وقت التقديم: null = مستوى الفرع. طلب من غير تثبيت (حمولة مش من مسار التقديم، فالمفتاح مش موجود) أو
+ * برقم مش رقم = مرفوض.
  */
-async function stagedDepartment(em: EntityManager, req: Pick<Request, 'branchId'>, payload: Record<string, unknown>): Promise<number | null> {
+function stagedDepartmentId(payload: Record<string, unknown>): number | null {
   const staged = payload.positionDepartmentId
   if (staged === null) return null
-  const department = Number.isSafeInteger(staged) && Number(staged) > 0
-    ? await em.getRepository(Department).findOne({ where: { id: Number(staged) }, lock: { mode: 'pessimistic_write' } }) : null
+  if (!Number.isSafeInteger(staged) || Number(staged) <= 0) throw new BadRequestException(POSITION_REQUEST_UNIT_GONE)
+  return Number(staged)
+}
+
+/**
+ * القسم المتثبّت لازم لسه موجود وتبع فرع الطلب، وصفه بيتقفل لآخر المعاملة (Codex CRP3A-B02): بيتنادى **بعد** قفل إنشاء الوظائف، فقسم
+ * اتنقل لفرع تاني والاعتماد مستني بيتشاف هنا ويترفض؛ ونقل بيبدأ بعد الفحص بيستنى لحد ما الوظيفة تتحفظ.
+ */
+async function lockStagedDepartment(em: EntityManager, req: Pick<Request, 'branchId'>, departmentId: number | null): Promise<void> {
+  if (departmentId == null) return
+  const department = await em.getRepository(Department).findOne({ where: { id: departmentId }, lock: { mode: 'pessimistic_write' } })
   if (!department || department.branchId !== req.branchId) throw new BadRequestException(POSITION_REQUEST_UNIT_GONE)
-  return department.id
 }
 
 /** التنفيذ عند الاعتماد النهائي، جوه معاملة الاعتماد: على فرع الطلب والقسم المتثبّت عليه وقت التقديم */
@@ -113,12 +119,14 @@ export async function executePositionRequest(em: EntityManager, req: Request, _t
   if (!(await lockPositionCreation(em))) throw new ConflictException('إنشاء الوظائف المعتمدة شغال دلوقتي من حد تاني؛ جرّب تاني بعد شوية')
   // الحكم كله بعد القفل: اللي اتغيّر والاعتماد مستني (المسمى اتقفل، القسم اتنقل) بيتشاف دلوقتي مش بقيمة قديمة
   const values = await positionRequestValues(em, payload)
-  const departmentId = await stagedDepartment(em, req, payload)
-  // وظيفة قايمة (مش ملغية) بنفس المسمى على نفس الوحدة: صفها بيتقفل وعددها بيزيد
+  const departmentId = stagedDepartmentId(payload)
+  // وظيفة قايمة (مش ملغية) بنفس المسمى على نفس الوحدة: صفها بيتقفل وعددها بيزيد. وصف الوظيفة بيتقفل **قبل** صف القسم — نفس ترتيب
+  // التعيين والربط (وظيفة ← قسم)، فمفيش مسارين بياخدوا القفلين بالعكس (Codex CRP3B-B01)
   const existing = await positions.createQueryBuilder('p').setLock('pessimistic_write')
     .where('p.jobTitleId = :jobTitleId', { jobTitleId: values.jobTitleId }).andWhere('p.branchId = :branchId', { branchId: req.branchId })
     .andWhere(departmentId == null ? 'p.departmentId IS NULL' : 'p.departmentId = :departmentId', { departmentId })
     .andWhere('p.teamId IS NULL').andWhere(`p.status <> 'CANCELLED'`).orderBy('p.id', 'ASC').getOne()
+  await lockStagedDepartment(em, req, departmentId)
   if (existing) {
     const before = existing.headcount
     // نفس حد العدد المعتمد بتاع شاشة الوظائف: زيادة تعدّيه مرفوضة برسالتها (والطلب في صندوق المعتمد)

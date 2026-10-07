@@ -57,7 +57,12 @@ export default function PositionHoldersModal({ id, onClose, onChanged }: Props) 
                 ))}
               </ul>
             )}
-            {detail.canManage && detail.status === 'ACTIVE' && (
+            {detail.canManage && detail.unitHidden && (
+              <p className="border-t border-gray-100 pt-3 text-xs text-amber-800" data-position-unit-moved>
+                وحدة الوظيفة دي اتغيّرت في الهيكل ومابقتش تبع فرعها: مفيش ربط جديد عليها. الغِ الوظيفة واعمل واحدة على الوحدة الصح.
+              </p>
+            )}
+            {detail.canManage && detail.status === 'ACTIVE' && !detail.unitHidden && (
               <div className="border-t border-gray-100 pt-3 space-y-2" data-position-link>
                 <label className="label" htmlFor="position-link-employee">اربط موظف من وحدة الوظيفة</label>
                 <EmployeePicker id="position-link-employee" employees={detail.linkable} value={picked} onChange={value => setPicked(value)} placeholder="اكتب الاسم أو الكود" />

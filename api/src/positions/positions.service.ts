@@ -12,7 +12,7 @@ import { Team } from '../org/entities/team.entity'
 import { ApprovedPosition, PositionHolder, type PositionStatus } from './position.entities'
 import {
   cleanBudget, cleanHeadcount, cleanNewPosition, generationKey, inPositionUnit, isPositionStatus, lockPositionCreation, normalTitle, occupiesSeat, positionCode, positionsReady, seatCounts, seatVerdict,
-  POSITION_STATUS_LABELS, POSITIONS_ENFORCE_FEATURE, POSITIONS_MIGRATION_MISSING, POSITION_REQUIRED, SEAT_FREEING_STATUSES,
+  POSITION_STATUS_LABELS, POSITIONS_ENFORCE_FEATURE, POSITIONS_MIGRATION_MISSING, POSITION_REQUIRED, POSITION_UNIT_MOVED, SEAT_FREEING_STATUSES,
   type EmployeeUnit, type PositionInput, type SeatVerdict,
 } from './position-rules'
 
@@ -20,8 +20,9 @@ import {
 //  الوظيفة تبع فرع (وقسم وفريق اختياريين) بعدد معتمد؛ والقراءة والكتابة بنطاق فروع الحساب (برّه النطاق = «غير موجودة»).
 //  «المشغول» محسوب مش متخزّن: المربوط بالوظيفة (position_holders)، وخدمته ماانتهتش، ولسه في وحدتها — فانتهاء الخدمة والنقل بيحرّروا المقعد
 //  لوحدهم من غير ما مساراتهم تتلمس.
-//  عند التعيين (EmployeesService.create) والربط من الشاشة: الحكم وصف الوظيفة مقفول، فتعيينين على آخر مقعد واحد بس بيعدّي. ترتيب الأقفال
-//  في كل المسارات: صف الوظيفة ثم صف الموظف.
+//  عند التعيين (EmployeesService.create) والربط من الشاشة: الحكم وصف الوظيفة مقفول، فتعيينين على آخر مقعد واحد بس بيعدّي. ووحدة الوظيفة
+//  بتتحكم دلوقتي تحت القفل (قسمها لسه تبع فرعها): وحدة اتنقلت مابتاخدش إسناد جديد.
+//  ترتيب الأقفال في كل المسارات: صف الوظيفة ← صف القسم ← صف الفريق ← صف الموظف (قفل إنشاء الوظائف قبلهم كلهم في التوليد والاعتماد).
 //  قبل ترحيل 097: الشاشة بتقول إن الترحيل ناقص، والتعيين زي ما هو — إلا والإنفاذ مفعّل: مرفوض برسالة الترحيل.
 
 const FREEING_SQL = SEAT_FREEING_STATUSES.map(status => `N'${status}'`).join(', ')
@@ -120,10 +121,30 @@ export class PositionsService {
     }
     const id = idOf(positionId)
     const position = id ? await em.getRepository(ApprovedPosition).findOne({ where: { id }, lock: { mode: 'pessimistic_write' } }) : null
+    // وحدة الوظيفة بتتحكم دلوقتي (بعد أي انتظار على صفها) وصفوفها مقفولة لحد ما الموظف يتحفظ. وظيفة فرع تاني (أو مش موجودة) بترد
+    // بنفس ردها من غير ما وحدتها تتلمس
+    if (position && unit.branchId != null && Number(unit.branchId) === position.branchId && !(await this.unitStillValid(em, position))) throw new BadRequestException(POSITION_UNIT_MOVED)
     const occupied = position ? (await this.occupiedOf(em, [position.id])).get(position.id) ?? 0 : 0
     const verdict = seatVerdict(position, unit, occupied, enforce)
     if (verdict) throw fail(verdict)
     return { positionId: position!.id }
+  }
+
+  /**
+   * وحدة الوظيفة لسه صالحة لإسناد جديد (تعيين أو ربط)؟ قسمها لازم يكون لسه تبع فرعها، وفريقها لسه تبع قسمها. بقاء الروابط القديمة بعد
+   * نقل الوحدة مابيجيزش إسناد جديد عليها (Codex CRP3B-B01). صف القسم ثم صف الفريق بيتقفلوا لآخر المعاملة: نقل بيبدأ بعد الحكم بيستنى.
+   * بتتنادى وصف الوظيفة مقفول.
+   */
+  private async unitStillValid(em: EntityManager, position: Pick<ApprovedPosition, 'branchId' | 'departmentId' | 'teamId'>): Promise<boolean> {
+    if (position.departmentId != null) {
+      const department = await em.getRepository(Department).findOne({ where: { id: position.departmentId }, lock: { mode: 'pessimistic_write' } })
+      if (!department || department.branchId !== position.branchId) return false
+    }
+    if (position.teamId != null) {
+      const team = await em.getRepository(Team).findOne({ where: { id: position.teamId }, lock: { mode: 'pessimistic_write' } })
+      if (!team || team.departmentId !== position.departmentId) return false
+    }
+    return true
   }
 
   /** بعد ما صف الموظف اتعمل، في نفس المعاملة: ربطه بالمقعد المحجوز */
@@ -287,7 +308,7 @@ export class PositionsService {
     })
     // اللي ينفع يتربطوا: موظفين وحدة الوظيفة الشاغلين اللي مش عليها (لصاحب الإدارة بس)
     let linkable: Array<{ id: number; fullName: string; employeeCode: string; jobTitle: string | null }> = []
-    if (this.canManage(user)) {
+    if (this.canManage(user) && !view.unitHidden) {
       const qb = em.getRepository(Employee).createQueryBuilder('e').select(['e.id', 'e.fullName', 'e.employeeCode', 'e.jobTitle'])
         .where('e.branchId = :branchId', { branchId: position.branchId })
         .andWhere(`(e.status IS NULL OR e.status NOT IN (:...freeing))`, { freeing: [...SEAT_FREEING_STATUSES] })
@@ -324,6 +345,9 @@ export class PositionsService {
       const branch = inBranchScope(branchScopeOf(user), value.branchId) ? await em.getRepository(Branch).findOne({ where: { id: value.branchId } }) : null
       if (!branch) throw new NotFoundException('الفرع غير موجود')
       await this.assertCatalog(em, value)
+      // وظيفة على مستوى الفرع مالهاش صف قسم يتقفل: قفل إنشاء الوظائف هو اللي بينسّقها مع التوليد (على قسم: صف القسم اللي التوليد بيقفله
+      // قبل ما يراجع «فيه وظيفة قايمة؟» — Codex CRP3B-B02)
+      if (value.departmentId == null && !(await lockPositionCreation(em))) throw new ConflictException('إنشاء الوظائف المعتمدة شغال دلوقتي من حد تاني؛ جرّب تاني بعد شوية')
       // صف القسم (ثم الفريق) مقفول لآخر المعاملة: نقله لفرع تاني (تعديل الهيكل) يا اتثبّت قبلنا فنشوفه ونرفض، يا بيستنى لحد ما الوظيفة تتحفظ
       // (Codex CRP3A-B02: فحص من غير قفل بيتقادم قبل الكتابة)
       if (value.departmentId != null) {
@@ -396,7 +420,7 @@ export class PositionsService {
     return (await this.views(this.ds.manager, [saved]))[0]
   }
 
-  /** ربط موظف قايم بالوظيفة (ولو كان على وظيفة تانية بيتنقل منها). نفس حكم التعيين، وصف الوظيفة ثم صف الموظف مقفولين */
+  /** ربط موظف قايم بالوظيفة (ولو كان على وظيفة تانية بيتنقل منها). نفس حكم التعيين، والأقفال: صف الوظيفة ← وحدتها ← صف الموظف */
   async addHolder(user: JwtPayload, id: number, employeeId: unknown) {
     const wanted = idOf(employeeId)
     if (!wanted) throw new BadRequestException('اختار الموظف')
@@ -404,6 +428,8 @@ export class PositionsService {
     const { enforce } = await this.hiringMode()
     await this.ds.transaction(async em => {
       const position = await this.loadScoped(em, user, id, true)
+      // وحدة اتنقلت في الهيكل مابتاخدش ربط جديد (نفس حكم التعيين)، وصفوفها مقفولة لحد ما الربط يتحفظ
+      if (!(await this.unitStillValid(em, position))) throw new BadRequestException(POSITION_UNIT_MOVED)
       const person = await em.getRepository(Employee).findOne({ where: { id: wanted }, lock: { mode: 'pessimistic_write' } })
       if (!person || !inBranchScope(branchScopeOf(user), person.branchId)) throw new NotFoundException('الموظف غير موجود')
       if (!occupiesSeat(person.status)) throw new BadRequestException('الموظف خدمته انتهت: مايتربطش بوظيفة')
@@ -521,7 +547,8 @@ export class PositionsService {
 
   /**
    * تطبيق التوليد: وظيفة نشطة لكل مجموعة «تتعمل» بعدد موظفيها وربطهم بيها. الخطة بتتحسب تاني جوه المعاملة (توليدة واحدة في المرة)،
-   * وبعدها الحكم كله بيتعاد تحت الأقفال قبل أي كتابة (Codex CRP3A): قسم المجموعة بيتقفل صفه ويتأكد إنه لسه تبع فرعها؛ وكل موظف بيتقفل
+   * وبعدها الحكم كله بيتعاد تحت الأقفال قبل أي كتابة (Codex CRP3A وCRP3B): المسمى لسه نشط، وقسم المجموعة بيتقفل صفه ويتأكد إنه لسه تبع
+   * فرعها، ومفيش وظيفة قايمة بنفس المسمى على الوحدة اتعملت بعد الخطة؛ وكل موظف بيتقفل
    * صفه ويتأكد إنه لسه في المجموعة (شاغل، ونفس الفرع والقسم والمسمى) **ولسه من غير مقعد في وحدته** — اللي اتربط بوظيفة بعد ما الخطة
    * اتقرت (من الشاشة أو بتعيين) بيتساب على وظيفته.
    */
@@ -534,10 +561,20 @@ export class PositionsService {
       let created = 0, linked = 0
       for (const group of plan) {
         if (group.action !== 'create' || group.jobTitleId == null) continue
+        // كل اللي الخطة حكمت بيه بيتعاد تحت الأقفال قبل أي كتابة (Codex CRP3B-B02 وN01):
+        //  المسمى لسه نشط في الكتالوج (صفه مقفول)
+        const title = await em.getRepository(JobTitle).findOne({ where: { id: group.jobTitleId }, lock: { mode: 'pessimistic_write' } })
+        if (!title || !title.isActive) continue
+        //  والقسم لسه تبع فرع المجموعة (صفه مقفول — والإنشاء من الشاشة بيقفل نفس الصف، وعلى مستوى الفرع بياخد قفل الإنشاء اللي معانا)
         if (group.departmentId != null) {
           const department = await em.getRepository(Department).findOne({ where: { id: group.departmentId }, lock: { mode: 'pessimistic_write' } })
           if (!department || department.branchId !== group.branchId) continue
         }
+        //  ومفيش وظيفة قايمة (مش ملغية) بنفس المسمى على نفس الوحدة اتعملت بعد ما الخطة اتقرت
+        const taken = await positions.createQueryBuilder('p').where('p.jobTitleId = :jobTitleId', { jobTitleId: group.jobTitleId }).andWhere('p.branchId = :branchId', { branchId: group.branchId })
+          .andWhere(group.departmentId == null ? 'p.departmentId IS NULL' : 'p.departmentId = :departmentId', { departmentId: group.departmentId })
+          .andWhere('p.teamId IS NULL').andWhere(`p.status <> 'CANCELLED'`).getCount()
+        if (taken) continue
         const members: number[] = []
         for (const employeeId of group.employeeIds) {
           const person = await em.getRepository(Employee).findOne({ where: { id: employeeId }, lock: { mode: 'pessimistic_write' } })
