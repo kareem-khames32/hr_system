@@ -9,10 +9,14 @@ import { branchScopeCovers, branchScopeOf, effectiveBranchScope } from './guards
 import { User } from './user.entity'
 import { auditRequestContext } from '../audit/audit'
 import { CSRF_HEADER, CSRF_MESSAGE, CSRF_TOKEN_INVALID, csrfMatches, csrfSafeMethod, sessionCookieOf } from './session-cookie'
+import { SESSION_ENDED_MESSAGE } from './user-sessions'
+import { UserSessionsService } from './user-sessions.service'
 
 type SessionRequest = { headers: Record<string, unknown>; method?: string }
 // نفس قارئ ترويسة Bearer اللي كان شغال بالحرف — وهو اللي بيحكم «الجلسة جاية منين» في المكانين (القراءة وحكم CSRF)
 const bearerFromHeader = ExtractJwt.fromAuthHeaderAsBearerToken()
+/** B2.17-ب: توكن ترويسة Bearer بنفس القارئ (الخروج بينهي جلسة التوكن اللي الطلب شايله) */
+export const bearerTokenOf = (req: SessionRequest): string | null => bearerFromHeader(req as never)
 /** B2.17: الجلسة جاية من cookie المتصفح (مفيش توكن في ترويسة Bearer)؟ دي اللي طلب الكتابة فيها محتاج رمز CSRF */
 export const sessionViaCookie = (req: SessionRequest): boolean => bearerFromHeader(req as never) === null && sessionCookieOf(req) !== null
 
@@ -21,7 +25,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(
     config: ConfigService,
     @InjectRepository(User)
-    private readonly users: Repository<User>
+    private readonly users: Repository<User>,
+    private readonly sessions: UserSessionsService
   ) {
     super({
       // B2.17: ترويسة Bearer أولًا (السكربتات والاختبارات — زي ما هي)، وإلا cookie الجلسة (المتصفح)
@@ -61,6 +66,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       if (!branchScopeCovers(current, branchScopeOf(payload))) {
         throw new UnauthorizedException('انتهت صلاحية الجلسة — سجّل الدخول من جديد')
       }
+    }
+    // B2.17-ب: توكن فيه رقم جلسة لازم جلسته تكون لسه قايمة (ماتنهتش بالخروج ولا من «جلساتي»)
+    if (payload.sid && !(await this.sessions.active(payload.sid, payload.sub))) {
+      throw new UnauthorizedException(SESSION_ENDED_MESSAGE)
     }
     // B2.17: الـcookie المتصفح بيبعتها لوحده، فطلب الكتابة بيها لازم يثبت إنه من صفحتنا: رمز CSRF بتاع الجلسة نفسها في
     // ترويسة (موقع تاني مايعرفش يقراه ولا يحط ترويسة). طلب Bearer من غير الشرط: الترويسة نفسها مابتتبعتش من موقع تاني.

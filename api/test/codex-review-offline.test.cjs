@@ -70,7 +70,9 @@ function authHarness({ configFailure = false, mailFailure = false } = {}) {
     { async authenticate() { return { mail: fakeUser.email } } }, { async resolveUser() { return { ...fakeUser } } }, mail,
     // B1.3: أمان الدخول زي قبل ترحيل 078 (لا قفل ولا سجل) — مختبر لوحده في login-security.integration.cjs
     { async record() {}, async lockState() { return { failedLoginCount: 0, lockedUntil: null } }, async lockoutSettings() { return { maxAttempts: 10, minutes: 15 } },
-      async registerFailure() { return null }, async reset() { return false }, async assertPassword() {} })
+      async registerFailure() { return null }, async reset() { return false }, async assertPassword() {} },
+    // B2.17-ب: الجلسات النشطة زي قبل ترحيل 101 (الجلسة من غير رقم) — مختبرة لوحدها في user-sessions.integration.cjs
+    { async open() { return null }, async revoke() {}, async revokeAll() {} })
   return { auth, twoFactor, stats, challenges, get row() { return row }, get code() { return deliveredCode } }
 }
 

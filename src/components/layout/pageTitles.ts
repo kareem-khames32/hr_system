@@ -17,6 +17,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/my/bonuses', 'مكافآتي'],
   ['/my/custody', 'عهدي'],
   ['/my/documents', 'مستنداتي'],
+  ['/profile/security', 'الأمان'],
   ['/profile', 'ملفي الشخصي'],
   ['/notifications', 'الإشعارات'],
   ['/calendar', 'التقويم'],

@@ -24,6 +24,7 @@ import { PRODUCT_NAME } from '../settings/product-name'
 import { failureDelayMs, lockedMessage, lockedNow } from './login-security'
 import { LoginSecurityService, type LoginContext } from './login-security.service'
 import { newCsrfToken } from './session-cookie'
+import { UserSessionsService } from './user-sessions.service'
 
 // حمولة التوكن — الدور والفرع هما أساس عزل البيانات
 export interface JwtPayload {
@@ -47,6 +48,9 @@ export interface JwtPayload {
   // B2.17: رمز CSRF بتاع جلسة الـcookie — طلب الكتابة بالـcookie لازم يبعته في ترويسة X-CSRF-Token (JwtStrategy).
   // توكن Bearer (السكربتات والاختبارات) من غيره
   csrf?: string
+  // B2.17-ب: رقم الجلسة (user_sessions.sid) — الجلسة اللي صفها اتنهى مابتعدّيش من حارس الدخول. توكن من غير رقم (قبل ترحيل 101،
+  // أو متوقّع برّه مسار الدخول) بيتحكم بالإصدار بس زي الأول
+  sid?: string
 }
 
 /** B2.17: شكل الجلسة المطلوب من العميل. cookie = التوكن في cookie httpOnly (ومعاه رمز CSRF) بدل جسم الرد */
@@ -92,7 +96,8 @@ export class AuthService {
     private readonly directory: DirectoryService,
     private readonly domain: DomainLoginService,
     private readonly mail: MailService,
-    private readonly security: LoginSecurityService
+    private readonly security: LoginSecurityService,
+    private readonly sessions: UserSessionsService
   ) {}
 
   // B1.3: تأخير رد المحاولة الغلط (ثانية ثم 2 ثم 4) — AUTH_FAILURE_DELAY_MS بيصغّره في الاختبارات
@@ -334,7 +339,7 @@ export class AuthService {
     if (gate === 'DISABLED') {
       await this.users.update({ id: user.id }, { lastLoginAt: new Date() })
       await this.security.record({ userId: user.id, identifier, method, outcome: 'SUCCESS', context })
-      return this.issueSession(user, session)
+      return this.issueSession(user, session, context)
     }
     try {
       const challenge = await this.twoFactor.open(user, method, address)
@@ -376,7 +381,7 @@ export class AuthService {
     if (!user || !user.isActive) throw new UnauthorizedException('بيانات الدخول غير صحيحة')
     await this.users.update({ id: user.id }, { lastLoginAt: new Date() })
     await this.security.record({ userId: user.id, identifier: user.email, method: 'CODE', outcome: 'SUCCESS', context })
-    return this.issueSession(user, session)
+    return this.issueSession(user, session, context)
   }
 
   /** إعادة إرسال الرمز لنفس محاولة الدخول (بمهلة وحد أعلى) — مفيش جلسة بتتفتح هنا. */
@@ -395,7 +400,7 @@ export class AuthService {
   }
 
   // تغيير كلمة المرور من صاحب الحساب — الطريق الوحيد المفتوح لتوكن «لازم يغيّر» (غير «مين أنا»)
-  async changePassword(userId: number, currentPassword: string, newPassword: string, session: SessionMode = {}) {
+  async changePassword(userId: number, currentPassword: string, newPassword: string, session: SessionMode = {}, context: LoginContext = {}) {
     const user = await this.withPasswordState().where('u.id = :id', { id: userId }).getOne()
     if (!user || !user.isActive) {
       throw new UnauthorizedException('الحساب معطّل')
@@ -425,11 +430,13 @@ export class AuthService {
         tokenVersion,
       }
     )
-    return this.issueSession({ ...user, mustChangePassword: false, passwordChangedAt, tokenVersion }, session)
+    // B2.17-ب: الإصدار زاد فكل جلسات الحساب ماتت — صفوفها بتتقفل، والجلسة الجديدة بصف جديد
+    await this.sessions.revokeAll(user.id, 'PASSWORD')
+    return this.issueSession({ ...user, mustChangePassword: false, passwordChangedAt, tokenVersion }, session, context)
   }
 
   // توكن + بيانات الحساب للواجهة (نفس رد الدخول)
-  private async issueSession(user: User, session: SessionMode = {}): Promise<SessionResponse> {
+  private async issueSession(user: User, session: SessionMode = {}, context: LoginContext = {}): Promise<SessionResponse> {
     const permissions = await this.resolvePermissions(user)
     const mustChangePassword = !!user.mustChangePassword
     // «كل الفروع» من عمود القاعدة بقيمته الحرفية فقط (bit → true)؛ مدير النظام نطاقه كامل بدوره فمايتكتبش له
@@ -438,6 +445,8 @@ export class AuthService {
     const branchIds = effectiveBranchScope(user)
     // B2.17: جلسة الـcookie بتشيل رمز CSRF بتاعها جوه التوكن نفسه (مربوط بيها، ومن غير جدول)
     const csrf = session.cookie ? newCsrfToken() : null
+    // B2.17-ب: صف الجلسة ورقمه في التوكن (null قبل ترحيل 101: الجلسة من غير رقم زي الأول)
+    const sid = await this.sessions.open(user, context)
 
     const payload: JwtPayload = {
       sub: user.id,
@@ -451,6 +460,7 @@ export class AuthService {
       ...(scopeAllBranches ? { scopeAllBranches: true } : {}),
       ...(branchIds !== null ? { branchIds } : {}),
       ...(csrf ? { csrf } : {}),
+      ...(sid ? { sid } : {}),
     }
 
     return {
@@ -494,6 +504,21 @@ export class AuthService {
       },
       csrfToken: payload.csrf ?? null,
     }
+  }
+
+  /**
+   * B2.17-ب: الخروج — الجلسة اللي التوكن ده بتاعها بتتنهي من الخادم (التوكن مابقاش يعدّي حتى لو لسه في مدته). توكن تالف أو منتهي أو
+   * من غير رقم جلسة: ولا حاجة (مفيش صف يتنهي).
+   */
+  async endSessionOfToken(token: string | null): Promise<void> {
+    if (!token) return
+    let payload: JwtPayload
+    try {
+      payload = await this.jwt.verifyAsync<JwtPayload>(token)
+    } catch {
+      return
+    }
+    if (payload?.sid && Number.isSafeInteger(payload.sub)) await this.sessions.revoke(payload.sid, payload.sub, 'LOGOUT')
   }
 
   async findById(id: number) {

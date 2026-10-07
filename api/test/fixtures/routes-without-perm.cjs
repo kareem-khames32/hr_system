@@ -33,7 +33,10 @@ const EXCEPTIONS = {
   'AuditController.recordExport': 'SELF', // POST /audit/exports
   'AttendanceExemptionsController.mine': 'SELF', // GET /attendance-exemptions/mine
   'AuthController.changePassword': 'SELF', // POST /auth/change-password
+  'AuthController.endOtherSessions': 'SELF', // POST /auth/sessions/end-others — B2.17-ب: جلسات صاحب الحساب نفسه
+  'AuthController.endSession': 'SELF', // DELETE /auth/sessions/:id
   'AuthController.me': 'SELF', // GET /auth/me
+  'AuthController.mySessions': 'SELF', // GET /auth/sessions
   'AuthController.session': 'SELF', // GET /auth/session — B2.17: بيانات الحساب ورمز CSRF للجلسة الحالية
   'BonusesController.mine': 'SELF', // GET /bonuses/mine
   'EmployeeSelfPhotoController.setOwnPhoto': 'SELF', // PUT /employees/me/photo

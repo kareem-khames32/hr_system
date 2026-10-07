@@ -66,15 +66,16 @@ test('SK-02: the server reads Bearer first with one reader for both the token an
   assert.match(strategy, /if \(sessionViaCookie\(req\) && !csrfSafeMethod\(req\.method\) && !csrfMatches\(payload\.csrf, req\.headers\[CSRF_HEADER\]\)\) \{\s+throw new ForbiddenException\(\{ statusCode: 403, code: CSRF_TOKEN_INVALID, message: CSRF_MESSAGE \}\)/)
   // الترتيب: الحساب والإصدار والنطاق الأول (جلسة باطلة = 401)، وبعدهم الرمز
   const order = ["throw new UnauthorizedException('الحساب معطّل')", '(user.tokenVersion ?? 0) !== (payload.tokenVersion ?? 0)', 'if (!branchScopeCovers(current, branchScopeOf(payload)))',
-    'if (sessionViaCookie(req)', 'return payload'].map(part => strategy.indexOf(part))
+    // B2.17-ب: والجلسة نفسها لسه قايمة، قبل حكم الرمز
+    'if (payload.sid && !(await this.sessions.active(payload.sid, payload.sub)))', 'if (sessionViaCookie(req)', 'return payload'].map(part => strategy.indexOf(part))
   assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), JSON.stringify(order))
 
   const service = read('api/src/auth/auth.service.ts')
   // الرمز جوه توكن جلسة الـcookie بس؛ والجلسة العادية ردها وتوكنها زي ما هم
   assert.match(service, /const csrf = session\.cookie \? newCsrfToken\(\) : null/)
-  assert.match(service, /\.\.\.\(csrf \? \{ csrf \} : \{\}\),\n    \}\n\n    return \{\n      accessToken: await this\.jwt\.signAsync\(payload\),/)
+  assert.match(service, /\.\.\.\(csrf \? \{ csrf \} : \{\}\),\n      \.\.\.\(sid \? \{ sid \} : \{\}\),\n    \}\n\n    return \{\n      accessToken: await this\.jwt\.signAsync\(payload\),/)
   assert.match(service, /\.\.\.\(csrf \? \{ csrfToken: csrf \} : \{\}\),\n    \}\n  \}/)
-  assert.match(service, /private async issueSession\(user: User, session: SessionMode = \{\}\): Promise<SessionResponse>/)
+  assert.match(service, /private async issueSession\(user: User, session: SessionMode = \{\}, context: LoginContext = \{\}\): Promise<SessionResponse>/)
   assert.match(service, /csrfToken: payload\.csrf \?\? null,/)
 
   const controller = read('api/src/auth/auth.controller.ts')
@@ -84,16 +85,16 @@ test('SK-02: the server reads Bearer first with one reader for both the token an
   assert.match(deliver, /const \{ accessToken, \.\.\.rest \} = result as T & \{ accessToken: string \}/)
   assert.match(deliver, /res\.setHeader\('Set-Cookie', sessionCookieHeader\(accessToken, sessionCookieOptions\(\), remember \? lifetime : null\)\)\s+return rest/)
   for (const call of ['this.auth.login(dto.email, dto.password, { ip, userAgent }, { cookie })', 'this.auth.domainLogin(dto.username, dto.password, { ip, userAgent }, { cookie })',
-    'this.auth.verifyTwoFactor(dto.challengeToken, dto.code, { ip, userAgent }, { cookie })', 'this.auth.changePassword(user.sub, dto.currentPassword, dto.newPassword, { cookie })']) {
+    'this.auth.verifyTwoFactor(dto.challengeToken, dto.code, { ip, userAgent }, { cookie })', 'this.auth.changePassword(user.sub, dto.currentPassword, dto.newPassword, { cookie }, context)']) {
     assert.ok(controller.includes(`this.deliver(res, await ${call}, cookie, dto.remember === true)`), call)
   }
   assert.equal(controller.match(/const cookie = dto\.cookieSession === true/g).length, 3, 'بطلب صريح ومنطقي من العميل')
-  assert.match(controller, /const cookie = sessionViaCookie\(req\)\s+return this\.deliver\(res, await this\.auth\.changePassword/, 'تغيير كلمة المرور بشكل الجلسة اللي الطلب جه بيها')
+  assert.match(controller, /const cookie = sessionViaCookie\(req\)\s+const context = [^\n]+\s+return this\.deliver\(res, await this\.auth\.changePassword/, 'تغيير كلمة المرور بشكل الجلسة اللي الطلب جه بيها')
   assert.match(controller, /@IsBoolean\(\{ message: 'cookieSession يقبل true أو false بس' \}\)\s+cookieSession\?: boolean/)
   // الخروج: من غير حارس، وبيمسح لما الطلب شايل الـcookie بس
   const logout = controller.slice(controller.indexOf("@Post('logout')"), controller.indexOf("@Get('security-status')"))
   assert.doesNotMatch(logout.slice(0, logout.indexOf('logout(')), /UseGuards/)
-  assert.match(logout, /if \(sessionCookieOf\(req, options\) !== null\) res\.setHeader\('Set-Cookie', clearedSessionCookieHeader\(options\)\)/)
+  assert.match(logout, /const cookie = sessionCookieOf\(req, options\)[\s\S]{0,260}if \(cookie !== null\) res\.setHeader\('Set-Cookie', clearedSessionCookieHeader\(options\)\)/)
   assert.match(controller, /@UseGuards\(JwtAuthGuard\)\s+@AllowPendingPasswordChange\(\)\s+@AllowDuringPolicyGate\(\)\s+@Get\('session'\)/)
   // الخادم بيسمح للواجهة ترسل الـcookie (نفس الإعداد القايم)
   assert.match(read('api/src/main.ts'), /origin: config\.get<string>\('FRONTEND_URL', 'http:\/\/localhost:3000'\),\s+credentials: true,/)

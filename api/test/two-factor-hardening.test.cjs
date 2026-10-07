@@ -93,7 +93,9 @@ function harness({ configValue = 'true', configThrows = false } = {}) {
     { async signAsync() { stats.sessions++; return 'fake-session' } }, twoFactor,
     { async authenticate() { return { mail: identity.email } }, isConfigured: () => true,
       status: () => ({ enabled: false, configured: false, missing: [] }) },
-    { async resolveUser() { return { ...identity } } }, mail, loginSecurityBeforeMigration)
+    { async resolveUser() { return { ...identity } } }, mail, loginSecurityBeforeMigration,
+    // B2.17-ب: خدمة الجلسات قبل ترحيلها — الجلسة بتتفتح من غير رقم
+    { async open() { return null }, async revoke() {}, async revokeAll() {} })
   return { auth, twoFactor, challenges, stats, sent, get code() { return sent[sent.length - 1] } }
 }
 
@@ -221,7 +223,7 @@ test('2FF4 — المصدر: الرفض قبل أي إصدار جلسة، وقر
   const body = auth.slice(auth.indexOf('private async finishLogin'), auth.indexOf('private httpFor'))
   assert.ok(body.indexOf("gate === 'UNKNOWN'") > 0, 'حالة «مش معروف» لازم تتفصل صريحة')
   assert.ok(
-    body.indexOf("gate === 'UNKNOWN'") < body.indexOf('return this.issueSession(user, session)'),
+    body.indexOf("gate === 'UNKNOWN'") < body.indexOf('return this.issueSession(user, session, context)'),
     'الرفض لازم يسبق أي إصدار جلسة'
   )
   assert.match(body, /ServiceUnavailableException/)

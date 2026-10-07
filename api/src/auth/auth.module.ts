@@ -21,6 +21,8 @@ import { Role, UserPermissionOverride } from './role.entity'
 import { RolesController } from './roles.controller'
 import { TwoFactorService } from './two-factor.service'
 import { User } from './user.entity'
+import { UserSession } from './user-session.entity'
+import { UserSessionsService } from './user-sessions.service'
 import { UsersController } from './users.controller'
 import { jwtLifetimeSeconds } from './jwt-secret'
 
@@ -37,6 +39,8 @@ import { jwtLifetimeSeconds } from './jwt-secret'
       RequestsConfig,
       // أمان الدخول (B1.3): سجل الدخول
       LoginEvent,
+      // B2.17-ب: الجلسات النشطة
+      UserSession,
     ]),
     PassportModule,
     JwtModule.registerAsync({
@@ -55,7 +59,7 @@ import { jwtLifetimeSeconds } from './jwt-secret'
     EmployeeLoginAccountController],
   // DirectoryService و MailService نسختين واحدتين: الاختبارات بتستبدل authenticate/send عليهما
   // بـ app.get(...) فمفيش اتصال LDAP ولا SMTP حقيقي في أي اختبار
-  providers: [AuthService, JwtStrategy, DirectoryService, MailService, TwoFactorService, DomainLoginService, LoginSecurityService,
+  providers: [AuthService, JwtStrategy, DirectoryService, MailService, TwoFactorService, DomainLoginService, LoginSecurityService, UserSessionsService,
     // المزامنة الجماعية: نفس DomainLoginService للإنشاء والربط، فمفيش روتين إنشاء تاني
     DomainSyncService],
   // DomainSyncService مصدَّرة عشان إضافة الموظف (EmployeesModule) تزوّده بحساب دخول في لحظته

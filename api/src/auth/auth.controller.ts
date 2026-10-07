@@ -1,10 +1,13 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   HttpCode,
   Ip,
+  Param,
+  ParseIntPipe,
   Post,
   Req,
   Res,
@@ -15,8 +18,9 @@ import { IsBoolean, IsEmail, IsOptional, IsString, Matches, MaxLength, MinLength
 import { AuthService, JwtPayload } from './auth.service'
 import { AllowPendingPasswordChange, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from './guards'
 import { jwtLifetimeSeconds } from './jwt-secret'
-import { sessionViaCookie } from './jwt.strategy'
+import { bearerTokenOf, sessionViaCookie } from './jwt.strategy'
 import { clearedSessionCookieHeader, sessionCookieHeader, sessionCookieOf, sessionCookieOptions } from './session-cookie'
+import { UserSessionsService } from './user-sessions.service'
 import { RequireModule } from '../modules-registry/module.guard'
 import { AllowDuringPolicyGate } from '../policies/policy-gate.decorator'
 
@@ -96,12 +100,12 @@ class ChangePasswordDto {
 }
 
 type CookieResponse = { setHeader(name: string, value: string): unknown }
-type SessionRequest = { headers: Record<string, unknown>; method?: string }
+type SessionRequest = { headers: Record<string, unknown>; method?: string; ip?: string }
 
 @RequireModule('platform')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService, private readonly config: ConfigService) {}
+  constructor(private readonly auth: AuthService, private readonly config: ConfigService, private readonly sessions: UserSessionsService) {}
 
   /**
    * B2.17: تسليم الجلسة. جلسة cookie = التوكن في cookie httpOnly والرد من غير accessToken (سكربت الصفحة مايشوفوش)؛ غير كده، أو
@@ -154,10 +158,36 @@ export class AuthController {
   // وبيمسح لما الطلب نفسه شايل الـcookie بس: طلب من موقع تاني مابيشيلهاش (SameSite)، فمايعرفش يخرّج حد
   @Post('logout')
   @HttpCode(200)
-  logout(@Req() req: SessionRequest, @Res({ passthrough: true }) res: CookieResponse) {
+  async logout(@Req() req: SessionRequest, @Res({ passthrough: true }) res: CookieResponse) {
     const options = sessionCookieOptions()
-    if (sessionCookieOf(req, options) !== null) res.setHeader('Set-Cookie', clearedSessionCookieHeader(options))
+    const cookie = sessionCookieOf(req, options)
+    // B2.17-ب: والجلسة نفسها بتتنهي من الخادم (التوكن اللي الطلب شايله — ترويسة أو cookie)
+    await this.auth.endSessionOfToken(bearerTokenOf(req) ?? cookie)
+    if (cookie !== null) res.setHeader('Set-Cookie', clearedSessionCookieHeader(options))
     return { ok: true }
+  }
+
+  // B2.17-ب: «جلساتي» — جلسات الحساب المفتوحة، وإنهاء واحدة منها أو كل اللي غير الحالية. صاحب الحساب لنفسه بس
+  @UseGuards(JwtAuthGuard)
+  @Get('sessions')
+  mySessions(@CurrentUser() user: JwtPayload) {
+    return this.sessions.list(user)
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('sessions/end-others')
+  @HttpCode(200)
+  endOtherSessions(@CurrentUser() user: JwtPayload) {
+    return this.sessions.endOthers(user)
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('sessions/:id')
+  async endSession(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Req() req: SessionRequest, @Res({ passthrough: true }) res: CookieResponse) {
+    const result = await this.sessions.end(user, id)
+    // أنهى جلسته الحالية وهي cookie: الـcookie بتتمسح معاها
+    if (result.current && sessionViaCookie(req)) res.setHeader('Set-Cookie', clearedSessionCookieHeader(sessionCookieOptions()))
+    return result
   }
 
   // حالة الأمان (البريد مضبوط؟ المجال مضبوط؟ التحقق مفتوح؟) — لشاشة السياسات، بلا أي سر
@@ -202,6 +232,7 @@ export class AuthController {
   @HttpCode(200)
   async changePassword(@CurrentUser() user: JwtPayload, @Body() dto: ChangePasswordDto, @Req() req: SessionRequest, @Res({ passthrough: true }) res: CookieResponse) {
     const cookie = sessionViaCookie(req)
-    return this.deliver(res, await this.auth.changePassword(user.sub, dto.currentPassword, dto.newPassword, { cookie }), cookie, dto.remember === true)
+    const context = { ip: req.ip ?? null, userAgent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null }
+    return this.deliver(res, await this.auth.changePassword(user.sub, dto.currentPassword, dto.newPassword, { cookie }, context), cookie, dto.remember === true)
   }
 }
