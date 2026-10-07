@@ -296,3 +296,61 @@ test('CRP2X-N01: تسجيل إيقاف بيتقاطع مع اعتماد طلب �
     Repository.prototype.findOne = findOne
   }
 })
+
+test('CRP2Y-X-N01: تجديد عقد بيتقاطع مع اعتماد طلب بيغيّر ملف نفس الموظف — التجديد بيتعاد بعد التقاطع والاتنين بيكمّلوا', async () => {
+  // مفيش رسالة بريد حقيقية بتطلع من الاختبار
+  const { MailService } = require('../src/auth/mail.service')
+  const mail = app.get(MailService)
+  mail.isConfigured = () => false
+  mail.send = async () => { throw new Error('no mail in tests') }
+  assert.notEqual(mail.send, MailService.prototype.send)
+  const { EntityManager, Repository } = require('../node_modules/typeorm')
+  const emp = await employee(), IBAN = 'SA4420000001234567895678'
+  const type = await repo('RequestType').save({ code: 'RENEW_BANK', nameAr: 'تغيير حساب بنكي (اختبار التجديد)', category: 'financial', destinationHandler: 'payroll_bank_secure', isActive: true })
+  const pending = await repo('Request').save({ typeCode: type.code, definitionCode: type.code, requesterId: emp.id, createdByUserId: admin.id, branchId: branch.id,
+    status: 'UNDER_REVIEW', currentStep: 1, resolvedSteps: JSON.stringify([{ stepOrder: 1, role: 'hr', approverEmployeeId: null, dueAt: null }]),
+    payload: JSON.stringify({ iban: IBAN, bankName: 'بنك الاختبار', reason: 'حساب جديد' }) })
+  const year = Number(today().slice(0, 4)) + 1, start = `${year}-01-01`, end = `${year}-12-31`
+  const emFind = EntityManager.prototype.findOne, findOne = Repository.prototype.findOne
+  const latch = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
+  const renewalHolds = latch(), approvalReads = latch(), release = latch()
+  const within = (promise, label) => { let timer; return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(label)), 25000) })]).finally(() => clearTimeout(timer)) }
+  let pendingReads = 0, deadlocks = 0, armed = false, hit = false, renewal, approval
+  // التجديد بيقف بعد ما مسك صف الموظف وقبل ما يقرا طلباته (أول مرة بس)
+  EntityManager.prototype.findOne = async function (target, options) {
+    if ((target?.name ?? target) === 'Request' && options?.where?.requesterId === emp.id) {
+      if (++pendingReads === 1) { renewalHolds.resolve(); await release.promise }
+      try { return await emFind.call(this, target, options) } catch (error) {
+        if ((error?.number ?? error?.driverError?.number ?? error?.driverError?.originalError?.info?.number) === 1205) deadlocks++
+        throw error
+      }
+    }
+    return emFind.call(this, target, options)
+  }
+  // والاعتماد بيقف بعد ما مسك صف الطلب وقبل ما يمسك صف الموظف
+  Repository.prototype.findOne = async function (options) {
+    if (armed && !hit && this.metadata.name === 'Employee' && options?.where?.id === emp.id && options.lock?.mode === 'pessimistic_write') { hit = true; approvalReads.resolve(); await release.promise }
+    return findOne.call(this, options)
+  }
+  try {
+    renewal = request(admin, 'POST', `/employees/${emp.id}/contract/renew`, { contractStart: start, contractEnd: end, reason: 'تجديد متقاطع مع اعتماد' }); renewal.catch(() => undefined)
+    await within(Promise.race([renewalHolds.promise, renewal.then(response => { throw new Error('التجديد خلص قبل الوقفة: ' + JSON.stringify(response.body).slice(0, 200)) })]), 'التجديد ماوصلش للوقفة')
+    armed = true
+    approval = request(admin, 'POST', `/requests/${pending.id}/act`, { action: 'APPROVE' }); approval.catch(() => undefined)
+    await within(Promise.race([approvalReads.promise, approval.then(response => { throw new Error('الاعتماد خلص قبل الوقفة: ' + JSON.stringify(response.body).slice(0, 200)) })]), 'الاعتماد ماوصلش للوقفة')
+    release.resolve()
+    const [approved, renewed] = await within(Promise.all([approval, renewal]), 'العمليتين ماخلصوش')
+    // التقاطع حصل فعلًا (SQL 1205 على قراءة التجديد لطلبات الموظف)، والتجديد اتعاد من الأول: الاتنين نجحوا والنتيجتين محفوظين
+    assert.equal(deadlocks, 1, 'التقاطع حصل')
+    assert.equal(pendingReads, 2, 'التجديد اتعاد من الأول مرة واحدة')
+    assert.deepEqual([approved.status, renewed.status], [201, 201], JSON.stringify([approved.body, renewed.body]).slice(0, 400))
+    const saved = await repo('Employee').findOneByOrFail({ id: emp.id })
+    assert.deepEqual([String(saved.contractStart).slice(0, 10), String(saved.contractEnd).slice(0, 10), saved.iban], [start, end, IBAN])
+    assert.equal(await repo('EmployeeStatusHistory').count({ where: { employeeId: emp.id, fieldName: 'contract' } }), 1, 'سطر تجديد واحد (المحاولة اللي اترجّعت ماسابتش أثر)')
+  } finally {
+    release.resolve()
+    await Promise.allSettled([approval, renewal].filter(Boolean))
+    EntityManager.prototype.findOne = emFind
+    Repository.prototype.findOne = findOne
+  }
+})

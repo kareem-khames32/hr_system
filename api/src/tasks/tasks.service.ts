@@ -296,10 +296,18 @@ export class TasksService {
     return { assigneeEmployeeId: employee!.id, assigneeRole: null, branchId: employee!.branchId, personal }
   }
 
-  /** علامة «تحتاج تقييم»: الميزة الفرعية مفتوحة، والمهمة على موظف غير اللي بيكلّف (مش شخصية ولا مهمة دور) */
-  private async ratingFlag(value: unknown, assignment: { assigneeEmployeeId: number | null; personal: boolean }, em: EntityManager = this.ds.manager): Promise<boolean> {
+  /**
+   * حالة ميزة التقييم. بتتقري **قبل** معاملات المهام مش جواها: القراءة من مخزن الخدمة (كاشها بيفضى كل كام ثانية) محتاجة اتصال تاني،
+   * والمعاملة ماسكة اتصالها — عشر معاملات مع كاش فاضي كانوا بيستنوا اتصال حداشر مش موجود (Codex CRP2Y-B02).
+   */
+  private ratingOn(): Promise<boolean> {
+    return this.modules.isFeatureEnabled(TASK_RATING_FEATURE)
+  }
+
+  /** علامة «تحتاج تقييم»: الميزة الفرعية مفتوحة (ratingOn: مقروءة قبل المعاملة)، والمهمة على موظف غير اللي بيكلّف (مش شخصية ولا مهمة دور) */
+  private async ratingFlag(value: unknown, assignment: { assigneeEmployeeId: number | null; personal: boolean }, ratingOn: boolean, em: EntityManager = this.ds.manager): Promise<boolean> {
     if (value !== true) return false
-    if (!(await this.modules.isFeatureEnabled(TASK_RATING_FEATURE))) throw new BadRequestException(TASK_RATING_CLOSED)
+    if (!ratingOn) throw new BadRequestException(TASK_RATING_CLOSED)
     if (!(await taskExtrasReady(em))) throw new BadRequestException(TASK_RULES_MIGRATION_MISSING)
     if (assignment.assigneeEmployeeId == null || assignment.personal) throw new BadRequestException('علامة «تحتاج تقييم» لمهمة على موظف غير اللي بيكلّف بيها')
     return true
@@ -311,7 +319,7 @@ export class TasksService {
     const description = this.cleanText(input.description, 2000)
     const dueDate = this.cleanDueDate(input.dueDate)
     const { personal, ...assignment } = await this.assignment(user, input)
-    const needsRating = await this.ratingFlag(input.needsRating, { ...assignment, personal })
+    const needsRating = await this.ratingFlag(input.needsRating, { ...assignment, personal }, input.needsRating === true && await this.ratingOn())
     const now = new Date()
     const saved = await this.ds.transaction(async em => {
       const repo = em.getRepository(Task)
@@ -385,6 +393,7 @@ export class TasksService {
    * المسؤول نفسه مايعدّلش ولا يحوّل (له تعليق «مش بتاعتي» وطلب تمديد الميعاد). كل تغيير بسطر في سجل المهمة.
    */
   async update(user: JwtPayload, id: number, input: TaskInput) {
+    const ratingOn = input.needsRating === true && await this.ratingOn()
     const saved = await this.ds.transaction(async em => {
       // B2.6: مهمة تنفيذ طلب معتمد مسؤولها من إعداد نوع الطلب — ماتتعدّلش ولا تتحوّل من هنا: مسؤولها بيقرا الطلب، فتحويلها كان
       // هيدّي «إدارة المهام» حق تختار مين يقراه. (الربط بالطلب ثابت من يوم ما المهمة اتفتحت، فبيتقري قبل قفل صفها)
@@ -418,7 +427,7 @@ export class TasksService {
       }
       // علامة «تحتاج تقييم»: للمهمة على موظف غير اللي كلّف (بتتشال لو المهمة بقت شخصية أو على دور)
       let needsRating = extras.needsRating && !personal && task.assigneeEmployeeId != null
-      if (input.needsRating != null) needsRating = await this.ratingFlag(input.needsRating, { assigneeEmployeeId: task.assigneeEmployeeId, personal }, em)
+      if (input.needsRating != null) needsRating = await this.ratingFlag(input.needsRating, { assigneeEmployeeId: task.assigneeEmployeeId, personal }, ratingOn, em)
       let dueChanged = false
       if (input.dueDate !== undefined) {
         const dueDate = this.cleanDueDate(input.dueDate, task.dueDate)
@@ -456,6 +465,7 @@ export class TasksService {
    * بترجع «مفتوحة» زي الأول. والمهمة اللي اتقيّمت اتقبل إنجازها فماتترجعش (والميزة مفتوحة). وكل تغيير بسطر في سجل المهمة.
    */
   async setStatus(user: JwtPayload, id: number, input: TaskStatusInput) {
+    const ratingOn = await this.ratingOn()
     const saved = await this.ds.transaction(async em => {
       // B2.6: مهمة تنفيذ طلب معتمد — صف طلبها بيتقفل قبل صفها (نفس ترتيب الاعتماد ورفض التنفيذ)
       const execution = await executionRequestOfTask(em, id, true)
@@ -484,7 +494,7 @@ export class TasksService {
         // المقيّمة اتقبل إنجازها فماتترجعش — طول ما ميزة التقييم مفتوحة. والميزة مقفولة: التقييم لا ظاهر ولا ساري، فالرجوع شغال زي أي مهمة
         // وبيشيل التقييم المخزّن (الإنجاز اللي اتقيّم اترفض؛ ولو الميزة اتفتحت تاني المهمة تتقيّم من جديد)
         const rated = extras.rating != null
-        if (rated && await this.modules.isFeatureEnabled(TASK_RATING_FEATURE)) throw new BadRequestException('المهمة اتقبلت واتقيّمت — ماتترجعش للتعديل')
+        if (rated && ratingOn) throw new BadRequestException('المهمة اتقبلت واتقيّمت — ماتترجعش للتعديل')
         // «خلصت» ← «جاري» بعدّاد (بعد ترحيل 096)؛ الملغية (وقبل الترحيل) ← «مفتوحة»
         const returned = task.status === 'DONE' && rulesReady
         Object.assign(task, { status: returned ? 'IN_PROGRESS' : 'OPEN', statusNote: note, closedByUserId: null, closedAt: null, proofNote: null, proofFileId: null, remindedAt: null, escalatedAt: null })
@@ -513,7 +523,7 @@ export class TasksService {
           if (execution) await completeExecution(em, execution.requestId, user.sub, proofNote)
           // الالتزام بالميعاد بيتسجّل مع الإقفال من غير ما حد يعمل حاجة. والمعلّمة «تحتاج تقييم» (والميزة مفتوحة): إشعار للي كلّف بيها
           const compliance = taskComplianceLabel(taskCompliance(task))
-          const awaitsRating = extras.needsRating && await this.modules.isFeatureEnabled(TASK_RATING_FEATURE)
+          const awaitsRating = extras.needsRating && ratingOn
           await log('DONE', `قفل المهمة${compliance ? ` — ${compliance}` : ''}`, awaitsRating ? ['CREATOR'] : [])
         } else {
           // «جاري» و«مستنية»: شغل المسؤول نفسه
@@ -595,7 +605,7 @@ export class TasksService {
    * اختياري. التقييم = قبول الإنجاز: المهمة المقيّمة ماتترجعش للتعديل.
    */
   async rate(user: JwtPayload, id: number, input: { rating?: unknown; note?: unknown }) {
-    if (!(await this.modules.isFeatureEnabled(TASK_RATING_FEATURE))) throw new BadRequestException(TASK_RATING_CLOSED)
+    if (!(await this.ratingOn())) throw new BadRequestException(TASK_RATING_CLOSED)
     const saved = await this.ds.transaction(async em => {
       const { task, access, extras } = await this.plainLocked(em, user, id)
       if (task.createdByUserId !== user.sub || !access.manage || extras.isPersonal) throw new ForbiddenException('تقييم المهمة للي كلّف بيها')

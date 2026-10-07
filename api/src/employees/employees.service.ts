@@ -395,7 +395,9 @@ export class EmployeesService {
     const reason = dto.reason?.trim()
     if (!reason || reason.length < 3 || reason.length > 250) throw new BadRequestException('سبب التجديد من 3 إلى 250 حرفاً')
     if (dto.contractFileRef != null && !/^file:[1-9]\d*$/.test(dto.contractFileRef)) throw new BadRequestException('مرجع ملف العقد غير صالح')
-    return this.employees.manager.transaction(async em => {
+    // بيمسك صف الموظف وبعدين بيقرا طلباته، واعتماد طلب بيغيّر ملف نفس الموظف ماسك صف الطلب ومستني صف الموظف: SQL Server بيختار المعاملة
+    // دي ضحية (1205) لأنها ماكتبتش حاجة لسه. بتتعاد من الأول والحكم كله بيتاخد تاني (Codex CRP2Y-X-N01، نفس معالجة تسجيل الإيقاف)
+    return withDeadlockRetry(() => this.employees.manager.transaction(async em => {
       const employee = await em.findOne(Employee, { where: { id }, lock: { mode: 'pessimistic_write' } })
       if (!employee || !inBranchScope(branchScope, employee.branchId)) throw new NotFoundException('الموظف غير موجود')
       if (['archived', 'terminated', 'resigned', 'retired'].includes(employee.status)) throw new BadRequestException('لا يمكن تجديد عقد موظف انتهت خدمته أو أُرشف')
@@ -424,7 +426,7 @@ export class EmployeesService {
         reason: `تجديد العقد — المستخدم #${actorId} — ${reason}${dto.contractFileRef ? ` — المستند ${dto.contractFileRef}` : ''}`,
       })
       return employee
-    })
+    }))
   }
 
   // قرار المالك 16 سبتمبر: الاسم بالعربي وتاريخ ميلاد قبل النهارده. الإلزام نفسه في CreateEmployeeDto؛ هنا شكل

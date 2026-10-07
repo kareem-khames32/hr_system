@@ -319,15 +319,30 @@ test('TR-03: المهمة الشخصية — لصاحبها ومديره الم�
   const hrSelf = await account('hr-self', 'employee', ['tasks.manage', 'tasks.view_all'], { employeeId: hrEmployee.id })
   const own = await create(hrSelf, { title: 'تذكير لنفسي', assigneeEmployeeId: hrEmployee.id })
   assert.deepEqual([own.personal, (await view(users.hrA, own.id)).status, (await listIds(hrSelf)).includes(own.id)], [true, 404, false])
+  // صاحبها قفلها تاني بملف، ومهمة عادية عليه قفلها بملف برضه (CRP2Y-B01: الملف المربوط بمهمة بيتبع حقها حتى لرافعه)
+  const proofAgain = await upload(users.worker)
+  expectStatus(await status(users.worker, personal.id, { status: 'DONE', proofFileId: proofAgain }), 201)
+  const shared = await create(users.lead, { title: 'مهمة عادية بإثبات', assigneeEmployeeId: emps.worker.id, requiresProof: true })
+  const sharedProof = await upload(users.worker)
+  expectStatus(await status(users.worker, shared.id, { status: 'DONE', proofFileId: sharedProof }), 201)
+  assert.deepEqual([await download(users.worker, proofAgain), await download(users.worker, sharedProof), await download(users.worker, proof)], [200, 200, 200])
   // حساب اتربط بموظف تاني: مالوش حق على المهمة الشخصية القديمة، وحساب صاحبها الجديد بيديرها
   await repo('User').update({ id: users.worker.id }, { employeeId: emps.outsider.id })
   const moved = { ...users.worker, employeeId: emps.outsider.id }
   assert.equal((await view(moved, personal.id)).status, 404)
+  // وملف إثباتها اللي هو رفعه زيها: 404 بنفس رد الملف اللي مش موجود — وملف المهمة العادية اللي مابقاش يشوفها كمان
+  assert.deepEqual([await download(moved, proofAgain), await download(moved, sharedProof), (await view(moved, shared.id)).status], [404, 404, 404])
+  // أما الملف اللي لسه مش مربوط بمهمة (إثبات اتشال مع إعادة الفتح) فلرافعه
+  assert.equal(await download(moved, proof), 200)
   const fresh = await login('worker-new', emps.worker)
-  assert.deepEqual((({ canWork, canManage }) => [canWork, canManage])(expectStatus(await view(fresh, personal.id), 200)), [true, true])
+  assert.deepEqual((({ personal: own, status: state, canManage }) => [own, state, canManage])(expectStatus(await view(fresh, personal.id), 200)), [true, 'DONE', true])
+  // وحساب صاحبها الجديد ومديره المباشر بيحمّلوا الملفين بحق المهمة (مش لأنهم رفعوهم)، والملف اللي مش مربوط مش ليهم
+  assert.deepEqual([await download(fresh, proofAgain), await download(users.lead, proofAgain), await download(fresh, sharedProof), await download(users.lead, sharedProof)], [200, 200, 200, 200])
+  assert.deepEqual([await download(fresh, proof), await download(users.lead, proof)], [404, 404])
   await repo('User').update({ id: users.worker.id }, { employeeId: emps.worker.id })
   await repo('User').update({ id: fresh.id }, { isActive: false })
-  await query(`DELETE FROM [tasks] WHERE [id] = @0`, [normal.id])
+  assert.deepEqual([await download(users.worker, proofAgain), await download(users.worker, sharedProof)], [200, 200], 'رجع لموظفه: رجع حقه')
+  await query(`DELETE FROM [tasks] WHERE [id] IN (@0, @1)`, [normal.id, shared.id])
 })
 
 test('TR-04: «تكليف أي موظف» — أي موظف في نطاق الحساب، وبيدير اللي كلّف بيه هو بس وبحقه دلوقتي، والصلاحية مش في أي دور جاهز', async () => {
@@ -670,4 +685,30 @@ test('TR-11: سجل المهمة — كل تغيير سطر في حوارها ب
   const before = (await logOf(users.head, task.id)).length
   assert.equal((await request(users.head, 'PATCH', `/tasks/${task.id}`, { dueDate: day(9) })).status, 400, 'المهمة ملغية')
   assert.equal((await logOf(users.head, task.id)).length, before)
+})
+
+test('TR-12: حالة ميزة التقييم بتتقري قبل معاملة المهمة مش جواها (CRP2Y-B02) — تعديل العلامة، والإقفال، والرجوع، والتقييم', async () => {
+  // قراءة الميزة من مخزن الخدمة محتاجة اتصال تاني لو كاشها فاضي، والمعاملة ماسكة اتصالها: عشر معاملات مهام كانوا بيستنوا اتصال حداشر
+  const modules = app.get(require('../src/modules-registry/modules.service').ModulesService)
+  expectStatus(await feature(true), 200)
+  const transaction = ds.transaction, read = modules.isFeatureEnabled
+  let open = 0, inside = 0, before = 0
+  ds.transaction = async function (...args) { open++; try { return await transaction.apply(this, args) } finally { open-- } }
+  modules.isFeatureEnabled = async function (...args) { if (open > 0) inside++; else before++; return read.apply(this, args) }
+  try {
+    const task = await create(users.head, { title: 'قراءة الميزة برّه المعاملة', assigneeEmployeeId: emps.peer.id, needsRating: true })
+    expectStatus(await request(users.head, 'PATCH', `/tasks/${task.id}`, { needsRating: false }), 200)
+    assert.equal(expectStatus(await request(users.head, 'PATCH', `/tasks/${task.id}`, { needsRating: true }), 200).needsRating, true)
+    expectStatus(await status(users.peer, task.id, { status: 'DONE' }), 201)
+    assert.equal(expectStatus(await status(users.head, task.id, { status: 'OPEN', note: 'ناقصة' }), 201).returnCount, 1)
+    expectStatus(await status(users.peer, task.id, { status: 'DONE' }), 201)
+    expectStatus(await request(users.head, 'POST', `/tasks/${task.id}/rating`, { rating: 3 }), 201)
+    assert.deepEqual(answer(await status(users.head, task.id, { status: 'OPEN', note: 'بعد التقييم' })), [400, 'المهمة اتقبلت واتقيّمت — ماتترجعش للتعديل'])
+    assert.equal(inside, 0, 'ولا قراءة لحالة الميزة ومعاملة مهمة مفتوحة')
+    assert.ok(before >= 7, `الحالة اتقرت قبل المعاملات (${before})`)
+  } finally {
+    ds.transaction = transaction
+    modules.isFeatureEnabled = read
+    expectStatus(await feature(false), 200)
+  }
 })

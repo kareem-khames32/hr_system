@@ -152,13 +152,18 @@ export async function taskAccess(user: JwtPayload, task: TaskAssignment, structu
 }
 
 /**
- * تحميل ملف إثبات المهمة (/files/:id) بنفس حكم المهمة: رافعه (قبل الإقفال وبعده)، وكل اللي يشوف المهمة اللي الملف إثباتها.
+ * تحميل ملف إثبات المهمة (/files/:id) بحكم المهمة:
+ *  - ملف مربوط بمهمة (إثباتها): لكل اللي يشوف المهمة دلوقتي — حتى رافعه (Codex CRP2Y-B01: حساب رافعه اتربط بموظف تاني مابقاش يشوف المهمة
+ *    الشخصية، فمايحمّلش ملفها).
+ *  - ملف لسه ماتربطش بمهمة: لرافعه بس (عشان يقفل بيه المهمة).
  * لا كاشف وجود: ملف مهمة برّه نطاق السائل = نفس رد الملف الغايب.
  */
 export async function assertTaskFileAccess(em: EntityManager, user: JwtPayload, file: Pick<StoredFile, 'id' | 'uploadedBy'>) {
-  if (!!user.sub && file.uploadedBy === user.sub) return
   const task = (await tasksTableReady(em)) ? await em.getRepository(Task).findOne({ where: { proofFileId: file.id } }) : null
-  if (!task) throw new NotFoundException(TASK_FILE_NOT_FOUND)
+  if (!task) {
+    if (!!user.sub && file.uploadedBy === user.sub) return
+    throw new NotFoundException(TASK_FILE_NOT_FOUND)
+  }
   const resolver = new ApproverResolver(em.getRepository(Employee), em.getRepository(Team), em.getRepository(Department), em.getRepository(Branch))
   const { isPersonal } = await taskExtrasOfOne(em, task.id)
   if (!(await taskAccess(user, { ...task, isPersonal }, resolver)).visible) throw new NotFoundException(TASK_FILE_NOT_FOUND)
