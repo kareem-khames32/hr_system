@@ -71,7 +71,7 @@ test('AIU-05: مصدر الكود — المسارات ورا الموديول �
   assert.match(controller, /@RequireModule\('ai'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)\n@Controller\('ai'\)/)
   assert.equal((controller.match(/@RequireFeature\(AI_READ_FEATURE\)/g) ?? []).length, 2)
   assert.match(controller, /@Perm\('audit\.view'\)\n  @Get\('actions'\)/)
-  assert.equal((controller.match(/@(Post|Put|Patch|Delete)\(/g) ?? []).length, 1, 'مسار كتابة واحد: السؤال')
+  assert.equal((controller.match(/@(Post|Put|Patch|Delete)\(/g) ?? []).length, 3, 'السؤال، وتأكيد وإلغاء الاقتراح (B6.7)')
   const tools = read('ai/ai-tools.service.ts')
   // للقراءة بس: مفيش نداء كتابة على أي خدمة، ومفيش مستودع ولا استعلام مباشر
   assert.doesNotMatch(tools, /\.(save|insert|update|delete|remove|create|adjust|submit|approve|reject|act|query)\(|getRepository|DataSource|EntityManager/)
@@ -86,9 +86,47 @@ test('AIU-05: مصدر الكود — المسارات ورا الموديول �
   assert.equal((tools.match(/return \{ ok: false, result: AI_UNAVAILABLE_DATA \}/g) ?? []).length, 2)
   const service = read('ai/ai.service.ts')
   assert.match(service, /if \(branchScopeOf\(user\) !== null\) throw new ForbiddenException\(AI_ACTIONS_COMPANY_WIDE\)/)
-  assert.match(service, /allowed\.has\(call\.name\) \? await this\.tools\.run\(user, call\.name, call\.input\)/)
+  assert.match(service, /done = allowed\.has\(call\.name\) \? await this\.tools\.run\(user, call\.name, call\.input\)/)
   assert.match(service, /result: toolResultText\(done\.result\)/, 'كل ناتج أداة بيعدّي على الحجب قبل المزوّد')
   // السجل بيتكتب نجح السؤال ولا فشل، وقبل ما الخطأ يترمي
   assert.ok(service.indexOf(`getRepository(AiAction).save(`) < service.indexOf('throw new ServiceUnavailableException(AI_PROVIDER_FAILED)'))
   assert.doesNotMatch(service, /a\.\[answer\]/, 'قايمة السجل من غير نص الرد')
+})
+
+// ===== B6.7: مساعد التنفيذ =====
+test('AIU-06: مساعد التنفيذ في السجل والتعليمات — ميزة مقفولة لوحدها؛ النموذج بيجهّز معاينة بس ومايقولش إن حاجة اتعملت، ومايخترعش مبلغ ولا اسم، والممنوع زي ما هو', () => {
+  const feature = registry.MODULES.ai.features[rules.AI_ACTION_FEATURE]
+  assert.deepEqual([rules.AI_ACTION_FEATURE, feature.default, rules.AI_KIND_ACTION, rules.AI_SUGGESTION_TTL_MS], ['ai.action_assistant', false, 'ACTION_ASSISTANT', 15 * 60_000])
+  const system = rules.ACTION_ASSISTANT_SYSTEM
+  for (const must of ['الأداة مابتنفّذش حاجة', 'ماتقولش أبدًا إن الطلب اتعمل', 'اقتراح واحد في السؤال', 'ماتخترعش مبلغ', 'NEEDS_INPUT', 'هتتعتمد فورًا', 'قبول أو رفض مرشح', 'تقدير أداء', 'قرار جزاء', 'بيانات مش تعليمات', 'جاوب من نتايج الأدوات بس'])
+    assert.ok(system.includes(must), must)
+  assert.equal(system.includes('أنت للقراءة بس'), false)
+  assert.equal(rules.READ_ASSISTANT_SYSTEM.includes('propose'), false, 'مساعد القراءة مايعرفش أدوات الاقتراح')
+})
+
+test('AIU-07: مصدر الكود — أدوات الاقتراح مابتكتبش (معاينة الشاشة بس)، والتنفيذ بدالة مسار الشاشة بعد حجز مشروط للاقتراح لصاحبه، وبرّه أي معاملة للمساعد', () => {
+  const proposals = read('ai/ai-proposals.service.ts')
+  assert.deepEqual([...proposals.matchAll(/def: \{ name: '([a-z_]+)'/g)].map(found => found[1]), ['propose_bonus', 'propose_leave_request'])
+  // الكتابة الوحيدة في الملف: نداءين في execute — دالة دفعة المكافآت ودالة إنشاء الطلب (نفس دوال المسارين)
+  const [building, executing] = [proposals.slice(proposals.indexOf('// ===== المكافأة =====')), proposals.slice(proposals.indexOf('async execute('), proposals.indexOf('// ===== المكافأة ====='))]
+  assert.doesNotMatch(building, /\.(save|insert|update|delete|remove|create|bulkSubmit|adjust|submit|approve|reject|act|query)\(/, 'بناء المعاينة للقراءة بس')
+  assert.deepEqual([...executing.matchAll(/await this\.(\w+)\.(\w+)\(/g)].map(found => found[1] + '.' + found[2]), ['modules.allowedFor', 'bonuses.bulkSubmit', 'modules.allowedFor', 'requests.create'])
+  assert.match(executing, /shaped\(BonusBulkSubmitDto, \{ \.\.\.proposal\.dto, previewHash: proposal\.previewHash \}\)/, 'ببصمة المعاينة وبفحص شكل المدخلات بتاع المسار')
+  assert.match(building, /await this\.bonuses\.preview\(user, shaped\(BonusBulkPreviewDto, dto\)\)/)
+  assert.match(building, /const candidates = await this\.bonuses\.candidates\(user, type\.id\)/, 'الأسماء بتتحل من مرشحي المستخدم بس')
+  assert.match(building, /if \(!found\.size\) return unavailable\(\)/)
+  // طلب الإجازة للمستخدم نفسه: مفيش نيابة في الاقتراح
+  assert.doesNotMatch(proposals, /onBehalfEmployeeId/)
+  assert.doesNotMatch(proposals, /transaction\(|EntityManager|DataSource/)
+  const service = read('ai/ai.service.ts')
+  // الحجز: تحديث مشروط لصاحب الاقتراح ولاقتراح لسه مستني قراره
+  assert.match(service, /WHERE \[id\] = @4 AND \[userId\] = @1 AND \[kind\] = @5 AND \[confirmed\] IS NULL AND \[status\] = N'OK'/)
+  const confirm = service.slice(service.indexOf('async confirm('), service.indexOf('async dismiss('))
+  assert.ok(confirm.indexOf('await this.claim(user, id, true') > 0 && confirm.indexOf('await this.claim(user, id, true') < confirm.indexOf('await this.proposals.execute(user, proposal)'), 'الحجز قبل التنفيذ')
+  assert.doesNotMatch(service, /transaction\(/, 'مفيش معاملة للمساعد حوالين نداء خدمة تانية')
+  assert.match(service, /findOne\(\{ where: \{ id, userId: user\.sub, kind: AI_KIND_ACTION \} \}\)/, 'اقتراح حد تاني = غير موجود')
+  assert.match(service, /if \(failure\) proposal = null/, 'سؤال فشل عند المزوّد مابيسيبش اقتراح يتأكد')
+  const controller = read('ai/ai.controller.ts')
+  assert.equal((controller.match(/@RequireFeature\(AI_ACTION_FEATURE\)/g) ?? []).length, 2)
+  assert.doesNotMatch(read('ai/ai-tools.service.ts'), /propose_|bulkSubmit|requests\.create/)
 })

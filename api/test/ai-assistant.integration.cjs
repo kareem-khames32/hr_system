@@ -118,7 +118,7 @@ test('AI-01: مقفول افتراضيًا (الموديول ثم الميزة)�
   assert.deepEqual(await closed(), [404, 404])
   ok(await request(U.admin, 'PUT', `/modules/features/${rules.AI_READ_FEATURE}`, { enabled: true })); modules.invalidate()
   // من غير مزوّد
-  assert.deepEqual(ok(await request(U.staff, 'GET', '/ai/status')), { available: false, limits: { questionMin: rules.AI_QUESTION_MIN, questionMax: rules.AI_QUESTION_MAX }, tools: [] })
+  assert.deepEqual(ok(await request(U.staff, 'GET', '/ai/status')), { available: false, limits: { questionMin: rules.AI_QUESTION_MIN, questionMax: rules.AI_QUESTION_MAX }, tools: [], actions: false })
   refused(await request(U.staff, 'POST', '/ai/ask', { question: 'رصيدي كام؟' }), 503, rules.AI_NOT_AVAILABLE)
   // بمزوّد وقبل الترحيل: مش متاح، ومفيش سؤال وصل للمزوّد
   ai.useProvider(fake); fake.plan = scripted([{ name: 'my_leave_balance' }])

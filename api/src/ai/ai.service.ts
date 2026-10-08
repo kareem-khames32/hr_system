@@ -1,10 +1,13 @@
-import { BadRequestException, ConflictException, ForbiddenException, HttpException, HttpStatus, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common'
+import { BadRequestException, ConflictException, ForbiddenException, HttpException, HttpStatus, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource, type EntityManager } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf } from '../auth/guards'
+import { ModulesService } from '../modules-registry/modules.service'
 import { AttemptLimiter } from '../recruitment/careers'
-import { AI_ACTIONS_COMPANY_WIDE, AI_KIND_READ, AI_MAX_TURNS, AI_MIGRATION_MISSING, AI_NOT_AVAILABLE, AI_PROVIDER_FAILED, AI_QUESTION_MAX, AI_QUESTION_MIN, AI_QUESTIONS_PER_MINUTE, AI_RATE_LIMITED, AiAction, cleanQuestion, READ_ASSISTANT_SYSTEM, toolResultText } from './ai-rules'
+import { AiProposalsService, type AiProposal } from './ai-proposals.service'
+import { ACTION_ASSISTANT_SYSTEM, AI_ACTION_FEATURE, AI_ACTIONS_COMPANY_WIDE, AI_KIND_ACTION, AI_KIND_READ, AI_MAX_TURNS, AI_MIGRATION_MISSING, AI_NOT_AVAILABLE, AI_PROVIDER_FAILED, AI_QUESTION_MAX, AI_QUESTION_MIN, AI_QUESTIONS_PER_MINUTE,
+  AI_RATE_LIMITED, AI_SUGGESTION_DECIDED, AI_SUGGESTION_EXPIRED, AI_SUGGESTION_NOT_FOUND, AI_SUGGESTION_TTL_MS, AiAction, cleanQuestion, READ_ASSISTANT_SYSTEM, toolResultText } from './ai-rules'
 import { AiToolsService } from './ai-tools.service'
 import { llmProviderFromEnv, type LlmMessage, type LlmProvider } from './llm-provider'
 
@@ -18,7 +21,7 @@ export class AiService {
   private readonly limiter = new AttemptLimiter(AI_QUESTIONS_PER_MINUTE, AI_QUESTIONS_PER_MINUTE * 50, 60_000)
   private tableReady = false
 
-  constructor(@InjectDataSource() private readonly ds: DataSource, private readonly tools: AiToolsService) {}
+  constructor(@InjectDataSource() private readonly ds: DataSource, private readonly tools: AiToolsService, private readonly proposals: AiProposalsService, private readonly modules: ModulesService) {}
 
   /** للاختبارات: مزوّد وهمي بدل مزوّد البيئة (null = من غير مزوّد) */
   useProvider(provider: LlmProvider | null) {
@@ -40,7 +43,9 @@ export class AiService {
   /** حالة المساعد للشاشة: متاح (مزوّد + جدول السجل)، والأدوات المتاحة للحساب ده */
   async status(user: JwtPayload) {
     const available = this.current() !== null && await this.ready(this.ds.manager)
-    return { available, limits: { questionMin: AI_QUESTION_MIN, questionMax: AI_QUESTION_MAX }, tools: available ? (await this.tools.available(user)).map(tool => ({ name: tool.name, label: this.tools.labelOf(tool.name) })) : [] }
+    return { available, limits: { questionMin: AI_QUESTION_MIN, questionMax: AI_QUESTION_MAX }, tools: available ? (await this.tools.available(user)).map(tool => ({ name: tool.name, label: this.tools.labelOf(tool.name) })) : [],
+      // B6.7: مساعد التنفيذ مفتوح؟ (الشاشة بتعرض المعاينة وزرار التأكيد)
+      actions: available && await this.modules.isFeatureEnabled(AI_ACTION_FEATURE) }
   }
 
   /** سؤال للمساعد: الأدوات بتتنفّذ بهوية السائل، والنتيجة بتتسجّل (نجحت ولا فشلت) */
@@ -51,18 +56,28 @@ export class AiService {
     if (!provider) throw new ServiceUnavailableException(AI_NOT_AVAILABLE)
     if (!(await this.ready(this.ds.manager))) throw new ConflictException(AI_MIGRATION_MISSING)
     if (!this.limiter.take(String(user.sub))) throw new HttpException(AI_RATE_LIMITED, HttpStatus.TOO_MANY_REQUESTS)
-    const tools = await this.tools.available(user), allowed = new Set(tools.map(tool => tool.name))
+    // B6.7: أدوات الاقتراح بتتضاف لما ميزة مساعد التنفيذ مفتوحة (وكل أداة ورا موديولها)
+    const proposing = (await this.modules.isFeatureEnabled(AI_ACTION_FEATURE)) ? await this.proposals.available(user) : []
+    const tools = [...await this.tools.available(user), ...proposing], allowed = new Set(tools.map(tool => tool.name)), proposes = new Set(proposing.map(tool => tool.name))
+    const system = proposing.length ? ACTION_ASSISTANT_SYSTEM : READ_ASSISTANT_SYSTEM
+    let proposal: AiProposal | null = null
     const messages: LlmMessage[] = [{ role: 'user', text: question }]
     const called: Array<{ name: string; input: Record<string, unknown>; ok: boolean }> = []
     let answer = '', failure: unknown = null
     try {
       for (let turn = 0; turn < AI_MAX_TURNS; turn++) {
-        const reply = await provider.turn({ system: READ_ASSISTANT_SYSTEM, messages, tools })
+        const reply = await provider.turn({ system, messages, tools })
         if (!reply.toolCalls.length) { answer = reply.text; break }
         messages.push({ role: 'assistant', text: reply.text, toolCalls: reply.toolCalls })
         for (const call of reply.toolCalls.slice(0, 6)) {
           // أداة برّه القايمة اللي اتبعتت للنموذج مابتتنفّذش
-          const done = allowed.has(call.name) ? await this.tools.run(user, call.name, call.input) : { ok: false, result: 'أداة مش معروفة' }
+          let done: { ok: boolean; result: unknown }
+          if (proposes.has(call.name)) {
+            // أداة اقتراح: بتبني معاينة بس (مابتكتبش)؛ اقتراح واحد في السؤال — الأول بيفضل
+            const built: { result: unknown; proposal: AiProposal | null } = proposal ? { result: 'فيه اقتراح اتجهّز في السؤال ده — اقتراح واحد في المرة', proposal: null } : await this.proposals.build(user, call.name, call.input)
+            if (built.proposal) proposal = built.proposal
+            done = { ok: !!built.proposal, result: built.result }
+          } else done = allowed.has(call.name) ? await this.tools.run(user, call.name, call.input) : { ok: false, result: 'أداة مش معروفة' }
           called.push({ name: call.name, input: call.input, ok: done.ok })
           messages.push({ role: 'tool', toolCallId: call.id, name: call.name, result: toolResultText(done.result) })
         }
@@ -72,10 +87,56 @@ export class AiService {
       this.logger.warn(`سؤال المساعد فشل عند المزوّد: ${error instanceof Error ? error.message : error}`)
     }
     if (!failure && !answer) answer = 'ماقدرتش أوصل لإجابة — جرّب تسأل بشكل تاني.'
-    const row = await this.ds.getRepository(AiAction).save(this.ds.getRepository(AiAction).create({ userId: user.sub, employeeId: user.employeeId ?? null, kind: AI_KIND_READ, question, tools: JSON.stringify(called),
-      answer: failure ? null : answer.slice(0, 8000), suggestion: null, confirmed: null, confirmedByUserId: null, confirmedAt: null, provider: provider.name.slice(0, 40), model: provider.model.slice(0, 80), status: failure ? 'FAILED' : 'OK', createdAt: new Date() }))
+    if (failure) proposal = null
+    const row = await this.ds.getRepository(AiAction).save(this.ds.getRepository(AiAction).create({ userId: user.sub, employeeId: user.employeeId ?? null, kind: proposal ? AI_KIND_ACTION : AI_KIND_READ, question, tools: JSON.stringify(called),
+      answer: failure ? null : answer.slice(0, 8000), suggestion: proposal ? JSON.stringify(proposal) : null, confirmed: null, confirmedByUserId: null, confirmedAt: null, provider: provider.name.slice(0, 40), model: provider.model.slice(0, 80), status: failure ? 'FAILED' : 'OK', createdAt: new Date() }))
     if (failure) throw new ServiceUnavailableException(AI_PROVIDER_FAILED)
-    return { id: row.id, answer, sources: [...new Set(called.filter(item => item.ok).map(item => item.name))].map(name => ({ name, label: this.tools.labelOf(name) })) }
+    return { id: row.id, answer, sources: [...new Set(called.filter(item => item.ok && !proposes.has(item.name)).map(item => item.name))].map(name => ({ name, label: this.tools.labelOf(name) })),
+      // B6.7: المعاينة اللي المستخدم بيأكدها (رقمها = رقم سطر السجل)
+      suggestion: proposal ? { id: row.id, expiresAt: new Date(new Date(row.createdAt).getTime() + AI_SUGGESTION_TTL_MS).toISOString(), ...proposal.view } : null }
+  }
+
+  /** اقتراح لصاحبه ولسه مستني قراره — غير كده نفس رد اللي مش موجود */
+  private async pendingSuggestion(user: JwtPayload, id: number): Promise<{ row: AiAction; proposal: AiProposal }> {
+    const row = Number.isSafeInteger(id) && id > 0 && await this.ready(this.ds.manager) ? await this.ds.getRepository(AiAction).findOne({ where: { id, userId: user.sub, kind: AI_KIND_ACTION } }) : null
+    const proposal = row?.suggestion ? this.proposals.parse(row.suggestion) : null
+    if (!row || !proposal) throw new NotFoundException(AI_SUGGESTION_NOT_FOUND)
+    if (row.confirmed !== null || row.status !== 'OK') throw new ConflictException(AI_SUGGESTION_DECIDED)
+    if (Date.now() - new Date(row.createdAt).getTime() > AI_SUGGESTION_TTL_MS) throw new ConflictException(AI_SUGGESTION_EXPIRED)
+    return { row, proposal }
+  }
+
+  /** حجز الاقتراح بتحديث مشروط: طلبين متزامنين = واحد بس بياخده (مفتاح منع التكرار) */
+  private async claim(user: JwtPayload, id: number, confirmed: boolean, status: string): Promise<boolean> {
+    const claimed: unknown[] = await this.ds.query(`UPDATE dbo.ai_actions SET [confirmed] = @0, [confirmedByUserId] = @1, [confirmedAt] = @2, [status] = @3 OUTPUT inserted.[id]
+      WHERE [id] = @4 AND [userId] = @1 AND [kind] = @5 AND [confirmed] IS NULL AND [status] = N'OK'`, [confirmed ? 1 : 0, user.sub, new Date(), status, id, AI_KIND_ACTION])
+    return claimed.length === 1
+  }
+
+  /**
+   * B6.7 — تأكيد اقتراح: الحجز الأول (مرة واحدة بالظبط)، وبعده التنفيذ بنفس دالة مسار الشاشة بهوية المستخدم وبرّه أي معاملة للمساعد.
+   * رفض الخدمة (صلاحية، نطاق، سقف، معاينة اتغيّرت) بيرجع للمستخدم زي ما الشاشة بترجّعه، والاقتراح بيتقفل (يتطلب من جديد).
+   */
+  async confirm(user: JwtPayload, id: number) {
+    const { proposal } = await this.pendingSuggestion(user, id)
+    if (!(await this.claim(user, id, true, 'EXECUTING'))) throw new ConflictException(AI_SUGGESTION_DECIDED)
+    const repo = this.ds.getRepository(AiAction)
+    try {
+      const result = await this.proposals.execute(user, proposal)
+      await repo.update({ id }, { status: 'EXECUTED', answer: JSON.stringify(result).slice(0, 8000) })
+      return { id, executed: true, result }
+    } catch (error) {
+      const message = error instanceof HttpException ? error.message : 'تعذّر التنفيذ'
+      await repo.update({ id }, { status: 'EXEC_FAILED', answer: String(message).slice(0, 1000) })
+      throw error
+    }
+  }
+
+  /** B6.7 — إلغاء اقتراح من غير تنفيذ (بيتسجّل إن صاحبه رفضه) */
+  async dismiss(user: JwtPayload, id: number) {
+    await this.pendingSuggestion(user, id)
+    if (!(await this.claim(user, id, false, 'DISMISSED'))) throw new ConflictException(AI_SUGGESTION_DECIDED)
+    return { id, dismissed: true }
   }
 
   /** سجل استخدام المساعد: لصاحب صلاحية سجل التدقيق بحساب «كل الفروع» بس (السؤال نص حر ممكن يذكر أي حد في الشركة). من غير نص الرد. */

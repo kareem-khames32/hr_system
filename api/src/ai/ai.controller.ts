@@ -1,8 +1,8 @@
-import { Body, Controller, Get, HttpCode, Post, Query, UseGuards } from '@nestjs/common'
+import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Post, Query, UseGuards } from '@nestjs/common'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { RequireFeature, RequireModule } from '../modules-registry/module.guard'
-import { AI_READ_FEATURE } from './ai-rules'
+import { AI_ACTION_FEATURE, AI_READ_FEATURE } from './ai-rules'
 import { AiService } from './ai.service'
 
 // B6.6: المساعد — موديول `ai` (مقفول افتراضيًا) وميزة مساعد القراءة (مقفولة). السؤال والحالة للحساب نفسه (الأدوات بهويته)، وسجل الاستخدام بصلاحية سجل التدقيق.
@@ -23,6 +23,21 @@ export class AiController {
   @HttpCode(200)
   ask(@CurrentUser() user: JwtPayload, @Body('question') question: unknown) {
     return this.ai.ask(user, question)
+  }
+
+  // ===== B6.7: مساعد التنفيذ — تأكيد أو إلغاء اقتراح اتعاين (لصاحبه بس؛ التنفيذ بنفس دالة مسار الشاشة) =====
+  @RequireFeature(AI_ACTION_FEATURE)
+  @Post('actions/:id/confirm')
+  @HttpCode(200)
+  confirm(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number) {
+    return this.ai.confirm(user, id)
+  }
+
+  @RequireFeature(AI_ACTION_FEATURE)
+  @Post('actions/:id/dismiss')
+  @HttpCode(200)
+  dismiss(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number) {
+    return this.ai.dismiss(user, id)
   }
 
   @Perm('audit.view')
