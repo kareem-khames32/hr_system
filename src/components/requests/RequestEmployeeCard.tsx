@@ -5,11 +5,13 @@
 // شايفة الطلب اللي قدّمته نيابةً اتقدّم لمين. البيانات من الخادم مع تفاصيل الطلب نفسها (بلا GET /employees)،
 // والطلب السرّي المحجوب مايرجعش معاه أي بيانات — فالبطاقة مابتظهرش أصلًا.
 import { UserRound } from 'lucide-react'
-import type { ApiRequestRequester, ApiRequestSubmittedBy } from '@/lib/api'
+import type { ApiRequestRequester, ApiRequestSubmittedBy, ApiResignationTerms } from '@/lib/api'
 
-export default function RequestEmployeeCard({ requester, submittedBy }: {
+export default function RequestEmployeeCard({ requester, submittedBy, resignationTerms }: {
   requester?: ApiRequestRequester | null
   submittedBy?: ApiRequestSubmittedBy | null
+  // B4.5 (هـ): المدد القانونية لطلب الاستقالة (الخادم بيبعتها لما حسابها مفعّل والطلب لسه في المسار)
+  resignationTerms?: ApiResignationTerms | null
 }) {
   if (!requester) return null
   const rows: Array<[string, string | null]> = [
@@ -44,6 +46,20 @@ export default function RequestEmployeeCard({ requester, submittedBy }: {
       )}
       {submittedBy && (
         <p className="text-xs rounded-lg bg-indigo-50 text-indigo-700 px-3 py-2">قدّمه نيابةً: {submittedBy.displayName || 'مستخدم آخر'}</p>
+      )}
+      {resignationTerms && (
+        <div className="rounded-lg bg-amber-50 text-amber-900 px-3 py-2 text-xs space-y-1" data-resignation-terms>
+          <p className="font-semibold">المدد القانونية ({resignationTerms.country === 'EG' ? 'مصر' : 'السعودية'})</p>
+          <p>
+            مدة الإخطار {resignationTerms.noticeLabel} — بتنتهي <span dir="ltr">{resignationTerms.noticeEndsOn}</span>
+            {resignationTerms.shortNotice && <strong className="text-red-700"> · آخر يوم عمل المطلوب قبل نهاية الإخطار القانوني</strong>}
+          </p>
+          <p>
+            مهلة الرد {resignationTerms.replyDays} يوم — آخر يوم <span dir="ltr">{resignationTerms.replyDeadline}</span>
+            {resignationTerms.replyOverdue && <strong className="text-red-700"> · المهلة عدّت: الاستقالة تعتبر مقبولة قانونًا</strong>}
+          </p>
+          <p className="text-amber-700">للعلم بس — النظام مابيعتمدش ولا بيرفض من نفسه.</p>
+        </div>
       )}
     </section>
   )

@@ -584,6 +584,8 @@ export interface ApiRequest {
   // أو كان الطلب سرّيًا محجوبًا عن السائل
   requester?: ApiRequestRequester | null
   submittedBy?: ApiRequestSubmittedBy | null
+  // B4.5 (هـ): المدد القانونية لطلب استقالة لسه في المسار (لو حسابها مفعّل) — عرض بس
+  resignationTerms?: ApiResignationTerms
 }
 // صاحب الطلب كما في ملفه الحالي: الاسم والكود والمسمى وتنظيمه ومديره المباشر (نفس حل المدير المباشر في سلسلة الاعتماد)
 export interface ApiRequestRequester {
@@ -601,6 +603,9 @@ export interface ApiRequestRequester {
   orgHidden?: boolean
 }
 export interface ApiRequestSubmittedBy { displayName: string | null }
+export interface ApiResignationTerms {
+  country: 'EG' | 'SA'; noticeLabel: string; noticeEndsOn: string; shortNotice: boolean; replyDays: number; replyDeadline: string; replyOverdue: boolean
+}
 export type ApiOvertimeEvidence = OvertimeEvidence
 export interface ApiOvertimePreview extends OvertimeEvidence {
   canSubmit: boolean

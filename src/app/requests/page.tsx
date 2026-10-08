@@ -1473,7 +1473,7 @@ export default function MyRequestsPage() {
         {requestDetail && <div className="fixed inset-0 bg-black/50 z-50 flex justify-end" onClick={() => setRequestDetail(null)}>
           <div className="bg-white w-full max-w-lg h-full overflow-y-auto p-6 space-y-5" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between"><h2 className="text-xl font-bold">تفاصيل الطلب #{requestDetail.id}</h2><button onClick={() => setRequestDetail(null)} aria-label="إغلاق التفاصيل"><X size={22} /></button></div>
-            <RequestEmployeeCard requester={requestDetail.requester} submittedBy={requestDetail.submittedBy} />
+            <RequestEmployeeCard requester={requestDetail.requester} submittedBy={requestDetail.submittedBy} resignationTerms={requestDetail.resignationTerms} />
             <RequestPayload payload={requestDetail.payload} />
             {/* نوع السلفة: «سلفة استثنائية — N قسط» أو «سلفة (مرة واحدة)» */}
             {(requestDetail.typeCode === 'LOAN' || isLoanCapType(types.find(t => t.code === requestDetail.typeCode))) && loanRequestKindLabel(requestDetail.payload) && (

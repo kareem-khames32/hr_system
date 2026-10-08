@@ -2,6 +2,7 @@ import { Body, Controller, Get, Put, Query, UseGuards } from '@nestjs/common'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { EgTrainingFundService } from './eg-training-fund'
+import { MinimumWageAlertService } from './minimum-wage-alert'
 import { SocialInsuranceService } from './social-insurance.service'
 import { RequireModule } from '../modules-registry/module.guard'
 
@@ -10,7 +11,7 @@ import { RequireModule } from '../modules-registry/module.guard'
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('social-insurance')
 export class SocialInsuranceController {
-  constructor(private readonly service: SocialInsuranceService, private readonly trainingFund: EgTrainingFundService) {}
+  constructor(private readonly service: SocialInsuranceService, private readonly trainingFund: EgTrainingFundService, private readonly minimumWage: MinimumWageAlertService) {}
 
   @Perm('payroll.view')
   @Get('settings')
@@ -35,5 +36,12 @@ export class SocialInsuranceController {
   @Get('eg-training-fund')
   egTrainingFund(@CurrentUser() user: JwtPayload, @Query('year') year?: string) {
     return this.trainingFund.report(user, year)
+  }
+
+  // B4.5 (هـ): تنبيه الحد الأدنى للأجور — الموظفين النشطين في نطاق الحساب اللي إجماليهم تحت الحد الأدنى لدولة فرعهم (قراءة بس)
+  @Perm('payroll.view')
+  @Get('minimum-wage-alerts')
+  minimumWageAlerts(@CurrentUser() user: JwtPayload) {
+    return this.minimumWage.report(user)
   }
 }

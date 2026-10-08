@@ -56,6 +56,9 @@ import {
 } from './destinations.service'
 import { LeaveBalancesService } from './leave-balances.service'
 import { readLeaveTypeExtras } from './leave-type-extras'
+import { RESIGNATION_LEGAL_TERMS_KEY, resignationLegalTerms } from './resignation-legal-terms'
+import { readStatutoryEntries } from '../statutory/statutory.service'
+import { branchCountryOf } from '../org/branch-currency'
 import { Leave, LeaveType } from './entities/leave.entities'
 import { assertLeaveTypeDateRules, assertLeaveTypeDaysRules, leaveCountsAllDays, leaveTypeBackdateLimit } from './leave-type-rules'
 import { assertLeaveOutsideSuspension } from '../employees/employee-suspension-overlap'
@@ -2384,7 +2387,8 @@ export class RequestsService {
     // B2.6-ب: «بالنيابة عن» على سطور السجل اللي اتاخدت بتفويض — والأسماء لأطراف الطلب بس
     await this.attachOnBehalf(approvals, party)
     // بطاقة صاحب الطلب أعلى شاشات التفاصيل الثلاث (بانتظار موافقتي، طلباتي، لوحة الطلبات)
-    const full = { ...this.withCanonicalStepActions(req), approvals, ...(await this.requestPeople(req, user)) }
+    const people = await this.requestPeople(req, user)
+    const full = { ...this.withCanonicalStepActions(req), approvals, ...people, ...(await this.resignationTerms(req, type, people.requester)) }
     if (!type || !this.isOvertimeDefinition(type)) return full
     const entries = await this.overtimeEntries.find({ where: { requestId: req.id, employeeId: req.requesterId } })
     const entry = entries.length === 1 ? entries[0] : null
@@ -2437,6 +2441,20 @@ export class RequestsService {
     }], row => row.employeeId)
     const { employeeId: _employee, ...view } = overtime
     return { ...full, overtime: view }
+  }
+
+  // B4.5 (هـ): المدد القانونية لطلب استقالة لسه في المسار (مدة الإخطار ومهلة الرد) بدولة فرع الموظف الحالي — عرض بس، ورا إعداده المقفول.
+  // الدولة من تنظيم الموظف الحالي، فبتتعرض لمن بطاقة تنظيمه ظاهرة له بس (صاحب الطلب، أو حساب فرع الموظف في نطاقه)
+  private async resignationTerms(req: Request, type: RequestType | null | undefined, requester: { employeeId: number; orgHidden?: true } | null) {
+    if (type?.code !== 'RESIGNATION' || !requester || requester.orgHidden || !req.submittedAt || !['SUBMITTED', 'UNDER_REVIEW'].includes(req.status)) return {}
+    const [setting]: Array<{ value: string }> = await this.ds.query('SELECT [value] FROM [requests_config] WHERE [key] = @0', [RESIGNATION_LEGAL_TERMS_KEY])
+    if (setting?.value !== 'true') return {}
+    const [branch]: Array<{ country: string | null }> = await this.ds.query('SELECT b.[country] FROM [employees] e INNER JOIN [branches] b ON b.[id] = e.[branchId] WHERE e.[id] = @0', [requester.employeeId])
+    let payload: Record<string, unknown> = {}
+    try { payload = JSON.parse(req.payload ?? '{}') ?? {} } catch { payload = {} }
+    const terms = resignationLegalTerms(await readStatutoryEntries(this.ds.manager), branchCountryOf(branch?.country),
+      { submittedOn: localDateOf(new Date(req.submittedAt)), lastWorkingDate: typeof payload.lastWorkingDate === 'string' ? payload.lastWorkingDate : null, today: localDateOf(new Date()) })
+    return terms ? { resignationTerms: terms } : {}
   }
 
   // بطاقة صاحب الطلب: هويته وتنظيمه الحالي ومديره المباشر (نفس حل خطوة «المدير المباشر» في السلسلة)، ومين قدّمه

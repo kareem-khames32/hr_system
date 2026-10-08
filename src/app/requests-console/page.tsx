@@ -643,7 +643,7 @@ export default function RequestsConsolePage() {
                     </span>
                   </div>
 
-                  <RequestEmployeeCard requester={detail.requester} submittedBy={detail.submittedBy} />
+                  <RequestEmployeeCard requester={detail.requester} submittedBy={detail.submittedBy} resignationTerms={detail.resignationTerms} />
 
                   {/* بيانات الطلب — السرّي يحجبه السيرفر لغير المقدّم والمعتمد الفعلي */}
                   {detail.confidentialMasked && (

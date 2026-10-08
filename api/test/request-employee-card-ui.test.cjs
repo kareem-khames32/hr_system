@@ -44,20 +44,20 @@ test('all three request detail views show the card at the top, before the payloa
   const inbox = read('src/app/approvals-inbox/page.tsx')
   assert.ok(inbox.includes("import RequestEmployeeCard from '@/components/requests/RequestEmployeeCard'"))
   // نافذة «تفاصيل الطلب #…» ونافذة القرار نفسها — البطاقة قبل الحمولة في الاثنين
-  assert.ok(inbox.includes('{detail && <><RequestEmployeeCard requester={detail.requester} submittedBy={detail.submittedBy} /><RequestPayload payload={detail.payload} />'))
-  assert.ok(inbox.includes('<RequestEmployeeCard requester={detail.requester} submittedBy={detail.submittedBy} />\n                  <RequestPayload payload={detail.payload} />'))
+  assert.ok(inbox.includes('{detail && <><RequestEmployeeCard requester={detail.requester} submittedBy={detail.submittedBy} resignationTerms={detail.resignationTerms} /><RequestPayload payload={detail.payload} />'))
+  assert.ok(inbox.includes('<RequestEmployeeCard requester={detail.requester} submittedBy={detail.submittedBy} resignationTerms={detail.resignationTerms} />\n                  <RequestPayload payload={detail.payload} />'))
 
   const mine = read('src/app/requests/page.tsx')
   assert.ok(mine.includes("import RequestEmployeeCard from '@/components/requests/RequestEmployeeCard'"))
   assert.ok(mine.includes('<h2 className="text-xl font-bold">تفاصيل الطلب #{requestDetail.id}</h2>'))
   const drawer = mine.slice(mine.indexOf('تفاصيل الطلب #{requestDetail.id}'))
-  assert.ok(drawer.indexOf('<RequestEmployeeCard requester={requestDetail.requester} submittedBy={requestDetail.submittedBy} />') > 0)
+  assert.ok(drawer.indexOf('<RequestEmployeeCard requester={requestDetail.requester} submittedBy={requestDetail.submittedBy} resignationTerms={requestDetail.resignationTerms} />') > 0)
   assert.ok(drawer.indexOf('<RequestEmployeeCard') < drawer.indexOf('<RequestPayload payload={requestDetail.payload} />'))
 
   const consolePage = read('src/app/requests-console/page.tsx')
   assert.ok(consolePage.includes("import RequestEmployeeCard from '@/components/requests/RequestEmployeeCard'"))
   const consoleDrawer = consolePage.slice(consolePage.indexOf('REQ-{detail.id}'))
-  assert.ok(consoleDrawer.indexOf('<RequestEmployeeCard requester={detail.requester} submittedBy={detail.submittedBy} />') > 0)
+  assert.ok(consoleDrawer.indexOf('<RequestEmployeeCard requester={detail.requester} submittedBy={detail.submittedBy} resignationTerms={detail.resignationTerms} />') > 0)
   assert.ok(consoleDrawer.indexOf('<RequestEmployeeCard') < consoleDrawer.indexOf('<RequestPayload payload={detail.payload} />'))
 })
 
@@ -69,7 +69,8 @@ test('the request type carries the card data, and the server masks it for a conf
     'departmentName: string | null', 'branchName: string | null', 'teamName: string | null', 'directManagerName: string | null']) assert.ok(api.includes(key), key)
   const service = read('api/src/requests/requests.service.ts')
   assert.ok(service.includes('if (!party && type?.isConfidential) return { ...this.maskConfidential({ ...this.withCanonicalStepActions(req), approvals }), requester: null, submittedBy: null }'))
-  assert.ok(service.includes('const full = { ...this.withCanonicalStepActions(req), approvals, ...(await this.requestPeople(req, user)) }'))
+  // B4.5 (هـ): المدد القانونية للاستقالة بتتضاف بعد بيانات الأشخاص، وبعد حجب السرّي (السطر اللي فوق بيرجع قبلها)
+  assert.ok(service.includes('const people = await this.requestPeople(req, user)\n    const full = { ...this.withCanonicalStepActions(req), approvals, ...people, ...(await this.resignationTerms(req, type, people.requester)) }'))
   // مراجعة Codex الجولة 4 (CR4-B02): التنظيم الحالي لصاحب الطلب نفسه أو لحساب نطاقه فيه فرع الموظف الحالي بس
   assert.ok(service.includes('|| inBranchScope(branchScopeOf(user), employee.branchId))'))
   assert.ok(service.includes('administrationName: null, departmentName: null, branchName: null, teamName: null, directManagerName: null, orgHidden: true }'))

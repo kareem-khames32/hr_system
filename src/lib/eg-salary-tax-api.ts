@@ -27,4 +27,11 @@ export interface ApiEgTrainingFund {
   entities: Array<{ entityId: number | null; name: string; headcount: number; applies: boolean; amount: number }>
   total: number
 }
+// B4.5 (هـ): تنبيه الحد الأدنى للأجور — الموظفين في نطاق الحساب اللي إجماليهم تحت الحد الأدنى لدولة فرعهم (قراءة بس)
+export interface ApiMinimumWageAlerts {
+  asOf: string
+  minimums: Array<{ country: 'EG'; amount: number; key: string; effectiveFrom: string; verified: boolean }>
+  employees: Array<{ employeeId: number; fullName: string; employeeCode: string | null; branchName: string; country: string; gross: number; minimum: number; shortfall: number }>
+}
+export const fetchMinimumWageAlerts = () => apiFetch<ApiMinimumWageAlerts>('/social-insurance/minimum-wage-alerts')
 export const fetchEgTrainingFund = (year?: number) => apiFetch<ApiEgTrainingFund>(`/social-insurance/eg-training-fund${year ? `?year=${year}` : ''}`)
