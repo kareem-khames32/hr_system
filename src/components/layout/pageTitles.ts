@@ -9,6 +9,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/my/team', 'فريقي'],
   ['/my/raises', 'زيادات فريقي'],
   ['/my/expenses', 'مصروفاتي'],
+  ['/my/skills', 'مهاراتي'],
   ['/announcements', 'الإعلانات'],
   ['/helpdesk', 'مركز الخدمات'],
   ['/cases/penalties', 'لائحة الجزاءات'],
@@ -53,6 +54,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/offboarding', 'إنهاء الخدمة'],
   ['/tasks', 'المهام'],
   ['/positions', 'الوظائف المعتمدة'],
+  ['/skills', 'المهارات والإحلال'],
   ['/policies/reports', 'تقرير الإقرارات'],
   ['/policies', 'مكتبة السياسات'],
   // الحضور والانصراف

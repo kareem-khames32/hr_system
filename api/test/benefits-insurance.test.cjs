@@ -23,6 +23,8 @@ test('BIU-02: بيانات الوثيقة والفئة — المطلوب وال
   const good = { name: ' وثيقة 2026 ', insurerName: ' بوبا ', policyNumber: ' P-1 ', country: 'SA', startDate: '2026-01-01', endDate: '2026-12-31', note: '' }
   assert.deepEqual(rules.policyFields(good), { fields: { name: 'وثيقة 2026', insurerName: 'بوبا', policyNumber: 'P-1', country: 'SA', startDate: '2026-01-01', endDate: '2026-12-31', note: null }, error: null })
   assert.equal(rules.policyFields({ ...good, country: '' }).fields.country, null)
+  // شهر أو يوم برّه المدى: رسالة خطأ، مش استثناء
+  assert.deepEqual([rules.policyFields({ ...good, startDate: '2026-13-01' }).fields, rules.policyFields({ ...good, endDate: '2026-12-45' }).fields], [null, null])
   assert.deepEqual([{ ...good, name: '' }, { ...good, insurerName: null }, { ...good, country: 'AE' }, { ...good, startDate: '2026-02-30' }, { ...good, endDate: '2025-12-31' }, { ...good, policyNumber: 'x'.repeat(61) },
     { ...good, name: 5 }, null].map(body => rules.policyFields(body).fields), [null, null, null, null, null, null, null, null])
   assert.deepEqual(rules.classFields({ name: ' أ ', employeeShareMonthly: 150.5, isDefault: true, gradeIds: [3, 1, 3] }), { fields: { name: 'أ', employeeShareMonthly: 150.5, isDefault: true, gradeIds: [1, 3] }, error: null })

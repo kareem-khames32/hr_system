@@ -124,7 +124,12 @@ export const requestStepAllowed = (step: 'send' | 'done' | 'cancel', status: Mem
   step === 'send' ? status === 'PENDING' : OPEN_REQUEST_STATUSES.includes(status)
 
 const DAY = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/
-const realDay = (value: unknown): value is string => typeof value === 'string' && DAY.test(value) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value
+const realDay = (value: unknown): value is string => {
+  if (typeof value !== 'string' || !DAY.test(value)) return false
+  const date = new Date(`${value}T00:00:00Z`)
+  // شهر أو يوم برّه المدى = تاريخ مش صالح (toISOString بترمي عليه)
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+}
 /** رد شركة التأمين: تاريخ السريان (مطلوب)، ورقم البطاقة (مطلوب للإضافة) */
 export function requestOutcome(kind: MemberRequestKind, body: unknown): { effectiveDate: string; cardNumber: string | null; error: null } | { effectiveDate: null; cardNumber: null; error: string } {
   const input = (body ?? {}) as Record<string, unknown>

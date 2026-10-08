@@ -31,6 +31,9 @@ test('EXU-02: التقرير والبند — العنوان، وفترة الم
   assert.deepEqual(rules.lineFields({ categoryId: 3, expenseDate: '2026-10-01', amount: 5 }, today).fields, { categoryId: 3, expenseDate: '2026-10-01', amount: 5, note: null, receiptFileId: null })
   assert.deepEqual([{ categoryId: '3', expenseDate: today, amount: 5 }, { categoryId: 3, expenseDate: '2026-10-09', amount: 5 }, { categoryId: 3, expenseDate: today, amount: 0 }, { categoryId: 3, expenseDate: today, amount: 5, note: 'x'.repeat(301) },
     { categoryId: 3, expenseDate: today, amount: 5, receiptFileId: '9' }, { categoryId: 3, expenseDate: '08/10/2026', amount: 5 }].map(body => rules.lineFields(body, today).fields), [null, null, null, null, null, null])
+  // شهر أو يوم برّه المدى: رسالة خطأ، مش استثناء
+  assert.deepEqual([rules.lineFields({ categoryId: 3, expenseDate: '2026-13-01', amount: 5 }, today).error, rules.reportFields({ title: 'مأمورية', tripFrom: '2026-00-10', tripTo: '2026-10-45' }).error],
+    ['تاريخ المصروف مطلوب', 'فترة المأمورية: تاريخ البداية والنهاية الاتنين (أو سيبهم فاضيين)'])
 })
 
 test('EXU-03: حكم السياسة على البند — فئة مقفولة أو فوق حد «منع» بيمنع، فوق حد «تحذير» بيتعلّم، والإيصال الإجباري بيتحكم عند التقديم بس', () => {

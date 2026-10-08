@@ -200,7 +200,12 @@ const flag = (value: unknown) => value === true || value === 1
 const cents = (value: unknown) => Math.round(Number(value) * 100)
 const money = (value: number) => (value / 100).toFixed(2)
 const ymd = (value: unknown) => (value instanceof Date ? value.toISOString().slice(0, 10) : String(value ?? '').slice(0, 10))
-const validYmd = (value: unknown): value is string => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value
+const validYmd = (value: unknown): value is string => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const date = new Date(`${value}T00:00:00Z`)
+  // شهر أو يوم برّه المدى = تاريخ مش صالح (toISOString بترمي عليه)
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+}
 const cleanText = (value: unknown, max: number): string | null => {
   if (value === undefined || value === null) return ''
   if (typeof value !== 'string') return null

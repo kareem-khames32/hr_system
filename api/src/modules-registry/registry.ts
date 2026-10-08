@@ -397,6 +397,13 @@ export const MODULES = {
       },
     },
   }),
+  // B5.4: المهارات والإحلال — مكتبة مهارات، والمطلوب لكل وظيفة معتمدة، وتقييم مهارة الموظف وفجوته. موديول جديد = مقفول لحد ما الشركة تفعّله
+  skills: moduleDef({
+    nameAr: 'المهارات والإحلال', group: 'talent', dependsOn: ['employees', 'positions'], softUses: ['performance', 'training'], preset: 'full', defaultEnabled: false,
+    description: 'مكتبة مهارات بمستويات، والمهارات المطلوبة لكل وظيفة معتمدة، وتقييم مهارة الموظف بمصدره، ومصفوفة فجوة للفريق',
+    permissions: ['skills.manage'],
+    routes: ['/skills', '/my/skills'],
+  }),
   // B2.11: الوظائف المعتمدة — وظيفة في وحدة بعدد معتمد، وتقرير «معتمد / مشغول / شاغر». موديول جديد = مقفول لحد ما الشركة تفعّله
   // (أول موديول defaultEnabled: false: مفيش حاجة كانت شغالة قبله)
   positions: moduleDef({

@@ -125,6 +125,23 @@ export class EmployeeSkill {
 
   @CreateDateColumn()
   createdAt: Date
+
+  // B5.4 (ترحيل 157): ربط الصف بمهارة من مكتبة المهارات — مصدر المستوى، ومين قيّم وإمتى، وصلاحية الشهادة. برّه الكيان للقراءة والكتابة
+  // (ملف الموظف بيشتغل قبل الترحيل): skills/skills.service.ts
+  @Column({ type: 'int', nullable: true, select: false, insert: false, update: false })
+  skillId?: number | null
+
+  @Column({ type: 'nvarchar', length: 20, nullable: true, select: false, insert: false, update: false })
+  source?: string | null
+
+  @Column({ type: 'int', nullable: true, select: false, insert: false, update: false })
+  assessedByUserId?: number | null
+
+  @Column({ type: 'datetime2', nullable: true, select: false, insert: false, update: false })
+  assessedAt?: Date | null
+
+  @Column({ type: 'date', nullable: true, select: false, insert: false, update: false })
+  validUntil?: string | null
 }
 
 // اللغات — مستوى منفصل للتحدث والكتابة والقراءة

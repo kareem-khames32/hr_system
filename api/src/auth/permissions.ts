@@ -132,6 +132,8 @@ export const PERMISSIONS: Record<string, string> = {
   'benefits.manage': 'إدارة المزايا والتأمين الطبي',
   // B5.3: تقارير المصروفات — فئات المصروف (لحساب بكل الفروع) وقراءة تقارير موظفين النطاق؛ الاعتماد في محرك الطلبات بسلسلته
   'expenses.manage': 'إدارة فئات المصروف وتقارير المصروفات',
+  // B5.4: المهارات — المكتبة (لحساب بكل الفروع) ومتطلبات الوظائف وتقييم مهارات موظفين النطاق
+  'skills.manage': 'إدارة المهارات ومتطلبات الوظائف',
   // B2.11: الوظائف المعتمدة
   'positions.view': 'عرض الوظائف المعتمدة',
   'positions.manage': 'إدارة الوظائف المعتمدة',
@@ -159,6 +161,7 @@ export const PERMISSION_MODULES: Array<{ key: string; labelAr: string; permissio
   { key: 'compensation', labelAr: 'تخطيط الزيادات وسلّم الرواتب', permissions: ['compensation.manage'] },
   { key: 'benefits', labelAr: 'المزايا والتأمين الطبي', permissions: ['benefits.manage'] },
   { key: 'expenses', labelAr: 'المصروفات', permissions: ['expenses.manage'] },
+  { key: 'skills', labelAr: 'المهارات والإحلال', permissions: ['skills.manage'] },
   { key: 'positions', labelAr: 'الوظائف المعتمدة', permissions: ['positions.view', 'positions.manage'] },
   { key: 'announcements', labelAr: 'الإعلانات', permissions: ['announcements.manage'] },
   { key: 'org', labelAr: 'الهيكل التنظيمي', permissions: ['org.manage'] },
@@ -213,6 +216,7 @@ export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   'positions.view': 'يفتح شاشة «الوظائف المعتمدة»: الوظائف وأعدادها وتقرير «معتمد / مشغول / شاغر» لكل قسم وشاغلي كل وظيفة — في نطاق فروعه',
   'announcements.manage': 'يكتب الإعلانات وينشرها ويسحبها ويشوف مين قراها — حساب الفروع لإعلانات فروعه بس',
   'dependents.manage': 'يشوف معالين موظف في نطاق فروعه ويضيف ويعدّل ويحذف (بسبب) مباشرة — من غير طلب',
+  'skills.manage': 'يعرّف مكتبة المهارات (حساب بكل الفروع)، ويحدد المهارات المطلوبة لوظائف نطاق فروعه، ويقيّم مهارات موظفيه ويشوف مصفوفة الفجوة',
   'expenses.manage': 'يعرّف فئات المصروف وحدودها (حساب بكل الفروع)، ويشوف تقارير مصروفات موظفين نطاق فروعه — الاعتماد والصرف في سلسلة الطلب',
   'benefits.manage': 'يشوف وثائق التأمين الطبي وفئاتها وأهلية موظفين نطاقه، ويسجّل اشتراكاتهم وطلبات شركة التأمين — تعريف الوثائق والفئات لحساب بكل الفروع',
   'compensation.manage': 'يفتح دورة زيادات ويحدد ميزانيات الإدارات ويراجع اقتراحات المديرين ويعدّلها — الأرقام محتاجة «عرض الرواتب»، والتطبيق على الرواتب محتاج «اعتماد الرواتب»',
@@ -433,6 +437,8 @@ export const ROLE_PRESETS: Array<{
       'benefits.manage',
       // B5.3: زي المهام — في حزمة الكود بس (والميزة الفرعية نفسها مقفولة افتراضيًا)
       'expenses.manage',
+      // B5.4: زي المهام — في حزمة الكود بس (والموديول نفسه مقفول افتراضيًا)
+      'skills.manage',
       // خطة المراجعة 24: طلب استثناء الحضور واعتماده وإنهاؤه — لا يعتمد أحد ما أنشأه (فصل مهام في الخدمة).
       // الاعتماد التنفيذي approve_executive يبقى لمدير النظام (ترحيل 20260914_*_c1_attendance_exemption_roles)
       'attendance_exemption.view', 'attendance_exemption.manage', 'attendance_exemption.approve',

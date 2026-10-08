@@ -52,6 +52,7 @@ import { DependentsModule } from './dependents/dependents.module'
 import { CompensationModule } from './compensation/compensation.module'
 import { BenefitsModule } from './benefits/benefits.module'
 import { ExpensesModule } from './expenses/expenses.module'
+import { SkillsModule } from './skills/skills.module'
 import { StatutoryModule } from './statutory/statutory.module'
 import { validateEnv } from './auth/jwt-secret'
 import { dbPacketSize } from './common/sql-packet-size'
@@ -156,6 +157,8 @@ import { dbPacketSize } from './common/sql-packet-size'
     BenefitsModule,
     // B5.3: تقارير المصروفات (ميزة expenses.reports، مقفولة افتراضيًا)
     ExpensesModule,
+    // B5.4: المهارات والإحلال (موديول skills، مقفول افتراضيًا)
+    SkillsModule,
     // B2.13-ب: التقارير المحفوظة والمجدولة
     SavedReportsModule,
     // B2.16: الإعلانات (موديول اختياري مقفول افتراضيًا)

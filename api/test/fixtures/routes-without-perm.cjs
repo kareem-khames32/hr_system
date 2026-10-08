@@ -100,6 +100,10 @@ const EXCEPTIONS = {
   'ExpensesController.removeLine': 'SELF', // DELETE /expenses/my/reports/:id/lines/:lineId
   'ExpensesController.attachAdvance': 'SELF', // PUT /expenses/my/reports/:id/advance
   'ExpensesController.addPerDiem': 'SELF', // POST /expenses/my/reports/:id/per-diem
+  // B5.4-أ: المهارات — مصفوفة مرؤوسي المدير المباشرين وتقييم مهاراتهم («المدير المباشر» موقع في الهيكل؛ التقييم كمان لصاحب skills.manage في نطاقه — الحكم في الخدمة تحت قفل صف الموظف)، وفجوة صاحب الحساب
+  'SkillsController.myTeam': 'SERVICE_CHECK', // GET /skills/my-team
+  'SkillsController.assess': 'SERVICE_CHECK', // PUT /skills/employees/:employeeId/:skillId
+  'SkillsController.mine': 'SELF', // GET /skills/my
   // B2.7: قراءة نسخة سياسة وملفها — لصاحب صلاحية السياسات، أو للموظف اللي السياسة في جمهوره (الحكم في الخدمة)
   'PoliciesController.version': 'SERVICE_CHECK', // GET /policies/versions/:versionId
   'PoliciesController.versionFile': 'SERVICE_CHECK', // GET /policies/versions/:versionId/file

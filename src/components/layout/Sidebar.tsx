@@ -121,6 +121,14 @@ const adminMenuDefs: MenuItem[] = [
     href: '/positions',
     perm: 'positions.view',
   },
+  // B5.4: المهارات والإحلال (الموديول مقفول افتراضيًا: البند بيظهر لما يتفعّل)
+  {
+    id: 'skills',
+    label: 'المهارات والإحلال',
+    icon: <GraduationCap size={20} />,
+    href: '/skills',
+    perm: 'skills.manage',
+  },
   // B2.5: قايمة كل المهام العامة في نطاق الحساب («مهامي» لكل حساب في بنود البوابة)
   {
     id: 'tasks',
@@ -508,6 +516,8 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
       { id: 'my-reviews', label: 'التقييمات', icon: <ClipboardList size={20} />, href: '/performance' },
       // B3.9: دورات الموظف التدريبية وشهاداته (بتظهر لما موديول التدريب مفتوح)
       { id: 'my-training', label: 'دوراتي', icon: <GraduationCap size={20} />, href: '/training/my-courses' },
+      // B5.4: فجوة مهارات الموظف ومصفوفة فريقه (بتظهر لما موديول المهارات مفتوح)
+      { id: 'my-skills', label: 'مهاراتي', icon: <GraduationCap size={20} />, href: '/my/skills' },
       { id: 'my-attendance', label: 'حضوري', icon: <Clock size={20} />, href: '/my/attendance' },
       { id: 'my-leaves', label: 'إجازاتي وأرصدتي', icon: <Calendar size={20} />, href: '/my/leaves' },
       { id: 'my-payslips', label: 'قسائم راتبي', icon: <Wallet size={20} />, href: '/my/payslips' },

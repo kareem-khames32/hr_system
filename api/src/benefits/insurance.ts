@@ -94,7 +94,12 @@ export const POLICY_EXPIRY_SOON_DAYS = 60
 export type PolicyState = 'UPCOMING' | 'ACTIVE' | 'EXPIRING' | 'EXPIRED' | 'DISABLED'
 export const POLICY_STATE_LABELS: Record<PolicyState, string> = { UPCOMING: 'لسه مابدأتش', ACTIVE: 'سارية', EXPIRING: 'هتنتهي قريب', EXPIRED: 'انتهت', DISABLED: 'متعطّلة' }
 const DAY = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/
-const realDay = (value: unknown): value is string => typeof value === 'string' && DAY.test(value) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value
+const realDay = (value: unknown): value is string => {
+  if (typeof value !== 'string' || !DAY.test(value)) return false
+  const date = new Date(`${value}T00:00:00Z`)
+  // شهر أو يوم برّه المدى = تاريخ مش صالح (toISOString بترمي عليه)
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+}
 const daysBetween = (from: string, to: string) => Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000)
 const day = (value: unknown) => String(value ?? '').slice(0, 10)
 
