@@ -26,6 +26,13 @@ export class AiController {
   }
 
   // ===== B6.7: مساعد التنفيذ — تأكيد أو إلغاء اقتراح اتعاين (لصاحبه بس؛ التنفيذ بنفس دالة مسار الشاشة) =====
+  // B6.8: اقتراحاتي المستنية (من أي قناة) — عشان الكتابة تتأكد من البوابة
+  @RequireFeature(AI_ACTION_FEATURE)
+  @Get('suggestions')
+  suggestions(@CurrentUser() user: JwtPayload) {
+    return this.ai.pendingSuggestions(user)
+  }
+
   @RequireFeature(AI_ACTION_FEATURE)
   @Post('actions/:id/confirm')
   @HttpCode(200)

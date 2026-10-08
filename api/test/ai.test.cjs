@@ -127,6 +127,8 @@ test('AIU-07: مصدر الكود — أدوات الاقتراح مابتكتب
   assert.match(service, /findOne\(\{ where: \{ id, userId: user\.sub, kind: AI_KIND_ACTION \} \}\)/, 'اقتراح حد تاني = غير موجود')
   assert.match(service, /if \(failure\) proposal = null/, 'سؤال فشل عند المزوّد مابيسيبش اقتراح يتأكد')
   const controller = read('ai/ai.controller.ts')
-  assert.equal((controller.match(/@RequireFeature\(AI_ACTION_FEATURE\)/g) ?? []).length, 2)
+  assert.equal((controller.match(/@RequireFeature\(AI_ACTION_FEATURE\)/g) ?? []).length, 3)
+  // B6.8: قايمة «اقتراحاتي المستنية» لصاحبها بس ولسه مستنية قراره
+  assert.match(service, /where: \{ userId: user\.sub, kind: AI_KIND_ACTION, status: 'OK', confirmed: IsNull\(\) \}/)
   assert.doesNotMatch(read('ai/ai-tools.service.ts'), /propose_|bulkSubmit|requests\.create/)
 })

@@ -2,6 +2,7 @@
 
 // B6.6: «المساعد» — مساعد القراءة: الموظف بيسأل والرد من نفس بيانات شاشاته (بهويته وصلاحياته ونطاقه). كل سؤال بيتسجّل.
 // B6.7: مساعد التنفيذ — المساعد بيجهّز معاينة (مكافأة، طلب إجازة) ومفيش حاجة بتتنفّذ غير لما المستخدم يضغط «تأكيد».
+// B6.8: الاقتراحات المستنية (من أي قناة، زي قناة صوت) بتظهر أول ما الشاشة تفتح عشان تتأكد من البوابة.
 // موديول ai وميزتي ai.read_assistant وai.action_assistant (مقفولين افتراضيًا).
 import { useEffect, useState } from 'react'
 import { Sparkles } from 'lucide-react'
@@ -15,7 +16,7 @@ interface Suggestion {
   rows: Array<{ name: string; code: string | null; amount: string | null; ready: boolean; note: string | null; chain: string[] }>
 }
 interface AssistantAnswer { id: number; answer: string; sources: Array<{ name: string; label: string }>; suggestion?: Suggestion | null }
-interface Turn { question: string; answer?: AssistantAnswer; error?: string; decision?: 'confirmed' | 'dismissed'; decisionError?: string; outcome?: string }
+interface Turn { question: string; answer?: AssistantAnswer; error?: string; decision?: 'confirmed' | 'dismissed'; decisionError?: string; outcome?: string; waiting?: boolean }
 
 const SAMPLES = ['رصيدي كام؟', 'آخر قسيمة راتب ليا صافيها كام؟', 'إيه سياسات الشركة السارية؟', 'فيه طلبات مستنية موافقتي؟']
 const outcomeOf = (result: Record<string, unknown>) => result.kind === 'BONUS_BULK'
@@ -30,7 +31,13 @@ export default function AssistantPage() {
   const [turns, setTurns] = useState<Turn[]>([])
 
   useEffect(() => {
-    apiFetch<AssistantStatus>('/ai/status').then(setStatus).catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل المساعد'))
+    apiFetch<AssistantStatus>('/ai/status').then((loaded) => {
+      setStatus(loaded)
+      // اقتراحات مستنية تأكيدي (اتجهّزت قبل كده أو من قناة تانية)
+      if (loaded.available && loaded.actions) apiFetch<{ suggestions: Array<Suggestion & { question: string }> }>('/ai/suggestions')
+        .then((pending) => setTurns((list) => [...pending.suggestions.reverse().map((suggestion) => ({ question: suggestion.question, waiting: true, answer: { id: suggestion.id, answer: '', sources: [], suggestion } })), ...list]))
+        .catch(() => undefined)
+    }).catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل المساعد'))
   }, [])
 
   async function ask(text: string) {
@@ -85,7 +92,8 @@ export default function AssistantPage() {
                 <div key={index} className="space-y-2">
                   <div className="card bg-primary-50 text-gray-800 text-start">{turn.question}</div>
                   {turn.error && <div role="alert" className="card bg-red-50 text-red-700">{turn.error}</div>}
-                  {turn.answer && (
+                  {turn.waiting && <p className="text-xs text-amber-700" data-assistant-waiting>معاينة مستنية تأكيدك</p>}
+                  {turn.answer && turn.answer.answer && (
                     <div className="card space-y-2" data-assistant-answer>
                       <p className="text-gray-800 whitespace-pre-wrap">{turn.answer.answer}</p>
                       {turn.answer.sources.length > 0 && (

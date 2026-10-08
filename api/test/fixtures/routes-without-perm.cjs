@@ -42,6 +42,7 @@ const EXCEPTIONS = {
   'AiController.confirm': 'SELF', // POST /ai/actions/:id/confirm — B6.7: صاحب الاقتراح بيأكده؛ التنفيذ بدالة مسار الشاشة وصلاحياتها
   'AiController.dismiss': 'SELF', // POST /ai/actions/:id/dismiss
   'AiController.status': 'SELF', // GET /ai/status
+  'AiController.suggestions': 'SELF', // GET /ai/suggestions — B6.8: اقتراحات الحساب نفسه المستنية تأكيده
   'AnnouncementsController.board': 'SELF', // GET /announcements/board
   'AnnouncementsController.markRead': 'SELF', // POST /announcements/:id/read
   'AnnouncementsController.occasions': 'SELF', // GET /announcements/occasions — B2.16-ب: زمايل فرع الموظف (الميزة الفرعية مقفولة افتراضيًا)

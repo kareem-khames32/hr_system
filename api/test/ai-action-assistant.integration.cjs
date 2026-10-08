@@ -266,3 +266,32 @@ test('AX-05: طلب الإجازة — معاينة بالتفاصيل من غي
   const log = ok(await request(U.admin, 'GET', '/ai/actions')).actions.find(row => row.id === suggestion.id)
   assert.deepEqual([log.kind, log.confirmed, log.status], [rules.AI_KIND_ACTION, true, 'EXECUTED'])
 })
+
+test('AX-06 (B6.8): «اقتراحاتي المستنية» — اقتراح اتجهّز من أي قناة بيظهر لصاحبه في البوابة ويتأكد منها؛ اقتراح حد تاني، واللي اتقرر، واللي قدم مابيظهروش', async () => {
+  const list = async user => ok(await request(user, 'GET', '/ai/suggestions')).suggestions
+  assert.deepEqual([await list(U.leader), await list(U.worker)], [[], []])
+  const from = future(7), to = future(8)
+  const mine = await ask(U.worker, 'عايز إجازة عارضة الأسبوع الجاي', [{ name: 'propose_leave_request', input: { leaveType: 'عارضة', fromDate: from, toDate: to } }])
+  const other = await ask(U.leader, 'اعمل مكافأة للصيانة', bonusCall({ targetNames: ['الصيانة'], amount: '150' }))
+  const shown = await list(U.worker)
+  assert.deepEqual(shown.map(row => [row.id, row.question, row.kind, row.title, row.details.slice(0, 3)]),
+    [[mine.body.suggestion.id, 'عايز إجازة عارضة الأسبوع الجاي', 'LEAVE_REQUEST', 'طلب إجازة عارضة', [{ label: 'نوع الإجازة', value: 'إجازة عارضة' }, { label: 'من', value: from }, { label: 'إلى', value: to }]]])
+  assert.equal(shown[0].expiresAt, mine.body.suggestion.expiresAt)
+  assert.deepEqual((await list(U.leader)).map(row => [row.id, row.kind, row.total]), [[other.body.suggestion.id, 'BONUS_BULK', '150.00']])
+  assert.deepEqual(await list(U.admin), [])
+  // التأكيد من القايمة (جلسة تانية غير اللي سألت): بيتنفّذ وبيخرج من القايمة
+  const before = await count('requests')
+  ok(await confirm(U.worker, shown[0].id))
+  assert.deepEqual([await count('requests'), await list(U.worker)], [before + 1, []])
+  // اللي قدم مابيظهرش، واللي اتلغى مابيظهرش
+  assert.match(database, NAME)
+  await pool.request().input('id', other.body.suggestion.id).query('UPDATE dbo.ai_actions SET [createdAt] = DATEADD(MINUTE, -16, [createdAt]) WHERE [id] = @id')
+  assert.deepEqual(await list(U.leader), [])
+  const third = await ask(U.leader, 'اعمل مكافأة للصيانة', bonusCall({ targetNames: ['الصيانة'], amount: '175' }))
+  assert.equal((await list(U.leader)).length, 1)
+  ok(await request(U.leader, 'POST', `/ai/actions/${third.body.suggestion.id}/dismiss`))
+  assert.deepEqual(await list(U.leader), [])
+  // الميزة مقفولة: القايمة مش موجودة
+  ok(await request(U.admin, 'PUT', `/modules/features/${rules.AI_ACTION_FEATURE}`, { enabled: false })); modules.invalidate()
+  try { assert.equal((await request(U.worker, 'GET', '/ai/suggestions')).status, 404) } finally { ok(await request(U.admin, 'PUT', `/modules/features/${rules.AI_ACTION_FEATURE}`, { enabled: true })); modules.invalidate() }
+})

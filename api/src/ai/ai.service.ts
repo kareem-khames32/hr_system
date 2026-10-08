@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, HttpStatus, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
-import { DataSource, type EntityManager } from 'typeorm'
+import { DataSource, IsNull, type EntityManager } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf } from '../auth/guards'
 import { ModulesService } from '../modules-registry/modules.service'
@@ -104,6 +104,20 @@ export class AiService {
     if (row.confirmed !== null || row.status !== 'OK') throw new ConflictException(AI_SUGGESTION_DECIDED)
     if (Date.now() - new Date(row.createdAt).getTime() > AI_SUGGESTION_TTL_MS) throw new ConflictException(AI_SUGGESTION_EXPIRED)
     return { row, proposal }
+  }
+
+  /**
+   * B6.8 — اقتراحات المستخدم نفسه اللي لسه مستنية قراره وجوه المهلة، من أي قناة جهّزتها (الشاشة، أو قناة صوت بتنادي نفس مسار السؤال):
+   * بتظهر في البوابة عشان الكتابة تتأكد كتابةً. اقتراح حد تاني مابيظهرش.
+   */
+  async pendingSuggestions(user: JwtPayload) {
+    if (!(await this.ready(this.ds.manager))) return { suggestions: [] }
+    const rows = await this.ds.getRepository(AiAction).find({ where: { userId: user.sub, kind: AI_KIND_ACTION, status: 'OK', confirmed: IsNull() }, order: { id: 'DESC' }, take: 20 })
+    const now = Date.now()
+    return { suggestions: rows.flatMap(row => {
+      const proposal = row.suggestion ? this.proposals.parse(row.suggestion) : null, created = new Date(row.createdAt).getTime()
+      return proposal && now - created <= AI_SUGGESTION_TTL_MS ? [{ id: row.id, question: row.question, expiresAt: new Date(created + AI_SUGGESTION_TTL_MS).toISOString(), ...proposal.view }] : []
+    }) }
   }
 
   /** حجز الاقتراح بتحديث مشروط: طلبين متزامنين = واحد بس بياخده (مفتاح منع التكرار) */
