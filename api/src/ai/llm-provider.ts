@@ -4,8 +4,10 @@
 export interface LlmToolDef { name: string; description: string; inputSchema: Record<string, unknown> }
 export interface LlmToolCall { id: string; name: string; input: Record<string, unknown> }
 /** دور في الحوار: سؤال المستخدم، رد النموذج (بنداءات أدواته)، أو نتيجة أداة */
+/** مستند مرفق مع رسالة المستخدم (B6.10: سيرة ذاتية PDF) */
+export interface LlmDocument { mediaType: 'application/pdf'; base64: string }
 export type LlmMessage =
-  | { role: 'user'; text: string }
+  | { role: 'user'; text: string; documents?: LlmDocument[] }
   | { role: 'assistant'; text: string; toolCalls: LlmToolCall[] }
   | { role: 'tool'; toolCallId: string; name: string; result: string }
 export interface LlmTurn { text: string; toolCalls: LlmToolCall[] }
@@ -32,7 +34,9 @@ export function llmConfig(env: Record<string, unknown> = process.env): { provide
 export function anthropicRequest(model: string, input: { system: string; messages: LlmMessage[]; tools: LlmToolDef[] }) {
   const messages: Array<{ role: 'user' | 'assistant'; content: unknown }> = []
   for (const message of input.messages) {
-    if (message.role === 'user') messages.push({ role: 'user', content: message.text })
+    if (message.role === 'user') messages.push({ role: 'user', content: message.documents?.length
+      ? [...message.documents.map(document => ({ type: 'document', source: { type: 'base64', media_type: document.mediaType, data: document.base64 } })), { type: 'text', text: message.text }]
+      : message.text })
     else if (message.role === 'assistant') messages.push({ role: 'assistant', content: [...(message.text ? [{ type: 'text', text: message.text }] : []),
       ...message.toolCalls.map(call => ({ type: 'tool_use', id: call.id, name: call.name, input: call.input }))] })
     else {

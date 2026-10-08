@@ -40,6 +40,15 @@ export class AiService {
     return this.tableReady
   }
 
+  /** B6.10: مزوّد جاهز لنداء مساعد من شاشة — نفس شروط السؤال (مزوّد مضبوط، جدول السجل، حد الأسئلة في الدقيقة) */
+  async engaged(user: JwtPayload): Promise<LlmProvider> {
+    const provider = this.current()
+    if (!provider) throw new ServiceUnavailableException(AI_NOT_AVAILABLE)
+    if (!(await this.ready(this.ds.manager))) throw new ConflictException(AI_MIGRATION_MISSING)
+    if (!this.limiter.take(String(user.sub))) throw new HttpException(AI_RATE_LIMITED, HttpStatus.TOO_MANY_REQUESTS)
+    return provider
+  }
+
   /** حالة المساعد للشاشة: متاح (مزوّد + جدول السجل)، والأدوات المتاحة للحساب ده */
   async status(user: JwtPayload) {
     const available = this.current() !== null && await this.ready(this.ds.manager)

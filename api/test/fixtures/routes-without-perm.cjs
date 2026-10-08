@@ -38,6 +38,9 @@ const EXCEPTIONS = {
   // ===== SELF (26) — خدمة ذاتية: بيشتغل على بيانات صاحب الحساب بس (user.sub / user.employeeId) — دور «موظف» صلاحياته فاضية فمفيش مفتاح ينفع =====
   // B2.16: لوحة الإعلانات وتسجيل القراءة — الموظف لنفسه (الإعلان ساري وهو في جمهوره؛ الفحص في الخدمة)
   // B6.6: مساعد القراءة — الحساب بيسأل والأدوات بتتنفّذ بهويته هو (موديول ai وميزة ai.read_assistant مقفولين افتراضيًا)
+  // B6.10: اقتراحات المساعد — قرار صاحب الاقتراح فيه (لصاحبه بس)، ومسودة ملخص التقييم للمدير المقيِّم (الخدمة بتحكم بنموذج التقييم نفسه)
+  'AiAssistController.outcome': 'SELF', // POST /ai/assist/:id/outcome
+  'AiAssistController.reviewDraft': 'SERVICE_CHECK', // POST /ai/assist/review/:assignmentId
   'AiController.ask': 'SELF', // POST /ai/ask
   'AiController.confirm': 'SELF', // POST /ai/actions/:id/confirm — B6.7: صاحب الاقتراح بيأكده؛ التنفيذ بدالة مسار الشاشة وصلاحياتها
   'AiController.dismiss': 'SELF', // POST /ai/actions/:id/dismiss

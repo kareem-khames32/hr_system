@@ -7,7 +7,8 @@ import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { ClipboardCheck } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
-import { createRequest } from '@/lib/api'
+import { apiFetch, createRequest } from '@/lib/api'
+import { useFeatureEnabled, useModuleEnabled } from '@/lib/modules'
 import { formatDate } from '@/lib/dates'
 import { REVIEW_OBJECTION_TYPE, acknowledgeReview, fetchReviewForm, submitReview, type ApiReviewForm, type ReviewAnswers, type ReviewEvidence, type ReviewResponseView } from '@/lib/reviews-api'
 
@@ -25,6 +26,16 @@ export default function ReviewFormPage() {
   const [objecting, setObjecting] = useState(false)
   const [objectionReason, setObjectionReason] = useState('')
   const [busy, setBusy] = useState(false)
+  // B6.10: مسودة ملخص من المساعد للمدير المقيِّم — اقتراح بيراجعه ويعدّله، وقراره فيه بيتسجّل مع التسليم
+  const aiModule = useModuleEnabled('ai'), aiDraftFeature = useFeatureEnabled('performance.ai_draft')
+  const [draft, setDraft] = useState<{ id: number; label: string; text: string; used: boolean } | null>(null)
+  const draftOutcome = (body: { used: boolean; finalText?: string }) => (draft ? apiFetch(`/ai/assist/${draft.id}/outcome`, { method: 'POST', body: JSON.stringify(body) }).catch(() => undefined) : Promise.resolve(undefined))
+  const askDraft = async () => {
+    setBusy(true); setError('')
+    try { setDraft({ ...(await apiFetch<{ id: number; label: string; text: string }>(`/ai/assist/review/${id}`, { method: 'POST' })), used: false }) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'تعذر الوصول للمساعد') } finally { setBusy(false) }
+  }
+  const dropDraft = async () => { await draftOutcome({ used: false }); setDraft(null) }
 
   useEffect(() => {
     if (!Number.isSafeInteger(id) || id < 1) {
@@ -73,7 +84,12 @@ export default function ReviewFormPage() {
     }
     const goals: ReviewAnswers['goals'] = {}
     for (const [goalId, value] of Object.entries(answers.goals)) goals[goalId] = { rating: value.rating, ...(value.comment?.trim() ? { comment: value.comment.trim() } : {}) }
-    void run(() => submitReview(id, { sections, goals }, comment.trim() || undefined))
+    void run(async () => {
+      const next = await submitReview(id, { sections, goals }, comment.trim() || undefined)
+      // المسودة اللي اتستخدمت: التعليق اللي اتسلّم فعلًا هو «النص النهائي» (الخادم بيقارنه بالاقتراح)
+      if (draft?.used) { await draftOutcome(comment.trim() ? { used: true, finalText: comment.trim() } : { used: false }); setDraft(null) }
+      return next
+    })
   }
 
   const scale = form ? Array.from({ length: form.template.ratingMax }, (_, index) => index + 1) : []
@@ -212,6 +228,25 @@ export default function ReviewFormPage() {
                     </div>
                   ))}
                   <div className="card space-y-3">
+                    {aiModule && aiDraftFeature && form.relation === 'manager' && (
+                      <div className="space-y-2" data-review-ai-draft>
+                        {!draft && <button type="button" className="btn-secondary text-sm" disabled={busy} onClick={askDraft}>مسودة ملخص من المساعد</button>}
+                        {draft && (
+                          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-2" data-ai-suggestion>
+                            <p className="text-xs font-semibold text-amber-800">{draft.label}</p>
+                            <p className="text-sm text-gray-800 whitespace-pre-line">{draft.text}</p>
+                            {draft.used
+                              ? <p className="text-xs text-gray-500">المسودة اتحطت في التعليق — راجعها وعدّلها قبل التسليم. الدرجات والتقدير منك إنت.</p>
+                              : (
+                                <div className="flex flex-wrap gap-2">
+                                  <button type="button" className="btn-secondary text-sm" disabled={busy} onClick={() => { setComment(draft.text.slice(0, 2000)); setDraft({ ...draft, used: true }) }}>استخدمها في التعليق</button>
+                                  <button type="button" className="btn-secondary text-sm" disabled={busy} onClick={dropDraft}>تجاهل</button>
+                                </div>
+                              )}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <label className="block text-sm text-gray-700">
                       تعليق عام (اختياري)
                       <textarea className="input w-full mt-1" rows={3} maxLength={2000} value={comment} onChange={(e) => setComment(e.target.value)} />

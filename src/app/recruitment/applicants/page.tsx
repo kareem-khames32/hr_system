@@ -23,6 +23,7 @@ import {
 } from '@/lib/api'
 import { formatDate } from '@/lib/dates'
 import { candidateHireHref } from '@/lib/candidate-hire'
+import { AiCandidateAssist } from '@/components/AiCandidateAssist'
 
 const stageLabels: Record<string, string> = {
   applied: 'تقدّم',
@@ -383,6 +384,8 @@ export default function ApplicantsPage() {
                         <p className="text-sm text-gray-600">{selectedApplicant.notes}</p>
                       </div>
                     )}
+                    {/* B6.10: اقتراحات المساعد (ملخص السيرة، ترتيب مقترح) — بتظهر لما مزاياها مفتوحة */}
+                    <AiCandidateAssist candidate={selectedApplicant} onSaved={load} />
                   </div>
 
                   {/* Actions */}
