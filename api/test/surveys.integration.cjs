@@ -250,3 +250,54 @@ test('SV-03: الاستبيان بالاسم بيسجّل الموظف؛ وال�
   try { assert.deepEqual([(await request(d1[0], 'GET', S + '/mine')).status, (await request(users.hr, 'GET', S)).status], [404, 404]) }
   finally { expectStatus(await request(users.admin, 'PUT', '/modules/surveys', { enabled: true }), 200); modules.invalidate() }
 })
+
+test('SV-04: Codex P3L-B02 — الإخفاء التكميلي لكل سؤال، والقفل بيستنى الرد الجاري فالنتايج بعده ثابتة', async () => {
+  const choice = { label: 'اختيار', type: 'choice', options: ['أ', 'ب'] }
+  const make = async questions => {
+    const made = expectStatus(await request(users.hr, 'POST', S, { title: 'استبيان الطرح', kind: 'PULSE', audience: branchAudience(org.branchA), isAnonymous: true, minGroup: 3, questions }), 201)
+    expectStatus(await request(users.hr, 'POST', `${S}/${made.id}/open`), 200)
+    return made
+  }
+  const results = async id => expectStatus(await request(users.hr, 'GET', `${S}/${id}/results`), 200)
+  const hiddenOf = (summary, key) => summary.find(entry => entry.key === key).hidden === true
+
+  // S02: سؤال اختياري جاوب عليه 3 في المبيعات وواحد في الدعم: ملخص الدعم مخفي، وملخص المبيعات كمان — وإلا إجابة الدعم تتحسب بالطرح من الإجمالي
+  const optional = await make([choice, { ...choice, label: 'اختياري', required: false }])
+  for (const [index, user] of d1.entries()) expectStatus(await respond(user, optional.id, { q1: 'أ', ...(index < 3 ? { q2: 'أ' } : {}) }), 200)
+  for (const [index, user] of d2.entries()) expectStatus(await respond(user, optional.id, { q1: 'أ', ...(index === 0 ? { q2: 'ب' } : {}) }), 200)
+  expectStatus(await request(users.hr, 'POST', `${S}/${optional.id}/close`), 200)
+  const shown = await results(optional.id)
+  const sales = shown.groups.find(group => group.name === 'قسم المبيعات'), support = shown.groups.find(group => group.name === 'قسم الدعم')
+  assert.deepEqual([shown.total, sales.count, support.count], [10, 6, 4])
+  assert.deepEqual([hiddenOf(shown.overall, 'q2'), hiddenOf(support.summary, 'q2'), hiddenOf(sales.summary, 'q2')], [false, true, true], 'ملخص السؤال اتخفى في المجموعتين')
+  assert.deepEqual([hiddenOf(shown.overall, 'q1'), hiddenOf(sales.summary, 'q1'), hiddenOf(support.summary, 'q1')], [false, false, false], 'السؤال الإجباري مايتأثرش')
+  assert.doesNotMatch(JSON.stringify([sales.summary.find(entry => entry.key === 'q2'), support.summary.find(entry => entry.key === 'q2')]), /answered|counts/)
+
+  // S03: رد جاري (ماسك قفل صف الاستبيان) — القفل بيستناه، وبعد القفل مفيش رد بيتضاف: قراءتين بنفس العدد
+  const racing = await make([choice])
+  for (const user of d1.slice(0, 3)) expectStatus(await respond(user, racing.id, { q1: 'أ' }), 200)
+  const { Repository } = require('../node_modules/typeorm')
+  const insert = Repository.prototype.insert
+  const latch = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
+  const entered = latch(), release = latch()
+  Repository.prototype.insert = async function (input) {
+    if (this.metadata.name === 'SurveyResponse' && input.surveyId === racing.id) { entered.resolve(); await release.promise }
+    return insert.call(this, input)
+  }
+  let pending, closing
+  try {
+    pending = respond(d1[3], racing.id, { q1: 'ب' })
+    await entered.promise
+    // رد واقف أطول من مهلة القفل: 409 «جرّب تاني» والاستبيان لسه مفتوح (مش قفل برد جاري، ومش خطأ خادم)
+    assert.deepEqual([answer(await request(users.hr, 'POST', `${S}/${racing.id}/close`)), (await repo('Survey').findOneByOrFail({ id: racing.id })).status], [[409, rules.SURVEY_BUSY], 'OPEN'])
+    closing = request(users.hr, 'POST', `${S}/${racing.id}/close`)
+    const waited = await Promise.race([closing.then(() => 'closed'), new Promise(done => setTimeout(() => done('waiting'), 1000))])
+    assert.equal(waited, 'waiting', 'القفل مستني الرد الجاري')
+    assert.equal((await repo('Survey').findOneByOrFail({ id: racing.id })).status, 'OPEN')
+    release.resolve()
+    assert.deepEqual([(await pending).status, (await closing).status], [200, 200])
+  } finally { release.resolve(); if (pending) await pending; if (closing) await closing; Repository.prototype.insert = insert }
+  const first = await results(racing.id)
+  assert.deepEqual([answer(await respond(d1[4], racing.id, { q1: 'أ' })), first.survey.status, first.total, (await results(racing.id)).total, await repo('SurveyResponse').count({ where: { surveyId: racing.id } })],
+    [[400, rules.SURVEY_NOT_OPEN], 'CLOSED', 4, 4, 4])
+})

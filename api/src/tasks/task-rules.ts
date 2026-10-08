@@ -2,6 +2,7 @@ import { Logger, NotFoundException } from '@nestjs/common'
 import type { EntityManager } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, inBranchScope, userHasPerm } from '../auth/guards'
+import { preboardingActive } from '../auth/preboarding'
 import { Employee, type EmployeeStatus } from '../employees/employee.entity'
 import type { StoredFile } from '../files/stored-file.entity'
 import { Branch } from '../org/entities/branch.entity'
@@ -136,6 +137,9 @@ export interface TaskAccess { visible: boolean; work: boolean; manage: boolean }
 /** صلاحيات الحساب على المهمة. structure: نفس حل المدير المباشر والشجرة بتاع محرك الطلبات (ApproverResolver) */
 export async function taskAccess(user: JwtPayload, task: TaskAssignment, structure: TaskStructure): Promise<TaskAccess> {
   const work = taskAwaitsAccount(user, task)
+  // Codex P3L-B01: الجلسة قبل المباشرة «لنفسه» — المهمة اللي مستنياها هي بس. سلطة المدير المباشر والمكلِّف و«إدارة المهام» مابتشتغلش فيها
+  // (والحكم ده هو حكم ملفات المهمة وتعليقاتها كمان)
+  if (preboardingActive(user)) return { visible: work, work, manage: false }
   const other = task.assigneeEmployeeId != null && !!user.employeeId && user.employeeId !== task.assigneeEmployeeId
   // المدير المباشر للموظف المسؤول (هيكليًا، من غير قيد فرع): بيشوف مهامه — وبيتحل لما الحكم واقف عليه بس
   const directManager = async () => other && (await structure.directManagerOf(task.assigneeEmployeeId!)) === user.employeeId

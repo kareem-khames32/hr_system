@@ -424,7 +424,7 @@ export class BonusesService {
   }
 
   // ===== الاقتراح الفردي =====
-  async create(user: JwtPayload, dto: CreateBonusDto) {
+  async create(user: JwtPayload, dto: CreateBonusDto, hooks?: { afterSave?: (em: EntityManager, requestId: number) => Promise<void> }) {
     const id = await this.manager.transaction(async em => {
       await this.org.assertMoneyRequestVisible(em, user, 'PAYROLL_BONUS', 'المكافأة')
       const ctx = await this.context(em, user, dto)
@@ -443,6 +443,9 @@ export class BonusesService {
       if (!evaluation.ok) throw this.exception(evaluation)
       const saved = await this.persist(em, user, ctx, evaluation, null)
       if (hasHrOverride(user)) await this.approveInstantly(em, user, saved, ctx, evaluation)
+      // Codex P3L-B03: صاحب الطلب (اقتراح تقييم، جزاء من اللائحة) بيكتب ربطه هنا جوه نفس المعاملة — الطلب وربطه بيثبتوا مع بعض أو مايثبتوش.
+      // الخطّاف من كود الخادم بس (المتحكم مابيبعتوش)، ولو رمى خطأ الطلب كله بيرجع
+      await hooks?.afterSave?.(em, saved.id)
       return saved.id
     })
     return this.detail(user, id)

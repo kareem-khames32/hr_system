@@ -74,7 +74,7 @@ test('SU-02: eNPS and the summary, groups shown without one that lets a hidden g
   assert.deepEqual(['10', '3', '100', '2', '101', '5.5', 'x', '', null, undefined].map(raw => rules.commentMin(raw)), [10, 3, 100, 10, 10, 10, 10, 10, 10, 10])
 })
 
-test('SU-03: a new closed module, a two-stage answer with no link from the response to the invitation, no audit line, the routes and the screens', () => {
+test('SU-03: a new closed module, a one-transaction answer with no link from the response to the invitation, no audit line, the routes and the screens', () => {
   const module = MODULES.surveys
   assert.deepEqual([module.defaultEnabled, module.permissions, module.routes, module.dependsOn], [false, ['surveys.manage'], ['/surveys', '/surveys/*'], ['employees']])
   const { PERMISSIONS, PERMISSION_MODULES, ROLE_PRESETS } = require('../src/auth/permissions')
@@ -90,12 +90,15 @@ test('SU-03: a new closed module, a two-stage answer with no link from the respo
 
   const service = read('api/src/surveys/surveys.service.ts')
   const respond = service.slice(service.indexOf('  async respond('))
-  const lock = respond.indexOf("lock: { mode: 'pessimistic_write' }"), mark = respond.indexOf('update({ id: invitation.id, respondedOn: IsNull() }, { respondedOn: today })'), end = respond.indexOf('\n    })\n'),
-    insert = respond.indexOf('this.ds.getRepository(SurveyResponse).insert(')
-  assert.ok(lock > 0 && mark > lock && end > mark && insert > end, 'قفل الاستبيان ← علامة مشروطة على الدعوة ← المعاملة بتقفل ← صف الرد برّه')
+  // Codex P3L-B02: علامة الدعوة وصف الرد في معاملة واحدة تحت قفل صف الاستبيان — القفل (close) بياخد نفس القفل فبيستنى الرد الجاري
+  const lock = respond.indexOf("lock: { mode: 'pessimistic_write' }"), mark = respond.indexOf('update({ id: invitation.id, respondedOn: IsNull() }, { respondedOn: today })'),
+    insert = respond.indexOf('em.getRepository(SurveyResponse).insert('), end = respond.indexOf('\n    })\n')
+  assert.ok(lock > 0 && mark > lock && insert > mark && end > insert, 'قفل الاستبيان ← علامة مشروطة على الدعوة ← صف الرد ← المعاملة بتقفل')
   assert.match(respond, /if \(!marked\.affected\) throw new ConflictException\(SURVEY_ANSWERED\)/)
-  assert.match(respond, /employeeId: survey\.isAnonymous === true \? null : invitation\.employeeId/)
-  assert.match(respond, /update\(\{ id: invitation\.id \}, \{ respondedOn: null \}\)/, 'لو صف الرد وقع العلامة بترجع')
+  assert.match(respond, /employeeId: fresh\.isAnonymous === true \? null : invitation\.employeeId/)
+  assert.doesNotMatch(respond, /this\.ds\.getRepository\(SurveyResponse\)/, 'مفيش صف رد برّه المعاملة')
+  const close = service.slice(service.indexOf('  async close('), service.indexOf('  async results('))
+  assert.match(close, /await this\.managed\(em, user, id, true\)/, 'القفل تحت قفل صف الاستبيان')
   assert.doesNotMatch(service, /recordAudit|\.save\(/, 'من غير سطر تدقيق ومن غير حفظ كيان كامل')
   // النتايج: تحت الحد مفيش حاجة، والتفصيل بالمجموعات المعروضة بس
   const results = service.slice(service.indexOf('  async results('), service.indexOf('  // ===== الموظف ====='))
@@ -103,10 +106,10 @@ test('SU-03: a new closed module, a two-stage answer with no link from the respo
   // Codex P3K-B13: النتايج بعد القفل بس، والحد على كل سؤال وكل تعليقات سؤال، واسم القسم بفرعه الحالي، والرد المجهول من غير يومه
   assert.match(results, /if \(row\.status !== 'CLOSED'\) throw new BadRequestException\(SURVEY_RESULTS_AFTER_CLOSE\)/)
   assert.deepEqual([(results.match(/summarize\(questions, /g) ?? []).length, results.includes('overall: summarize(questions, parsed.map((entry) => entry.answers), row.minGroup)'),
-    results.includes('summary: summarize(questions, byDepartment.get(key)!, row.minGroup)')], [2, true, true], 'الإجمالي وكل مجموعة بحد كل سؤال')
+    results.includes('summary: summarize(questions, byDepartment.get(key)!, row.minGroup, hiddenIn(key))')], [2, true, true], 'الإجمالي وكل مجموعة بحد كل سؤال (والإخفاء التكميلي لكل سؤال)')
   assert.match(results, /\.filter\(\(entry\) => entry\.texts\.length >= row\.minGroup\)/)
   assert.match(results, /\.filter\(\(entry\) => inBranchScope\(scope, entry\.branchId\)\)\.map\(\(entry\) => \[entry\.id, entry\.name\]\)/)
-  assert.match(respond, /submittedOn: survey\.isAnonymous === true \? \(survey\.openedAt \? localDateOf\(new Date\(survey\.openedAt\)\) : today\) : today/)
+  assert.match(respond, /submittedOn: fresh\.isAnonymous === true \? \(fresh\.openedAt \? localDateOf\(new Date\(fresh\.openedAt\)\) : today\) : today/)
   assert.match(results, /visibleGroups\(/)
   assert.doesNotMatch(results, /employeeId/, 'النتايج من غير موظف')
   // الإدارة بنطاق الفروع وإلا غير موجود
@@ -126,4 +129,28 @@ test('SU-03: a new closed module, a two-stage answer with no link from the respo
   assert.match(page, /\{row\.status === 'CLOSED' && \(\n\s+<button onClick=\{\(\) => show\(row\.id\)\}/, 'النتايج بعد القفل بس')
   assert.match(form, /form\?\.isAnonymous && !done && !form\.answered/)
   assert.doesNotMatch(page + form, /employeeName|employeeId/, 'الواجهة مابتعرضش صاحب رد')
+})
+
+test('SU-06: Codex P3L-B02 — per-question complementary suppression between the shown groups', () => {
+  const questions = rules.cleanSurveyQuestions([{ label: 'إجباري', type: 'choice', options: ['أ', 'ب'] }, { label: 'اختياري', type: 'choice', options: ['أ', 'ب'], required: false }, { label: 'تعليق', type: 'text', required: false }])
+  const answers = (count, optional) => Array.from({ length: count }, (_, index) => ({ q1: 'أ', ...(index < optional ? { q2: 'ب' } : {}) }))
+  const hidden = (groups, others, min = 5) => Object.fromEntries([...rules.complementaryHidden(questions, groups, others, min)].map(([key, set]) => [key, [...set].sort()]))
+  // مثال Codex S02: مجموعتين بخمس ردود، السؤال الاختياري 5 في الأولى و1 في التانية — ملخص الأولى بيتخفى كمان
+  assert.deepEqual(hidden([{ key: 1, answers: answers(5, 5) }, { key: 2, answers: answers(5, 1) }], []), { q2: [1] })
+  // المخفي فاضي (محدش جاوب) أو وصل الحد: مفيش إخفاء زيادة
+  assert.deepEqual(hidden([{ key: 1, answers: answers(5, 5) }, { key: 2, answers: answers(5, 0) }], []), {})
+  assert.deepEqual(hidden([{ key: 1, answers: answers(6, 6) }, { key: 2, answers: answers(6, 5) }], []), {})
+  // إجابات السؤال في المجموعات اللي مش معروضة داخلة في المخفي
+  assert.deepEqual(hidden([{ key: 1, answers: answers(5, 5) }, { key: 2, answers: answers(7, 6) }], answers(5, 2)), { q2: [1] })
+  assert.deepEqual(hidden([{ key: 1, answers: answers(5, 5) }, { key: 2, answers: answers(7, 6) }], answers(5, 5)), {})
+  // بالتسلسل: أصغر معروض الأول، ولحد ما المخفي يوصل الحد أو مايفضلش معروض
+  assert.deepEqual(hidden([{ key: 1, answers: answers(9, 2) }, { key: 2, answers: answers(9, 1) }, { key: 3, answers: answers(9, 5) }, { key: 4, answers: answers(9, 6) }], [], 5), { q2: [3] })
+  assert.deepEqual(hidden([{ key: 1, answers: answers(3, 3) }, { key: 2, answers: answers(3, 1) }], [], 3), { q2: [1] })
+  // السؤال النصي مالوش ملخص مجموعات
+  assert.equal(rules.complementaryHidden(questions, [{ key: 1, answers: [{ q1: 'أ', q3: 'نص' }] }], [], 5).has('q3'), false)
+  // الملخص بيخفي السؤال المطلوب إخفاؤه حتى لو إجاباته فوق الحد — من غير عدد ولا توزيع
+  const summary = rules.summarize(questions, answers(6, 6), 5, new Set(['q2']))
+  assert.deepEqual(summary.map(entry => [entry.key, entry.hidden === true, 'answered' in entry]), [['q1', false, true], ['q2', true, false]])
+  const service = read('api/src/surveys/surveys.service.ts')
+  assert.match(service, /summarize\(questions, byDepartment\.get\(key\)!, row\.minGroup, hiddenIn\(key\)\)/)
 })

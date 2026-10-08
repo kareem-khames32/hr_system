@@ -253,19 +253,49 @@ test('RW-03: طلب المكافأة ثبت والرد وقع — الاقترا
     assert.deepEqual([calls, stored.status, stored.bonusRequestId, await bonuses(), bonus.reason.endsWith(rewards.rewardMarker(row.id)), bonus.employeeId], [1, 'SUBMITTED', firstId, before + 1, true, emps.lone.id])
     assert.deepEqual([answer(await submit(users.other, row.id)), calls, await bonuses()], [[409, rewards.REWARD_TAKEN], 1, before + 1])
   } finally { service.bonuses.create = original }
-  // (2) محاولة اتقطعت قبل الربط خالص (الاقتراح رجع «مقترح» وطلبه موجود): التقديم بيربط الموجود ومابيناديش المكافآت تاني
-  await repo('ReviewRewardSuggestion').update({ id: row.id }, { status: 'SUGGESTED', bonusRequestId: null, decidedByUserId: null, decidedAt: null })
+  const reset = () => repo('ReviewRewardSuggestion').update({ id: row.id }, { status: 'SUGGESTED', bonusRequestId: null, decidedByUserId: null, decidedAt: null })
+  const stored = () => repo('ReviewRewardSuggestion').findOneByOrFail({ id: row.id })
+  const canSubmit = async () => expectStatus(await request(users.other, 'GET', R + '/mine'), 200).suggestions.find(entry => entry.id === row.id).canSubmit
+  const latch = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
+  // (2) Codex P3L-B03 (R02): العلامة في السبب مش مرجع — طلب قديم من نفس المدير شايل علامة الاقتراح مابيتربطش: الاقتراح بيتعمل له طلبه هو بقيمته
+  await reset()
   service.bonuses.create = async function (...args) { calls += 1; return original.apply(this, args) }
   try {
-    const again = expectStatus(await submit(users.other, row.id), 200)
-    assert.deepEqual([again.bonusRequestId, calls, await bonuses(), (await repo('ReviewRewardSuggestion').findOneByOrFail({ id: row.id })).status], [firstId, 1, before + 1, 'SUBMITTED'])
+    const second = expectStatus(await submit(users.other, row.id), 200)
+    const made = await repo('BonusRequest').findOneByOrFail({ id: second.bonusRequestId })
+    assert.deepEqual([second.bonusRequestId !== firstId, Number(made.inputValue), calls, await bonuses(), (await stored()).bonusRequestId], [true, 500, 2, before + 2, second.bonusRequestId])
   } finally { service.bonuses.create = original }
-  // طلب بنفس العلامة من حساب تاني مابيتلقطش: الاقتراح بيتعمل له طلبه هو (ونافذة التكرار مقفولة)
-  await repo('ReviewRewardSuggestion').update({ id: row.id }, { status: 'SUGGESTED', bonusRequestId: null, decidedByUserId: null, decidedAt: null })
-  await repo('BonusRequest').update({ id: firstId }, { creatorUserId: users.admin.id })
-  const own = expectStatus(await submit(users.other, row.id), 200)
-  assert.deepEqual([own.bonusRequestId !== firstId, await bonuses()], [true, before + 2])
-  // (3) الرفض الحقيقي قبل الحفظ لسه بيرجّع الاقتراح (متغطّي في RW-02): علامة اقتراح تاني مابتلقطش طلب الاقتراح ده
-  assert.notEqual(rewards.rewardMarker(row.id), rewards.rewardMarker(row.id * 10 + 1))
-  assert.equal(`x ${rewards.rewardMarker(row.id * 10 + 1)}`.includes(rewards.rewardMarker(row.id)), false, 'رقم اقتراح مش بادئة لرقم تاني')
+  // (3) Codex P3L-B04 (R03): كتابة الربط فشلت بعد حفظ الطلب — الطلب نفسه بيرجع (معاملة واحدة)، والحجز بيتفك، والإعادة بتنجح بطلب واحد
+  await reset()
+  let failures = 0
+  service.bonuses.create = async function (user, dto, hooks) {
+    return original.call(this, user, dto, { afterSave: async (em, id) => { await hooks.afterSave(em, id); if (!failures++) throw new Error('link write failed') } })
+  }
+  try {
+    const broken = await submit(users.other, row.id)
+    assert.deepEqual([broken.status, (await stored()).status, (await stored()).bonusRequestId, await bonuses(), await canSubmit()], [500, 'SUGGESTED', null, before + 2, true], 'الطلب رجع مع فشل ربطه')
+    const retried = expectStatus(await submit(users.other, row.id), 200)
+    assert.deepEqual([(await stored()).status, (await stored()).bonusRequestId, await bonuses()], ['SUBMITTED', retried.bonusRequestId, before + 3])
+  } finally { service.bonuses.create = original }
+  // (4) حجز اتقطع (الخادم وقع قبل الربط والفك): الجاري بيرفض، والقديم بيتاخد بعد المدة
+  await repo('ReviewRewardSuggestion').update({ id: row.id }, { status: 'CLAIMED', bonusRequestId: null, decidedByUserId: users.other.id, decidedAt: new Date() })
+  assert.deepEqual([answer(await submit(users.other, row.id)), await canSubmit(), await bonuses()], [[409, rewards.REWARD_TAKEN], false, before + 3])
+  await repo('ReviewRewardSuggestion').update({ id: row.id }, { decidedAt: new Date(Date.now() - (rewards.REWARD_CLAIM_MINUTES + 1) * 60000) })
+  assert.equal(await canSubmit(), true)
+  const taken = expectStatus(await submit(users.other, row.id), 200)
+  assert.deepEqual([(await stored()).status, (await stored()).bonusRequestId, await bonuses()], ['SUBMITTED', taken.bonusRequestId, before + 4])
+  // (5) محاولة اتأخرت لحد ما حجزها اتاخد: طلبها بيرجع (ربطها مشروط بحجزها هي) — طلب واحد للاقتراح
+  await reset()
+  const entered = latch(), release = latch()
+  let hit = false
+  service.bonuses.create = async function (...args) { if (!hit) { hit = true; entered.resolve(); await release.promise } return original.apply(this, args) }
+  try {
+    const late = submit(users.other, row.id)
+    await entered.promise
+    await repo('ReviewRewardSuggestion').update({ id: row.id }, { decidedAt: new Date(Date.now() - (rewards.REWARD_CLAIM_MINUTES + 1) * 60000) })
+    const winner = expectStatus(await submit(users.other, row.id), 200)
+    release.resolve()
+    const lost = await late
+    assert.deepEqual([answer(lost), (await stored()).status, (await stored()).bonusRequestId, await bonuses()], [[409, rewards.REWARD_TAKEN], 'SUBMITTED', winner.bonusRequestId, before + 5])
+  } finally { release.resolve(); service.bonuses.create = original }
 })

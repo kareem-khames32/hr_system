@@ -61,7 +61,14 @@ export function cleanRewardValues(raw: unknown): Partial<Record<ReviewBandKey, s
 }
 
 /** علامة الاقتراح في سبب طلب المكافأة — مفتاح عدم تكرار الطلب */
+/** وصف في سبب طلب المكافأة للي بيقراه — مش مرجع: محدش بيدوّر بيه (Codex P3L-B03) */
 export const rewardMarker = (suggestionId: number): string => `(اقتراح تقييم رقم ${suggestionId})`
+/** حجز اقتراح اتقطع (المحاولة وقعت قبل ما تربط أو تفك حجزها) بيتاخد بعد المدة دي */
+export const REWARD_CLAIM_MINUTES = 10
+const claimStale = (row: Pick<ReviewRewardSuggestion, 'status' | 'bonusRequestId' | 'decidedAt'>): boolean =>
+  row.status === 'CLAIMED' && row.bonusRequestId == null && row.decidedAt != null && Date.now() - new Date(row.decidedAt).getTime() > REWARD_CLAIM_MINUTES * 60000
+/** الحجز لسه حجزي: نفس الحساب ونفس لحظة الحجز بنصها المحفوظ */
+const CLAIM_MINE = `id = :id AND status = :status AND decidedByUserId = :user AND CONVERT(varchar(33), decidedAt, 126) = :token`
 
 @Injectable()
 export class ReviewRewardsService {
@@ -174,7 +181,7 @@ export class ReviewRewardsService {
     const cycles = new Map((await em.getRepository(ReviewCycle).find({ where: { id: In([...new Set(rows.map((row) => row.cycleId))]) } })).map((row) => [row.id, row.name]))
     const visible = rows.filter((row) => inBranchScope(scope, people.get(row.employeeId)?.branchId ?? null))
     const views = await this.suggestionViews(em, visible)
-    return { suggestions: visible.map((row) => ({ ...views.get(row.id)!, employeeName: people.get(row.employeeId)?.fullName ?? '—', cycleName: cycles.get(row.cycleId) ?? '—', canSubmit: row.status === 'SUGGESTED' })) }
+    return { suggestions: visible.map((row) => ({ ...views.get(row.id)!, employeeName: people.get(row.employeeId)?.fullName ?? '—', cycleName: cycles.get(row.cycleId) ?? '—', canSubmit: row.status === 'SUGGESTED' || claimStale(row) })) }
   }
 
   /** الاقتراح للحساب: المدير الموجّه له — وإلا غير موجود */
@@ -186,45 +193,46 @@ export class ReviewRewardsService {
   }
 
   /**
-   * المدير بيقدّم المكافأة المقترحة: الاقتراح بيتحجز له أولًا (تحت قفل صفه، مرة واحدة)، وبعدين طلب المكافأة بيتعمل باسمه بموديول المكافآت —
-   * برّه أي معاملة هنا — بكل أحكامه (النطاق، السقف، التكرار، الفترة) وبيدخل سلسلة اعتماده. لو المكافآت رفضت، الحجز بيرجع والرفض بيطلع زي ما هو.
+   * المدير بيقدّم المكافأة المقترحة: الاقتراح بيتحجز له أولًا (تحت قفل صفه)، وبعدين طلب المكافأة بيتعمل باسمه بموديول المكافآت نفسه برّه أي
+   * معاملة هنا — بكل أحكامه (النطاق، السقف، التكرار، الفترة) وبيدخل سلسلة اعتماده.
+   * Codex P3L-B03/B04: ربط الاقتراح بطلبه بيتكتب **جوه معاملة المكافأة نفسها** وبكتابة مشروطة بإن الحجز لسه حجز المحاولة دي — فالطلب وربطه
+   * بيثبتوا مع بعض أو مايثبتوش: مفيش طلب من غير ربط، ومفيش بحث بنص السبب (أي حد يكتبه)، ومحاولة قديمة اتاخد حجزها طلبها بيرجع.
+   * لو المكافآت رفضت، الحجز بيتفك والرفض بيطلع زي ما هو. وحجز اتقطع بيتاخد بعد REWARD_CLAIM_MINUTES.
    */
   async submit(user: JwtPayload, id: number) {
     const seen = await this.owned(this.ds.manager, user, id)
-    if (seen.status !== 'SUGGESTED') throw new ConflictException(REWARD_TAKEN)
+    if (seen.status !== 'SUGGESTED' && !claimStale(seen)) throw new ConflictException(REWARD_TAKEN)
     if (!(await this.modules.allowedFor('payroll', user))) throw new BadRequestException(REWARD_PAYROLL_OFF)
     const cycle = await this.ds.getRepository(ReviewCycle).findOne({ where: { id: seen.cycleId } })
-    const claimed = await this.ds.transaction(async (em) => {
+    const { claimed, token } = await this.ds.transaction(async (em) => {
       const row = await this.owned(em, user, id, true)
-      if (row.status !== 'SUGGESTED') throw new ConflictException(REWARD_TAKEN)
+      if (row.status !== 'SUGGESTED' && !claimStale(row)) throw new ConflictException(REWARD_TAKEN)
       await em.getRepository(ReviewRewardSuggestion).update({ id: row.id }, { status: 'CLAIMED', decidedByUserId: user.sub, decidedAt: new Date() })
-      return row
+      const [stamp]: Array<{ token: string }> = await em.query('SELECT CONVERT(varchar(33), [decidedAt], 126) AS [token] FROM [review_reward_suggestions] WHERE [id] = @0', [row.id])
+      return { claimed: row, token: String(stamp.token) }
     })
+    const mine = { id: claimed.id, user: user.sub, token }
     const bandLabel = REVIEW_BANDS.find((band) => band.key === claimed.band)?.label ?? claimed.band
-    // Codex P3K-B08-01: علامة دايمة في سبب طلب المكافأة = مفتاح عدم التكرار: الاقتراح بيلاقي بيها طلبه لو محاولة اتقطعت بعد ما الطلب ثبت
-    // (الرد وقع، أو الربط ماكملش)، فالطلب مايتعملش مرتين — حتى لو فحص التكرار في المكافآت مقفول
-    const marker = rewardMarker(claimed.id)
-    const existing = async (): Promise<number | null> => {
-      // لنفس الموظف ومن حساب المدير اللي بيقدّم نفسه (طلب يدوي من حساب تاني بنفس النص مايتلقطش)
-      const rows: Array<{ id: number }> = await this.ds.query(
-        'SELECT TOP (1) [id] FROM [bonus_requests] WHERE [employeeId] = @0 AND [creatorUserId] = @2 AND CHARINDEX(@1, [reason]) > 0 ORDER BY [id]', [claimed.employeeId, marker, user.sub])
-      return rows[0] ? Number(rows[0].id) : null
-    }
-    let madeId = await existing()
-    if (!madeId) {
-      try {
-        madeId = (await this.bonuses.create(user, { employeeId: claimed.employeeId, bonusTypeId: claimed.bonusTypeId, inputValue: plain(claimed.inputValue), targetPeriod: claimed.targetPeriod,
-          reason: `نتيجة دورة التقييم «${cycle?.name ?? claimed.cycleId}» — تقدير ${bandLabel} (${Number(claimed.finalScore)} من 100) ${marker}` })).id
-      } catch (error) {
-        // الطلب ثبت قبل ما الرد يقع = بيتربط؛ غير كده المكافآت رفضت قبل الحفظ: الحجز بيرجع والرفض بيطلع زي ما هو
-        madeId = await existing()
-        if (!madeId) {
-          await this.ds.getRepository(ReviewRewardSuggestion).update({ id: claimed.id, status: 'CLAIMED' }, { status: 'SUGGESTED', decidedByUserId: null, decidedAt: null })
-          throw error
-        }
+    let madeId: number
+    try {
+      madeId = (await this.bonuses.create(user, { employeeId: claimed.employeeId, bonusTypeId: claimed.bonusTypeId, inputValue: plain(claimed.inputValue), targetPeriod: claimed.targetPeriod,
+        reason: `نتيجة دورة التقييم «${cycle?.name ?? claimed.cycleId}» — تقدير ${bandLabel} (${Number(claimed.finalScore)} من 100) ${rewardMarker(claimed.id)}` }, {
+        afterSave: async (em, requestId) => {
+          const linked = await em.getRepository(ReviewRewardSuggestion).createQueryBuilder().update().set({ status: 'SUBMITTED', bonusRequestId: requestId })
+            .where(CLAIM_MINE, { ...mine, status: 'CLAIMED' }).execute()
+          if (!linked.affected) throw new ConflictException(REWARD_TAKEN)
+        } })).id
+    } catch (error) {
+      // الطلب وربطه ثبتوا والرد بس اللي وقع (قراءة التفاصيل بعد المعاملة): الاقتراح «اتقدّم» بطلبه — غير كده مفيش طلب: الحجز بيتفك والخطأ بيطلع
+      const [done]: Array<{ bonusRequestId: number | null }> = await this.ds.query(
+        `SELECT [bonusRequestId] FROM [review_reward_suggestions] WHERE [id] = @0 AND [status] = N'SUBMITTED' AND [decidedByUserId] = @1 AND CONVERT(varchar(33), [decidedAt], 126) = @2`, [mine.id, mine.user, mine.token])
+      if (done?.bonusRequestId == null) {
+        await this.ds.getRepository(ReviewRewardSuggestion).createQueryBuilder().update().set({ status: 'SUGGESTED', decidedByUserId: null, decidedAt: null })
+          .where(CLAIM_MINE, { ...mine, status: 'CLAIMED' }).execute()
+        throw error
       }
+      madeId = done.bonusRequestId
     }
-    await this.ds.getRepository(ReviewRewardSuggestion).update({ id: claimed.id, status: 'CLAIMED' }, { status: 'SUBMITTED', bonusRequestId: madeId })
     return { bonusRequestId: madeId, ...(await this.mine(user)) }
   }
 

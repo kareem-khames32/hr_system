@@ -1,0 +1,25 @@
+'use strict'
+const {test}=require('node:test'),assert=require('node:assert/strict'),setup=require('./codex-review-p3l-helpers.cjs')
+test('P3L-U01: calibration and mandatory-training views hide current foreign department names', {timeout:120000},async()=>{
+ const f=await setup('unit_scope');try{
+  await f.enable('performance');await f.enable('training')
+  const dept=await f.repo('Department').save({code:'US',name:'Original unit',branchId:f.a.id}),e=await f.emp({departmentId:dept.id,jobTitle:'Engineer'})
+  const hr=await f.account(['performance.calibrate','training.manage','performance.manage'])
+  const cycle=await f.repo('ReviewCycle').save({name:'Review scope probe',kind:'ANNUAL',templateId:1,periodStart:'2026-01-01',periodEnd:'2026-12-31',audienceMode:'BRANCHES',audienceIds:JSON.stringify([f.a.id]),branchIds:JSON.stringify([f.a.id]),selfDueDate:'2026-12-15',managerDueDate:'2026-12-20',status:'ACTIVE',createdByUserId:f.admin.id,createdAt:new Date()})
+  await f.repo('ReviewAssignment').insert({cycleId:cycle.id,employeeId:e.id,branchId:f.a.id,managerEmployeeId:null,status:'COMPLETED',managerScore:'80.00',finalScore:'80.00',createdAt:new Date()})
+  const course=await f.repo('TrainingCourse').save({name:'Safety',kind:'CLASSROOM',url:null,durationHours:'2.00',provider:null,description:null,givesCertificate:false,certificateValidMonths:null,isActive:true,createdByUserId:f.admin.id,createdAt:new Date()})
+  await f.repo('TrainingRequirement').insert({courseId:course.id,jobTitle:'Engineer',departmentId:null,createdByUserId:f.admin.id,createdAt:new Date()})
+  const parent=await f.ok('POST','/performance/goals',{ownerType:'DEPARTMENT',departmentId:dept.id,title:'Original department goal',periodStart:'2026-01-01',periodEnd:'2026-12-31'},hr)
+  const child=await f.ok('POST','/performance/goals',{ownerType:'EMPLOYEE',employeeId:e.id,title:'Employee linked goal',parentGoalId:parent.id,periodStart:'2026-01-01',periodEnd:'2026-12-31'},hr)
+  await f.repo('Department').update({id:dept.id},{branchId:f.b.id,name:'PRIVATE_UNIT_B_NOW'})
+  await f.repo('PerformanceGoal').update({id:parent.id},{title:'PRIVATE_GOAL_B_NOW'})
+  const cal=await f.ok('GET',`/performance/reviews/cycles/${cycle.id}/calibration`,null,hr)
+  assert.ok(!JSON.stringify(cal).includes('PRIVATE_UNIT_B_NOW'))
+  const missing=await f.ok('GET','/training/requirements',null,hr)
+  assert.ok(!JSON.stringify(missing).includes('PRIVATE_UNIT_B_NOW'))
+  assert.equal((await f.request('GET',`/performance/goals/${parent.id}`,null,hr)).status,404)
+  const shown=await f.ok('GET',`/performance/goals/${child.id}`,null,hr)
+  assert.ok(!JSON.stringify(shown).includes('PRIVATE_GOAL_B_NOW'));assert.equal(shown.parentGoalId,null)
+  console.log('REVIEW_MEASURE '+JSON.stringify({case:'U01',calibrationForeignUnit:false,trainingForeignUnit:false,hiddenParentDirect:404,hiddenParentTitleViaChild:false}))
+ }finally{await f.close()}
+})

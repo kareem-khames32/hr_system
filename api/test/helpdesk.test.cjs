@@ -88,3 +88,17 @@ test('HU-03: knowledge base — article values, search matching, the reader limi
   assert.ok(controller.indexOf("@Get('articles/manage')") < controller.indexOf("@Get('articles/:id')"), 'المسار الثابت قبل ‎:id')
   assert.ok(read('src/app/helpdesk/KnowledgePanel.tsx').includes('searchArticles(term.trim(), typeCode)') && read('src/app/helpdesk/ArticlesManager.tsx').includes('fetchManagedArticles()'))
 })
+
+test('Codex P3L-B06: the policy reference of an article is read with the manager of the transaction that holds the article row', () => {
+  const fs = require('node:fs'), path = require('node:path')
+  const source = file => fs.readFileSync(path.resolve(__dirname, '..', 'src', file), 'utf8')
+  const knowledge = source('helpdesk/knowledge.service.ts'), policies = source('policies/policies.service.ts')
+  assert.equal((knowledge.match(/this\.policies\.referenceFor\(/g) ?? []).length, 3)
+  const fields = knowledge.slice(knowledge.indexOf('  private async fields(em: EntityManager'), knowledge.indexOf('  async create('))
+  assert.match(fields, /await this\.policies\.referenceFor\(user, input\.policyId, em\)/)
+  const update = knowledge.slice(knowledge.indexOf('  async update('), knowledge.indexOf('  private async managed('))
+  assert.match(update, /this\.ds\.transaction\(async \(em\) => \{[\s\S]*await this\.fields\(em, user, input, row\)/)
+  const reference = policies.slice(policies.indexOf('  async referenceFor('), policies.indexOf("  /** «سياساتي»"))
+  assert.match(reference, /async referenceFor\(user: JwtPayload, policyId: number, em: EntityManager = this\.ds\.manager\)/)
+  assert.doesNotMatch(reference.slice(reference.indexOf('{')), /this\.ds\./, 'كل القراءات بمدير الاتصال المبعوت')
+})

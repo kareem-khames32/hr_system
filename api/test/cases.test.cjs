@@ -119,18 +119,29 @@ test('CU-14: the penalties catalog steps, the step for a repetition, the countin
   assert.deepEqual(penalties.parsePenaltySteps('تالف'), [])
   const service = read('api/src/cases/penalties.service.ts')
   const apply = service.slice(service.indexOf('async apply('), service.indexOf('// ===== السجل ====='))
-  const order = ['this.assertManager(user)', 'this.ds.transaction(', "getRepository(Employee).findOne({ where: { id: input.employeeId }, lock: { mode: 'pessimistic_write' } })", 'await this.target(em, user, input)', 'await this.settlePending(em, employee.id, violation.id)', 'await this.judge(em, employee.id, violation, incidentDate)', 'input.expectedFingerprint !== penaltyFingerprint(violation, occurrence, step, windowDays)', 'await this.caseOf(em, user, input.caseId, employee.id)', 'getRepository(EmployeePenalty).insert(', "status: step.action === 'DEDUCT_DAYS' ? 'PENDING' : 'ACTIVE'", 'await this.deductions.create(user,', 'deductionId = await this.deductionOf(this.ds.manager, made.employeeId, made.id, user.sub)',
-    "where('id = :id AND status = :status', { id: made.id, status: 'PENDING' })", 'throw error', "update({ id: made.id, status: 'PENDING' }, { deductionRequestId: deductionId, status: 'ACTIVE' })", 'getRepository(HrCaseEvent).insert('].map(part => apply.indexOf(part))
+  const order = ['this.assertManager(user)', 'this.ds.transaction(', "getRepository(Employee).findOne({ where: { id: input.employeeId }, lock: { mode: 'pessimistic_write' } })", 'await this.target(em, user, input)', 'await this.settlePending(em, employee.id, violation.id)', 'await this.judge(em, employee.id, violation, incidentDate)', 'input.expectedFingerprint !== penaltyFingerprint(violation, occurrence, step, windowDays)', 'await this.caseOf(em, user, input.caseId, employee.id)', 'getRepository(EmployeePenalty).insert(', "status: step.action === 'DEDUCT_DAYS' ? 'PENDING' : 'ACTIVE'", 'await this.deductions.create(user,', 'afterSave: async (em, requestId) =>', "update({ id: made.id, status: 'PENDING' }, { deductionRequestId: requestId, status: 'ACTIVE' })", 'if (!linked.affected) throw new ConflictException(PENALTY_EXPIRED)',
+    "now?.status === 'ACTIVE' && now.deductionRequestId != null",
+    "where('id = :id AND status = :status', { id: made.id, status: 'PENDING' })", 'throw error', 'getRepository(HrCaseEvent).insert('].map(part => apply.indexOf(part))
   assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), JSON.stringify(order))
   const transaction = apply.slice(apply.indexOf('this.ds.transaction('), apply.indexOf("if (made.step.action === 'DEDUCT_DAYS')"))
   assert.doesNotMatch(transaction, /this\.deductions\./, 'خدمة الخصومات برّه المعاملة')
   assert.doesNotMatch(service, /EmployeeObligation|obligation/i, 'مفيش قيد بيتكتب من هنا: الخصم بسلسلته ودفتره')
   const caseOf = service.slice(service.indexOf('private async caseOf('), service.indexOf('/**\n   * توقيع جزاء'))
   assert.match(caseOf, /\(await handlesCase\(em, user, row\.id\)\) && parties\.some\(\(entry\) => entry\.role === 'RESPONDENT' && entry\.employeeId === employeeId\)/)
-  // Codex P3K-B12: العدّ في المعاينة والتوقيع واحد (الساري + الحجز اللي طلبه ثبت)، والحجز الجديد بيوقّف التوقيع التاني، والبصمة شايلة الجزاء نفسه
-  assert.match(service, /if \(row\.status === 'ACTIVE' \|\| \(await this\.deductionOf\(em, employeeId, row\.id, row\.createdByUserId\)\)\) earlier\.push\(row\)/)
-  assert.match(service, /WHERE \[employeeId\] = @0 AND \[creatorUserId\] = @2 AND CHARINDEX\(@1, \[reason\]\) > 0/, 'علامة الجزاء لنفس الموظف ومن الحساب اللي وقّعه')
-  assert.match(service, /else throw new ConflictException\(PENALTY_IN_PROGRESS\)/)
+  // Codex P3K-B12/P3L-B03/B05: العدّ في المعاينة والتوقيع واحد (الساري بس — الحجز عمره ما ليه خصم)، والحجز الجديد بيوقّف التوقيع التاني،
+  // وتثبيت الجزاء جوه معاملة الخصم بكتابة مشروطة بالحجز، ومفيش بحث بنص سبب الطلب المالي
+  assert.match(service, /find\(\{ where: \{ employeeId, violationId: violation\.id, status: 'ACTIVE' \} \}\)/)
+  assert.doesNotMatch(service, /CHARINDEX|\[reason\]|deductionOf|LIKE/, 'العلامة في السبب وصف بس — محدش بيدوّر بيها')
+  assert.match(service, /<= PENALTY_PENDING_MINUTES \* 60000\) throw new ConflictException\(PENALTY_IN_PROGRESS\)/)
+  for (const [file, dto] of [['typed-deductions.service.ts', 'CreateDeductionDto'], ['bonuses.service.ts', 'CreateBonusDto']]) {
+    const money = read('api/src/payroll/' + file)
+    const create = money.slice(money.indexOf(`  async create(user: JwtPayload, dto: ${dto}, hooks?:`))
+    const inside = create.slice(0, create.indexOf('    return this.detail(user, id)'))
+    const at = ['this.manager.transaction(', 'await this.persist(em, user, ctx, evaluation, null)', 'await hooks?.afterSave?.(em, saved.id)', 'return saved.id'].map(part => inside.indexOf(part))
+    assert.ok(at.every((value, index) => value > 0 && (index === 0 || value > at[index - 1])), file + ' ' + JSON.stringify(at))
+  }
+  // الخطّاف مابييجيش من HTTP: المتحكمين بيندهوا بالحساب والبيانات بس
+  for (const file of ['typed-deductions.controller.ts', 'bonuses.controller.ts']) assert.match(read('api/src/payroll/' + file), /\.create\(user, dto\)/, file)
   assert.match(service, /JSON\.stringify\(\[violation\.id, occurrence, step\.action, step\.days \?\? null, violation\.deductionTypeId \?\? null, windowDays\]\)/)
   assert.match(service, /fingerprint: penaltyFingerprint\(violation, occurrence, step, windowDays\)/)
   const controller = read('api/src/cases/penalties.controller.ts')

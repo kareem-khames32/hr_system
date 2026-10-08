@@ -117,9 +117,11 @@ export const PENALTY_DATE = 'تاريخ الواقعة تاريخ صحيح مش 
 export const PENALTY_PERIOD = 'شهر المسير المستهدف (YYYY-MM) مطلوب لجزاء الخصم'
 export const PENALTY_CHANGED = 'رقم التكرار أو الجزاء اتغيّر عن اللي اتعرض — راجع المعاينة تاني'
 export const PENALTY_IN_PROGRESS = 'فيه جزاء لنفس الموظف والمخالفة لسه بيتسجّل — استنى لحظة وجرّب تاني'
+export const PENALTY_EXPIRED = 'التوقيع اتأخر وحجزه اتلغى — راجع المعاينة ووقّع تاني'
 /** حجز جزاء خصم أقدم من كده ومالوش طلب خصم = محاولة اتقطعت قبل ما الخصم يتعمل: بيتشال */
 export const PENALTY_PENDING_MINUTES = 10
 /** علامة دايمة في سبب طلب الخصم: الجزاء بيلاقي بيها خصمه لو الرد وقع بعد ما الطلب ثبت (مايتعملش مرتين) */
+/** وصف في سبب طلب الخصم للي بيقراه — مش مرجع: محدش بيدوّر بيه (Codex P3L-B03) */
 export const penaltyMarker = (penaltyId: number): string => `(جزاء رقم ${penaltyId})`
 /**
  * Codex P3K-B12-01: بصمة اللي المعاينة عرضته — المخالفة ورقم التكرار والجزاء وأيامه ونوع الخصم ومدة احتساب التكرار. التوقيع لازم يبعتها زي
@@ -261,13 +263,11 @@ export class PenaltiesService {
   private async judge(em: EntityManager, employeeId: number, violation: PenaltyViolation, incidentDate: string) {
     const windowDays = penaltyWindowDays((await em.getRepository(RequestsConfig).findOne({ where: { key: PENALTY_WINDOW_KEY } }))?.value)
     const from = dayBefore(incidentDate, windowDays)
-    // الساري، ومعاه الحجز اللي طلب خصمه ثبت فعلًا (هيتثبّت ساري في أول توقيع): المعاينة والتوقيع بيعدّوا نفس العدّ، فبصمة المعاينة بتفضل صح
-    const earlier: EmployeePenalty[] = []
-    for (const row of await em.getRepository(EmployeePenalty).find({ where: { employeeId, violationId: violation.id, status: In(['ACTIVE', 'PENDING']) } })) {
+    // الساري بس: الحجز (PENDING) عمره ما ليه خصم — الخصم وتثبيت الجزاء ساري بيتكتبوا في معاملة واحدة — فالمعاينة والتوقيع بيعدّوا نفس العدّ
+    const earlier = (await em.getRepository(EmployeePenalty).find({ where: { employeeId, violationId: violation.id, status: 'ACTIVE' } })).filter((row) => {
       const at = String(row.incidentDate).slice(0, 10)
-      if (at < from || at > incidentDate) continue
-      if (row.status === 'ACTIVE' || (await this.deductionOf(em, employeeId, row.id, row.createdByUserId))) earlier.push(row)
-    }
+      return at >= from && at <= incidentDate
+    })
     const occurrence = earlier.length + 1, step = penaltyStepFor(parsePenaltySteps(violation.steps), occurrence)
     if (!step) throw new BadRequestException(PENALTY_VIOLATION_NOT_FOUND)
     return { occurrence, step, windowDays }
@@ -307,26 +307,15 @@ export class PenaltiesService {
     return row
   }
 
-  /** طلب الخصم اللي اتعمل لجزاء — بعلامته في السبب، لنفس الموظف، ومن نفس الحساب اللي وقّع الجزاء (طلب يدوي من حساب تاني بنفس النص مايتلقطش) — أو null */
-  private async deductionOf(em: EntityManager, employeeId: number, penaltyId: number, creatorUserId: number): Promise<number | null> {
-    const rows: Array<{ id: number }> = await em.query(
-      'SELECT TOP (1) [id] FROM [deduction_requests] WHERE [employeeId] = @0 AND [creatorUserId] = @2 AND CHARINDEX(@1, [reason]) > 0 ORDER BY [id]', [employeeId, penaltyMarker(penaltyId), creatorUserId])
-    return rows[0] ? Number(rows[0].id) : null
-  }
-
   /**
-   * Codex P3K-B12-02: حجوزات لسه مااكتملتش لنفس الموظف والمخالفة (جزاء خصم طلبه بيتعمل برّه المعاملة) بتتحسم قبل أي حكم جديد، تحت قفل صف
-   * الموظف: طلب خصمه موجود = بيتثبّت ساري؛ مش موجود والحجز قديم = محاولة اتقطعت وبيتشال؛ ولسه جديد = التوقيع التاني بيستنى (409) بدل
-   * ما يحسبه سابقة أو يتجاهله.
+   * حجوزات لسه مااكتملتش لنفس الموظف والمخالفة (جزاء خصم طلبه بيتعمل برّه المعاملة) بتتحسم قبل أي حكم جديد، تحت قفل صف الموظف.
+   * Codex P3L-B03/B05: الحجز عمره ما ليه خصم (الخصم وتثبيت الجزاء في معاملة واحدة)، فمفيش بحث عن خصمه: قديم = محاولة اتقطعت وبيتشال —
+   * وكاتبه لو لسه شغال خصمه بيرجع لأن ربطه مشروط بوجود الحجز؛ ولسه جديد = التوقيع التاني بيستنى (409) بدل ما يحسبه سابقة أو يتجاهله.
    */
   private async settlePending(em: EntityManager, employeeId: number, violationId: number) {
-    const pending = await em.getRepository(EmployeePenalty).find({ where: { employeeId, violationId, status: 'PENDING' } })
-    for (const row of pending) {
-      const deductionId = await this.deductionOf(em, employeeId, row.id, row.createdByUserId)
-      if (deductionId) await em.getRepository(EmployeePenalty).update({ id: row.id, status: 'PENDING' }, { status: 'ACTIVE', deductionRequestId: deductionId })
-      else if (Date.now() - new Date(row.createdAt).getTime() > PENALTY_PENDING_MINUTES * 60000) {
-        await em.getRepository(EmployeePenalty).createQueryBuilder().delete().where('id = :id AND status = :status', { id: row.id, status: 'PENDING' }).execute()
-      } else throw new ConflictException(PENALTY_IN_PROGRESS)
+    for (const row of await em.getRepository(EmployeePenalty).find({ where: { employeeId, violationId, status: 'PENDING' } })) {
+      if (Date.now() - new Date(row.createdAt).getTime() <= PENALTY_PENDING_MINUTES * 60000) throw new ConflictException(PENALTY_IN_PROGRESS)
+      await em.getRepository(EmployeePenalty).createQueryBuilder().delete().where('id = :id AND status = :status', { id: row.id, status: 'PENDING' }).execute()
     }
   }
 
@@ -359,20 +348,23 @@ export class PenaltiesService {
         reason: `جزاء من لائحة الجزاءات ${penaltyMarker(id)}: ${text}${linked ? ` (ملف قضية رقم ${linked.id})` : ''}` }
     })
     if (made.step.action === 'DEDUCT_DAYS') {
-      let deductionId: number | null
       try {
-        deductionId = (await this.deductions.create(user, { employeeId: made.employeeId, deductionTypeId: made.deductionTypeId as number, inputValue: String(made.step.days), incidentDate: made.incidentDate,
-          reason: made.reason, targetPeriod: made.targetPeriod as string })).id
+        await this.deductions.create(user, { employeeId: made.employeeId, deductionTypeId: made.deductionTypeId as number, inputValue: String(made.step.days), incidentDate: made.incidentDate,
+          reason: made.reason, targetPeriod: made.targetPeriod as string }, {
+          // Codex P3L-B03/B05: تثبيت الجزاء ساري وربطه بخصمه جوه معاملة الخصم نفسها، بكتابة مشروطة بإن الحجز لسه موجود: الخصم وربطه بيثبتوا
+          // مع بعض، وتوقيع اتأخر لحد ما حجزه اتشال خصمه بيرجع (مفيش خصمين لجزاء واحد، ومفيش بحث بنص السبب)
+          afterSave: async (em, requestId) => {
+            const linked = await em.getRepository(EmployeePenalty).update({ id: made.id, status: 'PENDING' }, { deductionRequestId: requestId, status: 'ACTIVE' })
+            if (!linked.affected) throw new ConflictException(PENALTY_EXPIRED)
+          } })
       } catch (error) {
-        // الرد وقع: الطلب ممكن يكون ثبت قبلها (بعلامة الجزاء في سببه) — ساعتها بيتربط. غير كده الخصومات رفضت (نطاق، سقف، فترة مقفولة…):
-        // الجزاء مااتوقّعش — الحجز بيتشال ورفضها بيطلع زي ما هو
-        deductionId = await this.deductionOf(this.ds.manager, made.employeeId, made.id, user.sub)
-        if (!deductionId) {
+        // الخصم وربطه ثبتوا والرد بس اللي وقع: الجزاء ساري بخصمه. غير كده مفيش خصم (الخصومات رفضت: نطاق، سقف، فترة مقفولة…): الحجز بيتشال والرفض بيطلع
+        const now = await this.ds.getRepository(EmployeePenalty).findOne({ where: { id: made.id } })
+        if (!(now?.status === 'ACTIVE' && now.deductionRequestId != null)) {
           await this.ds.getRepository(EmployeePenalty).createQueryBuilder().delete().where('id = :id AND status = :status', { id: made.id, status: 'PENDING' }).execute()
           throw error
         }
       }
-      await this.ds.getRepository(EmployeePenalty).update({ id: made.id, status: 'PENDING' }, { deductionRequestId: deductionId, status: 'ACTIVE' })
     }
     // حدث التنفيذ في ملف القضية بعد ما الجزاء (وخصمه) يثبت — الخط الزمني بيتزوّد بس، فمابيتكتبش قبل كده
     if (made.caseId) {
