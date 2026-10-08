@@ -13,6 +13,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/my/shift-swaps', 'تبديل ورديتي'],
   ['/my/punch', 'بصمتي'],
   ['/my/safety', 'بلاغات السلامة'],
+  ['/my/timesheets', 'ساعاتي'],
   ['/announcements', 'الإعلانات'],
   ['/helpdesk', 'مركز الخدمات'],
   ['/cases/penalties', 'لائحة الجزاءات'],
@@ -60,6 +61,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/skills/succession', 'خطط الإحلال'],
   ['/skills', 'المهارات والإحلال'],
   ['/safety', 'السلامة وإصابات العمل'],
+  ['/timesheets', 'ساعات المشاريع'],
   ['/policies/reports', 'تقرير الإقرارات'],
   ['/policies', 'مكتبة السياسات'],
   // الحضور والانصراف

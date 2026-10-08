@@ -145,6 +145,14 @@ const adminMenuDefs: MenuItem[] = [
     href: '/safety',
     perm: 'safety.manage',
   },
+  // B5.8: مشاريع ساعات العمل وتقريرها (الموديول مقفول افتراضيًا: البند بيظهر لما يتفعّل)
+  {
+    id: 'timesheets',
+    label: 'ساعات المشاريع',
+    icon: <Hourglass size={20} />,
+    href: '/timesheets',
+    perm: 'timesheets.manage',
+  },
   // B2.5: قايمة كل المهام العامة في نطاق الحساب («مهامي» لكل حساب في بنود البوابة)
   {
     id: 'tasks',
@@ -541,6 +549,8 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
       // B5.4: فجوة مهارات الموظف ومصفوفة فريقه (بتظهر لما موديول المهارات مفتوح)
       { id: 'my-skills', label: 'مهاراتي', icon: <GraduationCap size={20} />, href: '/my/skills' },
       { id: 'my-attendance', label: 'حضوري', icon: <Clock size={20} />, href: '/my/attendance' },
+      // B5.8: تسجيل ساعاتي على المشاريع واعتماد ساعات فريقي (بتظهر لما موديول ساعات المشاريع مفتوح)
+      { id: 'my-timesheets', label: 'ساعاتي', icon: <Hourglass size={20} />, href: '/my/timesheets' },
       // B5.6: تسجيل البصمة من الموبايل (بتظهر لما ميزة «بصمة الموبايل» مفتوحة)
       { id: 'my-punch', label: 'بصمتي', icon: <Clock size={20} />, href: '/my/punch' },
       { id: 'my-leaves', label: 'إجازاتي وأرصدتي', icon: <Calendar size={20} />, href: '/my/leaves' },

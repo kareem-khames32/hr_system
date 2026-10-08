@@ -444,6 +444,21 @@ export const MODULES = {
     permissions: ['safety.manage'],
     routes: ['/safety', '/my/safety'],
   }),
+  // B5.8: ساعات المشاريع — مشروع ومهامه، وتسجيل ساعات الموظف واعتماد المدير المباشر، وتقرير ساعات. موديول جديد = مقفول لحد ما الشركة تفعّله
+  timesheets: moduleDef({
+    nameAr: 'ساعات المشاريع', group: 'time', dependsOn: ['employees'], softUses: ['attendance'], preset: 'full', defaultEnabled: false,
+    description: 'مشاريع بعملائها ومهامها، وتسجيل ساعات الموظف يوميًا وإرسال الأسبوع لاعتماد المدير المباشر مع مقارنة بالحضور، وتقرير ساعات لكل مشروع',
+    permissions: ['timesheets.manage'],
+    routes: ['/timesheets', '/my/timesheets'],
+    features: {
+      // تكلفة المشروع بأجر الساعة — رقم معروض بس (مش في المسير)، ومقفولة لحد ما الشركة تقرر
+      'timesheets.cost': {
+        nameAr: 'تكلفة المشروع بأجر الساعة',
+        description: 'تقرير ساعات المشاريع بيعرض تكلفة كل مشروع: الساعات المعتمدة × أجر ساعة الموظف (نفس مصدر تسعير الإضافي) — لصاحب صلاحية عرض الرواتب بس',
+        default: false,
+      },
+    },
+  }),
   // B2.11: الوظائف المعتمدة — وظيفة في وحدة بعدد معتمد، وتقرير «معتمد / مشغول / شاغر». موديول جديد = مقفول لحد ما الشركة تفعّله
   // (أول موديول defaultEnabled: false: مفيش حاجة كانت شغالة قبله)
   positions: moduleDef({

@@ -113,6 +113,14 @@ const EXCEPTIONS = {
   // B5.7: السلامة — بلاغات صاحب الحساب وبلاغ جديد (الخدمة بتحكم بملف الموظف المربوط بالحساب وبفرعه الحالي)
   'SafetyController.mine': 'SELF', // GET /safety/my
   'SafetyController.report': 'SELF', // POST /safety/my
+  // B5.8: ساعات المشاريع — ساعات صاحب الحساب (الخدمة بتحكم بملف الموظف المربوط بالحساب)، وأسابيع مرؤوسي المدير المباشرين واعتمادها («المدير المباشر» موقع في
+  // الهيكل؛ وكمان لصاحب timesheets.manage في نطاقه — الحكم في الخدمة تحت قفل صف الموظف)
+  'TimesheetsController.mine': 'SELF', // GET /timesheets/my
+  'TimesheetsController.saveEntry': 'SELF', // PUT /timesheets/my/entries
+  'TimesheetsController.submit': 'SELF', // POST /timesheets/my/submit
+  'TimesheetsController.recall': 'SELF', // POST /timesheets/my/recall
+  'TimesheetsController.team': 'SERVICE_CHECK', // GET /timesheets/team
+  'TimesheetsController.decide': 'SERVICE_CHECK', // POST /timesheets/weeks/:id/decision
   // B2.7: قراءة نسخة سياسة وملفها — لصاحب صلاحية السياسات، أو للموظف اللي السياسة في جمهوره (الحكم في الخدمة)
   'PoliciesController.version': 'SERVICE_CHECK', // GET /policies/versions/:versionId
   'PoliciesController.versionFile': 'SERVICE_CHECK', // GET /policies/versions/:versionId/file

@@ -54,6 +54,7 @@ import { BenefitsModule } from './benefits/benefits.module'
 import { ExpensesModule } from './expenses/expenses.module'
 import { SkillsModule } from './skills/skills.module'
 import { SafetyModule } from './safety/safety.module'
+import { TimesheetsModule } from './timesheets/timesheets.module'
 import { StatutoryModule } from './statutory/statutory.module'
 import { validateEnv } from './auth/jwt-secret'
 import { dbPacketSize } from './common/sql-packet-size'
@@ -162,6 +163,8 @@ import { dbPacketSize } from './common/sql-packet-size'
     SkillsModule,
     // B5.7: السلامة وإصابات العمل (موديول safety، مقفول افتراضيًا)
     SafetyModule,
+    // B5.8: ساعات المشاريع (موديول timesheets، مقفول افتراضيًا)
+    TimesheetsModule,
     // B2.13-ب: التقارير المحفوظة والمجدولة
     SavedReportsModule,
     // B2.16: الإعلانات (موديول اختياري مقفول افتراضيًا)
