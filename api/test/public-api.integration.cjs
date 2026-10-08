@@ -168,7 +168,7 @@ test('PA-03: الـAPI العام — مفتاح صالح بس (ناقص وغل�
     [[['PA_1', 'Riyadh']], [['المالية', B.riyadh.id]], 2, 2])
   // وصف المسارات لأي مفتاح صالح، ونفس المفتاح في ترويسة X-API-Key
   const spec = ok(await call(K.structure.key, '/openapi.json'))
-  assert.deepEqual([spec.openapi, Object.keys(spec.paths)], ['3.0.3', ['/employees', '/employees/{id}', '/structure']])
+  assert.deepEqual([spec.openapi, Object.keys(spec.paths).slice(0, 3)], ['3.0.3', ['/employees', '/employees/{id}', '/structure']])
   assert.equal((await send('GET', '/public/v1/structure', { 'X-API-Key': K.structure.key })).status, 200)
   // للقراءة بس: مفيش مسار كتابة
   for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) assert.equal((await call(K.all.key, '/employees', method)).status, 404, method)
@@ -186,4 +186,51 @@ test('PA-04: حد الطلبات لكل مفتاح — بعد الحد 429، و�
   assert.equal((await call(calm.key, '/structure')).status, 200)
   ok(await request(U.admin, 'PUT', '/modules/integrations', { enabled: false })); modules.invalidate()
   assert.deepEqual([(await call(calm.key, '/structure')).status, (await request(U.admin, 'GET', '/integrations/keys')).status], [404, 404])
+})
+
+test('PA-05: (ب) الحضور والإجازات وملخص المسير — نطاق القراءة لكل مسار، فروع المفتاح بفرع الموظف الحالي، المعتمد بس، إجمالي من غير مبلغ لموظف، وموديول البيانات المقفول بيقفل مساره', async () => {
+  ok(await request(U.admin, 'PUT', '/modules/integrations', { enabled: true })); modules.invalidate()
+  const day = (employee, date, extra = {}) => ({ employeeId: employee.id, branchId: employee.branchId, date, status: 'present', checkIn: '08:55', checkOut: '17:05', shiftName: 'صباحي', shiftStart: '09:00', shiftEnd: '17:00',
+    workMinutes: 480, lateMinutes: 0, deductibleMinutes: 0, earlyLeaveMinutes: 0, ...extra })
+  await repo('AttendanceDay').save([day(E.r1, '2026-09-01'), day(E.r1, '2026-09-02', { status: 'late', checkIn: '09:20', lateMinutes: 20 }), day(E.c1, '2026-09-01'), day(E.r1, '2026-10-15')])
+  const leave = (employee, fromDate, toDate, extra = {}) => ({ employeeId: employee.id, leaveTypeCode: 'annual', fromDate, toDate, days: 3, period: 'FULL', isUnpaid: false, status: 'APPROVED', ...extra })
+  const [l1, , l3] = await repo('Leave').save([leave(E.r1, '2026-09-10', '2026-09-12'), leave(E.r1, '2026-09-20', '2026-09-21', { status: 'CANCELLED' }), leave(E.c1, '2026-08-30', '2026-09-02', { leaveTypeCode: 'sick' })])
+  const run = (name, status, period = '2026-09') => repo('PayrollRun').save({ name, period, startDate: period + '-01', endDate: period + '-28', status })
+  const approved = await run('مسير سبتمبر', 'APPROVED'), draft = await run('مسودة سبتمبر', 'CALCULATED'), paid = await run('مسير القاهرة', 'PAID')
+  const item = (payrollRun, employee, netPay) => ({ runId: payrollRun.id, employeeId: employee.id, basicSalary: 9000, allowances: 0, netPay, payMethod: 'cash' })
+  await repo('PayrollItem').save([item(approved, E.r1, 8500.5), item(approved, E.c1, 7000.25), item(draft, E.r1, 1), item(paid, E.c1, 6400)])
+  const wide = await makeKey('نظام الحضور والرواتب', ['attendance.read', 'leaves.read', 'payroll.read'])
+  const riyadh = await makeKey('نظام حضور الرياض', ['attendance.read', 'leaves.read', 'payroll.read'], [B.riyadh.id])
+  // النطاق المطلوب لكل مسار
+  for (const route of ['/attendance?from=2026-09-01&to=2026-09-30', '/leaves?from=2026-09-01&to=2026-09-30', '/payroll/runs?period=2026-09']) refused(await call(K.all.key, route), 403, rules.KEY_SCOPE_MISSING)
+  // الحضور
+  const days = ok(await call(wide.key, '/attendance?from=2026-09-01&to=2026-09-30'))
+  assert.deepEqual([days.total, days.items.map(row => [row.employeeId, row.date, row.status, row.lateMinutes])], [3, [[E.r1.id, '2026-09-01', 'present', 0], [E.c1.id, '2026-09-01', 'present', 0], [E.r1.id, '2026-09-02', 'late', 20]].sort((a, b) => a[1].localeCompare(b[1]) || a[0] - b[0])])
+  assert.deepEqual(Object.keys(days.items[0]).sort(), ['checkIn', 'checkOut', 'date', 'earlyLeaveMinutes', 'employeeId', 'lateMinutes', 'shiftName', 'status'])
+  assert.deepEqual([ok(await call(riyadh.key, '/attendance?from=2026-09-01&to=2026-09-30')).items.map(row => row.employeeId), ok(await call(riyadh.key, `/attendance?from=2026-09-01&to=2026-09-30&employeeId=${E.c1.id}`)).items,
+    ok(await call(wide.key, `/attendance?from=2026-09-01&to=2026-09-30&employeeId=${E.c1.id}`)).total], [[E.r1.id, E.r1.id], [], 1])
+  for (const query of ['', 'from=2026-09-01', 'from=2026-09-01&to=2026-10-02', 'from=2026-09-05&to=2026-09-01', 'from=2026-09-01&to=2026-09-02&employeeId=x']) assert.equal((await call(wide.key, '/attendance?' + query)).status, 400, query)
+  // الإجازات: المعتمدة اللي بتتقاطع مع المدى
+  const leaves = ok(await call(wide.key, '/leaves?from=2026-09-01&to=2026-09-30'))
+  assert.deepEqual([leaves.total, leaves.items.map(row => [row.id, row.employeeId, row.leaveTypeCode, row.fromDate, row.toDate, row.days, row.isUnpaid])],
+    [2, [[l3.id, E.c1.id, 'sick', '2026-08-30', '2026-09-02', 3, false], [l1.id, E.r1.id, 'annual', '2026-09-10', '2026-09-12', 3, false]]])
+  assert.deepEqual([ok(await call(riyadh.key, '/leaves?from=2026-09-01&to=2026-09-30')).items.map(row => row.id), ok(await call(wide.key, '/leaves?from=2026-09-03&to=2026-09-09')).items, (await call(wide.key, '/leaves?from=2025-01-01&to=2026-09-30')).status],
+    [[l1.id], [], 400])
+  // ملخص المسير: المعتمد والمصروف بس، وإجمالي بنطاق المفتاح
+  const runs = ok(await call(wide.key, '/payroll/runs?period=2026-09'))
+  assert.deepEqual(runs, { period: '2026-09', runs: [{ id: approved.id, name: 'مسير سبتمبر', period: '2026-09', startDate: '2026-09-01', endDate: '2026-09-28', status: 'APPROVED', employees: 2, totalNet: '15500.75' },
+    { id: paid.id, name: 'مسير القاهرة', period: '2026-09', startDate: '2026-09-01', endDate: '2026-09-28', status: 'PAID', employees: 1, totalNet: '6400.00' }] })
+  // مفتاح الرياض: إجمالي موظفين الرياض بس، ومسير مافيهوش حد من نطاقه مش ظاهر
+  assert.deepEqual(ok(await call(riyadh.key, '/payroll/runs?period=2026-09')).runs.map(row => [row.id, row.employees, row.totalNet]), [[approved.id, 1, '8500.50']])
+  assert.deepEqual([ok(await call(wide.key, '/payroll/runs?period=2026-08')).runs, (await call(wide.key, '/payroll/runs')).status, (await call(wide.key, '/payroll/runs?period=2026-9')).status], [[], 400, 400])
+  // الموظف اتنقل: حضوره وإجازاته وصافيه بيتحسبوا على فرعه الحالي
+  await repo('Employee').update({ id: E.c1.id }, { branchId: B.riyadh.id })
+  assert.deepEqual([ok(await call(riyadh.key, '/attendance?from=2026-09-01&to=2026-09-30')).total, ok(await call(riyadh.key, '/leaves?from=2026-09-01&to=2026-09-30')).total, ok(await call(riyadh.key, '/payroll/runs?period=2026-09')).runs.map(row => row.employees)], [3, 2, [2, 1]])
+  await repo('Employee').update({ id: E.c1.id }, { branchId: B.cairo.id })
+  // وصف المسارات فيه المسارات الجديدة
+  assert.deepEqual(Object.keys(ok(await call(wide.key, '/openapi.json')).paths), ['/employees', '/employees/{id}', '/structure', '/attendance', '/leaves', '/payroll/runs'])
+  // موديول الإجازات مقفول: مسار الإجازات 404 والباقي شغال
+  ok(await request(U.admin, 'PUT', '/modules/leave', { enabled: false })); modules.invalidate()
+  assert.deepEqual([(await call(wide.key, '/leaves?from=2026-09-01&to=2026-09-30')).status, (await call(wide.key, '/attendance?from=2026-09-01&to=2026-09-30')).status], [404, 200])
+  ok(await request(U.admin, 'PUT', '/modules/leave', { enabled: true })); modules.invalidate()
 })

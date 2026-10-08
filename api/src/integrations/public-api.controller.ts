@@ -35,4 +35,26 @@ export class PublicApiController {
   structure(@Integration() integration: IntegrationIdentity) {
     return this.service.structure(integration)
   }
+
+  // B6.3 (ب): كل قراءة كمان ورا موديول بياناتها — الموديول المقفول = 404 للمسار ده
+  @RequireModule('integrations', 'attendance')
+  @RequireScope('attendance.read')
+  @Get('attendance')
+  attendance(@Integration() integration: IntegrationIdentity, @Query() query: Record<string, unknown>) {
+    return this.service.attendance(integration, query)
+  }
+
+  @RequireModule('integrations', 'leave')
+  @RequireScope('leaves.read')
+  @Get('leaves')
+  leaves(@Integration() integration: IntegrationIdentity, @Query() query: Record<string, unknown>) {
+    return this.service.leaves(integration, query)
+  }
+
+  @RequireModule('integrations', 'payroll')
+  @RequireScope('payroll.read')
+  @Get('payroll/runs')
+  payrollRuns(@Integration() integration: IntegrationIdentity, @Query() query: Record<string, unknown>) {
+    return this.service.payrollRuns(integration, query)
+  }
 }

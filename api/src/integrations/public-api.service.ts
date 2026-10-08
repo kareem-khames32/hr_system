@@ -14,6 +14,27 @@ export const PUBLIC_EMPLOYEE_STATUSES = ['active', 'probation', 'notice_period',
 const EMPLOYEE_COLUMNS = `e.[id], e.[employeeCode], e.[fullName], e.[fullNameEn], e.[jobTitle], e.[email], e.[branchId], e.[departmentId], e.[teamId], e.[managerEmployeeId], e.[status],
   CONVERT(char(10), e.[joinDate], 23) AS [joinDate]`
 
+// B6.3 (ب): حدود مدى التاريخ لكل قراءة
+export const PUBLIC_ATTENDANCE_MAX_DAYS = 31
+export const PUBLIC_LEAVES_MAX_DAYS = 366
+const YMD = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/
+/** مدى تاريخ إجباري (from و to بصيغة YYYY-MM-DD، وfrom مش بعد to، وبحد أقصى للأيام) */
+export function rangeOf(query: { from?: unknown; to?: unknown }, maxDays: number): { from: string; to: string } {
+  const valid = (value: unknown): value is string => typeof value === 'string' && YMD.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value
+  if (!valid(query.from) || !valid(query.to)) throw new BadRequestException('from و to تواريخ بصيغة YYYY-MM-DD')
+  if (query.from > query.to) throw new BadRequestException('from مش بعد to')
+  const days = Math.round((Date.parse(`${query.to}T00:00:00Z`) - Date.parse(`${query.from}T00:00:00Z`)) / 86400000) + 1
+  if (days > maxDays) throw new BadRequestException(`المدى ${maxDays} يوم بالكتير`)
+  return { from: query.from, to: query.to }
+}
+/** رقم موظف اختياري في الاستعلام */
+function employeeFilter(value: unknown): number | null {
+  if (value === undefined || value === '') return null
+  const id = Number(value)
+  if (!Number.isSafeInteger(id) || id < 1) throw new BadRequestException('employeeId رقم موظف')
+  return id
+}
+
 /** شرط نطاق الفروع على عمود: كل الفروع = من غير شرط؛ ولا فرع = ولا صف */
 export function scopeClause(scope: BranchScope, column: string, parameters: unknown[]): string {
   if (scope === null) return ''
@@ -78,11 +99,56 @@ export class PublicApiService {
       departments: departments.map(row => ({ ...row, id: Number(row.id), branchId: Number(row.branchId), parentId: row.parentId == null ? null : Number(row.parentId), isActive: !!row.isActive })) }
   }
 
+  /** صفحة من جملة قراءة واحدة (العدّ معاها)؛ صفحة بعد الآخر: العدّ بجملة بنفس الشرط */
+  private async paged<T extends { total?: number }>(columns: string, source: string, orderBy: string, parameters: unknown[], page: number, pageSize: number): Promise<{ total: number; rows: T[] }> {
+    const rows: T[] = await this.ds.query(`SELECT ${columns}, COUNT(*) OVER () AS [total] ${source} ORDER BY ${orderBy} OFFSET @${parameters.length} ROWS FETCH NEXT @${parameters.length + 1} ROWS ONLY`,
+      [...parameters, (page - 1) * pageSize, pageSize])
+    const total = rows.length ? Number(rows[0].total) : Number((await this.ds.query(`SELECT COUNT(*) AS [total] ${source}`, parameters))[0]?.total ?? 0)
+    return { total, rows }
+  }
+
+  // B6.3 (ب): أيام الحضور المحسوبة في مدى (31 يوم بالكتير) لموظفين نطاق المفتاح
+  async attendance(integration: IntegrationIdentity, query: { page?: unknown; pageSize?: unknown; from?: unknown; to?: unknown; employeeId?: unknown }) {
+    const { page, pageSize } = pageOf(query), { from, to } = rangeOf(query, PUBLIC_ATTENDANCE_MAX_DAYS), employeeId = employeeFilter(query.employeeId)
+    const parameters: unknown[] = [from, to]
+    let where = 'WHERE a.[date] >= @0 AND a.[date] <= @1' + scopeClause(integration.branchScope, 'e.[branchId]', parameters)
+    if (employeeId !== null) { parameters.push(employeeId); where += ` AND a.[employeeId] = @${parameters.length - 1}` }
+    const { total, rows } = await this.paged<Record<string, unknown> & { total?: number }>(
+      `a.[employeeId], CONVERT(char(10), a.[date], 23) AS [date], a.[status], a.[checkIn], a.[checkOut], a.[shiftName], a.[lateMinutes], a.[earlyLeaveMinutes]`,
+      `FROM dbo.attendance_days a INNER JOIN dbo.employees e ON e.[id] = a.[employeeId] ${where}`, 'a.[date], a.[employeeId]', parameters, page, pageSize)
+    return { page, pageSize, total, items: rows.map(({ total: _total, ...row }) => ({ ...row, employeeId: Number(row.employeeId), lateMinutes: Number(row.lateMinutes ?? 0), earlyLeaveMinutes: Number(row.earlyLeaveMinutes ?? 0) })) }
+  }
+
+  // B6.3 (ب): الإجازات المعتمدة اللي بتتقاطع مع مدى (سنة بالكتير) لموظفين نطاق المفتاح
+  async leaves(integration: IntegrationIdentity, query: { page?: unknown; pageSize?: unknown; from?: unknown; to?: unknown; employeeId?: unknown }) {
+    const { page, pageSize } = pageOf(query), { from, to } = rangeOf(query, PUBLIC_LEAVES_MAX_DAYS), employeeId = employeeFilter(query.employeeId)
+    const parameters: unknown[] = [from, to]
+    let where = `WHERE l.[status] = N'APPROVED' AND l.[fromDate] <= @1 AND l.[toDate] >= @0` + scopeClause(integration.branchScope, 'e.[branchId]', parameters)
+    if (employeeId !== null) { parameters.push(employeeId); where += ` AND l.[employeeId] = @${parameters.length - 1}` }
+    const { total, rows } = await this.paged<Record<string, unknown> & { total?: number }>(
+      `l.[id], l.[employeeId], l.[leaveTypeCode], CONVERT(char(10), l.[fromDate], 23) AS [fromDate], CONVERT(char(10), l.[toDate], 23) AS [toDate], l.[days], l.[period], l.[isUnpaid]`,
+      `FROM dbo.leaves l INNER JOIN dbo.employees e ON e.[id] = l.[employeeId] ${where}`, 'l.[fromDate], l.[id]', parameters, page, pageSize)
+    return { page, pageSize, total, items: rows.map(({ total: _total, ...row }) => ({ ...row, id: Number(row.id), employeeId: Number(row.employeeId), days: Number(row.days), isUnpaid: !!row.isUnpaid })) }
+  }
+
+  // B6.3 (ب): ملخص مسيرات شهر — المعتمد والمصروف بس، وعدد وإجمالي صافي موظفين نطاق المفتاح (من غير أي مبلغ لموظف بعينه)
+  async payrollRuns(integration: IntegrationIdentity, query: { period?: unknown }) {
+    if (typeof query.period !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(query.period)) throw new BadRequestException('period بصيغة YYYY-MM')
+    const parameters: unknown[] = [query.period]
+    const rows: Array<Record<string, unknown>> = await this.ds.query(`SELECT r.[id], r.[name], r.[period], CONVERT(char(10), r.[startDate], 23) AS [startDate], CONVERT(char(10), r.[endDate], 23) AS [endDate], r.[status],
+        COUNT(i.[id]) AS [employees], CONVERT(varchar(40), SUM(i.[netPay])) AS [totalNet]
+      FROM dbo.payroll_runs r INNER JOIN dbo.payroll_items i ON i.[runId] = r.[id] INNER JOIN dbo.employees e ON e.[id] = i.[employeeId]
+      WHERE r.[period] = @0 AND r.[status] IN (N'APPROVED', N'PAID')${scopeClause(integration.branchScope, 'e.[branchId]', parameters)}
+      GROUP BY r.[id], r.[name], r.[period], r.[startDate], r.[endDate], r.[status] ORDER BY r.[id]`, parameters)
+    return { period: query.period, runs: rows.map(row => ({ ...row, id: Number(row.id), employees: Number(row.employees), totalNet: String(row.totalNet) })) }
+  }
+
   /** وصف المسارات (OpenAPI 3) — ثابت، من غير أي بيانات */
   openapi() {
     const page = [{ name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 } }, { name: 'pageSize', in: 'query', schema: { type: 'integer', minimum: 1, maximum: PUBLIC_PAGE_MAX, default: PUBLIC_PAGE_DEFAULT } }]
     const errors = { 401: { description: 'Missing or invalid key' }, 403: { description: 'The key lacks the required scope' }, 404: { description: 'Not found, or outside the key branch scope' }, 429: { description: 'Rate limit exceeded' } }
     const secured = (scope: string) => [{ integrationKey: [scope] }]
+    const range = [{ name: 'from', in: 'query', required: true, schema: { type: 'string', format: 'date' } }, { name: 'to', in: 'query', required: true, schema: { type: 'string', format: 'date' } }]
     return {
       openapi: '3.0.3',
       info: { title: 'HR Public API', version: '1.0.0', description: 'Read-only integration API. Authenticate with an integration key: `Authorization: Bearer hrk_…` or `X-API-Key`. A key carries read scopes and a branch scope.' },
@@ -103,6 +169,12 @@ export class PublicApiService {
         '/employees/{id}': { get: { summary: 'One employee', security: secured('employees.read'), parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }],
           responses: { 200: { description: 'The employee', content: { 'application/json': { schema: { $ref: '#/components/schemas/Employee' } } } }, ...errors } } },
         '/structure': { get: { summary: 'Branches and departments in the key branch scope', security: secured('structure.read'), responses: { 200: { description: 'Branches and departments' }, ...errors } } },
+        '/attendance': { get: { summary: `Computed attendance days in a date range (max ${PUBLIC_ATTENDANCE_MAX_DAYS} days)`, security: secured('attendance.read'),
+          parameters: [...range, { name: 'employeeId', in: 'query', schema: { type: 'integer' } }, ...page], responses: { 200: { description: 'A page of attendance days' }, ...errors } } },
+        '/leaves': { get: { summary: `Approved leaves overlapping a date range (max ${PUBLIC_LEAVES_MAX_DAYS} days)`, security: secured('leaves.read'),
+          parameters: [...range, { name: 'employeeId', in: 'query', schema: { type: 'integer' } }, ...page], responses: { 200: { description: 'A page of approved leaves' }, ...errors } } },
+        '/payroll/runs': { get: { summary: 'Approved and paid payroll runs of a month: employee count and total net for employees in the key branch scope (no per-employee amounts)', security: secured('payroll.read'),
+          parameters: [{ name: 'period', in: 'query', required: true, schema: { type: 'string', pattern: '^\\d{4}-\\d{2}$' } }], responses: { 200: { description: 'Run summaries' }, ...errors } } },
       },
     }
   }

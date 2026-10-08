@@ -67,6 +67,8 @@ const HANDLER_TAGS = {
   FinancialReportController: { loans: ['loans'], overtime: ['payroll','overtime'] },
   LoansController: { capReview: ['requests'] },
   PortalController: { dismissNotification: ['notifications'], markNotificationsRead: ['notifications'], notifications: ['notifications'] },
+  // B6.3 (ب): الـAPI العام — كل قراءة ورا موديول التكاملات وموديول بياناتها
+  PublicApiController: { attendance: ['integrations','attendance'], leaves: ['integrations','leave'], payrollRuns: ['integrations','payroll'] },
   ReportsController: { attendance: ['attendance'], leaves: ['leave'], overtime: ['overtime'], payroll: ['payroll'], payrollLoans: ['loans'], payrollOvertime: ['payroll','overtime'], payrollUnassigned: ['payroll'], payrollVariance: ['payroll'] },
   RequestsController: { acknowledge: ['custody'], activeLeaveTypes: ['leave'], adjustBalance: ['leave'], balanceAdjustments: ['leave'], bulkBalances: ['leave'], employeeBalances: ['leave'], handover: ['custody'], managerConfirm: ['custody'], myBalances: ['leave'], myLeaves: ['leave'], reconcileOvertime: ['overtime'], rejectCustody: ['custody'], rollover: ['leave'], transfer: ['custody'] },
   SettingsController: { addStatutoryLeaveTypes: ['leave'], createChain: ['requests'], createLeaveType: ['leave'], createRequestType: ['requests'], destinationHandlers: ['requests'], leaveStatutoryPack: ['leave'], listChains: ['requests'], listLeaveTypes: ['leave'], listRequestTypes: ['requests'], replaceChainSteps: ['requests'], updateChain: ['requests'], updateLeaveType: ['leave'], updateRequestType: ['requests'], updateStep: ['requests'] },
@@ -141,8 +143,8 @@ test('RG-03: قايمة الاستثناءات من غير بنود قديمة،
   // B3.13: +2 SELF («استبياناتي» والرد) و+1 SERVICE_CHECK (نموذج الاستبيان للمدعو)
   // B3.14: +1 SELF («معاليني»)
   // B4.6 (ج): +1 SELF (إعداد عرض الحساب نفسه: الهجري جنب الميلادي)
-  assert.deepEqual(counts, { PUBLIC_OK: 19, SELF: 93, AUTH_ANY_OK: 11, SERVICE_CHECK: 137 })
-  assert.equal(handlers.filter(handler => handler.perms.length === 0).length, 260)
+  assert.deepEqual(counts, { PUBLIC_OK: 22, SELF: 93, AUTH_ANY_OK: 11, SERVICE_CHECK: 137 })
+  assert.equal(handlers.filter(handler => handler.perms.length === 0).length, 263)
   // من غير حارس دخول = العام بس
   const open = handlers.filter(handler => !guarded(handler, JwtAuthGuard)).map(handler => handler.id).sort()
   assert.deepEqual(open, Object.keys(EXCEPTIONS).filter(id => EXCEPTIONS[id] === 'PUBLIC_OK').sort())
@@ -225,7 +227,8 @@ test('RG-04: المسارات اللي بتخدم أكتر من موديول م�
   for (const handler of handlers.filter(item => item.ownModules)) (tagged[handler.controller] ??= {})[handler.name] = handler.ownModules
   assert.deepEqual(tagged, HANDLER_TAGS)
   // B2.8: +4 (حوار الطلب بموديول الطلبات، وحوار المهمة بموديول المهام)؛ B4.5 (ج): +2 (اقتراح شرائح الحزمة، وأنواع إجازات الحزمة لفرع)
-  assert.equal(Object.values(tagged).reduce((sum, own) => sum + Object.keys(own).length, 0), 73)
+  // B6.3 (ب): +3 (الحضور والإجازات وملخص المسير في الـAPI العام)
+  assert.equal(Object.values(tagged).reduce((sum, own) => sum + Object.keys(own).length, 0), 76)
   // ووسم الـhandler دايمًا غير وسم الكنترولر (وسم مكرر مالوش معنى وبيخبّي غلطة)
   for (const handler of handlers.filter(item => item.ownModules)) assert.notDeepEqual(handler.ownModules, handler.classModules, handler.id)
 

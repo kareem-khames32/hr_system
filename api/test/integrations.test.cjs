@@ -41,6 +41,10 @@ test('INU-03: شرط نطاق الفروع جوه جملة القراءة — ك
     ['', [], ' AND 1 = 0', [], ' AND e.[branchId] IN (@1, @2)', ['x', 4, 9]])
   assert.deepEqual([api.pageOf({}), api.pageOf({ page: '3', pageSize: '200' })], [{ page: 1, pageSize: 50 }, { page: 3, pageSize: 200 }])
   for (const query of [{ page: '0' }, { page: 'x' }, { pageSize: '201' }, { pageSize: '0' }, { page: '1.5' }]) assert.throws(() => api.pageOf(query))
+  // (ب) مدى التاريخ: إجباري وصحيح ومرتّب وبحد
+  assert.deepEqual([api.rangeOf({ from: '2026-10-01', to: '2026-10-31' }, 31), api.rangeOf({ from: '2026-02-28', to: '2026-02-28' }, 31)], [{ from: '2026-10-01', to: '2026-10-31' }, { from: '2026-02-28', to: '2026-02-28' }])
+  for (const query of [{}, { from: '2026-10-01' }, { from: '2026-10-02', to: '2026-10-01' }, { from: '2026-10-01', to: '2026-11-01' }, { from: '2026-02-30', to: '2026-03-01' }, { from: '01/10/2026', to: '2026-10-02' }])
+    assert.throws(() => api.rangeOf(query, 31), JSON.stringify(query))
 })
 
 test('INU-04: مصدر الكود — الحارس (حد العنوان ← المفتاح ← حد المفتاح ← النطاق)، والـAPI العام للقراءة بس ومن غير أعمدة حساسة، والإدارة لحساب بكل الفروع', () => {
@@ -53,12 +57,18 @@ test('INU-04: مصدر الكود — الحارس (حد العنوان ← ال
   assert.match(controller, /@RequireModule\('integrations'\)\n@UseGuards\(IntegrationKeyGuard\)\n@Controller\('public\/v1'\)/)
   assert.doesNotMatch(controller, /@(Post|Put|Patch|Delete)\(/)
   assert.deepEqual([...controller.matchAll(/(?:@RequireScope\('([a-z.]+)'\)\n\s+)?@Get\('([^']+)'\)/g)].map(match => [match[2], match[1] ?? null]),
-    [['openapi.json', null], ['employees', 'employees.read'], ['employees/:id', 'employees.read'], ['structure', 'structure.read']])
+    [['openapi.json', null], ['employees', 'employees.read'], ['employees/:id', 'employees.read'], ['structure', 'structure.read'], ['attendance', 'attendance.read'], ['leaves', 'leaves.read'], ['payroll/runs', 'payroll.read']])
+  // (ب) كل قراءة ورا موديول بياناتها كمان
+  for (const [module, route] of [['attendance', 'attendance'], ['leave', 'leaves'], ['payroll', 'payroll/runs']]) assert.match(controller, new RegExp(`@RequireModule\\('integrations', '${module}'\\)\\n\\s+@RequireScope\\('[a-z.]+'\\)\\n\\s+@Get\\('${route}'\\)`))
   // مفيش عمود حساس في أي جملة قراءة، ومفيش كتابة
-  assert.doesNotMatch(service, /salary|Salary|nationalId|passport|iban|bankAccount|\[phone\]|birthDate|passwordHash/)
+  assert.doesNotMatch(service, /salary|Salary|nationalId|passport|iban|bankAccount|\[phone\]|birthDate|passwordHash|basicSalary|allowances|deduction/)
   assert.doesNotMatch(service, /INSERT INTO|UPDATE dbo|DELETE FROM|\.save\(|\.insert\(/)
   // النطاق في جملة القراءة نفسها لكل قراءة
-  assert.equal((service.match(/scopeClause\(integration\.branchScope, /g) || []).length, 4)
+  assert.equal((service.match(/scopeClause\(integration\.branchScope, /g) || []).length, 7)
+  // (ب) الإجازات المعتمدة بس، والمسيرات المعتمدة والمصروفة بس، وإجمالي من غير مبلغ لموظف بعينه
+  assert.match(service, /WHERE l\.\[status\] = N'APPROVED' AND l\.\[fromDate\] <= @1 AND l\.\[toDate\] >= @0/)
+  assert.match(service, /WHERE r\.\[period\] = @0 AND r\.\[status\] IN \(N'APPROVED', N'PAID'\)/)
+  assert.match(service, /COUNT\(i\.\[id\]\) AS \[employees\], CONVERT\(varchar\(40\), SUM\(i\.\[netPay\]\)\) AS \[totalNet\]/)
   // الإدارة: الصلاحية على كل مسار، والحكم «كل الفروع» في كل مدخل؛ والمفتاح بيرجع في رد الإنشاء بس وبصمته مابترجعش
   assert.match(manage, /@RequireModule\('integrations'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)\n@Controller\('integrations'\)/)
   assert.equal((manage.match(/@Perm\('integrations\.manage'\)/g) || []).length, 3)
