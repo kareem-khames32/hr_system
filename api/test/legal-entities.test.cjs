@@ -4,6 +4,7 @@
 //         وعملة الفرع: كيانه لو معروف العملة وإلا القاعدة القديمة.
 //  LU-02) الربط: قرّاء العملة بمصدر واحد قبل الترحيل وبعده، وعمود الفرع برّه قراءة وكتابة الكيان، والكتابة تحت القفل وبالخانات، وفك الربط عند
 //         تغيير دولة الفرع، وحارس المسير في الحفظ والتعديل (مش النسخ ولا التكميلي)، ومسار التحذير قبل المسار بالرقم، والواجهة.
+//  LU-03) (الجزء ب) اليوم المحلي في منطقة، ومهمة الغياب: مجموعة عامة بفروع الكيانات المزمّنة مستبعدة، ومجموعة لكل كيان بحالته وبدايته.
 // Run (من api/): node --test test/legal-entities.test.cjs
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
@@ -98,4 +99,28 @@ test('LU-02: one currency source before and after the migration, the branch colu
   assert.match(page, /const ok = can\('settings\.manage'\) && isCompanyWideUser\(getCurrentUser\(\)\)/)
   assert.match(page, /invalidateCurrency\(\)/)
   assert.match(page, /disabled=\{!!entity\}/, 'الدولة مابتتعدّلش من الشاشة')
+})
+
+test('LU-03: the local day in a zone, and the absence catch-up split into the general group and one group per zoned entity', () => {
+  const at = iso => new Date(iso)
+  assert.deepEqual([rules.localDateInZone(at('2026-10-08T21:30:00Z'), 'Asia/Riyadh'), rules.localDateInZone(at('2026-10-08T20:30:00Z'), 'Asia/Riyadh'), rules.localDateInZone(at('2026-10-08T21:30:00Z'), 'Africa/Cairo'),
+    rules.localDateInZone(at('2026-01-01T00:30:00Z'), 'America/New_York'), rules.localDateInZone(at('2026-12-31T10:30:00Z'), 'Pacific/Kiritimati'), rules.localDateInZone(at('2026-03-01T05:00:00Z'), 'Pacific/Pago_Pago')],
+  ['2026-10-09', '2026-10-08', '2026-10-09', '2025-12-31', '2027-01-01', '2026-02-28'])
+
+  const source = read('api/src/org/legal-entities.ts')
+  const zones = source.slice(source.indexOf('export async function readEntityZones('), source.indexOf('/** كيان كل فرع مربوط'))
+  assert.match(zones, /if \(!\(await legalEntitiesReady\(em\)\)\) return \[\]/)
+  assert.match(zones, /WHERE e\.\[isActive\] = 1 AND e\.\[timeZone\] IS NOT NULL AND e\.\[timeZone\] <> N''/)
+  assert.match(zones, /if \(!validTimeZone\(String\(row\.timeZone\)\)\) continue/, 'منطقة مش صالحة في القاعدة مابتوقّعش المهمة')
+
+  const attendance = read('api/src/attendance/attendance.service.ts')
+  const job = attendance.slice(attendance.indexOf('  async materializeAbsencesCatchUp('), attendance.indexOf('  // ===== تجاوز وردية يوم بعينه'))
+  const order = ['const zones = await readEntityZones(this.days.manager)', "const seed = zones.length ? await this.configValue(STATE_KEY, '') : ''",
+    "await this.absenceCatchUpRange(STATE_KEY, localDateOf(now), opts, null, zones.flatMap(zone => zone.branchIds), '')",
+    'await this.absenceCatchUpRange(`${STATE_KEY}.entity.${zone.entityId}`, localDateInZone(now, zone.timeZone), opts, zone.branchIds, [], seed)'].map(part => job.indexOf(part))
+  assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), 'المناطق ← الحالة العامة قبل التشغيلة ← المجموعة العامة ← مجموعة لكل كيان: ' + order.join(','))
+  assert.match(job, /const to = addDays\(today, -1\) \/\/ أمس\n      let last = await this\.configValue\(STATE_KEY, ''\)\n      if \(!last\) last = seed/)
+  assert.match(job, /await this\.materializeAbsencesAll\(from, to, scope, exclude\)/)
+  assert.match(job, /await this\.config\.save\(this\.config\.create\(\{ key: STATE_KEY, value: to \}\)\)/)
+  assert.match(attendance, /if \(scope != null\) where\.branchId = branchIdIn\(scope\)\n    else if \(excludeBranchIds\.length\) where\.branchId = Not\(In\(excludeBranchIds\)\)/)
 })

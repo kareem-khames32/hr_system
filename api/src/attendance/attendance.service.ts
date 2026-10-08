@@ -18,8 +18,10 @@ import {
   IsNull,
   LessThanOrEqual,
   MoreThanOrEqual,
+  Not,
   Repository,
 } from 'typeorm'
+import { localDateInZone, readEntityZones } from '../org/legal-entities'
 import type { JwtPayload } from '../auth/auth.service'
 import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
 // تراكم المسير يومًا بيوم: علامة «متسخ» رخيصة (دوال خالصة بلا خدمات، فلا حلقة اعتماد بين الموديولين)
@@ -1760,10 +1762,13 @@ export class AttendanceService {
   async materializeAbsencesAll(
     fromDate: string,
     toDate: string,
-    scope: BranchScope = null
+    scope: BranchScope = null,
+    // B4.1-ب: فروع برّه التشغيلة دي (فروع كيان بيتحسب بتوقيته لوحده) — مع scope = null بس
+    excludeBranchIds: number[] = []
   ): Promise<{ created: number; failed: number[]; total: number }> {
     const where: Record<string, unknown> = { isActive: true }
     if (scope != null) where.branchId = branchIdIn(scope)
+    else if (excludeBranchIds.length) where.branchId = Not(In(excludeBranchIds))
     const emps = await this.employees.find({ where: where as any })
     let created = 0
     const failed: number[] = []
@@ -1795,13 +1800,36 @@ export class AttendanceService {
     this.absenceCatchUpRunning = true
     try {
       const STATE_KEY = 'attendance.absences_materialized_through'
+      // B4.1-ب: كيان قانوني له منطقة زمنية «أمس» بتاعه بتوقيته هو وبحالته هو. الباقي — والكل لو مفيش كيان بمنطقة (الافتراضي) — بتوقيت
+      // الخادم وبالحالة العامة زي الأول بالحرف
+      const now = new Date()
+      const zones = await readEntityZones(this.days.manager)
+      // الحالة العامة قبل تشغيلة النهارده: بداية كيان لسه واخد منطقة (فروعه كانت متغطية لحدها، وتشغيلة النهارده العامة مش شايلاهم)
+      const seed = zones.length ? await this.configValue(STATE_KEY, '') : ''
+      let result = await this.absenceCatchUpRange(STATE_KEY, localDateOf(now), opts, null, zones.flatMap(zone => zone.branchIds), '')
+      for (const zone of zones) {
+        const own = await this.absenceCatchUpRange(`${STATE_KEY}.entity.${zone.entityId}`, localDateInZone(now, zone.timeZone), opts, zone.branchIds, [], seed)
+        result = result ?? own
+      }
+      return result
+    } finally {
+      this.absenceCatchUpRunning = false
+    }
+  }
+
+  // لحاق مجموعة واحدة بحالتها: today = يومها المحلي، وscope/exclude = فروعها. seed = آخر يوم مُنجز يبدأ منه أول تشغيل لمجموعة جديدة
+  // (كيان لسه واخد منطقة: بيكمّل من آخر يوم مُنجز للكل مش من الأول)
+  private async absenceCatchUpRange(STATE_KEY: string, today: string, opts: { onlyIfBehind?: boolean }, scope: BranchScope, exclude: number[],
+    seed: string): Promise<{ from: string; to: string; created: number; failed: number } | null> {
+    {
       const addDays = (ymd: string, n: number) => {
         const d = new Date(`${ymd}T12:00:00`)
         d.setDate(d.getDate() + n)
         return localDateOf(d)
       }
-      const to = addDays(localDateOf(new Date()), -1) // أمس
-      const last = await this.configValue(STATE_KEY, '')
+      const to = addDays(today, -1) // أمس
+      let last = await this.configValue(STATE_KEY, '')
+      if (!last) last = seed
       const hasLast = /^\d{4}-\d{2}-\d{2}$/.test(last)
       if (opts.onlyIfBehind && hasLast && last >= to) return null
       const maxRaw = Number(
@@ -1826,7 +1854,7 @@ export class AttendanceService {
         }
         from = earliest
       }
-      const { created, failed, total } = await this.materializeAbsencesAll(from, to)
+      const { created, failed, total } = await this.materializeAbsencesAll(from, to, scope, exclude)
       if (total > 0 && failed.length === total) {
         // فشل الجميع = عطل عام لا موظف بعينه — لا يُسجَّل الإنجاز فيُعاد المدى لاحقاً
         this.logger.error(
@@ -1842,8 +1870,6 @@ export class AttendanceService {
       // سجّل آخر يوم مُنجز — التشغيل القادم يلحق من بعده
       await this.config.save(this.config.create({ key: STATE_KEY, value: to }))
       return { from, to, created, failed: failed.length }
-    } finally {
-      this.absenceCatchUpRunning = false
     }
   }
 

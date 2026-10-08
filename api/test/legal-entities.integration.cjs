@@ -5,6 +5,8 @@
 //  LE-02) العملة: فرع له دولة عملته زي ما هي قبل الربط وبعده؛ فرع من غير دولة بياخد عملة كيانه؛ وتغيير دولة الفرع بيفك كيانه القديم.
 //  LE-03) المسير: مسير جديد أو تعديل مسودة بيجمع كيانين مرفوض؛ مسير لكل كيان بيتعمل؛ والمسير المجمّع القايم ونسخته للشهر الجاي مابيتمنعوش
 //         وبيظهر عليهم تحذير.
+//  LE-04) (الجزء ب) مهمة الغياب: من غير كيان بمنطقة زمنية تشغيلة واحدة بتوقيت الخادم زي الأول؛ وكيان له منطقة «أمس» بتاعه بتوقيته وبحالته،
+//         وفروعه برّه التشغيلة العامة؛ وفحص «لو متأخر» لكل مجموعة؛ ومسح المنطقة بيرجّع التشغيلة الواحدة.
 // Run (من api/): node --test test/legal-entities.integration.cjs
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
@@ -239,4 +241,65 @@ test('LE-03: المسير — جديد بيجمع كيانين مرفوض، مس
   assert.deepEqual(later.map(row => [row.name, row.period]).sort(), [['مسير الشركة كلها (قديم)', '2026-08'], ['مسير الشركة كلها (قديم)', '2026-09']])
   // حساب فرع: مسيرات نطاقه بس (ومفيش فيها مجمّع)؛ ومن غير صلاحية الرواتب 403
   assert.deepEqual([expectStatus(await request(users.branchAdmin, 'GET', '/payroll/runs/entity-warnings'), 200), (await request(users.branchAdmin, 'GET', L)).status], [{ warnings: [] }, 403])
+})
+
+test('LE-04: مهمة الغياب — تشغيلة واحدة بتوقيت الخادم من غير مناطق، وكيان له منطقة «أمس» بتاعه بتوقيته وبحالته وفروعه برّه العامة', async () => {
+  const { localDateOf } = require('../src/attendance/attendance.service')
+  const attendance = app.get(require('../src/attendance/attendance.service').AttendanceService)
+  const KEY = 'attendance.absences_materialized_through'
+  const dayBefore = ymd => { const d = new Date(`${ymd}T12:00:00`); d.setDate(d.getDate() - 1); return localDateOf(d) }
+  // «أمس» في منطقة — بحساب مستقل عن الكود
+  const yesterdayIn = zone => dayBefore(new Date().toLocaleDateString('en-CA', { timeZone: zone }))
+  const stateOf = async key => (await repo('RequestsConfig').findOneBy({ key }))?.value ?? null
+  const patchZone = (id, timeZone) => request(users.admin, 'PATCH', `${L}/${id}`, { timeZone })
+  const calls = []
+  const original = attendance.materializeAbsencesAll
+  attendance.materializeAbsencesAll = async (from, to, scope = null, exclude = []) => { calls.push({ from, to, scope, exclude }); return { created: 0, failed: [], total: 1 } }
+  try {
+    // من غير كيان بمنطقة: تشغيلة واحدة للكل بتوقيت الخادم وبالحالة العامة — السلوك القايم
+    const sysBefore = dayBefore(localDateOf(new Date()))
+    const first = await attendance.materializeAbsencesCatchUp()
+    const sysAfter = dayBefore(localDateOf(new Date()))
+    assert.deepEqual([calls.length, calls[0].scope, calls[0].exclude, [sysBefore, sysAfter].includes(calls[0].to), first.to === calls[0].to, await stateOf(KEY) === calls[0].to,
+      await stateOf(`${KEY}.entity.${state.sa}`), await stateOf(`${KEY}.entity.${state.eg}`)], [1, null, [], true, true, true, null, null])
+    const system = calls[0].to
+
+    // كيانين بمنطقتين بعيد عن بعض 25 ساعة: «أمس» بتاع كل واحد غير التاني دايمًا
+    expectStatus(await patchZone(state.sa, 'Pacific/Kiritimati'), 200)
+    expectStatus(await patchZone(state.eg, 'Pacific/Pago_Pago'), 200)
+    calls.length = 0
+    const ahead = [yesterdayIn('Pacific/Kiritimati')], behind = [yesterdayIn('Pacific/Pago_Pago')]
+    await attendance.materializeAbsencesCatchUp()
+    ahead.push(yesterdayIn('Pacific/Kiritimati')); behind.push(yesterdayIn('Pacific/Pago_Pago'))
+    assert.equal(calls.length, 3)
+    const [main, sa, eg] = calls
+    assert.deepEqual([main.scope, main.exclude, sa.scope, sa.exclude, eg.scope, eg.exclude], [null, [org.riyadh.id, org.jeddah.id, org.cairo.id], [org.riyadh.id, org.jeddah.id], [], [org.cairo.id], []])
+    assert.deepEqual([ahead.includes(sa.to), behind.includes(eg.to), sa.to > eg.to, sa.to >= main.to, main.to >= eg.to], [true, true, true, true, true], JSON.stringify([main.to, sa.to, eg.to]))
+    assert.deepEqual([await stateOf(KEY), await stateOf(`${KEY}.entity.${state.sa}`), await stateOf(`${KEY}.entity.${state.eg}`)], [main.to, sa.to, eg.to], 'حالة لكل مجموعة')
+    // أول تشغيل لكيان واخد منطقة بيبدأ من الحالة العامة قبل التشغيلة (مش من الأول): المدى مابيرجعش ورا أول أمس بتاعه
+    assert.deepEqual([sa.from >= dayBefore(dayBefore(system)), eg.from === dayBefore(eg.to)], [true, true])
+
+    // «لو متأخر»: كل مجموعة حالتها = أمس بتاعها ← مفيش تشغيل
+    calls.length = 0
+    assert.deepEqual([await attendance.materializeAbsencesCatchUp({ onlyIfBehind: true }), calls.length], [null, 0])
+    // كيان حالته متأخرة لوحده: هو بس اللي بيتشغّل
+    await repo('RequestsConfig').save({ key: `${KEY}.entity.${state.eg}`, value: dayBefore(dayBefore(dayBefore(eg.to))) })
+    const late = await attendance.materializeAbsencesCatchUp({ onlyIfBehind: true })
+    assert.deepEqual([calls.length, calls[0].scope, calls[0].from, late.to === calls[0].to, behind.concat(yesterdayIn('Pacific/Pago_Pago')).includes(calls[0].to)],
+      [1, [org.cairo.id], dayBefore(dayBefore(eg.to)), true, true], 'من بعد آخر يوم مُنجز للكيان')
+
+    // مسح المنطقة (أو إيقاف الكيان): فروعه بترجع للتشغيلة العامة
+    expectStatus(await patchZone(state.sa, ''), 200)
+    expectStatus(await patchZone(state.eg, null), 200)
+    calls.length = 0
+    await attendance.materializeAbsencesCatchUp()
+    assert.deepEqual([calls.length, calls[0].scope, calls[0].exclude], [1, null, []])
+  } finally {
+    attendance.materializeAbsencesAll = original
+  }
+  // التشغيلة العامة بفروع مستبعدة: الموظفين النشطين برّه الفروع دي بس (الاستعلام الفعلي)
+  const real = await attendance.materializeAbsencesAll('2020-01-01', '2020-01-01', null, [org.riyadh.id, org.jeddah.id])
+  const all = await attendance.materializeAbsencesAll('2020-01-01', '2020-01-01')
+  const inRiyadh = await repo('Employee').count({ where: { branchId: org.riyadh.id, isActive: true } })
+  assert.deepEqual([all.total - real.total, inRiyadh > 0], [inRiyadh, true])
 })

@@ -207,6 +207,32 @@ export async function unlinkBranchEntityOnCountryChange(em: EntityManager, branc
 
 // ===== القرّاء =====
 
+/** اليوم المحلي (YYYY-MM-DD) في منطقة زمنية */
+export function localDateInZone(now: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now)
+  const part = (type: string) => parts.find((entry) => entry.type === type)?.value ?? ''
+  return `${part('year')}-${part('month')}-${part('day')}`
+}
+
+/**
+ * B4.1-ب: الكيانات السارية اللي لها منطقة زمنية صالحة وفروع مربوطة — بفروعها. فاضي قبل الترحيل أو لو مفيش كيان بمنطقة (الافتراضي):
+ * ساعتها كل حاجة بتوقيت الخادم زي الأول.
+ */
+export async function readEntityZones(em: EntityManager): Promise<Array<{ entityId: number; timeZone: string; branchIds: number[] }>> {
+  if (!(await legalEntitiesReady(em))) return []
+  const rows: Array<{ entityId: number; timeZone: string; branchId: number }> = await em.query(
+    `SELECT e.[id] AS [entityId], e.[timeZone], b.[id] AS [branchId] FROM dbo.legal_entities e INNER JOIN dbo.branches b ON b.[legalEntityId] = e.[id]
+     WHERE e.[isActive] = 1 AND e.[timeZone] IS NOT NULL AND e.[timeZone] <> N'' ORDER BY e.[id], b.[id]`)
+  const zones = new Map<number, { entityId: number; timeZone: string; branchIds: number[] }>()
+  for (const row of rows) {
+    if (!validTimeZone(String(row.timeZone))) continue
+    const zone = zones.get(Number(row.entityId)) ?? { entityId: Number(row.entityId), timeZone: String(row.timeZone), branchIds: [] }
+    zone.branchIds.push(Number(row.branchId))
+    zones.set(zone.entityId, zone)
+  }
+  return [...zones.values()]
+}
+
 /** كيان كل فرع مربوط (رقم الفرع ← رقم كيانه) — فاضي قبل الترحيل */
 export async function readBranchEntityIds(em: EntityManager, branchIds: number[] | null): Promise<Map<number, number>> {
   const out = new Map<number, number>()
