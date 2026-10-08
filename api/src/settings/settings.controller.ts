@@ -1056,13 +1056,14 @@ export class SettingsController {
     const manager = this.leaveTypes.manager
     const branchId = await definitionBranchForCreate(manager, user, dto.branchId)
     if (branchId === null) throw new BadRequestException('اختار الفرع')
-    const [branch]: Array<{ country: string | null }> = await manager.query('SELECT [country] FROM [branches] WHERE [id] = @0', [branchId])
-    const country = branchCountryOf(branch?.country)
-    const pack = statutoryLeaveTypes(await readStatutoryEntries(manager), country, attendanceRuleToday())
-    if (!country || !pack.types.length) throw new BadRequestException('حزمة الدولة مافيهاش أنواع إجازات لدولة الفرع ده')
     return manager.transaction(async em => {
       // إضافتين في نفس اللحظة لنفس الفرع: التانية تستنى وتلاقي الأنواع موجودة
       await em.query('SELECT TOP (0) 1 AS [x] FROM dbo.leave_types WITH (TABLOCKX, HOLDLOCK)')
+      // CR4-SELF: دولة الفرع (تحت قفل صفه) وصفوف الحزمة بيتقروا بعد القفل — تغيير دولة الفرع في النص مايعدّيش بحكم قديم
+      const [branch]: Array<{ country: string | null }> = await em.query('SELECT [country] FROM [branches] WITH (UPDLOCK, ROWLOCK) WHERE [id] = @0', [branchId])
+      const country = branchCountryOf(branch?.country)
+      const pack = statutoryLeaveTypes(await readStatutoryEntries(em), country, attendanceRuleToday())
+      if (!country || !pack.types.length) throw new BadRequestException('حزمة الدولة مافيهاش أنواع إجازات لدولة الفرع ده')
       const repo = em.getRepository(LeaveType), created: string[] = [], existing: string[] = []
       for (const type of pack.types) {
         const code = statutoryLeaveTypeCode(type.baseCode, country, branchId)

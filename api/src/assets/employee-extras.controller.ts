@@ -19,7 +19,7 @@ import { LeaveBalancesService } from '../requests/leave-balances.service'
 import { Loan, LoanInstallment } from '../requests/entities/financial.entities'
 import { EmployeeDocument } from './assets.entities'
 import { canReadEmployeeFinance, projectEmployee, projectEmployeeHistory } from '../employees/employee-projection'
-import { partialMaskingOn } from '../employees/employee-privacy'
+import { canSeeFullIdentity, maskIdentityPartial, partialMaskingOn } from '../employees/employee-privacy'
 import { readLoanInstallmentPositions } from '../payroll/payroll-installment-balances'
 import { PayrollDecimal } from '../payroll/payroll-decimal'
 import { RequireModule } from '../modules-registry/module.guard'
@@ -187,12 +187,15 @@ export class EmployeeExtrasController {
       ? await this.assets.find({ where: { id: In(assetIds) } })
       : []
     const assetById = new Map(assetRows.map((a) => [a.id, a]))
+    // CR4-SELF (B4.8-أ): الإخفاء الجزئي بيغطي الملف وسجل تغيير الهوية وأرقام المستندات — لغير صاحب الملف واللي بيعدّل ومدير المستندات
+    const masking = await partialMaskingOn(this.custody.manager)
+    const maskDocuments = masking && !canSeeFullIdentity(user, id) && !userHasPerm(user, 'documents.manage')
     return {
-      employee: projectEmployee(employee, user, await partialMaskingOn(this.custody.manager)),
+      employee: projectEmployee(employee, user, masking),
       leaves: empLeaves,
       balances: empBalances,
-      history: projectEmployeeHistory(empHistory, user, id),
-      documents: empDocs,
+      history: projectEmployeeHistory(empHistory, user, id, masking),
+      documents: maskDocuments ? empDocs.map(doc => ({ ...doc, number: maskIdentityPartial(doc.number) })) : empDocs,
       loans: empLoans,
       custody: custodyRows.map((c) => ({
         ...c,
@@ -217,6 +220,6 @@ export class EmployeeExtrasController {
       where: { employeeId: id },
       order: { changedAt: 'DESC' },
     })
-    return projectEmployeeHistory(rows, user, id)
+    return projectEmployeeHistory(rows, user, id, await partialMaskingOn(this.custody.manager))
   }
 }

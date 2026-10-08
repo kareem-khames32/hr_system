@@ -33,6 +33,8 @@ const fields = row => [row.nationalId ?? null, row.passportNo ?? null, row.iban 
 const fileOf = async user => fields(ok(await request(user, 'GET', `/employees/${E.target.id}`), 200))
 const listOf = async user => fields(ok(await request(user, 'GET', '/employees'), 200).find(row => row.id === E.target.id))
 const profileOf = async user => fields(ok(await request(user, 'GET', `/employees/${E.target.id}/profile`), 200).employee)
+const historyOf = async user => { const row = ok(await request(user, 'GET', `/employees/${E.target.id}/history`), 200).find(entry => entry.fieldName === 'nationalId'); return [row.oldValue, row.newValue] }
+const documentNumbers = async user => ok(await request(user, 'GET', `/employees/${E.target.id}/profile`), 200).documents.map(doc => doc.number)
 async function exportRow(user) {
   const response = await fetch(`${base}/employees/export?ids=${E.target.id}`, { headers: { Authorization: 'Bearer ' + token(user) } })
   assert.equal(response.status, 200)
@@ -73,8 +75,13 @@ before(async () => {
   U.payroll = await account('payroll', ['employees.view', 'payroll.view'])
   U.editor = await account('editor', ['employees.view', 'employees.edit'])
   U.self = await account('self', [], { employeeId: E.target.id })
-  const { configSeed } = require('../src/seed/requests-seed.data')
-  await repo('RequestsConfig').save(configSeed.filter(row => row.key === privacy.PARTIAL_MASKING_KEY))
+  await require('../src/seed/seed-requests').seedRequests(ds)
+  if (!(await repo('RequestsConfig').findOneBy({ key: privacy.PARTIAL_MASKING_KEY }))) await repo('RequestsConfig').save({ key: privacy.PARTIAL_MASKING_KEY, value: 'false' })
+  await repo('RequestsConfig').update({ key: privacy.PARTIAL_MASKING_KEY }, { value: 'false' })
+  // CR4-SELF: سطر تغيير هوية في سجل الموظف ومستند هوية برقمه — نفس حكم الإخفاء
+  await repo('EmployeeStatusHistory').save({ employeeId: E.target.id, changeType: 'DATA', fieldName: 'nationalId', oldValue: '2000000001', newValue: ID, oldStatus: null, newStatus: 'change', reason: 'تصحيح رقم' })
+  await repo('EmployeeDocument').save({ employeeId: E.target.id, docType: 'national_id', number: ID, issueDate: '2025-01-01', expiryDate: '2030-01-01' })
+  U.docs = await account('docs', ['employees.view', 'documents.manage'])
 }, { timeout: 120000 })
 
 after(async t => {
@@ -99,6 +106,8 @@ test('EP-01: الإعداد مقفول (الافتراضي) — الهوية ك�
   }
   assert.deepEqual(await fileOf(U.self), FULL)
   assert.deepEqual([await exportRow(U.viewer), await exportRow(U.editor)], [[ID, PASSPORT, null], [ID, PASSPORT, IBAN]])
+  // CR4-SELF: سجل تغيير الهوية وأرقام المستندات كاملين زي الأول
+  assert.deepEqual([await historyOf(U.viewer), await documentNumbers(U.viewer)], [['2000000001', ID], [ID]])
 })
 
 test('EP-02: الإعداد مفتوح — الهوية والجواز بآخر 4 خانات لغير صاحب الملف واللي بيعدّل، والآيبان مخفي لغير المصرّح له بالمالية — في الملف والقايمة وملف Excel', async () => {
@@ -111,6 +120,11 @@ test('EP-02: الإعداد مفتوح — الهوية والجواز بآخر 
     assert.deepEqual(await read(U.editor), FULL, read.name)
   }
   assert.deepEqual([await fileOf(U.self), await fileOf(admin)], [FULL, FULL])
+  // CR4-SELF: السجل والمستندات بنفس الحكم — المخفي لغير صاحب الملف واللي بيعدّل (ومدير المستندات بيشوف أرقامها)
+  assert.deepEqual([await historyOf(U.viewer), await historyOf(U.payroll), await historyOf(U.editor), await historyOf(U.self)],
+    [['•••••• 0001', MASKED_ID], ['•••••• 0001', MASKED_ID], ['2000000001', ID], ['2000000001', ID]])
+  assert.deepEqual([await documentNumbers(U.viewer), await documentNumbers(U.editor), await documentNumbers(U.docs), await documentNumbers(U.self)], [[MASKED_ID], [ID], [ID], [ID]])
+  assert.doesNotMatch(JSON.stringify(ok(await request(U.viewer, 'GET', `/employees/${E.target.id}/profile`), 200)), new RegExp(`${ID}|${PASSPORT}|${IBAN}|2000000001`))
   // ملف Excel بنفس الحكم (والآيبان عمود مالي: مش موجود أصلًا لغير المصرّح)
   assert.deepEqual([await exportRow(U.viewer), await exportRow(U.payroll), await exportRow(U.editor)], [[MASKED_ID, MASKED_PASSPORT, null], [MASKED_ID, MASKED_PASSPORT, IBAN], [ID, PASSPORT, IBAN]])
   // التعديل مابيتأثرش: اللي بيعدّل بيحفظ خانة تانية والهوية والآيبان زي ما هم
@@ -128,6 +142,9 @@ test('EP-03: تصدير بيانات الموظف — ملف الموظف وكل
   await repo('Leave').save({ employeeId: E.target.id, leaveTypeCode: 'ANNUAL', fromDate: '2026-03-01', toDate: '2026-03-03', days: 3, period: 'FULL', isUnpaid: false, status: 'APPROVED' })
   await repo('EmployeeSuspension').save({ employeeId: E.target.id, fromDate: '2026-04-01', toDate: '2026-04-02', plannedToDate: '2026-04-02', reason: 'إيقاف تجربة', status: 'ACTIVE' })
   await repo('Leave').save({ employeeId: E.other.id, leaveTypeCode: 'ANNUAL', fromDate: '2026-03-01', toDate: '2026-03-01', days: 1, period: 'FULL', isUnpaid: false, status: 'APPROVED' })
+  // طلب عادي وطلب سرّي (شكوى) للموظف نفسه
+  await repo('Request').save({ typeCode: 'LEAVE', requesterId: E.target.id, branchId: B.one.id, status: 'SUBMITTED', payload: '{"note":"طلب عادي"}' })
+  await repo('Request').save({ typeCode: 'GRIEVANCE', requesterId: E.target.id, branchId: B.one.id, status: 'SUBMITTED', isConfidential: true, payload: '{"description":"شكوى سرّية جدًا"}' })
   const route = `/employees/${E.target.id}/data-export`
   // من غير «تعديل الموظفين» 403 (حتى صاحب الملف)، وموظف برّه نطاق الحساب «غير موجود»
   assert.deepEqual([(await request(U.viewer, 'GET', route)).status, (await request(U.payroll, 'GET', route)).status, (await request(U.self, 'GET', route)).status,
@@ -136,15 +153,21 @@ test('EP-03: تصدير بيانات الموظف — ملف الموظف وكل
   const data = ok(await request(U.editor, 'GET', route), 200)
   assert.deepEqual([data.employeeId, data.employee.fullName, data.employee.nationalId, data.employee.iban, /^\d{4}-\d{2}-\d{2}T/.test(data.exportedAt)], [E.target.id, 'موظف الخصوصية', ID, IBAN, true])
   const counts = Object.fromEntries(data.sections.map(section => [section.key, section.count]))
-  assert.deepEqual([counts.documents, counts.leaves, counts.suspensions, counts.payrollItems, counts.requests], [1, 1, 1, 0, 0])
+  assert.deepEqual([counts.documents, counts.leaves, counts.suspensions, counts.payrollItems, counts.requests], [2, 1, 1, 0, 1])
+  // CR4-SELF: الطلب السرّي برّه الملف (والعادي جوّه)، وقسم الجزاءات محتاج صلاحيته — اللي اتشال متقال من غير أعداد
+  assert.deepEqual(data.sections.find(section => section.key === 'requests').rows.map(row => row.typeCode), ['LEAVE'])
+  assert.doesNotMatch(JSON.stringify(data), /شكوى سرّية جدًا|GRIEVANCE/)
+  assert.deepEqual([data.omitted, 'penalties' in counts, data.excluded.includes('الطلبات السرّية')], [[{ key: 'penalties', label: 'الجزاءات', reason: 'محتاج صلاحية لائحة الجزاءات' }], false, true])
+  const withPenalties = ok(await request(admin, 'GET', route), 200)
+  assert.deepEqual([withPenalties.omitted, withPenalties.sections.some(section => section.key === 'penalties'), withPenalties.sections.find(section => section.key === 'requests').count], [[], true, 1])
   // سجلات الموظف ده بس
   assert.ok(data.sections.every(section => section.rows.every(row => (row.employeeId ?? row.requesterId) === E.target.id)))
-  assert.equal(data.sections.find(section => section.key === 'documents').rows[0].number, 'IQ-1')
+  assert.deepEqual(data.sections.find(section => section.key === 'documents').rows.map(row => row.number), [ID, 'IQ-1'])
   assert.equal(data.sections.find(section => section.key === 'leaves').label, 'الإجازات')
   // ولا كلمة مرور ولا حساب دخول في الملف
   assert.doesNotMatch(JSON.stringify(data), /passwordHash|test-only|totpSecret/)
-  const audit = await repo('AuditLog').find({ where: { action: 'EMPLOYEE_DATA_EXPORT' } })
-  assert.deepEqual(audit.map(row => [row.category, Number(row.entityId), row.actorUserId, row.branchId]), [['EXPORT', E.target.id, U.editor.id, B.one.id]])
+  const audit = await repo('AuditLog').find({ where: { action: 'EMPLOYEE_DATA_EXPORT' }, order: { id: 'ASC' } })
+  assert.deepEqual(audit.map(row => [row.category, Number(row.entityId), row.actorUserId, row.branchId]), [['EXPORT', E.target.id, U.editor.id, B.one.id], ['EXPORT', E.target.id, admin.id, B.one.id]])
   // التصدير قراءة بس
-  assert.deepEqual([await repo('Leave').countBy({ employeeId: E.target.id }), await repo('EmployeeDocument').countBy({ employeeId: E.target.id })], [1, 1])
+  assert.deepEqual([await repo('Leave').countBy({ employeeId: E.target.id }), await repo('EmployeeDocument').countBy({ employeeId: E.target.id })], [1, 2])
 })

@@ -8,7 +8,7 @@ const apiRoot = path.resolve(__dirname, '..')
 require('../node_modules/ts-node').register({ project: path.join(apiRoot, 'tsconfig.json'), transpileOnly: true })
 require('../node_modules/reflect-metadata')
 const privacy = require('../src/employees/employee-privacy')
-const { projectEmployee } = require('../src/employees/employee-projection')
+const { projectEmployee, projectEmployeeHistory } = require('../src/employees/employee-projection')
 const user = (permissions, employeeId = null) => ({ sub: 1, role: 'employee', permissions, employeeId })
 const EMP = { id: 7, fullName: 'موظف تجربة', employeeCode: 'E7', nationalId: '2123456789', passportNo: 'A12345678', iban: 'SA0380000000608010167519', bankName: 'بنك', basicSalary: 9000, payMethod: 'transfer', branchId: 1 }
 
@@ -56,7 +56,7 @@ test('EPU-04: مصدر الكود — الإعداد مبذور مقفول، و�
   assert.deepEqual(configSeed.filter(row => row.key === privacy.PARTIAL_MASKING_KEY), [{ key: 'privacy.partial_masking.enabled', value: 'false' }])
   const controller = read('employees/employees.controller.ts')
   assert.equal((controller.match(/projectEmployee\(/g) ?? []).length, (controller.match(/projectEmployee\([^\n]*(masking|partialMasking\(\))\)/g) ?? []).length, 'مفيش رد بملف موظف من غير حكم الإخفاء')
-  assert.match(read('assets/employee-extras.controller.ts'), /employee: projectEmployee\(employee, user, await partialMaskingOn\(this\.custody\.manager\)\)/)
+  assert.match(read('assets/employee-extras.controller.ts'), /const masking = await partialMaskingOn\(this\.custody\.manager\)[\s\S]{0,300}employee: projectEmployee\(employee, user, masking\)/)
   assert.match(read('employees/employee-export.service.ts'), /if \(canSeeFullIdentity\(user, row\.id\)\) continue\n\s+row\.nationalId = maskIdentityPartial\(row\.nationalId\)\n\s+row\.passportNo = maskIdentityPartial\(row\.passportNo\)/)
   assert.match(controller, /@Perm\('employees\.edit'\)\n  @Get\(':id\/data-export'\)/)
   const exporter = read('employees/employee-data-export.ts')
@@ -66,6 +66,33 @@ test('EPU-04: مصدر الكود — الإعداد مبذور مقفول، و�
   const { EMPLOYEE_DATA_SECTIONS } = require('../src/employees/employee-data-export')
   const tables = EMPLOYEE_DATA_SECTIONS.map(section => section.table)
   assert.deepEqual([tables.length, new Set(tables).size, tables.every(table => /^[a-z_]+$/.test(table)), EMPLOYEE_DATA_SECTIONS.every(section => /^[A-Za-z]+$/.test(section.column))], [37, 37, true, true])
+  // CR4-SELF: الأقسام المالية والجزاءات بصلاحية اللي بيصدّر، والطلبات السرّية برّه الملف
+  assert.deepEqual(EMPLOYEE_DATA_SECTIONS.filter(section => section.access === 'finance').map(section => section.key).sort(),
+    ['bonuses', 'deductions', 'loanInstallments', 'loans', 'obligations', 'paymentChanges', 'payrollItems', 'salaryHistory'])
+  assert.deepEqual(EMPLOYEE_DATA_SECTIONS.filter(section => section.access === 'penalties').map(section => section.key), ['penalties'])
+  assert.match(exporter, /if \(section\.access === 'penalties' && !userHasPerm\(user, 'cases\.penalties'\)\)/)
+  assert.match(exporter, /if \(section\.access === 'finance' && !canSeeEmployeesFinance\(user\)\)/)
+  assert.match(exporter, /NOT EXISTS \(SELECT 1 FROM dbo\.\[request_types\] t WHERE t\.\[code\] = r\.\[typeCode\] AND t\.\[isConfidential\] = 1\)/)
   for (const forbidden of ['users', 'user_sessions', 'login_events', 'hr_cases', 'hr_case_parties', 'review_responses', 'audit_log']) assert.equal(tables.includes(forbidden), false, forbidden)
   for (const wanted of ['employee_documents', 'leaves', 'payroll_items', 'loans', 'deduction_requests', 'requests', 'employee_suspensions', 'dependents']) assert.ok(tables.includes(wanted), wanted)
+})
+
+test('EPU-05 (CR4-SELF): سجل تغيير الهوية والجواز بنفس حكم الخانة — مقفول زي الأول، ومفتوح مخفي لغير صاحب الملف واللي بيعدّل', () => {
+  const row = (fieldName, oldValue, newValue, extra = {}) => ({ id: 1, employeeId: 7, changeType: 'DATA', fieldName, oldValue, newValue, oldStatus: null, newStatus: 'change', reason: 'تصحيح', ...extra })
+  const rows = [row('nationalId', '2123456789', '2987654321'), row('passportNo', 'A12345678', null), row('jobTitle', 'محاسب', 'محاسب أول'),
+    row(null, null, null, { changeType: null, oldStatus: 'nationalId:2123456789', newStatus: 'nationalId:2987654321' })]
+  const values = list => list.map(entry => [entry.oldValue, entry.newValue, entry.oldStatus, entry.newStatus])
+  const viewer = user(['employees.view']), editor = user(['employees.edit']), self = user([], 7)
+  // مقفول (الافتراضي): زي الأول بالحرف لكل الحسابات
+  assert.deepEqual(values(projectEmployeeHistory(rows, viewer, 7)), values(projectEmployeeHistory(rows, editor, 7)))
+  assert.deepEqual(values(projectEmployeeHistory(rows, viewer, 7, false)), values(projectEmployeeHistory(rows, viewer, 7)))
+  assert.equal(projectEmployeeHistory(rows, viewer, 7)[0].oldValue, '2123456789')
+  // مفتوح: أرقام الهوية والجواز بآخر 4 خانات، وباقي السطور زي ما هي
+  const masked = projectEmployeeHistory(rows, viewer, 7, true)
+  assert.deepEqual([masked[0].oldValue, masked[0].newValue, masked[1].oldValue, masked[1].newValue, masked[2].oldValue, masked[2].newValue], ['•••••• 6789', '•••••• 4321', '•••••• 5678', null, 'محاسب', 'محاسب أول'])
+  assert.doesNotMatch(JSON.stringify(masked), /2123456789|2987654321|A12345678/)
+  for (const allowed of [editor, self]) assert.deepEqual(values(projectEmployeeHistory(rows, allowed, 7, true)), values(projectEmployeeHistory(rows, allowed, 7)))
+  const extras = fs.readFileSync(path.join(apiRoot, 'src', 'assets', 'employee-extras.controller.ts'), 'utf8').replace(/\r\n/g, '\n')
+  assert.equal((extras.match(/projectEmployeeHistory\(/g) ?? []).length, (extras.match(/projectEmployeeHistory\([^\n]*(masking|partialMaskingOn\(this\.custody\.manager\))\)/g) ?? []).length, 'كل رد بسجل الموظف بياخد حكم الإخفاء')
+  assert.match(extras, /documents: maskDocuments \? empDocs\.map\(doc => \(\{ \.\.\.doc, number: maskIdentityPartial\(doc\.number\) \}\)\) : empDocs,/)
 })

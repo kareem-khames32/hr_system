@@ -45,9 +45,24 @@ export function projectEmployee(employee: Employee, user: JwtPayload, partialMas
   return safe
 }
 
-export function projectEmployeeHistory(rows: EmployeeStatusHistory[], user: JwtPayload, employeeId: number) {
+// partialMasking (CR4-SELF، B4.8-أ): سطر تغيير رقم الهوية أو الجواز بنفس حكم الخانة نفسها — وإلا السجل بيكشف اللي الملف خبّاه
+const IDENTITY_FIELDS: readonly string[] = ['nationalId', 'passportNo']
+const maskIdentityStatus = (value: string | null | undefined) => {
+  const match = /^(nationalId|passportNo):(.*)$/s.exec(value ?? '')
+  return match ? `${match[1]}:${maskIdentityPartial(match[2]) ?? '—'}` : value
+}
+export function projectEmployeeHistory(rows: EmployeeStatusHistory[], user: JwtPayload, employeeId: number, partialMasking = false) {
   // سطر ربط حساب الدخول القديم داخلي (فيه رقم حساب): مابيرجعش في سجل الموظف لحد
   rows = rows.filter(row => row.fieldName !== LOGIN_ACCOUNT_FIELD)
+  if (partialMasking && !canSeeFullIdentity(user, employeeId)) {
+    // السطر الجديد بخانته (fieldName)، والقديم بصيغة «nationalId:…» في الحالة القديمة والجديدة
+    rows = rows.map(row => {
+      const field = IDENTITY_FIELDS.includes(row.fieldName ?? ''), legacy = [row.oldStatus, row.newStatus].some(value => /^(nationalId|passportNo):/.test(value ?? ''))
+      if (!field && !legacy) return row
+      return { ...row, ...(field ? { oldValue: maskIdentityPartial(row.oldValue), newValue: maskIdentityPartial(row.newValue) } : {}),
+        oldStatus: maskIdentityStatus(row.oldStatus) as string, newStatus: maskIdentityStatus(row.newStatus) as string }
+    }) as EmployeeStatusHistory[]
+  }
   const compatible = rows.map(historyWithLegacyLabels)
   if (canReadEmployeeFinance(user, employeeId)) return compatible
   const financial = /^(salary|basicSalary|housingAllowance|transportAllowance|phoneAllowance|workNatureAllowance|otherAllowance|workPressureAllowance|iban|bankName|bankBranch|gosiBaseSalary|payMethod|salaryCycle):/i

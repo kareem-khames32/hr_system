@@ -62,5 +62,10 @@ test('SPU-04: مصدر الكود — الإعداد مقفول مبذور، و�
   assert.ok(create.indexOf('this.scopedEmployee(em, id, branchScope, true)') < create.indexOf('const paid = dto.paid === true'), 'حكم «بأجر» بعد قفل صف الموظف')
   assert.match(create, /if \(paid && !\(await markSuspensionPaid\(em, row\.id\)\)\) throw new BadRequestException\(SUSPENSION_PAID_MIGRATION\)/)
   assert.match(read('payroll/payroll-daily-accrual.service.ts'), /suspensionAmount: round2\(input\.suspended && !input\.suspendedPaid \? input\.dayRate : 0\)/)
+  // CR4-SELF: «موقوف بلا أجر» في تقرير الرواتب وتقرير غير المدرجين للإيقاف من غير أجر بس — الموقوف بأجر مستحق وبيبان لو مش في مسير
+  for (const file of ['payroll/payroll-reports.ts', 'payroll/payroll-unassigned-report.ts']) {
+    assert.match(read(file), /suspendedWholeRange\(unpaidSuspensions\(/, file)
+    assert.doesNotMatch(read(file), /suspendedWholeRange\((?!unpaidSuspensions\()/, file)
+  }
   assert.match(read('payroll/payroll-daily-accrual.service.ts'), /suspended, exempt, \.\.\.\(suspendedPaid \? \{ suspendedPaid \} : \{\}\),/, 'بصمة اليوم من غير «بأجر» زي الأول بالحرف')
 })

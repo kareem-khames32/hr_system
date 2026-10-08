@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { BadRequestException } from '@nestjs/common'
 import { EntityManager, In } from 'typeorm'
-import { displayEmployeeStatus, payrollSuspensionNote, suspendedWholeRange } from '../employees/employee-suspension-rules'
+import { displayEmployeeStatus, payrollSuspensionNote, suspendedWholeRange, unpaidSuspensions } from '../employees/employee-suspension-rules'
 import { readEmployeeSuspensions } from '../employees/employee-suspensions'
 import { Employee } from '../employees/employee.entity'
 import { OffboardingCase } from '../offboarding/offboarding.entities'
@@ -170,7 +170,8 @@ export async function buildPayrollUnassignedReport(em: EntityManager, input: {
     if (!coverage && !problem) continue
     const periods = suspensions.get(employee.id) ?? []
     // موقوف بلا أجر: كل أيام تغطيته في الفترة أيام إيقاف ⇒ مفيش يوم مستحق، فهو خارج التقرير إلا بـincludeSuspended
-    const suspended = !!coverage && !problem && suspendedWholeRange(periods, coverage.coverFrom, coverage.coverTo)
+    // CR4-SELF (B4.5-د): الإيقاف «بأجر» أيامه مستحقة — الموقوف بأجر طول الفترة لازم يبان في التقرير لو مش في مسير
+    const suspended = !!coverage && !problem && suspendedWholeRange(unpaidSuspensions(periods), coverage.coverFrom, coverage.coverTo)
     if (suspended && !input.includeSuspended) continue
     const org = payrollOrgAt(history, employee, coverage?.coverTo ?? endDate)
     if (scope !== null && (org.branchId == null || !scope.includes(org.branchId))) continue
