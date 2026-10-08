@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, NotFoundException } from '@nest
 import { Column, Entity, PrimaryGeneratedColumn, type EntityManager } from 'typeorm'
 import { DocType } from '../assets/assets.entities'
 import { closeRenewalTask } from '../assets/document-expiry'
+import { raiseDependentRemoval } from '../benefits/insurance-members'
 import { localDateOf } from '../attendance/attendance.service'
 import { recordEmployeeChange } from '../employees/employee-change-log'
 import { Employee } from '../employees/employee.entity'
@@ -298,6 +299,8 @@ export async function updateDependent(em: EntityManager, dependentId: number, va
 export async function removeDependent(em: EntityManager, dependentId: number, reason: string, actor: DependentActor, ownerId: number | null = null): Promise<number> {
   const row = await lockedDependent(em, dependentId, actor, ownerId)
   await em.getRepository(Dependent).update({ id: row.id }, { status: 'REMOVED', removeReason: reason, updatedAt: new Date() })
+  // B5.2 (ب): المعال المشترك في التأمين: طلب حذف لشركة التأمين (من غير اشتراك ساري = ولا حاجة)
+  await raiseDependentRemoval(em, row.employeeId, row.id, actor.userId || 0)
   await recordEmployeeChange(em, { employeeId: row.employeeId, fieldName: 'dependents', oldValue: describe(row), newValue: 'حذف', changeType: 'DATA', reason, requestId: actor.requestId ?? null, changedByUserId: actor.userId || null })
   return row.id
 }

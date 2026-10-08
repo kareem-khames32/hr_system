@@ -30,6 +30,7 @@ export const DOC_TYPES: Array<{ code: string; label: string }> = [
   { code: 'iqama', label: 'إقامة' },
   { code: 'work_permit', label: 'رخصة عمل' },
   { code: 'qiwa_contract', label: 'توثيق العقد في قوى' },
+  { code: 'medical_insurance_card', label: 'بطاقة التأمين الطبي' },
   { code: 'driver_license', label: 'رخصة قيادة' },
   { code: 'health_certificate', label: 'شهادة صحية' },
   { code: 'letter', label: 'خطاب رسمي' },

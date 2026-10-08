@@ -37,3 +37,38 @@ export const updateInsurancePolicy = (id: number, body: Partial<PolicyInput> & {
 export const createInsuranceClass = (policyId: number, body: ClassInput) => apiFetch<ApiInsuranceOverview>(`${I}/policies/${policyId}/classes`, json('POST', body))
 export const updateInsuranceClass = (id: number, body: Partial<ClassInput> & { isActive?: boolean }) => apiFetch<ApiInsuranceOverview>(`${I}/classes/${id}`, json('PATCH', body))
 export const fetchInsuranceEligibility = () => apiFetch<ApiEligibility>(`${I}/eligibility`)
+
+// ===== (ب) الاشتراكات وطلبات شركة التأمين =====
+
+export type MemberRequestKind = 'ADD' | 'REMOVE'
+export type MemberRequestStatus = 'PENDING' | 'SENT' | 'DONE' | 'CANCELLED'
+export interface ApiInsuranceMember {
+  employeeId: number; employeeName: string; employeeCode: string | null
+  /** المعال، أو null = الموظف نفسه */
+  dependentId: number | null
+  memberName: string; relation: string | null
+  enrollment: { id: number; policyName: string | null; className: string | null; cardNumber: string | null; startDate: string } | null
+  openRequest: { id: number; kind: MemberRequestKind; kindLabel: string; status: MemberRequestStatus; statusLabel: string } | null
+}
+export interface ApiInsuranceRequest {
+  id: number; kind: MemberRequestKind; kindLabel: string; status: MemberRequestStatus; statusLabel: string
+  /** MANUAL من الشاشة · OFFBOARDING مع إنهاء الخدمة · DEPENDENT مع حذف المعال */
+  origin: string; originLabel: string
+  employeeId: number; employeeName: string; employeeCode: string | null; memberName: string; relation: string | null
+  policyName: string | null; className: string | null; reason: string | null; effectiveDate: string | null; cardNumber: string | null
+  createdAt: string; sentAt: string | null; closedAt: string | null
+}
+export interface ApiInsuranceMembers { ready: boolean; members: ApiInsuranceMember[]; requests: ApiInsuranceRequest[] }
+export interface ApiInsuranceSheet {
+  status: 'PENDING' | 'SENT'; statusLabel: string
+  rows: Array<{ requestId: number; kind: MemberRequestKind; kindLabel: string; employeeName: string; employeeCode: string | null; memberName: string; memberNameEn: string | null; relation: string | null
+    birthDate: string | null; nationalId: string | null; policyName: string | null; policyNumber: string | null; className: string | null; cardNumber: string | null; reason: string | null }>
+}
+
+export const fetchInsuranceMembers = () => apiFetch<ApiInsuranceMembers>(`${I}/members`)
+export const fetchInsuranceSheet = (status: 'PENDING' | 'SENT') => apiFetch<ApiInsuranceSheet>(`${I}/sheet?status=${status}`)
+export const requestInsuranceAdd = (employeeId: number, dependentId: number | null) => apiFetch<ApiInsuranceMembers>(`${I}/requests`, json('POST', { employeeId, ...(dependentId === null ? {} : { dependentId }) }))
+export const requestInsuranceRemove = (enrollmentId: number, reason: string) => apiFetch<ApiInsuranceMembers>(`${I}/enrollments/${enrollmentId}/remove-request`, json('POST', { reason }))
+export const sendInsuranceRequest = (id: number) => apiFetch<ApiInsuranceMembers>(`${I}/requests/${id}/send`, json('POST', {}))
+export const doneInsuranceRequest = (id: number, effectiveDate: string, cardNumber: string) => apiFetch<ApiInsuranceMembers>(`${I}/requests/${id}/done`, json('POST', { effectiveDate, ...(cardNumber ? { cardNumber } : {}) }))
+export const cancelInsuranceRequest = (id: number, reason: string) => apiFetch<ApiInsuranceMembers>(`${I}/requests/${id}/cancel`, json('POST', { reason }))

@@ -22,7 +22,7 @@ test('SZU-01: نسبة السعوديين لكل كيان — السعودي ب�
 test('SZU-02: رخصة العمل وتوثيق العقد في قوى نوعين في بذرة كتالوج المستندات ومرآتها، من غير تغيير في الباقي', () => {
   const codes = DOC_TYPES_SEED.map(row => row.code)
   assert.deepEqual(DOC_TYPES_SEED.filter(row => ['work_permit', 'qiwa_contract'].includes(row.code)), [{ code: 'work_permit', nameAr: 'رخصة عمل' }, { code: 'qiwa_contract', nameAr: 'توثيق العقد في قوى' }])
-  assert.deepEqual([codes.length, new Set(codes).size, codes.every(code => DOC_TYPE_CODE_RE.test(code)), codes.at(-1), codes.includes('iqama')], [14, 14, true, 'other', true])
+  assert.deepEqual([codes.length, new Set(codes).size, codes.every(code => DOC_TYPE_CODE_RE.test(code)), codes.at(-1), codes.includes('iqama')], [15, 15, true, 'other', true]) // B5.2 (ب): + بطاقة التأمين الطبي
   const mirror = fs.readFileSync(path.join(apiRoot, '..', 'src', 'lib', 'doc-types.ts'), 'utf8')
   for (const row of DOC_TYPES_SEED) assert.ok(mirror.includes(`{ code: '${row.code}', label: '${row.nameAr}' }`), row.code)
 })

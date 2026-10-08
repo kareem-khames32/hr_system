@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { HeartPulse } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
+import { MembersPanel } from './MembersPanel'
 import { formatDate } from '@/lib/dates'
 import { formatMoney } from '@/lib/money'
 import { createInsuranceClass, createInsurancePolicy, fetchInsurance, fetchInsuranceEligibility, updateInsuranceClass, updateInsurancePolicy,
@@ -220,6 +221,9 @@ export default function BenefitsPage() {
             )}
           </div>
         )}
+
+        {/* (ب) الاشتراكات وطلبات شركة التأمين */}
+        {data?.ready && <MembersPanel />}
 
         {eligibility && (
           <div className="card space-y-3" data-insurance-eligibility>

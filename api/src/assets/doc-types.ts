@@ -18,6 +18,8 @@ export const DOC_TYPES_SEED: Array<{ code: string; nameAr: string }> = [
   // B4.6 (أ): رخصة العمل وتوثيق العقد في قوى — بنفس خانات المستند (الرقم، الإصدار، الانتهاء) وإعدادات الانتهاء والمهمة
   { code: 'work_permit', nameAr: 'رخصة عمل' },
   { code: 'qiwa_contract', nameAr: 'توثيق العقد في قوى' },
+  // B5.2 (ب): بطاقة التأمين الطبي — بتاريخ انتهائها وتنبيهه (محرك B2.15)
+  { code: 'medical_insurance_card', nameAr: 'بطاقة التأمين الطبي' },
   { code: 'driver_license', nameAr: 'رخصة قيادة' },
   { code: 'health_certificate', nameAr: 'شهادة صحية' },
   { code: 'letter', nameAr: 'خطاب رسمي' },

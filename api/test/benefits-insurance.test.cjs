@@ -51,7 +51,7 @@ test('BIU-04: مصدر الكود — الموديول مقفول افتراضي
     [false, 'full', 'people', ['dependents'], ['payroll', 'offboarding'], ['benefits.manage'], ['/benefits'], false])
   const controller = read('benefits/benefits.controller.ts')
   assert.match(controller, /@RequireModule\('benefits'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)/)
-  assert.deepEqual([(controller.match(/@Perm\('benefits\.manage'\)/g) ?? []).length, (controller.match(/@(Get|Post|Put|Patch|Delete)\(/g) ?? []).length, /@Delete\(/.test(controller)], [6, 6, false])
+  assert.deepEqual([(controller.match(/@Perm\('benefits\.manage'\)/g) ?? []).length, (controller.match(/@(Get|Post|Put|Patch|Delete)\(/g) ?? []).length, /@Delete\(/.test(controller)], [13, 13, false]) // (ب): + 7 مسارات للاشتراكات والطلبات
   const service = read('benefits/benefits.service.ts')
   assert.equal((service.match(/assertCompanyWideWrite\(user\)/g) ?? []).length, 4, 'الوثيقة وتعديلها والفئة وتعديلها لحساب بكل الفروع')
   assert.match(service, /findOne\(\{ where: \{ id \}, lock: \{ mode: 'pessimistic_write' \} \}\)/)

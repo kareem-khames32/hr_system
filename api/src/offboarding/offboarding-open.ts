@@ -1,4 +1,5 @@
 import { EntityManager, In } from 'typeorm'
+import { raiseOffboardingRemovals } from '../benefits/insurance-members'
 import { CustodyAssignment } from '../requests/entities/custody.entities'
 import {
   ClearanceItem,
@@ -59,6 +60,9 @@ export async function openOffboardingCase(
     { caseId: kase.id, party: 'finance', label: 'تسوية السلف وحساب المستحقات' },
     { caseId: kase.id, party: 'hr', label: 'تسليم الوثائق وشهادة الخبرة' },
   ]
+  // B5.2 (ب): اشتراكات تأمين سارية للموظف أو معاليه = طلب حذف لكل اشتراك وبند إخلاء طرف عند الموارد البشرية. من غير اشتراكات (أو قبل ترحيلها): ولا حاجة زيادة
+  const insuranceRemovals = await raiseOffboardingRemovals(em, input.employeeId, input.openedBy ?? 0)
+  if (insuranceRemovals > 0) items.push({ caseId: kase.id, party: 'hr', label: `حذف التأمين الطبي من الوثيقة (${insuranceRemovals} عضو)` })
   await em.getRepository(ClearanceItem).save(items)
   return kase
 }
