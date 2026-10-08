@@ -121,6 +121,22 @@ const EXCEPTIONS = {
   'TimesheetsController.recall': 'SELF', // POST /timesheets/my/recall
   'TimesheetsController.team': 'SERVICE_CHECK', // GET /timesheets/team
   'TimesheetsController.decide': 'SERVICE_CHECK', // POST /timesheets/weeks/:id/decision
+  // B5.10 (أ): تقييم 360 — ترشيحات الموظف والدعوات اللي عليه (بملف الموظف المربوط بالحساب)، وقرار الترشيح وقراءة النتيجة للمدير المباشر (موقع في الهيكل) أو لصاحب
+  // performance.manage في نطاقه — الحكم في الخدمة تحت قفل صف الموظف
+  'Feedback360Controller.mine': 'SELF', // GET /performance/feedback360/my
+  'Feedback360Controller.nominate': 'SELF', // POST /performance/feedback360/my/nominations
+  'Feedback360Controller.respond': 'SELF', // POST /performance/feedback360/invites/:id/respond
+  'Feedback360Controller.team': 'SERVICE_CHECK', // GET /performance/feedback360/team
+  'Feedback360Controller.decide': 'SERVICE_CHECK', // POST /performance/feedback360/invites/:id/decision
+  'Feedback360Controller.results': 'SERVICE_CHECK', // GET /performance/feedback360/results
+  // B5.10 (ب): اجتماعات 1:1 — اجتماعات صاحب الحساب؛ والتحديد للمدير المباشر دلوقتي، والتعديل والمهام لطرفي الاجتماع (الحكم في الخدمة تحت قفل الصف)
+  'OneOnOnesController.list': 'SELF', // GET /performance/one-on-ones
+  'OneOnOnesController.create': 'SERVICE_CHECK', // POST /performance/one-on-ones
+  'OneOnOnesController.update': 'SERVICE_CHECK', // PATCH /performance/one-on-ones/:id
+  'OneOnOnesController.addAction': 'SERVICE_CHECK', // POST /performance/one-on-ones/:id/actions
+  // B5.10 (ج): التقدير — قايمة فرع صاحب الحساب وكلمة شكر لزميل فيه (بملف الموظف المربوط بالحساب)
+  'RecognitionsController.feed': 'SELF', // GET /performance/recognitions
+  'RecognitionsController.send': 'SELF', // POST /performance/recognitions
   // B2.7: قراءة نسخة سياسة وملفها — لصاحب صلاحية السياسات، أو للموظف اللي السياسة في جمهوره (الحكم في الخدمة)
   'PoliciesController.version': 'SERVICE_CHECK', // GET /policies/versions/:versionId
   'PoliciesController.versionFile': 'SERVICE_CHECK', // GET /policies/versions/:versionId/file

@@ -1784,7 +1784,7 @@ export const fetchCalendar = (month?: string, range?: { from: string; to: string
   if (month) query.set('month', month)
   if (range) { query.set('from', range.from); query.set('to', range.to) }
   // holidays.targeted/audienceText: «تسري على» للعطلة المخصصة (ترحيل 070) — الموظف بيشوف اللي تخصه بس
-  return get<{ month: string; from: string; to: string; holidays: Array<{ id: number; name: string; date: string; endDate?: string | null; targeted?: boolean; audienceText?: string }>; leaves: Array<ApiLeave & { daysInMonth?: number; daysInRange?: number }>; weekendDays: string[] }>(`/calendar${query.size ? `?${query}` : ''}`)
+  return get<{ month: string; from: string; to: string; holidays: Array<{ id: number; name: string; date: string; endDate?: string | null; targeted?: boolean; audienceText?: string }>; leaves: Array<ApiLeave & { daysInMonth?: number; daysInRange?: number }>; weekendDays: string[]; meetings?: Array<{ id: number; date: string; time: string | null; withName: string; role: 'MANAGER' | 'EMPLOYEE' }> }>(`/calendar${query.size ? `?${query}` : ''}`)
 }
 // الإشعارات مشتقة من الأحداث: التصنيف صريح من السيرفر، والقراءة والحذف محفوظان لكل مستخدم
 export interface ApiNotification {

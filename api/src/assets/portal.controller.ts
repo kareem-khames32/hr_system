@@ -38,6 +38,8 @@ import { CommentsService } from '../comments/comments.service'
 import { AnnouncementsService } from '../announcements/announcements.service'
 import { leaveView } from '../common/leave-contract'
 import { ModulesService } from '../modules-registry/modules.service'
+import { oneOnOneCalendar } from '../performance/one-on-ones.service'
+import { ONE_ON_ONE_FEATURE } from '../performance/people-feedback'
 import { routeAvailable } from '../modules-registry/registry'
 import { RequireModule } from '../modules-registry/module.guard'
 
@@ -177,7 +179,9 @@ export class PortalController {
       })
     }
     const weekendDays = await this.attendance.calendarWeekendDays(user.employeeId, user.branchId)
-    return { month: m, from, to, holidays: monthHolidays, leaves, weekendDays }
+    // B5.10: اجتماعات 1:1 اللي صاحب الحساب طرف فيها (لو ميزتها مفتوحة)
+    const meetings = (await this.modules.isFeatureEnabled(ONE_ON_ONE_FEATURE)) ? await oneOnOneCalendar(this.holidays.manager, user, from, to) : []
+    return { month: m, from, to, holidays: monthHolidays, leaves, weekendDays, meetings }
   }
 
   // ===== الإشعارات المشتقة للمستخدم الحالي =====

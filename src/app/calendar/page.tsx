@@ -27,7 +27,7 @@ interface CalendarEvent {
   title: string;
   date: string;
   endDate?: string;
-  type: "leave" | "holiday";
+  type: "leave" | "holiday" | "meeting";
   employee?: string;
   description?: string;
 }
@@ -45,6 +45,8 @@ interface ApiHoliday {
 const eventTypes = [
   { id: "leave", name: "إجازة", color: "bg-blue-500", icon: CalendarIcon },
   { id: "holiday", name: "عطلة رسمية", color: "bg-red-500", icon: Sun },
+  // B5.10: اجتماعات 1:1 (بتيجي من الخادم لو ميزتها مفتوحة)
+  { id: "meeting", name: "اجتماع 1:1", color: "bg-green-500", icon: CalendarIcon },
 ];
 
 
@@ -68,6 +70,7 @@ export default function CalendarPage() {
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [holidays, setHolidays] = useState<ApiHoliday[]>([]);
   const [leaves, setLeaves] = useState<(ApiLeave & { daysInMonth?: number; daysInRange?: number })[]>([]);
+  const [meetings, setMeetings] = useState<Array<{ id: number; date: string; time: string | null; withName: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -80,12 +83,13 @@ export default function CalendarPage() {
     let cancelled = false;
     setLoading(true);
     setError("");
-    setHolidays([]); setLeaves([]); setSelectedEvent(null);
+    setHolidays([]); setLeaves([]); setMeetings([]); setSelectedEvent(null);
     Promise.all(range.months.map((monthKey) => fetchCalendar(monthKey, { from: range.from, to: range.to })))
       .then((responses) => {
         if (cancelled) return;
         setHolidays([...new Map(responses.flatMap((data) => data.holidays).map((holiday) => [holiday.id, holiday])).values()]);
         setLeaves([...new Map(responses.flatMap((data) => data.leaves).map((leave) => [leave.id, leave])).values()]);
+        setMeetings([...new Map(responses.flatMap((data) => data.meetings ?? []).map((meeting) => [meeting.id, meeting])).values()]);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -116,6 +120,13 @@ export default function CalendarPage() {
       type: "leave" as const,
       employee: l.employeeName,
       description: `${leaveCatalog.label(l.leaveType)} (${l.period === "MORNING" ? "نصف يوم صباحي" : l.period === "EVENING" ? "نصف يوم مسائي" : `${l.days} يوم`})`,
+    })),
+    ...meetings.map((meeting) => ({
+      id: `m-${meeting.id}`,
+      title: `اجتماع 1:1 مع ${meeting.withName}`,
+      date: meeting.date,
+      type: "meeting" as const,
+      description: meeting.time ? `الساعة ${meeting.time}` : "اجتماع 1:1",
     })),
   ];
 

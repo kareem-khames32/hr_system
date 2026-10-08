@@ -16,6 +16,11 @@ import { ReviewRewardsController } from './review-rewards.controller'
 import { ReviewRewardsService } from './review-rewards.service'
 import { ReviewsController } from './reviews.controller'
 import { ReviewsService } from './reviews.service'
+import { Feedback360Service } from './feedback360.service'
+import { OneOnOnesService } from './one-on-ones.service'
+import { Feedback360Invite, Feedback360Response, OneOnOne, OneOnOneAction, Recognition } from './people-feedback'
+import { Feedback360Controller, OneOnOnesController, RecognitionsController } from './people-feedback.controller'
+import { RecognitionsService } from './recognitions.service'
 
 // B3.6: إدارة الأداء — الأهداف (الدورات والقوالب في B3.7، والمعايرة والربط بالفلوس في B3.8). موديول جديد مقفول لحد ما الشركة تفتحه.
 @Module({
@@ -32,6 +37,12 @@ import { ReviewsService } from './reviews.service'
       ReviewResponse,
       // B3.8-ب: المكافآت المقترحة من نتيجة التقييم
       ReviewRewardSuggestion,
+      // B5.10: 360 واجتماعات 1:1 والتقدير (ميزات فرعية مقفولة افتراضيًا)
+      Feedback360Invite,
+      Feedback360Response,
+      OneOnOne,
+      OneOnOneAction,
+      Recognition,
       // لحل المدير المباشر (ApproverResolver)
       Employee,
       User,
@@ -40,8 +51,8 @@ import { ReviewsService } from './reviews.service'
       Branch,
     ]),
   ],
-  controllers: [GoalsController, ReviewsController, ReviewRewardsController],
-  providers: [GoalsService, ReviewsService, ReviewRewardsService, ApproverResolver],
+  controllers: [GoalsController, ReviewsController, ReviewRewardsController, Feedback360Controller, OneOnOnesController, RecognitionsController],
+  providers: [GoalsService, ReviewsService, ReviewRewardsService, ApproverResolver, Feedback360Service, OneOnOnesService, RecognitionsService],
   exports: [GoalsService, ReviewsService],
 })
 export class PerformanceModule {}

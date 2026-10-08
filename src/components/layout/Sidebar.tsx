@@ -550,6 +550,10 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
       { id: 'my-shift-swaps', label: 'تبديل ورديتي', icon: <Clock size={20} />, href: '/my/shift-swaps' },
       // B5.4: فجوة مهارات الموظف ومصفوفة فريقه (بتظهر لما موديول المهارات مفتوح)
       { id: 'my-skills', label: 'مهاراتي', icon: <GraduationCap size={20} />, href: '/my/skills' },
+      // B5.10: 360 واجتماعات 1:1 والتقدير (كل بند بيظهر لما ميزته مفتوحة)
+      { id: 'my-feedback360', label: 'تقييم 360', icon: <Target size={20} />, href: '/my/feedback360' },
+      { id: 'my-one-on-ones', label: 'اجتماعات 1:1', icon: <Users size={20} />, href: '/my/one-on-ones' },
+      { id: 'my-recognition', label: 'التقدير', icon: <Gift size={20} />, href: '/my/recognition' },
       { id: 'my-attendance', label: 'حضوري', icon: <Clock size={20} />, href: '/my/attendance' },
       // B5.8: تسجيل ساعاتي على المشاريع واعتماد ساعات فريقي (بتظهر لما موديول ساعات المشاريع مفتوح)
       { id: 'my-timesheets', label: 'ساعاتي', icon: <Hourglass size={20} />, href: '/my/timesheets' },

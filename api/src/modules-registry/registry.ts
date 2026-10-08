@@ -363,6 +363,27 @@ export const MODULES = {
     permissions: ['performance.manage', 'performance.calibrate'],
     // B3.7-ب: التقييمات ودوراتها ونماذجها ونموذج التقييم بقوا حقيقيين (كانوا شاشات عرض)؛ «تقييم جديد» لسه شاشة عرض
     routes: ['/performance/goals', '/performance', '/performance/cycles', '/performance/templates', '/performance/*'],
+    features: {
+      // B5.10: تلات ميزات «لاحقًا» في G10 — مقفولة لحد ما الشركة تقرر (باقة «كامل»)
+      'performance.feedback360': {
+        nameAr: 'تقييم 360',
+        description: 'الموظف بيرشّح زملاء ومديره بيعتمد، ومرؤوسين المدير بيقيّموه؛ الرد من غير اسم صاحبه، والنتيجة بعد قفل الدورة وبحد أدنى للردود',
+        default: false,
+        routes: ['/my/feedback360'],
+      },
+      'performance.one_on_one': {
+        nameAr: 'اجتماعات 1:1',
+        description: 'اجتماع المدير المباشر مع مرؤوسه: أجندة مشتركة وملاحظات ومهام متابعة، وبيظهر في تقويم الطرفين',
+        default: false,
+        routes: ['/my/one-on-ones'],
+      },
+      'performance.recognition': {
+        nameAr: 'التقدير بين الزملاء',
+        description: 'كلمة شكر من موظف لزميل في فرعه بتظهر في قايمة الفرع — من غير أي أثر مالي',
+        default: false,
+        routes: ['/my/recognition'],
+      },
+    },
   }),
   // B3.9: التدريب — كتالوج الدورات والجلسات والتسجيل والشهادة، وشاشاته (كانت شاشات عرض) بقت حقيقية في الجزء (ب).
   // موديول جديد = مقفول لحد ما الشركة تفتحه
