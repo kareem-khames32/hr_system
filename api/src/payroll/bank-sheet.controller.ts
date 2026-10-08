@@ -7,6 +7,7 @@ import { orgFilterIsEmpty, orgFilterMatches, parseOrgFilter } from '../org/org-f
 import { readBranchCurrencyOf } from '../org/branch-currency-db'
 import { singleCurrency, totalsByCurrency } from '../org/currency-totals'
 import { bankSheetSources, buildBankSheet, NO_BANK_LABEL, type BankSheetRow, type BankSheetSource } from './bank-sheet'
+import { readActiveBanks } from './banks'
 import { PayrollItemDisbursement } from './payroll-disbursement.entities'
 import { payrollItemSettlementPayout } from './payroll-settlement-salary'
 import { PayrollService } from './payroll.service'
@@ -46,10 +47,12 @@ export class PayrollBankSheetController {
     const ofSource = (source: BankSheetSource) => currencyOfBranch(source.placement?.branchId ?? null)
     const ofEmployee = new Map(sources.map(source => [source.employeeId, ofSource(source)]))
     const withCurrency = <T extends Pick<BankSheetRow, 'employeeId'>>(row: T) => ({ ...row, currency: ofEmployee.get(row.employeeId) ?? null })
-    const sheet = buildBankSheet(sources)
+    // B4.6 (ب): جدول البنوك المفعّلة — نفس القايمة للكشف ولإجمالي كل عملة
+    const banksCatalog = await readActiveBanks(this.dataSource.manager)
+    const sheet = buildBankSheet(sources, { banks: banksCatalog })
     // إجمالي كل عملة = نفس الإجمالي + بنوكها وتنبيهاتها ومصروفها مع التصفية (من نفس الدالة على صفوف العملة دي بس)
     const currencyPart = (list: readonly BankSheetSource[]) => {
-      const part = buildBankSheet([...list])
+      const part = buildBankSheet([...list], { banks: banksCatalog })
       return { ...part.totals, banks: part.banks, issues: { employees: part.issues.employees, bank: part.issues.bank, cash: part.issues.cash },
         settlement: { employees: part.settlement.employees, total: part.settlement.total } }
     }

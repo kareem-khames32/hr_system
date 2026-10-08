@@ -69,6 +69,9 @@ import { EgTrainingFundService } from './eg-training-fund'
 import { MinimumWageAlertService } from './minimum-wage-alert'
 import { SaudizationReportService } from './saudization-report'
 import { SalaryItem } from './salary-items'
+import { Bank } from './banks'
+import { BanksController } from './banks.controller'
+import { BanksService } from './banks.service'
 import { SalaryItemsController } from './salary-items.controller'
 import { SalaryItemsService } from './salary-items.service'
 import { PayrollLiveService } from './payroll-live.service'
@@ -149,14 +152,15 @@ import { HiddenRunPeriodsInterceptor } from './hidden-run-periods.interceptor'
       PayrollRunApproval,
       PayrollItemDisbursement,
       SalaryItem,
+      Bank,
     ]),
   ],
   controllers: [PayrollController, ObligationsController, PayrollRulesController, PayrollPolicyController, PayrollSalaryHistoryController, TypedDeductionsController, BonusesController,
     FinancialExemptionsController, PayrollCorrectionsController, SocialInsuranceController, PayrollBankSheetController, PayrollOverviewController, PayrollAllowancesController,
-    PayrollDailyAccrualController, PayrollApprovalChainController, PayrollDisbursementController, PayrollLiveController, SalaryItemsController, EgSalaryTaxController],
+    PayrollDailyAccrualController, PayrollApprovalChainController, PayrollDisbursementController, PayrollLiveController, SalaryItemsController, BanksController, EgSalaryTaxController],
   providers: [PayrollService, ObligationsService, PayrollRulesService, PayrollPolicyService, PayrollSalaryHistoryService, TypedDeductionsService, TypedDeductionsScheduler, BonusesService,
     FinancialExemptionsService, PayrollCorrectionsService, SocialInsuranceService, PayrollOverviewService, PayrollAllowancesService,
-    PayrollDailyAccrualService, PayrollDailyAccrualScheduler, PayrollApprovalChainService, PayrollDisbursementService, PayrollLiveService, SalaryItemsService, MinimumWageAlertService, SaudizationReportService, EgSalaryTaxService, EgTrainingFundService,
+    PayrollDailyAccrualService, PayrollDailyAccrualScheduler, PayrollApprovalChainService, PayrollDisbursementService, PayrollLiveService, SalaryItemsService, BanksService, MinimumWageAlertService, SaudizationReportService, EgSalaryTaxService, EgTrainingFundService,
     // CR40: شبكة أمان على كل رد JSON لحساب فرع — فترة مسير مخفي له في أي نص بتتحجب (hidden-run-periods.interceptor.ts)
     { provide: APP_INTERCEPTOR, useClass: HiddenRunPeriodsInterceptor }],
   // B3.8-ب: مكافآت نتيجة التقييم بتتقدّم بخدمة المكافآت نفسها

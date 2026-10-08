@@ -2,6 +2,7 @@ import type { BranchScope } from '../auth/guards'
 import { PAY_METHOD_LABELS, PAY_METHODS, payrollPaySplit } from './pay-split'
 import { disbursementMarksByItem, recordedDisbursement, type DisbursementMarkInput, type RecordedDisbursement } from './payroll-disbursement-split'
 import { roundPayrollMoney } from './payroll-money'
+import { bankCatalogIssue, type BankCatalogEntry } from './banks'
 
 // كشف البنوك لمسير (قرار المالك): لكل موظف الكود والاسم والبنك والآيبان ومبلغ البنك والنقدي، وإجمالي كل بنك.
 export const NO_BANK_LABEL = 'بدون بنك محدد'
@@ -129,7 +130,9 @@ export function bankSheetSources(input: {
   return sources
 }
 
-export function buildBankSheet(allSources: BankSheetSource[]) {
+// banks (B4.6-ب): جدول البنوك المفعّلة — آيبان سليم كوده مش في الجدول بيطلع عليه تنبيه. من غيره (أو فاضي) الكشف زي الأول بالحرف
+export function buildBankSheet(allSources: BankSheetSource[], options: { banks?: readonly BankCatalogEntry[] } = {}) {
+  const banksCatalog = options.banks ?? []
   // صفوف التصفية مش في الكشف ولا في مبلغ الصرف؛ بتتذكر في «مصروف مع التصفية» عشان حد ما يفتكرش إنها اتنسيت.
   const settlement = allSources.filter(source => source.settlementPayout)
   const sources = allSources.filter(source => !source.settlementPayout)
@@ -143,7 +146,9 @@ export function buildBankSheet(allSources: BankSheetSource[]) {
       netPay: roundPayrollMoney(Number(source.netPay) || 0), bankAmount: split.bank, cashAmount: split.cash,
       // مبلغ اتصرف بالفعل بتقسيمه المثبت: بيانات الملف مش تنبيه دلوقتي (الفلوس اتحركت خلاص)
       issue: source.recorded?.amounts ? null
-        : bankSheetRowIssue({ payMethod, bankTransferAmount: source.bankTransferAmount, bankName, iban, bankAmount: split.bank }) }
+        : bankSheetRowIssue({ payMethod, bankTransferAmount: source.bankTransferAmount, bankName, iban, bankAmount: split.bank })
+          // بيانات الملف سليمة ومبلغه بنكي: كود بنك الآيبان لازم يبقى في جدول البنوك (لو الجدول فيه بنوك دولته)
+          ?? (split.bank > 0 && banksCatalog.length ? bankCatalogIssue(iban, banksCatalog) : null) }
   })
   rows.sort((a, b) => (a.bankAmount > 0 ? 0 : 1) - (b.bankAmount > 0 ? 0 : 1)
     || (a.bankName ?? NO_BANK_LABEL).localeCompare(b.bankName ?? NO_BANK_LABEL, 'ar') || a.employeeCode.localeCompare(b.employeeCode, 'en'))

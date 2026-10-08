@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException } from '@nestjs/common'
 import type { EntityManager } from 'typeorm'
 import type { BranchScope } from '../auth/guards'
 import { bankSheetSources, buildBankSheet, type BankSheetEmployeeInput, type BankSheetItemInput, type BankSheetMemberInput } from './bank-sheet'
+import type { BankCatalogEntry } from './banks'
 import { PAY_METHOD_LABELS } from './pay-split'
 import { payrollItemSettlementPayout } from './payroll-settlement-salary'
 import { PayrollItemDisbursement } from './payroll-disbursement.entities'
@@ -69,12 +70,14 @@ export function buildPayrollDisbursementRows(input: {
   members: ReadonlyArray<MemberLike>
   marks: ReadonlyArray<MarkLike>
   branchScope: BranchScope
+  /** B4.6 (ب): جدول البنوك المفعّلة — نفس تنبيه كشف البنك؛ من غيره الصفوف زي الأول */
+  banks?: readonly BankCatalogEntry[]
 }): { rows: PayrollDisbursementRow[]; mode: PayrollDisbursementMode } {
   const mode = payrollDisbursementMode(input.runStatus, input.marks)
   const open = payrollDisbursementOpen(input.runStatus, mode)
   // نفس مصدر كشف البنوك والتقرير المالي: الصف المصروف بتقسيمه المسجل (العلامة أو لقطة البند في مسير مصروف)، وغيره من ملف الموظف
   const sheet = buildBankSheet(bankSheetSources({ items: input.items, employees: input.employees, members: input.members,
-    branchScope: input.branchScope, settlementOf: payrollItemSettlementPayout, runStatus: input.runStatus, marks: input.marks }))
+    branchScope: input.branchScope, settlementOf: payrollItemSettlementPayout, runStatus: input.runStatus, marks: input.marks }), { banks: input.banks })
   const itemOf = new Map(input.items.map(item => [item.employeeId, item]))
   const memberOf = new Map(input.members.map(member => [member.employeeId, member]))
   const markOf = new Map(input.marks.map(mark => [mark.itemId, mark]))

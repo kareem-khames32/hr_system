@@ -13,6 +13,7 @@ import {
   PAYROLL_DISBURSE_BULK_MAX, type PayrollDisbursementFilter, type PayrollDisbursementRow,
 } from './payroll-disbursement'
 import { PAY_METHOD_LABELS } from './pay-split'
+import { readActiveBanks } from './banks'
 import { PAYROLL_PAY_CHANNEL_LABELS, payrollRunStateIssue, type PayrollPayChannel } from './payroll-run-approval'
 import { payrollRunTypeOf } from './payroll-corrections'
 import { lockPayrollRunForCorrection } from './payroll-reversal-ledger'
@@ -59,7 +60,7 @@ export class PayrollDisbursementService {
         select: ['id', 'employeeCode', 'fullName', 'branchId', 'payMethod', 'bankTransferAmount', 'bankName', 'iban'] }))
     }
     const marks = await em.getRepository(PayrollItemDisbursement).find({ where: { runId: run.id } })
-    return { items, marks, ...buildPayrollDisbursementRows({ runStatus: run.status, items, employees, members, marks, branchScope: branchScopeOf(user) }) }
+    return { items, marks, ...buildPayrollDisbursementRows({ runStatus: run.status, items, employees, members, marks, banks: await readActiveBanks(em), branchScope: branchScopeOf(user) }) }
   }
 
   private runView(run: PayrollRun, mode: ReturnType<typeof payrollDisbursementMode>, names: Map<number, string>) {
