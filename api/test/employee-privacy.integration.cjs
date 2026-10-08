@@ -232,3 +232,48 @@ test('EP-05 (P4A-B05): التصدير ماسك صف الموظف من حكم ا�
     await repo('Employee').update({ id: E.target.id }, { branchId: B.one.id })
   }
 })
+
+test('EP-06 (P4B-B01): قيد دفتر مصدره طلب سري (sourceRequestId) وسلفة طلبها سري برّه التصدير؛ ونفس السجلات وطلبها مش سري جوّه', async () => {
+  const route = `/employees/${E.target.id}/data-export`
+  const section = async key => ok(await request(admin, 'GET', route), 200).sections.find(row => row.key === key)?.rows ?? []
+  const type = await repo('RequestType').findOneByOrFail({ code: 'LEAVE_ANNUAL' })
+  const made = await repo('Request').save({ typeCode: 'LEAVE', definitionCode: 'LEAVE_ANNUAL', requesterId: E.target.id, branchId: B.one.id, status: 'COMPLETED', payload: '{"amount":321,"reason":"مصروف سري جدًا"}' })
+  const obligation = await repo('EmployeeObligation').save({ employeeId: E.target.id, type: 'CREDIT', category: 'expense', amount: 321, label: 'مصروفات: مصروف سري جدًا', status: 'PENDING', sourceRequestId: made.id })
+  const loan = await repo('Loan').save({ requestId: made.id, employeeId: E.target.id, amount: 1200, status: 'ACTIVE' })
+  const has = async () => [(await section('obligations')).some(row => row.id === obligation.id), (await section('loans')).some(row => row.id === loan.id)]
+  try {
+    await repo('RequestType').update({ id: type.id }, { isConfidential: false })
+    assert.deepEqual(await has(), [true, true], 'الطلب مش سري: سجلاته في الملف')
+    await repo('RequestType').update({ id: type.id }, { isConfidential: true })
+    assert.deepEqual(await has(), [false, false], 'الطلب سري: القيد والسلفة برّه')
+    const data = ok(await request(U.editor, 'GET', route), 200)
+    assert.doesNotMatch(JSON.stringify(data), /مصروف سري جدًا/)
+    assert.equal(JSON.stringify(data.sections.find(row => row.key === 'obligations')?.rows ?? []).includes(String(made.id)), false, 'ولا رقم الطلب المصدر')
+  } finally {
+    await repo('RequestType').update({ id: type.id }, { isConfidential: false })
+    await repo('Loan').delete({ id: loan.id }); await repo('EmployeeObligation').delete({ id: obligation.id }); await repo('Request').delete({ id: made.id })
+  }
+})
+
+test('EP-07 (P4B-N01): التصدير اللي SQL اختاره ضحية تعارض أقفال (1205) بيتعاد كله — مش 500', async () => {
+  const route = `/employees/${E.target.id}/data-export`
+  const original = ds.transaction
+  let calls = 0
+  ds.transaction = function (...args) {
+    const work = args[args.length - 1]
+    if (typeof work !== 'function' || !String(work).includes('UPDLOCK, ROWLOCK')) return original.apply(this, args)
+    calls++
+    // أول محاولتين: المعاملة بتبدأ وبترجع كضحية تعارض — زي ما SQL Server بيعمل
+    if (calls <= 2) return original.call(this, async () => { throw Object.assign(new Error('Transaction was deadlocked'), { number: 1205 }) })
+    return original.apply(this, args)
+  }
+  try {
+    const before = await repo('AuditLog').countBy({ action: 'EMPLOYEE_DATA_EXPORT' })
+    const data = ok(await request(U.editor, 'GET', route), 200)
+    assert.deepEqual([calls, data.employeeId, await repo('AuditLog').countBy({ action: 'EMPLOYEE_DATA_EXPORT' }) - before], [3, E.target.id, 1], 'تالت محاولة نجحت، وسطر تدقيق واحد')
+    // أكتر من الحد: الخطأ بيطلع
+    calls = -10
+    assert.equal((await request(U.editor, 'GET', route)).status, 500)
+    assert.equal(calls, -7, 'تلات محاولات بس')
+  } finally { ds.transaction = original }
+})

@@ -78,7 +78,25 @@ test('EPU-04: مصدر الكود — الإعداد مبذور مقفول، و�
   // P4A-B04: السرّية بتعريف الطلب الفعلي ثم نوعه، وتأجيل القسط على سرّية السلفة — وأي سجل اتعمل من طلب سري برّه
   assert.match(exporter, /t\.\[code\] = r\.\[definitionCode\] OR t\.\[code\] = r\.\[typeCode\] OR \(t\.\[code\] = N'LOAN' AND r\.\[typeCode\] = N'\$\{LOAN_DEFERRAL_TYPE\}'\)/)
   assert.match(exporter, /r\.\[requesterId\] = @0 AND NOT \$\{CONFIDENTIAL_REQUEST_SQL\} ORDER BY r\.\[id\]/)
-  assert.match(exporter, /AND NOT EXISTS \(SELECT 1 FROM dbo\.\[requests\] r WHERE r\.\[id\] = s\.\[requestId\] AND \$\{CONFIDENTIAL_REQUEST_SQL\}\)/)
+  // P4B-B01: كل أعمدة الربط الفعلية بالطلب (قيد الدفتر بـsourceRequestId)، والقفزة التانية (قسط السلفة ← السلفة)
+  const exportRules = require('../src/employees/employee-data-export')
+  assert.deepEqual([exportRules.REQUEST_LINK_COLUMNS, exportRules.PARENT_REQUEST_LINKS], [['requestId', 'sourceRequestId', 'resignationRequestId'],
+    { loan_installments: { column: 'loanId', table: 'loans' }, employment_periods: { column: 'offboardingCaseId', table: 'offboarding_cases' } }])
+  assert.match(exporter, /AND NOT EXISTS \(SELECT 1 FROM dbo\.\[requests\] r WHERE r\.\[id\] = s\.\[\$\{name\}\] AND \$\{CONFIDENTIAL_REQUEST_SQL\}\)/)
+  assert.match(exporter, /INNER JOIN dbo\.\[requests\] r ON r\.\[id\] = p\.\[\$\{name\}\] WHERE p\.\[id\] = s\.\[\$\{parent\.column\}\] AND \$\{CONFIDENTIAL_REQUEST_SQL\}/)
+  assert.match(exporter, /s\.\[\$\{section\.column\}\] = @0\$\{notFromConfidential\(section\.table\)\} ORDER BY 1/)
+  // كل عمود في مصدر الكيانات اسمه بيخلص بـRequestId وبيشاور على جدول requests لازم يبقى في القايمة (deductionRequestId وbonusRequestId جداولهم المصنّفة)
+  const linkNames = new Set()
+  const walk = dir => { for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name)
+    if (entry.isDirectory()) walk(full)
+    else if (/\.ts$/.test(entry.name)) for (const match of fs.readFileSync(full, 'utf8').matchAll(/^\s+([a-zA-Z]*[rR]equestId)[?!]?: number/gm)) linkNames.add(match[1])
+  } }
+  walk(path.join(apiRoot, 'src'))
+  assert.deepEqual([...linkNames].filter(name => !['deductionRequestId', 'bonusRequestId'].includes(name)).sort(), [...exportRules.REQUEST_LINK_COLUMNS].sort(), 'عمود ربط جديد بالطلب لازم يدخل قايمة التصدير')
+  // P4B-N01: ضحية تعارض الأقفال بتتعاد
+  assert.match(exporter, /catch \(error\) \{ if \(attempt >= EXPORT_DEADLOCK_ATTEMPTS \|\| !deadlockVictim\(error\)\) throw error \}/)
+  assert.equal(exportRules.EXPORT_DEADLOCK_ATTEMPTS, 3)
   for (const forbidden of ['users', 'user_sessions', 'login_events', 'hr_cases', 'hr_case_parties', 'review_responses', 'audit_log']) assert.equal(tables.includes(forbidden), false, forbidden)
   for (const wanted of ['employee_documents', 'leaves', 'payroll_items', 'loans', 'deduction_requests', 'requests', 'employee_suspensions', 'dependents']) assert.ok(tables.includes(wanted), wanted)
 })
