@@ -19,6 +19,7 @@ class StatutoryRowDto {
 class StatutoryCalculatorDto {
   @IsOptional() enabled?: unknown
   @IsOptional() startPeriod?: unknown
+  @IsOptional() branchIds?: unknown
 }
 
 // B4.2: «حزمة الدولة» — العرض بصلاحية الإعدادات، والتعديل لمدير النظام بس (في الخدمة)

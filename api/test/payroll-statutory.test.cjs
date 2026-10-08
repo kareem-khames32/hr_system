@@ -88,8 +88,8 @@ test('PSU-05: مصدر الكود — الحساب ورا سياقه (null وا�
   assert.equal((service.match(/applyPayrollStatutory\(/g) ?? []).length, 1)
   assert.match(service, /if \(statutoryCents === null\) throw new ConflictException\(/)
   assert.match(service, /Number\(item\.netPay\) !== round2\(netBefore - deducted \+ workPressure - statutory\)/)
-  assert.match(run, /if \(!taxOn && !martyrsOn\) return null/)
-  assert.match(run, /values\.get\(EG_TAX_ENABLED_KEY\) === 'true', martyrsOn = values\.get\(EG_MARTYRS_ENABLED_KEY\) === 'true'/)
+  assert.match(run, /if \(!taxOn && !martyrsOn && !healthOn\) return null/)
+  assert.match(run, /values\.get\(EG_TAX_ENABLED_KEY\) === 'true', martyrsOn = values\.get\(EG_MARTYRS_ENABLED_KEY\) === 'true', healthOn = values\.get\(EG_HEALTH_ENABLED_KEY\) === 'true'/)
   assert.match(run, /r\.\[status\] IN \(N'CALCULATED', N'APPROVED', N'PAID'\)/)
   assert.match(run, /NOT EXISTS \(SELECT 1 FROM \[payroll_run_reversal_lines\] l WHERE l\.\[originalItemId\] = i\.\[id\] AND l\.\[status\] = N'POSTED'\)/)
   // B4.4 (ج): مفاتيح الإعدادين مذكورة في ملف الحساب (قراءة) وخدمة التفعيل (المسار الوحيد اللي بيكتبهم) بس؛ وشاشة الإعدادات العامة بترفضهم
@@ -102,9 +102,33 @@ test('PSU-05: مصدر الكود — الحساب ورا سياقه (null وا�
   const source = path.join(apiRoot, 'src')
   for (const file of walk(source)) {
     const relative = path.relative(source, file).split(path.sep).join('/'), text = fs.readFileSync(file, 'utf8')
-    for (const key of ['eg.salary_tax.enabled', 'eg.salary_tax.start_period', 'eg.martyrs_fund.enabled', 'EG_TAX_ENABLED_KEY', 'EG_MARTYRS_ENABLED_KEY', 'EG_TAX_START_PERIOD_KEY']) {
+    for (const key of ['eg.salary_tax.enabled', 'eg.salary_tax.start_period', 'eg.martyrs_fund.enabled', 'eg.health_insurance.enabled', 'eg.health_insurance.branch_ids',
+      'EG_TAX_ENABLED_KEY', 'EG_MARTYRS_ENABLED_KEY', 'EG_TAX_START_PERIOD_KEY', 'EG_HEALTH_ENABLED_KEY', 'EG_HEALTH_BRANCHES_KEY']) {
       const allowed = relative === 'payroll/payroll-statutory-run.ts' || (relative === 'statutory/statutory-calculators.service.ts' && /^EG_/.test(key))
       assert.equal(text.includes(key), allowed, `${relative}: ${key}`)
     }
   }
+})
+
+test('PSU-06: B4.4 (د) — قاعدة صندوق التدريب من حزمة الدولة (مثال البطاقة: 2,700 × 0.25% = 6.75 ← 10 جنيه)، وقايمة فروع الحساب، وكود التأمين الصحي في اللقطة', () => {
+  const fund = require('../src/payroll/eg-training-fund')
+  const { parseStatutoryBranchIds } = require('../src/payroll/payroll-statutory-run')
+  const entries = STATUTORY_SEED.map(seed => ({ ...seed, verified: false }))
+  const rule = fund.egTrainingFundRuleAt(entries, '2026-10-08')
+  assert.deepEqual(rule, { pct: 0.25, minAmount: 10, maxAmount: 30, minHeadcount: 30, minInsuranceWage: 2700, perEmployee: 10, effectiveFrom: '2025-09-01', wageLimitsFrom: '2026-01-01', verified: false })
+  // 2027: الحد الأدنى 3,200 ← 8 ← لسه 10
+  assert.deepEqual([fund.egTrainingFundRuleAt(entries, '2027-12-31').minInsuranceWage, fund.egTrainingFundRuleAt(entries, '2027-12-31').perEmployee], [3200, 10])
+  // بين الحدّين وفوق الأقصى
+  const withWage = wage => fund.egTrainingFundRuleAt(entries.map(entry => entry.key === 'eg.insurance.wage_limits' ? { ...entry, values: { ...entry.values, min_salary: String(wage) } } : entry), '2026-10-08').perEmployee
+  assert.deepEqual([8000, 20000].map(withWage), [20, 30])
+  // قبل سريان الصندوق أو حد الأجر، أو صف ناقص: مفيش قاعدة
+  assert.equal(fund.egTrainingFundRuleAt(entries, '2025-08-31'), null)
+  assert.equal(fund.egTrainingFundRuleAt(entries.filter(entry => entry.key !== 'eg.training_fund'), '2026-10-08'), null)
+  assert.deepEqual([29, 30, 31, 0].map(count => fund.egTrainingFundCost(count, rule)), [{ applies: false, amount: 0 }, { applies: true, amount: 300 }, { applies: true, amount: 310 }, { applies: false, amount: 0 }])
+  assert.deepEqual(['[3, 1, 3]', '[]', null, 'x', '{"a":1}', '[1, "2", 0, -1, 1.5]'].map(parseStatutoryBranchIds), [[1, 3], [], [], [], [], [1]])
+  assert.deepEqual(statutory.PAYROLL_STATUTORY_CODES, ['INCOME_TAX', 'MARTYRS_FUND', 'HEALTH_INSURANCE'])
+  assert.deepEqual(statutory.payrollStatutorySnapshot({ HEALTH_INSURANCE: 750 }, { healthInsurance: { amount: 750 } }), { total: 750, lines: [{ code: 'HEALTH_INSURANCE', amount: 750 }], healthInsurance: { amount: 750 } })
+  // صندوق التدريب مش بند في القسيمة: مالوش كود في الخصومات القانونية ولا كتابة في ملفه
+  assert.equal(statutory.PAYROLL_STATUTORY_CODES.includes('TRAINING_FUND'), false)
+  assert.doesNotMatch(read('eg-training-fund.ts'), /\.insert\(|\.update\(|\.save\(|INSERT |UPDATE /)
 })

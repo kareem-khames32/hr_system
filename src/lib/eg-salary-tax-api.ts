@@ -19,3 +19,12 @@ export interface ApiEgTaxPreview {
 }
 
 export const fetchEgTaxPreview = (runId: number) => apiFetch<ApiEgTaxPreview>(`/payroll/runs/${runId}/eg-tax-preview`)
+
+// B4.4 (د): صندوق التدريب المصري — تقرير سنوي بتكلفة المنشأة (مش خصم من الموظف)، لحساب بكل الفروع
+export interface ApiEgTrainingFund {
+  year: number; date: string; headcountAsOf: string; available: boolean; message?: string
+  rule: { pct: number; minAmount: number; maxAmount: number; minHeadcount: number; minInsuranceWage: number; perEmployee: number; effectiveFrom: string; wageLimitsFrom: string; verified: boolean } | null
+  entities: Array<{ entityId: number | null; name: string; headcount: number; applies: boolean; amount: number }>
+  total: number
+}
+export const fetchEgTrainingFund = (year?: number) => apiFetch<ApiEgTrainingFund>(`/social-insurance/eg-training-fund${year ? `?year=${year}` : ''}`)

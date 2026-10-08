@@ -21,6 +21,9 @@ const INSURANCE = 'حساب التأمينات الاجتماعية'
 // B4.4: مفتاحي الضريبة بتقراهم المعاينة عند الطلب، وحساب المسير لو إعداد الضريبة مفتوح (مقفول افتراضيًا)؛ وصندوق الشهداء بإعداده
 const TAX_PREVIEW = 'ضريبة كسب العمل: المعاينة، والمسير لو إعدادها مفتوح (مقفول افتراضيًا)'
 const MARTYRS_FUND = 'صندوق الشهداء في المسير لو إعداده مفتوح (مقفول افتراضيًا)'
+// B4.4 (د)
+const HEALTH_INSURANCE = 'التأمين الصحي الشامل في المسير لو إعداده مفتوح (مقفول افتراضيًا)'
+const TRAINING_FUND = 'تقرير صندوق التدريب السنوي (للعرض بس)'
 export const STATUTORY_CATALOG: readonly StatutoryKeyInfo[] = [
   // ===== مصر =====
   { country: 'EG', key: EG_INSURANCE_WAGE_LIMITS, label: 'حدود أجر التأمين', card: 'C-EG-03', usedBy: INSURANCE, codes: { min_salary: 'الحد الأدنى للأجر', max_salary: 'الحد الأقصى للأجر' } },
@@ -35,9 +38,9 @@ export const STATUTORY_CATALOG: readonly StatutoryKeyInfo[] = [
       tier_2_first_pct: pct('الفئة 2: نسبة الأول'), tier_3_from: 'الفئة 3: صافي الدخل من', tier_3_first_to: 'الفئة 3: أول', tier_3_first_pct: pct('الفئة 3: نسبة الأول'), tier_4_from: 'الفئة 4: صافي الدخل من',
       tier_4_first_to: 'الفئة 4: أول', tier_4_first_pct: pct('الفئة 4: نسبة الأول'), tier_5_from: 'الفئة 5: صافي الدخل من', tier_5_first_to: 'الفئة 5: أول', tier_5_first_pct: pct('الفئة 5: نسبة الأول') } },
   { country: 'EG', key: 'eg.martyrs_fund', label: 'صندوق تكريم الشهداء (مشاركة اجتماعية)', card: 'C-EG-04', usedBy: MARTYRS_FUND, codes: { employee_pct: pct('من إجمالي الراتب') } },
-  { country: 'EG', key: 'eg.health_insurance', label: 'التأمين الصحي الشامل', card: 'C-EG-04', usedBy: null,
+  { country: 'EG', key: 'eg.health_insurance', label: 'التأمين الصحي الشامل', card: 'C-EG-04', usedBy: HEALTH_INSURANCE,
     codes: { employee_pct: pct('حصة الموظف'), employer_pct: pct('حصة صاحب العمل'), spouse_pct: pct('الزوجة غير العاملة'), dependent_pct: pct('لكل معال') } },
-  { country: 'EG', key: 'eg.training_fund', label: 'صندوق التدريب', card: 'C-EG-04', usedBy: null,
+  { country: 'EG', key: 'eg.training_fund', label: 'صندوق التدريب', card: 'C-EG-04', usedBy: TRAINING_FUND,
     codes: { pct_of_min_insurance_wage: pct('من الحد الأدنى لأجر التأمين'), min_amount: 'حد أدنى للموظف', max_amount: 'حد أقصى للموظف', min_headcount: 'المنشأة من كام موظف' } },
   { country: 'EG', key: 'eg.leave.annual', label: 'الإجازة السنوية', card: 'C-EG-05', usedBy: null,
     codes: { first_year_days: 'أيام أول سنة', standard_days: 'أيام من السنة التانية', senior_days: 'أيام الشريحة الأعلى', senior_service_years: 'الشريحة الأعلى بعد كام سنة خدمة', senior_age: 'أو من سن',

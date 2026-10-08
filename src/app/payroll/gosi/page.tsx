@@ -9,6 +9,7 @@ import { currencyLabel } from '@/lib/currency'
 import { currencyTotalRows, moneyByCurrency } from '@/lib/currency-totals'
 import { PayrollPeriodSelect, usePayrollMonthContext } from '@/components/DayRangeFilter'
 import { useOrgFilter } from '@/components/OrgFilter'
+import EgTrainingFundCard from '@/components/payroll/EgTrainingFundCard'
 import {
   fetchSocialInsuranceReport, fetchSocialInsuranceSettings, filterSocialInsuranceReport, INSURANCE_CATEGORY_LABELS, INSURANCE_SYSTEM_LABELS, INSURANCE_TRACK_LABELS,
   saveSocialInsuranceSettings, STATUTORY_CODE_LABELS, STATUTORY_KEY_LABELS,
@@ -139,6 +140,8 @@ function SettingsCard({ view, onSaved }: { view: SocialInsuranceSettingsView; on
         </div>
       </div>
       {!!view.statutory?.length && <StatutoryTable entries={view.statutory} />}
+      {/* B4.4 (د): صندوق التدريب المصري — تقرير سنوي بتكلفة المنشأة (بيظهر لحساب بكل الفروع لو فيه فروع في مصر) */}
+      <EgTrainingFundCard />
     </div>
   )
 }

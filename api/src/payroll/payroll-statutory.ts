@@ -3,9 +3,9 @@
 // والأقساط وبدل ضغط العمل — فكل الحساب القايم ماشي زي ما هو بالحرف، وكل اللي بيجمع أعمدة البند بياخد المجموع ده من هنا.
 // بند من غير breakdown.statutory (الإعداد مقفول، أو فرع مش مصري، أو مسير قديم) = صفر = نفس الأرقام القديمة بالحرف.
 
-export const PAYROLL_STATUTORY_CODES = ['INCOME_TAX', 'MARTYRS_FUND'] as const
+export const PAYROLL_STATUTORY_CODES = ['INCOME_TAX', 'MARTYRS_FUND', 'HEALTH_INSURANCE'] as const
 export type PayrollStatutoryCode = (typeof PAYROLL_STATUTORY_CODES)[number]
-export const PAYROLL_STATUTORY_NAMES: Record<PayrollStatutoryCode, string> = { INCOME_TAX: 'ضريبة كسب العمل', MARTYRS_FUND: 'صندوق الشهداء' }
+export const PAYROLL_STATUTORY_NAMES: Record<PayrollStatutoryCode, string> = { INCOME_TAX: 'ضريبة كسب العمل', MARTYRS_FUND: 'صندوق الشهداء', HEALTH_INSURANCE: 'التأمين الصحي الشامل' }
 export const PAYROLL_STATUTORY_TOTAL_LABEL = 'الخصومات القانونية (ضريبة وصناديق)'
 
 export interface PayrollStatutoryLine { code: PayrollStatutoryCode; amount: number }
@@ -15,6 +15,8 @@ export interface PayrollStatutorySnapshot {
   /** لقطة حساب الضريبة (الرصيد التراكمي للسنة بيتقري منها) */
   egTax?: Record<string, unknown>
   martyrsFund?: Record<string, unknown>
+  /** B4.4 (د): لقطة التأمين الصحي الشامل (الوعاء، النسب، عدد المعالين، وحصة صاحب العمل للعلم) */
+  healthInsurance?: Record<string, unknown>
 }
 
 const centsOf = (value: unknown): number | null => {
@@ -60,7 +62,7 @@ export const payrollStatutorySql = (alias: string): string =>
   `CASE WHEN ISJSON(${alias}.[breakdown]) = 1 THEN ISNULL(TRY_CAST(JSON_VALUE(${alias}.[breakdown], '$.statutory.total') AS decimal(18,2)), 0) ELSE CAST(0 AS decimal(18,2)) END`
 
 /** لقطة الخصومات القانونية لبند: السطور اللي ليها مبلغ ومجموعها (بالقرش) */
-export function payrollStatutorySnapshot(amounts: Partial<Record<PayrollStatutoryCode, number>>, details: Pick<PayrollStatutorySnapshot, 'egTax' | 'martyrsFund'>): PayrollStatutorySnapshot {
+export function payrollStatutorySnapshot(amounts: Partial<Record<PayrollStatutoryCode, number>>, details: Pick<PayrollStatutorySnapshot, 'egTax' | 'martyrsFund' | 'healthInsurance'>): PayrollStatutorySnapshot {
   const lines = PAYROLL_STATUTORY_CODES.flatMap((code) => {
     const cents = Math.round((amounts[code] ?? 0) * 100)
     if (!Number.isSafeInteger(cents) || cents < 0) throw new Error(`خصم قانوني غير صالح: ${code}`)

@@ -10,6 +10,8 @@ export default function StatutoryCalculatorsCard({ refreshKey }: { refreshKey?: 
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
   const [periods, setPeriods] = useState<Record<string, string>>({})
+  // فروع الحساب المختارة قبل الحفظ (للحسابات اللي بتتطبق في فروع بعينها)
+  const [branches, setBranches] = useState<Record<string, number[]>>({})
 
   const load = useCallback(() => {
     fetchStatutoryCalculators().then(setData).catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل الحسابات القانونية'))
@@ -22,7 +24,9 @@ export default function StatutoryCalculatorsCard({ refreshKey }: { refreshKey?: 
     if (enabled && !window.confirm(`تفعيل «${row.label}»؟ هيتخصم من صافي الموظفين في المسيرات اللي هتتحسب بعد كده.`)) return
     setBusy(row.code); setError('')
     try {
-      setData(await updateStatutoryCalculator(row.code, { enabled, ...(enabled && row.needsStartPeriod ? { startPeriod } : {}) }))
+      setData(await updateStatutoryCalculator(row.code, { enabled, ...(enabled && row.needsStartPeriod ? { startPeriod } : {}),
+        ...(row.needsBranches && branches[row.code] ? { branchIds: branches[row.code] } : {}) }))
+      setBranches((current) => { const next = { ...current }; delete next[row.code]; return next })
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'تعذر الحفظ')
     } finally {
@@ -55,6 +59,22 @@ export default function StatutoryCalculatorsCard({ refreshKey }: { refreshKey?: 
                 </span>
               </div>
               <p className="text-sm text-gray-500 mt-1">{row.note}</p>
+              {row.needsBranches && (
+                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1" data-calculator-branches={row.code}>
+                  {!row.branchOptions.length && <span className="text-sm text-gray-500">مفيش فروع دولتها مصر.</span>}
+                  {row.branchOptions.map((option) => {
+                    const chosen = branches[row.code] ?? row.branchIds
+                    return (
+                      <label key={option.id} className="text-sm text-gray-700 flex items-center gap-1">
+                        <input type="checkbox" checked={chosen.includes(option.id)} disabled={!data.canEdit || row.enabled || busy === row.code}
+                          onChange={(event) => setBranches((current) => ({ ...current,
+                            [row.code]: event.target.checked ? [...chosen, option.id] : chosen.filter((id) => id !== option.id) }))} />
+                        {option.name}
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
               {!row.enabled && row.blockers.map((blocker) => (
                 <p key={blocker} className="text-sm text-amber-700 mt-1 flex items-start gap-1">
                   <AlertTriangle size={14} className="mt-1 shrink-0" />

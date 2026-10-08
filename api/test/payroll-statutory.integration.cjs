@@ -287,3 +287,75 @@ test('PS-06: سلفة وضريبة في نفس البند — القسط بيت�
   const approved = await repo('PayrollItem').findOneByOrFail({ id: item.id })
   assert.deepEqual([Number(approved.netPay), Number(approved.loanInstallments), statutoryOf(approved).total], [10860, 1000, 1490])
 })
+
+test('PS-07: التأمين الصحي الشامل — ورا إعداده ولفروعه المختارة: حصة الموظف ومعاليه المؤمَّن عليهم من أجر التأمين، سطر في القسيمة، ومن غير تأمينات أو فرع مش مختار مفيش', async () => {
+  const alex = await repo('Branch').save({ code: 'PST_ALX', name: 'فرع الإسكندرية', country: 'EG', insuranceSystem: 'EGYPTIAN' })
+  const covered = await employee(org.cairo), unregistered = await employee(org.cairo, { isGosiRegistered: false, gosiBaseSalary: null }), elsewhere = await employee(alex)
+  const dependent = (relation, extra = {}) => repo('Dependent').save({ employeeId: covered.id, nameAr: `معال ${relation}`, nameEn: null, relation, birthDate: null, nationalId: null, gender: null, isInsured: true,
+    documentId: null, status: 'ACTIVE', removeReason: null, requestId: null, createdByUserId: users.admin.id, createdAt: new Date(), updatedAt: null, ...extra })
+  await dependent('SPOUSE'); await dependent('SON'); await dependent('DAUGHTER', { isInsured: false }); await dependent('FATHER', { status: 'REMOVED', removeReason: 'اختبار' })
+  assert.deepEqual(await run.readInsuredDependents(ds.manager, covered.id), { spouses: 1, others: 1 })
+  assert.deepEqual(await run.readInsuredDependents(ds.manager, unregistered.id), { spouses: 0, others: 0 })
+
+  // الإعداد مقفول: السياق من غير تأمين صحي
+  assert.equal((await run.readPayrollStatutoryContext(ds.manager, { period: '2026-08', endDate: '2026-08-31' })).health, null)
+  // مفتوح من غير فروع، أو بفرع مش مصري بس: لسه مفيش
+  await settings({ [run.EG_HEALTH_ENABLED_KEY]: 'true', [run.EG_HEALTH_BRANCHES_KEY]: '[]' })
+  assert.equal((await run.readPayrollStatutoryContext(ds.manager, { period: '2026-08', endDate: '2026-08-31' })).health, null)
+  await settings({ [run.EG_HEALTH_BRANCHES_KEY]: JSON.stringify([org.riyadh.id]) })
+  assert.equal((await run.readPayrollStatutoryContext(ds.manager, { period: '2026-08', endDate: '2026-08-31' })).health, null)
+  await settings({ [run.EG_HEALTH_BRANCHES_KEY]: JSON.stringify([org.cairo.id, org.riyadh.id]) })
+  const context = await run.readPayrollStatutoryContext(ds.manager, { period: '2026-08', endDate: '2026-08-31' })
+  assert.deepEqual([[...context.health.branchIds], context.health.employeePct, context.health.employerPct, context.health.spousePct, context.health.dependentPct], [[org.cairo.id], 1, 4, 3, 1])
+  // المسير التكميلي: من غير تأمين صحي (ولا صندوق شهداء)
+  const supplementary = await run.readPayrollStatutoryContext(ds.manager, { period: '2026-08', endDate: '2026-08-31', runType: 'SUPPLEMENTARY' })
+  assert.deepEqual([supplementary.health, supplementary.martyrs, !!supplementary.tax], [null, null, true])
+
+  const result = await runFor('2026-08', [covered, unregistered, elsewhere])
+  const item = itemOf(result, covered), stored = statutoryOf(item)
+  // أجر التأمين 15,000: 1% + 3% للزوجة + 1% لمعال واحد = 5% = 750؛ وحصة صاحب العمل 4% = 600 للعلم بس
+  assert.deepEqual(stored.healthInsurance, { base: 15000, employeePct: 1, spousePct: 3, dependentPct: 1, spouses: 1, dependents: 1, amount: 750, employerPct: 4, employerShare: 600, effectiveFrom: '2000-01-01' })
+  assert.deepEqual([stored.lines, stored.total, Number(item.netPay)], [[{ code: 'INCOME_TAX', amount: 1482.5 }, { code: 'MARTYRS_FUND', amount: 7.5 }, { code: 'HEALTH_INSURANCE', amount: 750 }], 2240, 15000 - 1650 - 2240])
+  // التأمين الصحي مابيقللش وعاء الضريبة (نفس ضريبة المثال)
+  assert.equal(stored.egTax.netIncome, 13350)
+  const payslip = expectStatus(await request(users.admin, 'GET', `/payroll/items/${item.id}`), 200)
+  assert.deepEqual(payslip.lines.deductions.map(line => [line.key, line.name, line.amount]).slice(-2), [['MARTYRS_FUND', 'صندوق الشهداء', 7.5], ['HEALTH_INSURANCE', 'التأمين الصحي الشامل', 750]])
+  assert.deepEqual(payslip.lines.totals, { earnings: 15000, deductions: 1650 + 2240, net: 11110 })
+  // من غير تأمينات في البند، أو فرع مش من المختارين: مفيش تأمين صحي (والباقي زي ما هو)
+  for (const emp of [unregistered, elsewhere]) {
+    const other = statutoryOf(itemOf(result, emp))
+    assert.deepEqual(['healthInsurance' in other, other.lines.some(line => line.code === 'HEALTH_INSURANCE')], [false, false], emp.employeeCode)
+  }
+  // كشف الرواتب بيتصالح بالتأمين الصحي كمان
+  const register = expectStatus(await request(users.admin, 'GET', '/reports/financial/payroll-register?period=2026-08&includeDraft=true'), 200)
+  for (const entry of register.rows) assert.equal(Math.round((Number(entry.gross) - Number(entry.totalDeductions)) * 100), Math.round(Number(entry.net) * 100), `صف ${entry.employeeId}`)
+  await settings({ [run.EG_HEALTH_ENABLED_KEY]: 'false' })
+})
+
+test('PS-08: تقرير صندوق التدريب — سنوي بتكلفة المنشأة، ينطبق من حد العدد، لحساب بكل الفروع بس، وقراءة بس', async () => {
+  const T = '/social-insurance/eg-training-fund'
+  const scoped = await repo('User').save({ email: 'scoped@payroll-statutory.invalid', displayName: 'scoped', passwordHash: 'test-only', role: 'hr_manager', branchId: org.cairo.id,
+    permissions: JSON.stringify(['payroll.view']), isActive: true })
+  const plain = await repo('User').save({ email: 'plain@payroll-statutory.invalid', displayName: 'plain', passwordHash: 'test-only', role: 'hr_manager', branchId: null, scopeAllBranches: true,
+    permissions: JSON.stringify(['employees.view']), isActive: true })
+  assert.deepEqual([(await request(plain, 'GET', T)).status, (await request(scoped, 'GET', T)).status], [403, 403])
+  for (const year of ['2024', '2099', 'abc', '20260']) assert.equal((await request(users.admin, 'GET', `${T}?year=${year}`)).status, 400, year)
+  const egyptians = () => ds.query(`SELECT COUNT(*) AS [n] FROM [employees] e INNER JOIN [branches] b ON b.[id] = e.[branchId] WHERE b.[country] = N'EG' AND e.[isActive] = 1 AND e.[status] = N'active'`)
+  const before = Number((await egyptians())[0].n)
+  const small = expectStatus(await request(users.admin, 'GET', T), 200)
+  // 2,700 × 0.25% = 6.75 أقل من الحد الأدنى ← 10 جنيه للموظف في السنة؛ وتحت 30 موظف مابينطبقش
+  assert.deepEqual([small.available, small.rule.perEmployee, small.rule.minHeadcount, small.rule.minInsuranceWage, small.rule.verified], [true, 10, 30, 2700, false])
+  assert.deepEqual(small.entities.map(entity => [entity.name, entity.headcount, entity.applies, entity.amount]), [['فروع مصر (من غير كيان قانوني)', before, false, 0]])
+  assert.equal(small.total, 0)
+  // وصل الحد: 30 موظف × 10
+  for (let index = before; index < 30; index++) await repo('Employee').save({ employeeCode: `TF${index}`, fullName: `موظف صندوق التدريب ${index}`, branchId: org.cairo.id, joinDate: '2024-01-01', basicSalary: 5000, status: 'active', isActive: true })
+  const reached = expectStatus(await request(users.admin, 'GET', `${T}?year=2026`), 200)
+  assert.deepEqual([reached.entities.map(entity => [entity.headcount, entity.applies, entity.amount]), reached.total, reached.year], [[[30, true, 300]], 300, 2026])
+  // موظف الفرع السعودي والمنتهي خدمته برّه العدد
+  await repo('Employee').update({ employeeCode: 'TF29' }, { status: 'terminated', isActive: false })
+  assert.deepEqual(expectStatus(await request(users.admin, 'GET', T), 200).entities.map(entity => [entity.headcount, entity.applies, entity.amount]), [[29, false, 0]])
+  // صف الصندوق مش ساري للسنة: مش متاح
+  await ds.query(`UPDATE [statutory_definitions] SET [effectiveFrom] = '2027-06-01' WHERE [key] = N'eg.training_fund'`)
+  try { assert.deepEqual([expectStatus(await request(users.admin, 'GET', T), 200).available, expectStatus(await request(users.admin, 'GET', T), 200).entities], [false, []]) }
+  finally { await ds.query(`UPDATE [statutory_definitions] SET [effectiveFrom] = '2025-09-01' WHERE [key] = N'eg.training_fund'`) }
+})

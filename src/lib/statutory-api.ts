@@ -19,10 +19,12 @@ export const updateStatutoryRow = (id: number, body: { values?: Record<string, s
 // B4.4 (ج): الحسابات القانونية اللي ورا إعداد (ضريبة كسب العمل، صندوق الشهداء) — مقفولة افتراضيًا، والتفعيل لمدير النظام بس
 export interface ApiStatutoryCalculator {
   code: string; label: string; note: string; enabled: boolean; needsStartPeriod: boolean; startPeriod: string | null
+  /** B4.4 (د): حساب بيتطبق في فروع مختارة بس (التأمين الصحي الشامل: المحافظات اللي اتطبق فيها) */
+  needsBranches: boolean; branchIds: number[]; branchOptions: Array<{ id: number; name: string }>
   rows: Array<{ key: string; effectiveFrom: string; verified: boolean; current: boolean }>
   /** أسباب إن الحساب مايتفعّلش دلوقتي (صفوف «محتاج تحقق»، أو مفيش صف ساري) */
   blockers: string[]
 }
 export interface ApiStatutoryCalculators { canEdit: boolean; calculators: ApiStatutoryCalculator[] }
 export const fetchStatutoryCalculators = () => apiFetch<ApiStatutoryCalculators>(`${S}/calculators`)
-export const updateStatutoryCalculator = (code: string, body: { enabled?: boolean; startPeriod?: string }) => apiFetch<ApiStatutoryCalculators>(`${S}/calculators/${code}`, json('PUT', body))
+export const updateStatutoryCalculator = (code: string, body: { enabled?: boolean; startPeriod?: string; branchIds?: number[] }) => apiFetch<ApiStatutoryCalculators>(`${S}/calculators/${code}`, json('PUT', body))

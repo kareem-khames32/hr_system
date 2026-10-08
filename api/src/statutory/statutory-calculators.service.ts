@@ -5,7 +5,10 @@ import { localDateOf } from '../attendance/attendance.service'
 import { recordAudit } from '../audit/audit'
 import type { JwtPayload } from '../auth/auth.service'
 import { EG_TAX_BRACKETS_KEY, EG_TAX_COUNTRY, EG_TAX_HIGH_INCOME_KEY } from '../payroll/eg-salary-tax'
-import { EG_MARTYRS_ENABLED_KEY, EG_MARTYRS_FUND_KEY, EG_TAX_ENABLED_KEY, EG_TAX_START_PERIOD_KEY } from '../payroll/payroll-statutory-run'
+import { Branch } from '../org/entities/branch.entity'
+import { branchCountryOf } from '../org/branch-currency'
+import { EG_HEALTH_BRANCHES_KEY, EG_HEALTH_ENABLED_KEY, EG_HEALTH_KEY, EG_MARTYRS_ENABLED_KEY, EG_MARTYRS_FUND_KEY, EG_TAX_ENABLED_KEY, EG_TAX_START_PERIOD_KEY,
+  parseStatutoryBranchIds } from '../payroll/payroll-statutory-run'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { StatutoryDefinition } from './statutory.entities'
 
@@ -21,10 +24,13 @@ export const CALCULATOR_START_PERIOD = 'فترة البداية لازم شهر 
 export const CALCULATOR_UNVERIFIED = 'الحساب مايتفعّلش وفيه صفوف له «محتاج تحقق» في حزمة الدولة — راجعها وعلّم «اتأكد» الأول'
 export const CALCULATOR_NO_ROWS = 'الحساب مايتفعّلش من غير صف ساري له في حزمة الدولة'
 export const CALCULATOR_NOTHING = 'مفيش تغيير'
+export const CALCULATOR_BRANCHES = 'اختار الفروع المطبّق فيها الحساب: فروع موجودة ودولتها مصر (فرع واحد على الأقل عند التفعيل)'
 export const CALCULATOR_ROW_IN_USE = 'الصف ده بيتحسب بيه دلوقتي (حسابه مفعّل) — لازم يفضل «اتأكد». اقفل الحساب الأول لو محتاج تراجعه'
 
 export interface StatutoryCalculator {
   code: string; label: string; note: string; enabledKey: string; startPeriodKey?: string
+  /** B4.4 (د): حساب بيتطبق في فروع مختارة بس (قايمة أرقام فروع من دولة country) */
+  branchesKey?: string; country?: string
   /** مفاتيح الحزمة اللي الحساب بيقراها؛ required = لازم يبقى ليه صف ساري */
   keys: Array<{ country: string; key: string; required: boolean }>
 }
@@ -34,15 +40,18 @@ export const STATUTORY_CALCULATORS: readonly StatutoryCalculator[] = [
     keys: [{ country: EG_TAX_COUNTRY, key: EG_TAX_BRACKETS_KEY, required: true }, { country: EG_TAX_COUNTRY, key: EG_TAX_HIGH_INCOME_KEY, required: false }] },
   { code: 'EG_MARTYRS_FUND', label: 'صندوق الشهداء (مصر)', note: 'نسبة من إجمالي استحقاقات موظفي فروع مصر في المسير الأساسي',
     enabledKey: EG_MARTYRS_ENABLED_KEY, keys: [{ country: EG_TAX_COUNTRY, key: EG_MARTYRS_FUND_KEY, required: true }] },
+  { code: 'EG_HEALTH_INSURANCE', label: 'التأمين الصحي الشامل (مصر)', note: 'حصة الموظف ومعاليه المؤمَّن عليهم من أجر التأمين، لموظفي الفروع المختارة (المحافظات اللي اتطبق فيها) في المسير الأساسي',
+    enabledKey: EG_HEALTH_ENABLED_KEY, branchesKey: EG_HEALTH_BRANCHES_KEY, country: EG_TAX_COUNTRY, keys: [{ country: EG_TAX_COUNTRY, key: EG_HEALTH_KEY, required: true }] },
 ]
 /** مفاتيح إعدادات التفعيل — ليها مسارها ده بس (شاشة الإعدادات العامة مابتكتبهاش) */
-export const STATUTORY_CALCULATOR_CONFIG_KEYS: readonly string[] = STATUTORY_CALCULATORS.flatMap((entry) => [entry.enabledKey, ...(entry.startPeriodKey ? [entry.startPeriodKey] : [])])
+export const STATUTORY_CALCULATOR_CONFIG_KEYS: readonly string[] = STATUTORY_CALCULATORS.flatMap((entry) => [entry.enabledKey, ...(entry.startPeriodKey ? [entry.startPeriodKey] : []),
+  ...(entry.branchesKey ? [entry.branchesKey] : [])])
 export const STATUTORY_CALCULATOR_CONFIG_REFUSAL = 'تفعيل الحسابات القانونية من «الإعدادات ← حزمة الدولة» — مش من هنا'
 
 const PERIOD = /^\d{4}-(0[1-9]|1[0-2])$/
 const day = (value: unknown): string => String(value).slice(0, 10)
 
-export interface CalculatorInput { enabled?: unknown; startPeriod?: unknown }
+export interface CalculatorInput { enabled?: unknown; startPeriod?: unknown; branchIds?: unknown }
 
 /** الحسابات المفعّلة اللي بتقرا مفتاح حزمة معيّن (تحت معاملة اللي بيعدّل صف المفتاح) */
 export async function enabledCalculatorsOf(em: EntityManager, country: string, key: string): Promise<StatutoryCalculator[]> {
@@ -83,10 +92,15 @@ export class StatutoryCalculatorsService {
     const em = this.ds.manager
     const values = new Map((await em.getRepository(RequestsConfig).find({ where: { key: In([...STATUTORY_CALCULATOR_CONFIG_KEYS]) } })).map((row) => [row.key, row.value]))
     const calculators = []
+    const branches = await em.getRepository(Branch).find({ select: { id: true, name: true, country: true }, order: { id: 'ASC' } })
     for (const calculator of STATUTORY_CALCULATORS) {
       const rows = await this.rowsOf(em, calculator, false)
+      const options = calculator.branchesKey ? branches.filter((branch) => branchCountryOf(branch.country) === calculator.country).map((branch) => ({ id: branch.id, name: branch.name })) : []
       calculators.push({ code: calculator.code, label: calculator.label, note: calculator.note, enabled: values.get(calculator.enabledKey) === 'true',
         needsStartPeriod: !!calculator.startPeriodKey, startPeriod: calculator.startPeriodKey ? values.get(calculator.startPeriodKey) ?? null : null,
+        needsBranches: !!calculator.branchesKey, branchOptions: options,
+        // المختار من الفروع اللي لسه دولتها دولة الحساب
+        branchIds: calculator.branchesKey ? parseStatutoryBranchIds(values.get(calculator.branchesKey)).filter((id) => options.some((option) => option.id === id)) : [],
         rows: rows.map(({ key, effectiveFrom, verified, current }) => ({ key, effectiveFrom, verified, current })), blockers: this.blockersOf(calculator, rows) })
     }
     return { canEdit: user.role === 'super_admin', calculators }
@@ -99,18 +113,31 @@ export class StatutoryCalculatorsService {
     if (!calculator) throw new NotFoundException(CALCULATOR_UNKNOWN)
     if (input.enabled !== undefined && typeof input.enabled !== 'boolean') throw new BadRequestException(CALCULATOR_ENABLED_VALUE)
     if (input.startPeriod !== undefined && (!calculator.startPeriodKey || typeof input.startPeriod !== 'string' || !PERIOD.test(input.startPeriod))) throw new BadRequestException(CALCULATOR_START_PERIOD)
+    if (input.branchIds !== undefined && (!calculator.branchesKey || !Array.isArray(input.branchIds) || input.branchIds.some((id) => !Number.isSafeInteger(id) || (id as number) < 1))) {
+      throw new BadRequestException(CALCULATOR_BRANCHES)
+    }
     await this.ds.transaction(async (em) => {
       // صفوف الحزمة الأول (نفس ترتيب اللي بيعدّل صف: الصف ثم الإعداد)، وبعدها الحكم
       const rows = await this.rowsOf(em, calculator, true)
-      const keys = [calculator.enabledKey, ...(calculator.startPeriodKey ? [calculator.startPeriodKey] : [])]
+      const keys = [calculator.enabledKey, ...(calculator.startPeriodKey ? [calculator.startPeriodKey] : []), ...(calculator.branchesKey ? [calculator.branchesKey] : [])]
       const stored = new Map((await em.getRepository(RequestsConfig).find({ where: { key: In(keys) } })).map((row) => [row.key, row.value]))
       const before = { enabled: stored.get(calculator.enabledKey) === 'true', startPeriod: calculator.startPeriodKey ? stored.get(calculator.startPeriodKey) ?? null : null }
       const after = { enabled: input.enabled === undefined ? before.enabled : input.enabled, startPeriod: input.startPeriod === undefined ? before.startPeriod : input.startPeriod as string }
-      if (after.enabled === before.enabled && after.startPeriod === before.startPeriod) throw new BadRequestException(CALCULATOR_NOTHING)
+      // الفروع: المبعوت لازم كله فروع موجودة ودولتها دولة الحساب دلوقتي
+      const storedBranches = calculator.branchesKey ? parseStatutoryBranchIds(stored.get(calculator.branchesKey)) : []
+      let branchIds = storedBranches
+      if (calculator.branchesKey && input.branchIds !== undefined) {
+        branchIds = [...new Set(input.branchIds as number[])].sort((a, b) => a - b)
+        const found = branchIds.length ? await em.getRepository(Branch).find({ where: { id: In(branchIds) }, select: { id: true, country: true } }) : []
+        if (found.length !== branchIds.length || found.some((branch) => branchCountryOf(branch.country) !== calculator.country)) throw new BadRequestException(CALCULATOR_BRANCHES)
+      }
+      const branchesChanged = JSON.stringify(branchIds) !== JSON.stringify(storedBranches)
+      if (after.enabled === before.enabled && after.startPeriod === before.startPeriod && !branchesChanged) throw new BadRequestException(CALCULATOR_NOTHING)
       if (after.enabled) {
         const blockers = this.blockersOf(calculator, rows)
         if (blockers.length) throw new BadRequestException(blockers[0])
         if (calculator.startPeriodKey && !(after.startPeriod && PERIOD.test(after.startPeriod))) throw new BadRequestException(CALCULATOR_START_PERIOD)
+        if (calculator.branchesKey && !branchIds.length) throw new BadRequestException(CALCULATOR_BRANCHES)
       }
       const write = async (key: string, value: string) => {
         const updated = await em.getRepository(RequestsConfig).update({ key }, { value })
@@ -118,8 +145,9 @@ export class StatutoryCalculatorsService {
       }
       if (after.enabled !== before.enabled) await write(calculator.enabledKey, after.enabled ? 'true' : 'false')
       if (calculator.startPeriodKey && after.startPeriod !== before.startPeriod && after.startPeriod) await write(calculator.startPeriodKey, after.startPeriod)
+      if (calculator.branchesKey && branchesChanged) await write(calculator.branchesKey, JSON.stringify(branchIds))
       await recordAudit(em, { category: 'SETTINGS', action: 'STATUTORY_CALCULATOR_CHANGED', entityType: 'statutory_calculator', entityId: calculator.code, actorUserId: user.sub,
-        summary: `حزمة الدولة: ${after.enabled ? (before.enabled ? 'تعديل' : 'تفعيل') : 'قفل'} «${calculator.label}»${after.enabled && after.startPeriod ? ` من فترة ${after.startPeriod}` : ''}`, before, after })
+        summary: `حزمة الدولة: ${after.enabled ? (before.enabled ? 'تعديل' : 'تفعيل') : 'قفل'} «${calculator.label}»${after.enabled && after.startPeriod ? ` من فترة ${after.startPeriod}` : ''}`, before: { ...before, ...(calculator.branchesKey ? { branchIds: storedBranches } : {}) }, after: { ...after, ...(calculator.branchesKey ? { branchIds } : {}) } })
     })
     return this.list(user)
   }

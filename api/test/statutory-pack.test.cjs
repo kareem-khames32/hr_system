@@ -18,7 +18,9 @@ const refuses = (work, label) => assert.throws(work, error => error?.getStatus?.
 const entries = STATUTORY_SEED.map(seed => ({ ...seed, verified: false }))
 const READ_BY_CALCULATORS = [SA_GOSI_NEW_TRACK, EG_INSURANCE_WAGE_LIMITS]
 // B4.4: مفاتيح بتقراها حاسبة ورا إعداد مقفول افتراضيًا (كل مفتاح مذكور في ملف واحد): الضريبة (ومعاينتها)، وصندوق الشهداء
-const READ_BY_PREVIEW = { 'eg.salary_tax.brackets': 'payroll/eg-salary-tax.ts', 'eg.salary_tax.high_income': 'payroll/eg-salary-tax.ts', 'eg.martyrs_fund': 'payroll/payroll-statutory-run.ts' }
+const READ_BY_PREVIEW = { 'eg.salary_tax.brackets': 'payroll/eg-salary-tax.ts', 'eg.salary_tax.high_income': 'payroll/eg-salary-tax.ts', 'eg.martyrs_fund': 'payroll/payroll-statutory-run.ts',
+  // B4.4 (د): التأمين الصحي الشامل (ورا إعداده)، وتقرير صندوق التدريب (قراءة بس)
+  'eg.health_insurance': 'payroll/payroll-statutory-run.ts', 'eg.training_fund': 'payroll/eg-training-fund.ts' }
 
 test('SP-01: every seed row belongs to a catalog key with exactly its codes, the new keys are reference data no calculator reads, and the worked examples of the C cards hold', () => {
   assert.equal(STATUTORY_SEED.length, 27)
@@ -41,7 +43,7 @@ test('SP-01: every seed row belongs to a catalog key with exactly its codes, the
   for (const info of STATUTORY_CATALOG) {
     assert.ok(STATUTORY_SEED.some(seed => seed.country === info.country && seed.key === info.key), `${info.key}: له صف في البذرة`)
     assert.equal(info.usedBy !== null, READ_BY_CALCULATORS.includes(info.key) || info.key in READ_BY_PREVIEW, `${info.key}: مين بيقراه`)
-    if (info.key in READ_BY_PREVIEW) assert.match(info.usedBy, /مقفول افتراضيًا/, info.key)
+    if (info.key in READ_BY_PREVIEW) assert.match(info.usedBy, /مقفول افتراضيًا|للعرض بس/, info.key)
     assert.ok(info.label.length > 2 && /^C-(EG|SA)-0\d$/.test(info.card) && Object.values(info.codes).every(label => label.length > 1))
   }
   assert.equal(new Set(STATUTORY_CATALOG.map(info => `${info.country}|${info.key}`)).size, STATUTORY_CATALOG.length)

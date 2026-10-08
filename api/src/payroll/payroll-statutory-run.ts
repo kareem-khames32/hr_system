@@ -1,5 +1,6 @@
 import { In, type EntityManager } from 'typeorm'
 import { Branch } from '../org/entities/branch.entity'
+import { dependentsReady } from '../dependents/dependent-rules'
 import { branchCountryOf } from '../org/branch-currency'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { statutoryAt, statutoryNumber } from '../statutory/statutory'
@@ -18,7 +19,18 @@ export const EG_TAX_ENABLED_KEY = 'eg.salary_tax.enabled'
 export const EG_TAX_START_PERIOD_KEY = 'eg.salary_tax.start_period'
 export const EG_MARTYRS_ENABLED_KEY = 'eg.martyrs_fund.enabled'
 export const EG_MARTYRS_FUND_KEY = 'eg.martyrs_fund'
-export const PAYROLL_STATUTORY_KEYS = [EG_TAX_ENABLED_KEY, EG_TAX_START_PERIOD_KEY, EG_MARTYRS_ENABLED_KEY] as const
+// B4.4 (د): التأمين الصحي الشامل — مفعّل؟ وفي أنهي فروع (قايمة أرقام فروع JSON: المحافظات اللي اتطبق فيها)
+export const EG_HEALTH_ENABLED_KEY = 'eg.health_insurance.enabled'
+export const EG_HEALTH_BRANCHES_KEY = 'eg.health_insurance.branch_ids'
+export const EG_HEALTH_KEY = 'eg.health_insurance'
+export const PAYROLL_STATUTORY_KEYS = [EG_TAX_ENABLED_KEY, EG_TAX_START_PERIOD_KEY, EG_MARTYRS_ENABLED_KEY, EG_HEALTH_ENABLED_KEY, EG_HEALTH_BRANCHES_KEY] as const
+/** قايمة أرقام الفروع المحفوظة في الإعداد (نص تالف أو مش قايمة = فاضية) */
+export function parseStatutoryBranchIds(value: string | null | undefined): number[] {
+  try {
+    const parsed: unknown = JSON.parse(value || '[]')
+    return Array.isArray(parsed) ? [...new Set(parsed.filter((id): id is number => Number.isSafeInteger(id) && id > 0))].sort((a, b) => a - b) : []
+  } catch { return [] }
+}
 const PERIOD = /^\d{4}-(0[1-9]|1[0-2])$/
 
 export interface PayrollStatutoryContext {
@@ -27,6 +39,8 @@ export interface PayrollStatutoryContext {
   tax: { table: EgTaxTable; startPeriod: string } | null
   /** صندوق الشهداء مفعّل ونسبته سارية — وللمسير الأساسي بس */
   martyrs: { pct: number; effectiveFrom: string } | null
+  /** B4.4 (د): التأمين الصحي الشامل مفعّل ونسبه سارية، لفروعه المختارة (من فروع مصر) — وللمسير الأساسي بس */
+  health: { employeePct: number; employerPct: number; spousePct: number; dependentPct: number; effectiveFrom: string; branchIds: Set<number> } | null
   taxable: Map<string, boolean>
   egyptBranchIds: Set<number>
 }
@@ -37,22 +51,31 @@ export interface PayrollStatutoryContext {
  */
 export async function readPayrollStatutoryContext(em: EntityManager, run: { period: string; endDate: string; runType?: string | null }): Promise<PayrollStatutoryContext | null> {
   const values = new Map((await em.getRepository(RequestsConfig).find({ where: { key: In([...PAYROLL_STATUTORY_KEYS]) } })).map((row) => [row.key, row.value]))
-  const taxOn = values.get(EG_TAX_ENABLED_KEY) === 'true', martyrsOn = values.get(EG_MARTYRS_ENABLED_KEY) === 'true'
-  if (!taxOn && !martyrsOn) return null
+  const taxOn = values.get(EG_TAX_ENABLED_KEY) === 'true', martyrsOn = values.get(EG_MARTYRS_ENABLED_KEY) === 'true', healthOn = values.get(EG_HEALTH_ENABLED_KEY) === 'true'
+  if (!taxOn && !martyrsOn && !healthOn) return null
   const entries = await readStatutoryEntries(em), endDate = String(run.endDate).slice(0, 10)
   const startPeriod = values.get(EG_TAX_START_PERIOD_KEY) ?? ''
   const table = taxOn && PERIOD.test(startPeriod) && run.period >= startPeriod ? egTaxTableAt(entries, endDate) : null
   const fund = martyrsOn && (run.runType ?? 'REGULAR') === 'REGULAR' ? statutoryAt(entries, EG_TAX_COUNTRY, EG_MARTYRS_FUND_KEY, endDate) : null
   const pct = statutoryNumber(fund, 'employee_pct')
-  if (!table && !(fund && pct)) return null
+  const regular = (run.runType ?? 'REGULAR') === 'REGULAR'
+  const healthRow = healthOn && regular ? statutoryAt(entries, EG_TAX_COUNTRY, EG_HEALTH_KEY, endDate) : null
+  const healthPct = { employee: statutoryNumber(healthRow, 'employee_pct'), employer: statutoryNumber(healthRow, 'employer_pct'), spouse: statutoryNumber(healthRow, 'spouse_pct'), dependent: statutoryNumber(healthRow, 'dependent_pct') }
+  const healthBranches = healthRow && healthPct.employee !== null ? parseStatutoryBranchIds(values.get(EG_HEALTH_BRANCHES_KEY)) : []
+  if (!table && !(fund && pct) && !healthBranches.length) return null
   const taxable = new Map(SALARY_ITEM_SEED.map((seed) => [seed.code, seed.taxable]))
   if (await salaryItemsReady(em)) {
     const rows: Array<{ code: string; taxable: boolean | number }> = await em.query('SELECT [code], [taxable] FROM dbo.salary_items')
     for (const row of rows) taxable.set(String(row.code), row.taxable === true || Number(row.taxable) === 1)
   }
   const branches = await em.getRepository(Branch).find({ select: { id: true, country: true } })
-  return { period: run.period, tax: table ? { table, startPeriod } : null, martyrs: fund && pct ? { pct, effectiveFrom: fund.effectiveFrom } : null, taxable,
-    egyptBranchIds: new Set(branches.filter((branch) => branchCountryOf(branch.country) === EG_TAX_COUNTRY).map((branch) => branch.id)) }
+  const egyptBranchIds = new Set(branches.filter((branch) => branchCountryOf(branch.country) === EG_TAX_COUNTRY).map((branch) => branch.id))
+  // فرع اتغيّرت دولته بعد ما اتختار: برّه (الحكم بدولة الفرع الحالية)
+  const healthIds = new Set(healthBranches.filter((id) => egyptBranchIds.has(id)))
+  return { period: run.period, tax: table ? { table, startPeriod } : null, martyrs: fund && pct ? { pct, effectiveFrom: fund.effectiveFrom } : null,
+    health: healthRow && healthIds.size ? { employeePct: healthPct.employee ?? 0, employerPct: healthPct.employer ?? 0, spousePct: healthPct.spouse ?? 0, dependentPct: healthPct.dependent ?? 0,
+      effectiveFrom: healthRow.effectiveFrom, branchIds: healthIds } : null,
+    taxable, egyptBranchIds }
 }
 
 export interface EgTaxYearToDate { netIncome: number; days: number; tax: number; periodCounted: boolean }
@@ -84,6 +107,15 @@ export async function readEgTaxYearToDate(em: EntityManager, employeeId: number,
 
 const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100
 
+/** معالين الموظف الحاليين المؤمَّن عليهم: الزوج/الزوجة، والباقي. قبل ترحيل سجل المعالين = مفيش */
+export async function readInsuredDependents(em: EntityManager, employeeId: number): Promise<{ spouses: number; others: number }> {
+  if (!(await dependentsReady(em))) return { spouses: 0, others: 0 }
+  const rows: Array<{ relation: string; n: number }> = await em.query(
+    `SELECT [relation], COUNT(*) AS [n] FROM dbo.dependents WHERE [employeeId] = @0 AND [status] = N'ACTIVE' AND [isInsured] = 1 GROUP BY [relation]`, [employeeId])
+  const spouses = rows.filter((row) => row.relation === 'SPOUSE').reduce((sum, row) => sum + Number(row.n), 0)
+  return { spouses, others: rows.reduce((sum, row) => sum + Number(row.n), 0) - spouses }
+}
+
 /**
  * بيحسب الخصومات القانونية لبند اتبنى وبيطرحها من صافيه وبيسجّلها في تفصيله (breakdown.statutory). بيرجّع المجموع (0 = البند زي ما هو
  * بالحرف: موظف فرعه مش في مصر، أو مفيش حاجة سارية). لازم يتنده قبل حفظ البند وبعد ما قيود الدفتر بتاعته اتحددت.
@@ -110,8 +142,21 @@ export async function applyPayrollStatutory(em: EntityManager, context: PayrollS
     fund = base > 0 ? round2(base * context.martyrs.pct / 100) : 0
     martyrsFund = { base, pct: context.martyrs.pct, amount: fund, effectiveFrom: context.martyrs.effectiveFrom }
   }
-  if (!egTax && !martyrsFund) return 0
-  const snapshot = payrollStatutorySnapshot({ INCOME_TAX: tax, MARTYRS_FUND: fund }, { ...(egTax ? { egTax } : {}), ...(martyrsFund ? { martyrsFund } : {}) })
+  // B4.4 (د): التأمين الصحي الشامل — لموظف فرعه من الفروع المطبّق فيها وعليه تأمينات في البند ده: من أجر التأمين، حصته + نسبة الزوج/الزوجة
+  // المؤمَّن عليه + نسبة لكل معال مؤمَّن عليه تاني (من سجل المعالين). حصة صاحب العمل في اللقطة للعلم بس
+  let health = 0, healthInsurance: Record<string, unknown> | undefined
+  const insurance = breakdown.socialInsurance as { applies?: unknown; insuredSalary?: unknown } | undefined
+  if (context.health && context.health.branchIds.has(Number(branchId)) && insurance?.applies === true && typeof insurance.insuredSalary === 'number' && insurance.insuredSalary > 0) {
+    const covered = await readInsuredDependents(em, employeeId)
+    const base = insurance.insuredSalary, rate = context.health
+    const pct = rate.employeePct + covered.spouses * rate.spousePct + covered.others * rate.dependentPct
+    health = round2(base * pct / 100)
+    healthInsurance = { base, employeePct: rate.employeePct, spousePct: rate.spousePct, dependentPct: rate.dependentPct, spouses: covered.spouses, dependents: covered.others, amount: health,
+      employerPct: rate.employerPct, employerShare: round2(base * rate.employerPct / 100), effectiveFrom: rate.effectiveFrom }
+  }
+  if (!egTax && !martyrsFund && !healthInsurance) return 0
+  const snapshot = payrollStatutorySnapshot({ INCOME_TAX: tax, MARTYRS_FUND: fund, HEALTH_INSURANCE: health },
+    { ...(egTax ? { egTax } : {}), ...(martyrsFund ? { martyrsFund } : {}), ...(healthInsurance ? { healthInsurance } : {}) })
   item.breakdown = JSON.stringify({ ...breakdown, statutory: snapshot })
   item.netPay = round2(Number(item.netPay) - snapshot.total)
   return snapshot.total

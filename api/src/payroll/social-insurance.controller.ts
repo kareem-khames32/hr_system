@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Put, Query, UseGuards } from '@nestjs/common'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
+import { EgTrainingFundService } from './eg-training-fund'
 import { SocialInsuranceService } from './social-insurance.service'
 import { RequireModule } from '../modules-registry/module.guard'
 
@@ -9,7 +10,7 @@ import { RequireModule } from '../modules-registry/module.guard'
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('social-insurance')
 export class SocialInsuranceController {
-  constructor(private readonly service: SocialInsuranceService) {}
+  constructor(private readonly service: SocialInsuranceService, private readonly trainingFund: EgTrainingFundService) {}
 
   @Perm('payroll.view')
   @Get('settings')
@@ -27,5 +28,12 @@ export class SocialInsuranceController {
   @Get('report')
   report(@CurrentUser() user: JwtPayload, @Query('period') period?: string, @Query('branchId') branchId?: string) {
     return this.service.report(user, period, branchId)
+  }
+
+  // B4.4 (د): صندوق التدريب المصري — تقرير سنوي بتكلفة المنشأة (مش خصم من الموظف)، لحساب بكل الفروع
+  @Perm('payroll.view')
+  @Get('eg-training-fund')
+  egTrainingFund(@CurrentUser() user: JwtPayload, @Query('year') year?: string) {
+    return this.trainingFund.report(user, year)
   }
 }
