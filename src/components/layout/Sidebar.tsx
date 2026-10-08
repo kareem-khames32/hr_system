@@ -96,6 +96,8 @@ const adminMenuDefs: MenuItem[] = [
       { label: 'نواقص مسوغات التعيين', href: '/employees/hiring-documents', perm: 'documents.manage' },
       { label: 'إصدار مستند', href: '/employees/documents/create', perm: 'documents.manage' },
       { label: 'سجل العهد', href: '/employees/custody', perm: 'custody.assign' },
+      // B5.2: وثائق التأمين الطبي وفئاتها (بتظهر لما موديول المزايا مفتوح)
+      { label: 'المزايا والتأمين الطبي', href: '/benefits', perm: 'benefits.manage' },
       { label: 'سجل النقل', href: '/employees/transfers', perm: 'transfers.view' },
       // B3.12: لائحة الجزاءات وتوقيعها (بتظهر لما موديول الشكاوى والتحقيقات مفتوح)
       { label: 'لائحة الجزاءات', href: '/cases/penalties', perm: 'cases.penalties' },

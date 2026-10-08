@@ -370,6 +370,13 @@ export const MODULES = {
     permissions: ['compensation.manage'],
     routes: ['/compensation', '/compensation/*', '/my/raises'],
   }),
+  // B5.2: المزايا والتأمين الطبي — وثائق التأمين وفئاتها وأهلية الفئة بالدرجة، واشتراكات الموظف ومعاليه. موديول جديد = مقفول لحد ما الشركة تفتحه، وفي الباقة الكاملة
+  benefits: moduleDef({
+    nameAr: 'المزايا والتأمين الطبي', group: 'people', dependsOn: ['dependents'], softUses: ['payroll', 'offboarding'], preset: 'full', defaultEnabled: false,
+    description: 'وثائق التأمين الطبي وفئاتها، ومين يستحق أنهي فئة بدرجته، واشتراك الموظف ومعاليه وطلبات الإضافة والحذف لشركة التأمين',
+    permissions: ['benefits.manage'],
+    routes: ['/benefits'],
+  }),
   // B2.11: الوظائف المعتمدة — وظيفة في وحدة بعدد معتمد، وتقرير «معتمد / مشغول / شاغر». موديول جديد = مقفول لحد ما الشركة تفعّله
   // (أول موديول defaultEnabled: false: مفيش حاجة كانت شغالة قبله)
   positions: moduleDef({
