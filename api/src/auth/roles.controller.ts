@@ -40,6 +40,7 @@ import {
 } from './guards'
 import { adminGrantViolation, ALL_PERMISSIONS, permissionRegistry, ROLE_PRESETS } from './permissions'
 import { Role, UserPermissionOverride } from './role.entity'
+import { roleStampOf } from './role-stamp'
 import { User } from './user.entity'
 import { RequireModule } from '../modules-registry/module.guard'
 import { ModulesService } from '../modules-registry/modules.service'
@@ -66,6 +67,8 @@ class CreateRoleDto {
 
 /** الدور اتغيّر (حزمته أو حالته) بعد ما التعديل اتحكم عليه — CRP3F */
 export const ROLE_CHANGED_MEANWHILE = 'بيانات الدور اتغيّرت — حدّث الصفحة وحاول تاني'
+// CRP3H: الحساب أو حزمة دوره اتغيّروا بين الحكم على تعديل صلاحياته وكتابته
+export const ACCOUNT_PERMISSIONS_CHANGED = 'بيانات الحساب أو صلاحيات دوره اتغيّرت — حدّث الصفحة وحاول تاني'
 
 class UpdateRoleDto {
   @IsOptional()
@@ -212,14 +215,24 @@ export class RolesController {
     const violation =
       actor.role === 'super_admin' ? null : adminGrantViolation(perms, [])
     if (violation) throw new ForbiddenException(violation)
-    const saved = await this.roles.save(
-      this.roles.create({
-        code: dto.code,
-        nameAr: dto.nameAr,
-        permissions: JSON.stringify(perms),
-        isSystem: false,
-      })
-    )
+    // CRP3H: كود دور أساسي من غير صف ممكن يبقى عليه حسابات — صف جديد له = تعديل حزمتهم. محدش يعمل كده لدوره هو (زي تعديل الحزمة)
+    if (actor.role !== 'super_admin' && dto.code === actor.role) {
+      throw new BadRequestException('لا يمكنك تعديل صلاحيات دورك أنت')
+    }
+    // CRP3H (استمرار P3G-B02): الإنشاء في معاملة — إدخال الصف بيستنى أي إسناد أو تعديل صلاحيات ماسك مكان الكود ده (role-stamp.ts)،
+    // والحسابات اللي على الكود (لو أساسي) جلساتها بتتبطل مع الصف في نفس المعاملة
+    const saved = await this.roles.manager.transaction(async (em) => {
+      const row = await em.getRepository(Role).save(
+        em.getRepository(Role).create({
+          code: dto.code,
+          nameAr: dto.nameAr,
+          permissions: JSON.stringify(perms),
+          isSystem: false,
+        })
+      )
+      await em.getRepository(User).increment({ role: dto.code as User['role'] }, 'tokenVersion', 1)
+      return row
+    })
     return { ...saved, permissions: perms }
   }
 
@@ -342,6 +355,10 @@ export class RolesController {
     @Body() dto: { grants?: string[]; revokes?: string[] }
   ) {
     const user = await this.scopedUser(actor, id)
+    // CRP3H (P3H-B01): أساس الحكم زي ما اتقرا — إصدار الحساب (دوره ونطاقه وتجاوزاته وحزمة دوره: أي تغيير فيهم بيزوّده) وحزمة دوره.
+    // الاتنين بيتقارنوا تحت القفل جوه معاملة الكتابة
+    const seenVersion = user.tokenVersion ?? 0
+    const judgedRole = await roleStampOf(this.roles.manager, user.role)
     if (user.role === 'super_admin') {
       throw new BadRequestException('مدير النظام يملك كل الصلاحيات — لا تجاوزات')
     }
@@ -387,6 +404,11 @@ export class RolesController {
     ]
     const list = (effect: string, from: Array<{ permission: string; effect: string }>) => from.filter(row => row.effect === effect).map(row => row.permission).sort()
     await this.overrides.manager.transaction(async (em) => {
+      // CRP3H (P3H-B01): الحكم فوق (النطاق، والأثر الفعلي للمنح) اتعمل على قراية من غير قفل. صف الدور (أو مكانه) بيتقفل الأول وبعده
+      // صف الحساب (نفس ترتيب الإسناد وتعديل الدور)، ولو حزمة الدور أو الحساب نفسه (دوره، نطاقه، تجاوزاته) اتغيّروا بعد القراية = 409
+      if ((await roleStampOf(em, user.role, true)) !== judgedRole) throw new ConflictException(ACCOUNT_PERMISSIONS_CHANGED)
+      const fresh = await em.getRepository(User).findOne({ where: { id }, lock: { mode: 'pessimistic_write' } })
+      if (!fresh || (fresh.tokenVersion ?? 0) !== seenVersion || fresh.role !== user.role) throw new ConflictException(ACCOUNT_PERMISSIONS_CHANGED)
       const overrides = em.getRepository(UserPermissionOverride)
       const previous = await overrides.find({ where: { userId: id } })
       await overrides.delete({ userId: id })

@@ -1,4 +1,4 @@
-import { Injectable, Logger, UnauthorizedException } from '@nestjs/common'
+import { ConflictException, Injectable, Logger, UnauthorizedException } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository } from 'typeorm'
 import * as bcrypt from 'bcryptjs'
@@ -38,6 +38,8 @@ const REFUSALS = {
 } as const
 
 export const DOMAIN_LOGIN_REFUSALS = REFUSALS
+// CRP3H: الحساب اتغيّر (اتنقل لموظف تاني، أو اتعطّل، أو اتربط) بين مطابقة الهوية وكتابة الربط
+export const DOMAIN_LINK_ACCOUNT_CHANGED = 'حساب الموظف اتغيّر أثناء الربط بحساب الشركة — حاول تاني'
 
 /** كلمة مرور غير قابلة للاستخدام: حساب المجال مالوش كلمة عندنا، فمسار البريد+الكلمة بيفشل عليه دايمًا. */
 const unusablePasswordHash = (): Promise<string> =>
@@ -129,7 +131,18 @@ export class DomainLoginService {
     employee?: Employee | null
   ): Promise<boolean> {
     if (existing.domainObjectGuid) return false
-    await this.users.update({ id: existing.id }, { domainObjectGuid: directory.objectGuid })
+    // CRP3H (P3H-B02): الهوية اتطابقت على موظف الحساب وقت القراية — الربط بيتكتب بشرط إن الحساب لسه لنفس الموظف ده ولسه مفعّل ومش
+    // مربوط. حساب اتنقل لموظف تاني (أو اتعطّل أو اتربط) بين القراية والكتابة = مفيش كتابة، والمتصل يعيد من الأول
+    const written = await this.users
+      .createQueryBuilder()
+      .update(User)
+      .set({ domainObjectGuid: directory.objectGuid })
+      .where(`id = :id AND domainObjectGuid IS NULL AND isActive = 1 AND ${existing.employeeId == null ? 'employeeId IS NULL' : 'employeeId = :employeeId'}`, {
+        id: existing.id,
+        employeeId: existing.employeeId,
+      })
+      .execute()
+    if (!written.affected) throw new ConflictException(DOMAIN_LINK_ACCOUNT_CHANGED)
     existing.domainObjectGuid = directory.objectGuid
     this.logger.log(
       `ربط حساب قائم ${existing.id} (${existing.email}) بحساب المجال ${directory.sAMAccountName}` +

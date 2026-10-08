@@ -60,6 +60,7 @@ import {
   SUPER_ADMIN_ONLY_GRANTS,
 } from './permissions'
 import { Role } from './role.entity'
+import { roleStampOf } from './role-stamp'
 import { User, UserRole } from './user.entity'
 import { Employee } from '../employees/employee.entity'
 import { recordLoginAccountUnlinked } from '../employees/employee-change-log'
@@ -300,10 +301,9 @@ export class UsersController {
    * عليها؛ وبمدير معاملة: صف الدور بيتقفل لآخرها، فتعديل حزمته يا ثبت قبلنا فنشوفه، يا بيستنى الحفظ
    */
   private async roleStamp(code: string, em?: EntityManager): Promise<string> {
-    const row = em
-      ? await em.getRepository(Role).findOne({ where: { code }, lock: { mode: 'pessimistic_write' } })
-      : await this.roles.findOne({ where: { code } })
-    return row ? JSON.stringify([row.permissions, row.isActive === true]) : 'PRESET'
+    // CRP3H: دور من غير صف كان «قفله» مابيمسكش حاجة — إنشاء صف له بعد القراية كان بيعدّي والإسناد يكمل بحكم الحزمة الأساسية.
+    // القفل دلوقتي بيمسك مكان الكود في الفهرس كمان (role-stamp.ts)
+    return roleStampOf(em ?? this.roles.manager, code, !!em)
   }
 
   private async assertAssignableRole(code: string) {
