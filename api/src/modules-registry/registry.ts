@@ -308,6 +308,14 @@ export const MODULES = {
     routes: ['/my/team'],
   }),
 
+  // B3.6: إدارة الأداء — الأهداف أولًا (الدورات والقوالب والمعايرة في B3.7 وB3.8؛ باقي شاشات /performance شاشات عرض لحد ما ينزلوا).
+  // موديول جديد = مقفول لحد ما الشركة تفتحه
+  performance: moduleDef({
+    nameAr: 'إدارة الأداء', group: 'talent', dependsOn: ['org', 'employees'], softUses: ['tasks'], preset: 'standard', defaultEnabled: false,
+    description: 'أهداف الموظفين والأقسام والشركة: اقتراح واعتماد ومتابعة التقدّم وتعديل بسبب، ومهمة كدليل على هدف',
+    permissions: ['performance.manage'],
+    routes: ['/performance/goals'],
+  }),
   // B2.11: الوظائف المعتمدة — وظيفة في وحدة بعدد معتمد، وتقرير «معتمد / مشغول / شاغر». موديول جديد = مقفول لحد ما الشركة تفعّله
   // (أول موديول defaultEnabled: false: مفيش حاجة كانت شغالة قبله)
   positions: moduleDef({

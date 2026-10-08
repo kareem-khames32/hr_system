@@ -93,6 +93,15 @@ const EXCEPTIONS = {
   'PayrollController.myPayslips': 'SELF', // GET /payroll/my-payslips
   // B1.14: مستحق الموظف التقديري عن نفسه (user.employeeId) — ورا الميزة الفرعية payroll.live_employee_view (مقفولة = 404)
   'PayrollLiveController.mine': 'SELF', // GET /payroll/live/mine
+  'GoalsController.change': 'SERVICE_CHECK', // PATCH /performance/goals/:id — B3.6: تعديل في نص الفترة بسبب: لمدير صاحب الهدف المباشر أو لإدارة الأداء في نطاقه
+  'GoalsController.close': 'SERVICE_CHECK', // POST /performance/goals/:id/status — B3.6: قفل الهدف (والمقترح صاحبه يسحبه)
+  'GoalsController.create': 'SERVICE_CHECK', // POST /performance/goals — B3.6: لنفسه مقترح؛ لمرؤوس مباشر أو بالصلاحية ساري؛ لقسم أو للشركة بالصلاحية
+  'GoalsController.decide': 'SERVICE_CHECK', // POST /performance/goals/:id/decision — B3.6: اعتماد أو رفض المقترح: للمدير المباشر أو لإدارة الأداء
+  'GoalsController.detail': 'SERVICE_CHECK', // GET /performance/goals/:id — B3.6: للي له دور على الهدف، وإلا غير موجود
+  'GoalsController.evidence': 'SERVICE_CHECK', // POST /performance/goals/:id/evidence — B3.6: مهمة مسؤولها صاحب الهدف كدليل
+  'GoalsController.mine': 'SELF', // GET /performance/goals/mine — B3.6: أهداف الموظف نفسه، وأهداف قسمه والشركة السارية
+  'GoalsController.progress': 'SERVICE_CHECK', // POST /performance/goals/:id/progress — B3.6: صاحب الهدف أو مديره أو إدارة الأداء
+  'GoalsController.team': 'SERVICE_CHECK', // GET /performance/goals/team — B3.6: أهداف المرؤوسين المباشرين من الهيكل
   'MyInterviewsController.ics': 'SERVICE_CHECK', // GET /recruitment/my-interviews/:id/ics — B3.4-ب: ملف الدعوة لمسؤول التوظيف في نطاق المرشح أو لمحاور في المقابلة
   'MyInterviewsController.mine': 'SELF', // GET /recruitment/my-interviews — B3.4-ب: مقابلات الموظف المحاور نفسه
   'MyInterviewsController.submit': 'SELF', // POST /recruitment/my-interviews/:id/scorecard — B3.4-ب: بطاقة المحاور نفسه، مرة واحدة

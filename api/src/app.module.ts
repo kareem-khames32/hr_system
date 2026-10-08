@@ -43,6 +43,7 @@ import { PoliciesModule } from './policies/policies.module'
 import { CommentsModule } from './comments/comments.module'
 import { PositionsModule } from './positions/positions.module'
 import { RecruitmentModule } from './recruitment/recruitment.module'
+import { PerformanceModule } from './performance/performance.module'
 import { StatutoryModule } from './statutory/statutory.module'
 import { validateEnv } from './auth/jwt-secret'
 import { dbPacketSize } from './common/sql-packet-size'
@@ -135,6 +136,7 @@ import { dbPacketSize } from './common/sql-packet-size'
     PositionsModule,
     // B3.2: الوظائف الشاغرة
     RecruitmentModule,
+    PerformanceModule,
     // B2.13-ب: التقارير المحفوظة والمجدولة
     SavedReportsModule,
     // B2.16: الإعلانات (موديول اختياري مقفول افتراضيًا)

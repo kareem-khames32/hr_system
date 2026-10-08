@@ -111,6 +111,8 @@ export const PERMISSIONS: Record<string, string> = {
   'candidates.manage': 'المرشحون والتعيين',
   // B3.5-أ: اعتماد عرض العمل قبل ما يتبعت للمرشح (اللي عمل العرض مايعتمدوش)
   'candidates.approve_offers': 'اعتماد عروض العمل',
+  // B3.6: إدارة الأداء — الموظف ومديره من غير صلاحية (حقهم من الهيكل)
+  'performance.manage': 'إدارة الأداء',
   // B2.11: الوظائف المعتمدة
   'positions.view': 'عرض الوظائف المعتمدة',
   'positions.manage': 'إدارة الوظائف المعتمدة',
@@ -129,6 +131,7 @@ export const ALL_PERMISSIONS = Object.keys(PERMISSIONS)
 export const PERMISSION_MODULES: Array<{ key: string; labelAr: string; permissions: string[] }> = [
   { key: 'employees', labelAr: 'الموظفون', permissions: ['employees.view', 'employees.create', 'employees.edit', 'employees.archive', 'employees.view_compensation', 'documents.manage', 'transfers.view'] },
   { key: 'recruitment', labelAr: 'التوظيف', permissions: ['candidates.manage', 'candidates.approve_offers'] },
+  { key: 'performance', labelAr: 'إدارة الأداء', permissions: ['performance.manage'] },
   { key: 'positions', labelAr: 'الوظائف المعتمدة', permissions: ['positions.view', 'positions.manage'] },
   { key: 'announcements', labelAr: 'الإعلانات', permissions: ['announcements.manage'] },
   { key: 'org', labelAr: 'الهيكل التنظيمي', permissions: ['org.manage'] },
@@ -182,6 +185,7 @@ export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   'candidates.approve_offers': 'يعتمد عرض العمل (الراتب وتاريخ البدء) أو يرجّعه قبل ما يتبعت للمرشح — واللي عمل العرض مايعتمدوش',
   'positions.view': 'يفتح شاشة «الوظائف المعتمدة»: الوظائف وأعدادها وتقرير «معتمد / مشغول / شاغر» لكل قسم وشاغلي كل وظيفة — في نطاق فروعه',
   'announcements.manage': 'يكتب الإعلانات وينشرها ويسحبها ويشوف مين قراها — حساب الفروع لإعلانات فروعه بس',
+  'performance.manage': 'يعمل أهداف الأقسام والشركة، ويشوف ويعتمد ويعدّل أهداف موظفين نطاق فروعه — الموظف ومديره المباشر بيشتغلوا على أهدافهم من غيرها',
   'positions.manage': 'يضيف الوظائف المعتمدة ويعدّل عددها وحالتها، ويربط الموظفين بيها ويفكّهم، ويولّدها من الموظفين الحاليين — في نطاق فروعه (الشاشة نفسها بصلاحية «عرض الوظائف المعتمدة»)',
   'org.manage': 'ينشئ الفروع والأقسام والفرق ويعدّلها ويحدّد مديريها',
   'requests.view_all': 'يشوف كل طلبات موظفي نطاقه في كونسول الطلبات — قراءة بس، والقرار لأصحاب خطوات الاعتماد',
@@ -370,6 +374,8 @@ export const ROLE_PRESETS: Array<{
       'candidates.manage', 'transfers.view',
       // B3.5-أ: زي المهام — في حزمة الكود بس (دور الشركة القايم مابيتغيّرش بترحيل)
       'candidates.approve_offers',
+      // B3.6: زي المهام — في حزمة الكود بس (والموديول نفسه مقفول افتراضيًا)
+      'performance.manage',
       // خطة المراجعة 24: طلب استثناء الحضور واعتماده وإنهاؤه — لا يعتمد أحد ما أنشأه (فصل مهام في الخدمة).
       // الاعتماد التنفيذي approve_executive يبقى لمدير النظام (ترحيل 20260914_*_c1_attendance_exemption_roles)
       'attendance_exemption.view', 'attendance_exemption.manage', 'attendance_exemption.approve',

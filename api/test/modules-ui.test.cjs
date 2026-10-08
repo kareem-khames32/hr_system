@@ -84,7 +84,7 @@ test('MU-01: كل شاشة لها صاحب (موديول أو ميزة شاشا�
   assert.deepEqual(unowned, [], `شاشات من غير صاحب في سجل الموديولات: ${unowned.join(', ')}`)
   // الشاشات الوهمية بالظبط — أي شاشة ببيانات عرض جديدة لازم تتسجّل، وأي شاشة حقيقية ماتتحسبش وهمية
   assert.deepEqual(pages.filter(route => owners[route].feature === registry.DEMO_SCREENS_FEATURE), [
-    '/performance', '/performance/5', '/performance/cycles', '/performance/goals', '/performance/new', '/performance/templates',
+    '/performance', '/performance/5', '/performance/cycles', '/performance/new', '/performance/templates',
     '/recruitment/5', '/recruitment/add', '/reports/custom',
     '/training', '/training/5', '/training/add', '/training/certificates', '/training/my-courses'])
   // أمثلة من كل موديول (المطابقة الكاملة في modules-registry.test.cjs)

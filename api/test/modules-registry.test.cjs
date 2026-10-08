@@ -145,7 +145,9 @@ test('MR-03: صاحب مسار الواجهة — أطول نمط بيكسب، �
   // الشاشات الوهمية: ورا الميزة، ومسار العرض الأدق بيكسب على مسار الموديول
   const demo = (pathname, module) => assert.deepEqual(owner(pathname), { module, feature: DEMO_SCREENS_FEATURE }, pathname)
   demo('/performance', null)
-  demo('/performance/goals', null)
+  // B3.6: شاشة الأهداف بقت حقيقية تبع موديول الأداء (باقي شاشات /performance لسه شاشات عرض)
+  assert.deepEqual(registry.routeOwner('/performance/goals'), { module: 'performance', feature: null })
+  demo('/performance/cycles', null)
   demo('/training/my-courses', null)
   demo('/reports/custom', 'reports')
   demo('/recruitment/add', 'recruitment')

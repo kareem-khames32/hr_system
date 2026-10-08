@@ -472,6 +472,8 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
       { id: 'my-jobs', label: 'وظائف داخلية', icon: <Briefcase size={20} />, href: '/my/jobs' },
       // B3.4-ب: المقابلات اللي الموظف محاور فيها وبطاقته
       { id: 'my-interviews', label: 'مقابلاتي', icon: <ClipboardList size={20} />, href: '/my/interviews' },
+      // B3.6: أهداف الموظف وفريقه (بتظهر لما موديول الأداء مفتوح) — نفس شاشة «الأهداف»
+      { id: 'my-goals', label: 'الأهداف', icon: <Target size={20} />, href: '/performance/goals' },
       { id: 'my-attendance', label: 'حضوري', icon: <Clock size={20} />, href: '/my/attendance' },
       { id: 'my-leaves', label: 'إجازاتي وأرصدتي', icon: <Calendar size={20} />, href: '/my/leaves' },
       { id: 'my-payslips', label: 'قسائم راتبي', icon: <Wallet size={20} />, href: '/my/payslips' },
