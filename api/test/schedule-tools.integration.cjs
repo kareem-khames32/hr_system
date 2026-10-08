@@ -1,6 +1,7 @@
 'use strict'
 // B5.5 (أ) على SQL حقيقي: أدوات الجدولة — الميزة الفرعية مقفولة افتراضيًا، ترحيلي 161 و162، أنماط التدوير بنطاقها، نسخ أسبوع وتطبيق نمط من خلال
-// حفظ الجدول الأسبوعي القايم، ونشر جدول أسبوع لفرع بإشعار لموظفيه. قاعدة اختبار عشوائية تُحذف في النهاية.
+// حفظ الجدول الأسبوعي القايم، ونشر جدول أسبوع لفرع بإشعار لموظفيه. و(ب): قواعد الراحة وحد الساعات والتغطية بالمهارة (ترحيلات 163–165)، والفحص بالطلب
+// وعند النشر (مخالفة «منع» بتوقّفه إلا بسبب تجاوز). قاعدة اختبار عشوائية تُحذف في النهاية.
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), crypto = require('node:crypto')
@@ -16,6 +17,7 @@ const uploads = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-schedule-tools-files-'
 const secret = crypto.randomBytes(48).toString('hex')
 const jwt = new (require('../node_modules/@nestjs/jwt').JwtService)({ secret })
 const rules = require('../src/attendance/schedule-tools')
+const checks = require('../src/attendance/schedule-checks')
 const MIGRATIONS = ['20261010_161_shift_rotations.sql', '20261010_162_schedule_publications.sql'].map(name => path.resolve(apiRoot, '..', 'docs', 'migrations', 'payroll', name))
 let master, pool, app, ds, base, modules, queue, created = false, sequence = 0
 const B = {}, E = {}, U = {}, S = {}, R = {}
@@ -240,4 +242,109 @@ test('ST-05: النشر — سجل لفرع في النطاق بعدد موظف�
   assert.deepEqual(ok(await request(U.schedCairo, 'GET', T)).publications, [])
   ok(await publish(U.schedCairo, { week: week(2), branchId: B.cairo.id }), 201)
   assert.equal(ok(await request(U.admin, 'GET', T)).publications.length, 3)
+})
+
+const CHECK_MIGRATIONS = ['20261010_163_schedule_rules.sql', '20261010_164_shift_coverage_rules.sql', '20261010_165_schedule_violations.sql'].map(name => path.resolve(apiRoot, '..', 'docs', 'migrations', 'payroll', name))
+const runCheckMigrations = async () => { assert.match(database, NAME); for (const file of CHECK_MIGRATIONS) for (const batch of migrate.splitBatches(fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n'))) await pool.request().batch(batch) }
+const dayOf = (weekStart, offset) => { const date = new Date(`${weekStart}T12:00:00`); date.setDate(date.getDate() + offset); return ymd(date) }
+const saveRule = (user, body, id) => request(user, id ? 'PATCH' : 'POST', id ? `${T}/rules/${id}` : `${T}/rules`, body)
+const saveCoverage = (user, body, id) => request(user, id ? 'PATCH' : 'POST', id ? `${T}/coverage/${id}` : `${T}/coverage`, body)
+const check = async (user, weekStart, branch) => ok(await request(user, 'GET', `${T}/checks?week=${weekStart}&branchId=${branch.id}`))
+const found = async (user, weekStart, branch) => (await check(user, weekStart, branch)).violations.map(row => [row.kind, row.severity, row.employeeName ?? row.shiftName, row.detail]).sort((a, b) => (a[2] + a[0]).localeCompare(b[2] + b[0], 'ar'))
+
+test('ST-06: قواعد فحص الجدول — بنطاق فرعها وبشدتين؛ الفحص بيشوف الراحة عند تغيير الوردية بين أسبوعين ووردية اليوم الخاص وأيام الراحة؛ والتغطية بالمهارة وشهادتها السارية', async () => {
+  for (const migration of CHECK_MIGRATIONS) {
+    const text = fs.readFileSync(migration), code = path.basename(migration).split('_')[1]
+    assert.equal(text.includes(Buffer.from('\r\n')), false, 'LF بس — git بيخزّن الملف LF')
+    assert.ok(String(text).match(/THROW \d+/g).every(item => new RegExp(`^THROW ${code}0\\d\\d$`).test(item)), code)
+    assert.doesNotMatch(String(text), /\bDROP\b|\bTRUNCATE\b|\bDELETE\b|\bINSERT\b|\bUPDATE\b/i)
+  }
+  await runCheckMigrations()
+  for (const table of ['schedule_violations', 'shift_coverage_rules', 'schedule_rules']) await pool.request().batch(`DROP TABLE dbo.${table}`)
+  checks.resetScheduleChecksCache()
+  // قبل الترحيلات: مفيش فحص، والنشر شغال زي الأول
+  assert.equal(ok(await request(U.sched, 'GET', `${T}/rules`)).ready, false)
+  refused(await saveRule(U.sched, { kind: 'MIN_REST_HOURS', limitHours: 11, severity: 'BLOCK', branchId: B.riyadh.id }), 400, checks.SCHEDULE_CHECKS_MIGRATION_MISSING)
+  assert.deepEqual((await check(U.sched, week(2), B.riyadh)).violations, [])
+  ok(await request(U.sched, 'POST', `${T}/publish`, { week: week(2), branchId: B.riyadh.id }), 201)
+  await runCheckMigrations(); await runCheckMigrations()
+  const ready = ok(await request(U.sched, 'GET', `${T}/rules`))
+  assert.deepEqual([ready.ready, ready.kinds.map(row => row.code), ready.severities.map(row => row.code), ready.rules, ready.coverage], [true, ['MIN_REST_HOURS', 'MAX_DAY_HOURS', 'MAX_WEEK_HOURS'], ['WARN', 'BLOCK'], [], []])
+  // القواعد: القيم، والنطاق (فرع تاني «مش موجود»، و«كل الفروع» لحساب بكل الفروع)
+  const rest = { kind: 'MIN_REST_HOURS', limitHours: 11, severity: 'BLOCK', branchId: B.riyadh.id }
+  for (const [body, message] of [[{ ...rest, kind: 'NAPS' }, 'اختار نوع القاعدة'], [{ ...rest, limitHours: 0 }, 'الحد بالساعات رقم موجب لحد 24 (بمنزلتين بالكتير)'], [{ ...rest, limitHours: 25 }, 'الحد بالساعات رقم موجب لحد 24 (بمنزلتين بالكتير)'],
+    [{ ...rest, limitHours: '11' }, 'الحد بالساعات رقم موجب لحد 24 (بمنزلتين بالكتير)'], [{ ...rest, severity: 'STOP' }, 'الشدة «تحذير» أو «منع»']]) refused(await saveRule(U.sched, body), 400, message)
+  refused(await saveRule(U.sched, { ...rest, branchId: B.cairo.id }), 404, rules.BRANCH_NOT_FOUND)
+  assert.equal((await saveRule(U.sched, { ...rest, branchId: null })).status, 403)
+  R.rest = ok(await saveRule(U.sched, rest), 201).id
+  R.day = ok(await saveRule(U.sched, { kind: 'MAX_DAY_HOURS', limitHours: 12, severity: 'WARN', branchId: B.riyadh.id }), 201).id
+  R.week = ok(await saveRule(U.admin, { kind: 'MAX_WEEK_HOURS', limitHours: 48, severity: 'WARN', branchId: null }), 201).id
+  refused(await saveRule(U.schedCairo, rest, R.rest), 404, checks.RULE_NOT_FOUND)
+  assert.equal((await saveRule(U.sched, { kind: 'MAX_WEEK_HOURS', limitHours: 60, severity: 'WARN', branchId: B.riyadh.id }, R.week)).status, 403)
+  assert.deepEqual([ok(await request(U.sched, 'GET', `${T}/rules`)).rules.length, ok(await request(U.schedCairo, 'GET', `${T}/rules`)).rules.map(row => row.id)], [3, [R.week]])
+  // جدول أسبوعين نضاف: أول ليلي الأسبوع اللي قبله ثم صباحي؛ تاني مسائي ووردية يوم خاص 13 ساعة التلات؛ تالت صباحي وأيام راحته الجمعة والسبت
+  const W = week(13), before = week(12)
+  const schedule = await repo('WorkSchedule').save({ name: 'دوام خمس أيام', weekendDays: 'FRI,SAT', startTime: '08:00', endTime: '16:00', isDefault: false, isActive: true, branchId: null })
+  await repo('Employee').update({ id: E.three.id }, { workScheduleId: schedule.id })
+  ok(await request(U.sched, 'POST', '/attendance/schedule', { entries: [entry(E.one, before, S.night), entry(E.one, W, S.morning), entry(E.two, W, S.evening), entry(E.three, W, S.morning)] }), 201)
+  await repo('ScheduleDayOverride').save({ employeeId: E.two.id, date: dayOf(W, 2), shiftId: null, shiftName: 'وردية طويلة', startTime: '06:00', endTime: '19:00' })
+  assert.deepEqual(await found(U.sched, W, B.riyadh), [
+    // أول: نهاية ليلي السبت 06:00 الأحد وبداية صباحي 08:00 = ساعتين راحة؛ وسبع أيام × 8 = 56 ساعة
+    ['MAX_WEEK_HOURS', 'WARN', 'موظف أول', '56 ساعة في الأسبوع — الحد 48'], ['MIN_REST_HOURS', 'BLOCK', 'موظف أول', 'راحة 2 ساعة بين ورديتين — الحد 11'],
+    // تاني: وردية التلات 13 ساعة، وبعد مسائي الاتنين (22:00) بـ8 ساعات، وأسبوعه 6×8 + 13 = 61
+    ['MAX_DAY_HOURS', 'WARN', 'موظف تاني', 'وردية 13 ساعة — الحد 12'], ['MAX_WEEK_HOURS', 'WARN', 'موظف تاني', '61 ساعة في الأسبوع — الحد 48'], ['MIN_REST_HOURS', 'BLOCK', 'موظف تاني', 'راحة 8 ساعة بين ورديتين — الحد 11'],
+    // تالت: خمس أيام × 8 = 40 — من غير مخالفات
+  ].sort((a, b) => (a[2] + a[0]).localeCompare(b[2] + b[0], 'ar')))
+  const summary = await check(U.sched, W, B.riyadh)
+  assert.deepEqual([summary.warnings, summary.blocked, summary.violations[0].severityLabel != null], [3, 2, true])
+  // النطاق والقيم
+  refused(await request(U.sched, 'GET', `${T}/checks?week=${W}&branchId=${B.cairo.id}`), 404, rules.BRANCH_NOT_FOUND)
+  refused(await request(U.sched, 'GET', `${T}/checks?week=${dayOf(W, 1)}&branchId=${B.riyadh.id}`), 400, 'الأسبوع: تاريخ يوم أحد (بداية الأسبوع)')
+  assert.equal((await request(U.viewer, 'GET', `${T}/checks?week=${W}&branchId=${B.riyadh.id}`)).status, 403)
+  // قاعدة مقفولة مابتتفحصش
+  ok(await saveRule(U.admin, { kind: 'MAX_WEEK_HOURS', limitHours: 48, severity: 'WARN', branchId: null, isActive: false }, R.week))
+  assert.deepEqual((await found(U.sched, W, B.riyadh)).map(row => row[0]).sort(), ['MAX_DAY_HOURS', 'MIN_REST_HOURS', 'MIN_REST_HOURS'])
+  // التغطية: الصباحي محتاج واحد بمهارة «لحام» متوسط — لحساب بكل الفروع
+  const skill = await repo('Skill').save({ name: 'لحام', category: null, description: null, isActive: true, updatedByUserId: U.admin.id, updatedAt: new Date() })
+  const need = { shiftId: S.morning.id, skillId: skill.id, minLevel: 'intermediate', minCount: 1, severity: 'WARN' }
+  assert.equal((await saveCoverage(U.sched, need)).status, 403)
+  for (const [body, message] of [[{ ...need, shiftId: 'x' }, 'اختار الوردية'], [{ ...need, minLevel: 'master' }, 'اختار أقل مستوى للمهارة'], [{ ...need, minCount: 0 }, 'أقل عدد رقم صحيح من 1 لحد 500'],
+    [{ ...need, shiftId: S.closed.id }, 'الوردية أو المهارة مش موجودة أو مقفولة'], [{ ...need, skillId: 999999 }, 'الوردية أو المهارة مش موجودة أو مقفولة']]) refused(await saveCoverage(U.admin, body), 400, message)
+  R.cover = ok(await saveCoverage(U.admin, need), 201).id
+  const coverage = async () => (await found(U.sched, W, B.riyadh)).filter(row => row[0] === 'SKILL_COVERAGE')
+  assert.deepEqual(await coverage(), [['SKILL_COVERAGE', 'WARN', 'صباحي', 'الوردية محتاجة 1 بمهارة «لحام» — الموجود 0']])
+  // مستوى أقل مايتعدّش؛ مستوى كفاية بشهادة سارية بيقفلها؛ وشهادة منتهية قبل الأسبوع بترجّعها
+  const give = (person, level, validUntil) => pool.request().query(`DELETE FROM dbo.employee_skills WHERE [employeeId] = ${Number(person.id)} AND [skillId] = ${Number(skill.id)};
+    INSERT INTO dbo.employee_skills ([employeeId], [name], [level], [skillId], [source], [validUntil], [createdAt]) VALUES (${Number(person.id)}, N'لحام', N'${level}', ${Number(skill.id)}, N'CERTIFICATE', ${validUntil ? `'${validUntil}'` : 'NULL'}, SYSDATETIME())`)
+  await give(E.one, 'beginner', null); assert.equal((await coverage()).length, 1)
+  await give(E.one, 'advanced', dayOf(W, 3)); assert.deepEqual(await coverage(), [])
+  await give(E.one, 'advanced', dayOf(W, -1)); assert.equal((await coverage()).length, 1)
+  await give(E.three, 'expert', null); assert.deepEqual(await coverage(), [])
+  const audit = await pool.request().query(`SELECT [action], COUNT(*) AS n FROM dbo.audit_log WHERE [entityType] IN (N'schedule_rule', N'shift_coverage_rule') GROUP BY [action]`)
+  assert.deepEqual(Object.fromEntries(audit.recordset.map(row => [row.action, Number(row.n)])), { SCHEDULE_RULE_CREATED: 3, SCHEDULE_RULE_UPDATED: 1, SHIFT_COVERAGE_CREATED: 1 })
+})
+
+test('ST-07: النشر مع الفحص — مخالفة «منع» بتوقّف النشر من غير أي أثر إلا بسبب تجاوز؛ وكل مخالفات لحظة النشر بتتسجّل عليه، والسبب على مخالفات المنع بس', async () => {
+  const W = week(13)
+  const publish = (user, body) => request(user, 'POST', `${T}/publish`, { week: W, branchId: B.riyadh.id, ...body })
+  const counts = async () => [await repo('SchedulePublication').count({ where: { weekStart: W } }), Number((await query(`SELECT COUNT(*) AS n FROM [outbox_events] WHERE [eventType] = N'SCHEDULE_PUBLISHED'`))[0].n), await repo('ScheduleViolation').count()]
+  const before = await counts()
+  refused(await publish(U.sched, {}), 409, 'الجدول فيه 2 مخالفة «منع» — صلّحها، أو اكتب سبب التجاوز وانشر')
+  refused(await publish(U.sched, { overrideReason: 'ض' }), 400, 'سبب التجاوز من حرفين لحد 300 حرف')
+  assert.deepEqual(await counts(), before, 'النشر المرفوض من غير سجل ولا حدث ولا مخالفات')
+  const done = ok(await publish(U.sched, { overrideReason: '  ضغط   شغل استثنائي ' }), 201)
+  assert.deepEqual([done.employeesCount, done.warnings, done.blocked], [3, 1, 2])
+  const saved = (await repo('ScheduleViolation').find({ where: { publicationId: done.id }, order: { id: 'ASC' } })).map(row => [row.ruleKind, row.severity, row.overrideReason]).sort((a, b) => a[0].localeCompare(b[0]))
+  assert.deepEqual(saved, [['MAX_DAY_HOURS', 'WARN', null], ['MIN_REST_HOURS', 'BLOCK', 'ضغط شغل استثنائي'], ['MIN_REST_HOURS', 'BLOCK', 'ضغط شغل استثنائي']])
+  const [audit] = (await pool.request().query(`SELECT TOP (1) [after] FROM dbo.audit_log WHERE [action] = N'SCHEDULE_PUBLISHED' ORDER BY [id] DESC`)).recordset
+  assert.deepEqual((({ warnings, blocked, overrideReason }) => [warnings, blocked, overrideReason])(JSON.parse(audit.after)), [1, 2, 'ضغط شغل استثنائي'])
+  // تصليح المخالفات: «منع» بقت «تحذير» — النشر من غير سبب، والمخالفات بتتسجّل من غير سبب
+  ok(await saveRule(U.sched, { kind: 'MIN_REST_HOURS', limitHours: 11, severity: 'WARN', branchId: B.riyadh.id }, R.rest))
+  const soft = ok(await publish(U.sched, { overrideReason: 'مش مطلوب' }), 201)
+  assert.deepEqual([soft.warnings, soft.blocked, [...new Set((await repo('ScheduleViolation').find({ where: { publicationId: soft.id } })).map(row => row.overrideReason))]], [3, 0, [null]])
+  // فرع من غير مخالفات: نشر من غير صفوف مخالفات
+  ok(await request(U.admin, 'POST', '/attendance/schedule', { entries: [entry(E.cairo, W, S.morning)] }), 201)
+  await pool.request().query(`UPDATE dbo.shift_coverage_rules SET [isActive] = 0`)
+  const clean = ok(await request(U.schedCairo, 'POST', `${T}/publish`, { week: W, branchId: B.cairo.id }), 201)
+  assert.deepEqual([clean.warnings, clean.blocked, await repo('ScheduleViolation').count({ where: { publicationId: clean.id } })], [0, 0, 0])
 })

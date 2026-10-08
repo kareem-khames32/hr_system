@@ -147,7 +147,7 @@ export function applyFields(body: unknown, today: string): { fields: ApplyFields
   return { fields: { rotationId: input.rotationId, employeeIds: [...new Set(input.employeeIds as number[])], fromWeek, weeks: input.weeks, startIndex }, error: null }
 }
 
-export interface PublishFields { week: string; branchId: number; note: string | null }
+export interface PublishFields { week: string; branchId: number; note: string | null; overrideReason: string | null }
 /** نشر جدول أسبوع لفرع */
 export function publishFields(body: unknown): { fields: PublishFields | null; error: string | null } {
   const input = (body ?? {}) as Record<string, unknown>
@@ -156,7 +156,10 @@ export function publishFields(body: unknown): { fields: PublishFields | null; er
   if (!positiveId(input.branchId)) return { fields: null, error: 'اختار الفرع' }
   const note = cleanText(input.note, 300)
   if (note === null) return { fields: null, error: 'الملاحظة 300 حرف بالكتير' }
-  return { fields: { week, branchId: input.branchId, note: note || null }, error: null }
+  // (ب) سبب تجاوز مخالفات «منع» — اختياري هنا، ومطلوب لو الفحص لقى مخالفة منع
+  const overrideReason = cleanText(input.overrideReason, 300)
+  if (overrideReason === null || (overrideReason !== '' && overrideReason.length < 2)) return { fields: null, error: 'سبب التجاوز من حرفين لحد 300 حرف' }
+  return { fields: { week, branchId: input.branchId, note: note || null, overrideReason: overrideReason || null }, error: null }
 }
 
 let ready: boolean | null = null

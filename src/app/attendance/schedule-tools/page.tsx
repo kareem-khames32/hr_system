@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { CalendarRange } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import { fetchEmployees, type ApiEmployee } from '@/lib/api'
+import RulesPanel from './RulesPanel'
 import {
   applyShiftRotation, copyScheduleWeek, createShiftRotation, fetchScheduleTools, publishScheduleWeek, updateShiftRotation, type ApiScheduleTools, type ApiShiftRotation, type ScheduleSkip,
 } from '@/lib/schedule-tools-api'
@@ -26,7 +27,7 @@ export default function ScheduleToolsPage() {
   const [copy, setCopy] = useState({ fromWeek: weekFromNow(0), toWeek: weekFromNow(1), branchId: '', overwrite: false })
   const [rotation, setRotation] = useState(emptyRotation())
   const [apply, setApply] = useState({ rotationId: '', branchId: '', employeeIds: [] as string[], fromWeek: weekFromNow(1), weeks: '4', startIndex: '0' })
-  const [publish, setPublish] = useState({ week: weekFromNow(1), branchId: '', note: '' })
+  const [publish, setPublish] = useState({ week: weekFromNow(1), branchId: '', note: '', overrideReason: '' })
 
   const load = useCallback(() => {
     fetchScheduleTools().then(setData).catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل أدوات الجدولة'))
@@ -61,7 +62,8 @@ export default function ScheduleToolsPage() {
   }
   const doPublish = () => {
     if (!publish.branchId || !isSunday(publish.week)) return setError('اختار الفرع وأسبوع يبدأ بيوم أحد')
-    return run(() => publishScheduleWeek({ week: publish.week, branchId: Number(publish.branchId), note: publish.note.trim() }), (result: { employeesCount: number }) => `اتنشر الجدول واتبعت إشعار لـ${result.employeesCount} موظف`)
+    return run(() => publishScheduleWeek({ week: publish.week, branchId: Number(publish.branchId), note: publish.note.trim(), ...(publish.overrideReason.trim() ? { overrideReason: publish.overrideReason.trim() } : {}) }),
+      (result: { employeesCount: number; warnings: number; blocked: number }) => `اتنشر الجدول واتبعت إشعار لـ${result.employeesCount} موظف${result.warnings || result.blocked ? ` — اتسجّلت ${result.warnings + result.blocked} مخالفة` : ''}`)
   }
 
   const shiftName = (id: number) => { const shift = data?.shifts.find((row) => row.id === id); return shift ? `${shift.name} (${shift.startTime}–${shift.endTime})` : `وردية #${id}` }
@@ -199,6 +201,8 @@ export default function ScheduleToolsPage() {
           </div>
         )}
 
+        {data?.ready && <RulesPanel tools={data} week={publish.week} branchId={publish.branchId} />}
+
         {data?.ready && (
           <div className="card space-y-3" data-schedule-publish>
             <h2 className="text-lg font-semibold text-gray-800">نشر جدول الأسبوع</h2>
@@ -215,6 +219,9 @@ export default function ScheduleToolsPage() {
               </label>
               <label className="flex-1 min-w-48 text-sm text-gray-600">ملاحظة
                 <input className="input w-full mt-1" maxLength={300} value={publish.note} onChange={(event) => setPublish({ ...publish, note: event.target.value })} />
+              </label>
+              <label className="flex-1 min-w-48 text-sm text-gray-600">سبب تجاوز مخالفات «منع» (لو فيه)
+                <input className="input w-full mt-1" maxLength={300} value={publish.overrideReason} onChange={(event) => setPublish({ ...publish, overrideReason: event.target.value })} />
               </label>
               <button type="button" className="btn-primary disabled:opacity-50" disabled={busy} onClick={doPublish}>نشر</button>
             </div>

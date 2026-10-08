@@ -7,6 +7,7 @@ const apiRoot = path.resolve(__dirname, '..')
 require('../node_modules/ts-node').register({ project: path.join(apiRoot, 'tsconfig.json'), transpileOnly: true })
 require('../node_modules/reflect-metadata')
 const rules = require('../src/attendance/schedule-tools')
+const checks = require('../src/attendance/schedule-checks')
 const registry = require('../src/modules-registry/registry')
 const events = require('../src/notifications/notification-events')
 const read = rel => fs.readFileSync(path.join(apiRoot, 'src', rel), 'utf8').replace(/\r\n/g, '\n')
@@ -36,7 +37,7 @@ test('STU-02: قواعد النمط والنسخ والتطبيق والنشر �
   assert.deepEqual(rules.applyFields({ rotationId: 2, employeeIds: [4, 4, 9], fromWeek: '2026-10-11', weeks: 3 }, today).fields, { rotationId: 2, employeeIds: [4, 9], fromWeek: '2026-10-11', weeks: 3, startIndex: 0 })
   assert.deepEqual([{ employeeIds: [4], fromWeek: '2026-10-11', weeks: 1 }, { rotationId: 2, employeeIds: [], fromWeek: '2026-10-11', weeks: 1 }, { rotationId: 2, employeeIds: [4], fromWeek: '2026-10-04', weeks: 1 },
     { rotationId: 2, employeeIds: [4], fromWeek: '2026-10-11', weeks: 13 }, { rotationId: 2, employeeIds: [4], fromWeek: '2026-10-11', weeks: 1, startIndex: -1 }].map(body => rules.applyFields(body, today).fields), [null, null, null, null, null])
-  assert.deepEqual(rules.publishFields({ week: '2026-10-11', branchId: 3, note: ' ملاحظة ' }).fields, { week: '2026-10-11', branchId: 3, note: 'ملاحظة' })
+  assert.deepEqual(rules.publishFields({ week: '2026-10-11', branchId: 3, note: ' ملاحظة ' }).fields, { week: '2026-10-11', branchId: 3, note: 'ملاحظة', overrideReason: null })
   assert.deepEqual([{ week: '2026-10-12', branchId: 3 }, { week: '2026-10-11' }, { week: '2026-10-11', branchId: 3, note: 'x'.repeat(301) }].map(body => rules.publishFields(body).fields), [null, null, null])
 })
 
@@ -46,7 +47,7 @@ test('STU-03: مصدر الكود — المسارات ورا الموديول �
   assert.deepEqual([registry.routeOwner('/attendance/schedule-tools'), registry.routeOwner('/attendance/weekly-schedule')], [{ module: 'shifts', feature: 'shifts.advanced' }, { module: 'shifts', feature: null }])
   const controller = read('attendance/schedule-tools.controller.ts')
   assert.match(controller, /@RequireModule\('shifts'\)\n@RequireFeature\('shifts\.advanced'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)/)
-  assert.deepEqual([(controller.match(/@Perm\('attendance\.manage'\)/g) ?? []).length, (controller.match(/@(Get|Post|Put|Patch|Delete)\(/g) ?? []).length], [6, 6])
+  assert.deepEqual([(controller.match(/@Perm\('attendance\.manage'\)/g) ?? []).length, (controller.match(/@(Get|Post|Put|Patch|Delete)\(/g) ?? []).length], [12, 12]) // (ب): + القواعد والتغطية والفحص
   const service = read('attendance/schedule-tools.service.ts')
   assert.equal((service.match(/await this\.attendance\.upsertSchedule\(/g) ?? []).length, 2, 'النسخ والتطبيق بيكتبوا من حفظ الجدول القايم')
   assert.doesNotMatch(service, /INSERT INTO|UPDATE dbo\.weekly_schedule_entries|DELETE FROM|getRepository\(ScheduleEntry\)/, 'مفيش كتابة مباشرة على الجدول الأسبوعي')
@@ -70,4 +71,41 @@ test('STU-04: الواجهة — «أدوات الجدولة»: نسخ، أنم�
   for (const route of ['/rotations', '/copy-week', '/apply-rotation', '/publish']) assert.ok(api.includes(route), route)
   assert.match(web('components/layout/Sidebar.tsx'), /\{ label: 'أدوات الجدولة', href: '\/attendance\/schedule-tools', perm: 'attendance\.manage' \}/)
   assert.match(web('components/layout/pageTitles.ts'), /\['\/attendance\/schedule-tools', 'أدوات الجدولة'\]/)
+})
+
+test('STU-05: فحص الجدول — مدة الوردية والراحة (بالليلي)، ومخالفة واحدة لكل قاعدة بأسوأ قيمة، وقواعد النشر', () => {
+  assert.deepEqual([checks.shiftMinutes({ start: '08:00', end: '16:00' }), checks.shiftMinutes({ start: '22:00', end: '06:00' }), checks.shiftMinutes({ start: '06:00', end: '19:00' }), checks.shiftMinutes({ start: '09:00', end: '09:00' })], [480, 480, 780, 1440])
+  const morning = { start: '08:00', end: '16:00' }, evening = { start: '14:00', end: '22:00' }, night = { start: '22:00', end: '06:00' }
+  assert.deepEqual([checks.restMinutes(morning, morning), checks.restMinutes(evening, morning), checks.restMinutes(night, morning), checks.restMinutes(night, night), checks.restMinutes(morning, night)], [960, 600, 120, 960, 1800])
+  const all = [{ kind: 'MIN_REST_HOURS', limitHours: 11, severity: 'BLOCK' }, { kind: 'MAX_DAY_HOURS', limitHours: 12, severity: 'WARN' }, { kind: 'MAX_WEEK_HOURS', limitHours: 48, severity: 'WARN' }]
+  // ليلي قبل الأسبوع ثم صباحي سبع أيام
+  assert.deepEqual(checks.employeeViolations(5, [night, morning, morning, morning, morning, morning, morning, morning], all).map(row => [row.kind, row.severity, row.detail]),
+    [['MIN_REST_HOURS', 'BLOCK', 'راحة 2 ساعة بين ورديتين — الحد 11'], ['MAX_WEEK_HOURS', 'WARN', '56 ساعة في الأسبوع — الحد 48']])
+  // أيام الراحة بتفصل: مفيش راحة قصيرة ولا ساعات زيادة
+  assert.deepEqual(checks.employeeViolations(5, [null, morning, morning, morning, morning, morning, null, null], all), [])
+  // اليوم اللي قبل الأسبوع بيدخل في الراحة بس، مش في ساعات الأسبوع
+  assert.deepEqual(checks.employeeViolations(5, [{ start: '00:00', end: '23:00' }, null, null, null, null, null, null, null], all), [])
+  assert.deepEqual(checks.employeeViolations(5, [null, { start: '06:00', end: '19:00' }, null, null, null, null, null, null], all).map(row => row.detail), ['وردية 13 ساعة — الحد 12'])
+  // شدة مش معروفة بتتجاهل، والحد بالكسور
+  assert.deepEqual(checks.employeeViolations(5, [null, morning, null, null, null, null, null, null], [{ kind: 'MAX_DAY_HOURS', limitHours: 7.5, severity: 'LOUD' }, { kind: 'MAX_DAY_HOURS', limitHours: 7.5, severity: 'WARN' }]).map(row => row.detail),
+    ['وردية 8 ساعة — الحد 7.5'])
+  assert.deepEqual(checks.ruleFields({ kind: 'MAX_WEEK_HOURS', limitHours: 48, severity: 'BLOCK' }).fields, { kind: 'MAX_WEEK_HOURS', limitHours: 48, severity: 'BLOCK', branchId: null, isActive: true })
+  assert.deepEqual([{ kind: 'MAX_DAY_HOURS', limitHours: 25, severity: 'WARN' }, { kind: 'MAX_WEEK_HOURS', limitHours: 169, severity: 'WARN' }, { kind: 'MAX_DAY_HOURS', limitHours: 8.123, severity: 'WARN' }, { kind: 'MAX_DAY_HOURS', limitHours: 8 }]
+    .map(body => checks.ruleFields(body).fields), [null, null, null, null])
+  assert.deepEqual(checks.coverageFields({ shiftId: 2, skillId: 3, minLevel: 'advanced', minCount: 2, severity: 'WARN' }).fields, { shiftId: 2, skillId: 3, minLevel: 'advanced', minCount: 2, severity: 'WARN', isActive: true })
+  assert.deepEqual([rules.publishFields({ week: '2026-10-11', branchId: 3, overrideReason: ' سبب  واضح ' }).fields.overrideReason, rules.publishFields({ week: '2026-10-11', branchId: 3 }).fields.overrideReason,
+    rules.publishFields({ week: '2026-10-11', branchId: 3, overrideReason: 'س' }).fields], ['سبب واضح', null, null])
+  // مصدر الكود: الفحص قبل أي كتابة في النشر، والمنع بيوقّف من غير سبب، والمخالفات بتتسجّل على النشر
+  const service = read('attendance/schedule-tools.service.ts')
+  const publish = service.slice(service.indexOf('async publish('), service.indexOf('// ===== (ب) قواعد فحص الجدول'))
+  assert.ok(publish.indexOf('await weekViolations(em, fields.week, fields.branchId)') < publish.indexOf('getRepository(SchedulePublication).save('))
+  assert.match(publish, /if \(blocked > 0 && !fields\.overrideReason\) throw new ConflictException\(BLOCKED\(blocked\)\)/)
+  assert.match(publish, /overrideReason: item\.severity === 'BLOCK' \? fields\.overrideReason : null/)
+  const core = read('attendance/schedule-checks.ts')
+  assert.match(core, /const shift = special \?\? \(off\.has\(weekday\) \? null : weekly \?\? null\)/, 'وردية اليوم الخاص بتسبق، وأيام الراحة من جدول الدوام')
+  assert.match(core, /\(!skill\.validUntil \|\| skill\.validUntil >= week\)/)
+  assert.doesNotMatch(core, /INSERT INTO|UPDATE dbo|DELETE FROM|\.save\(|\.update\(/, 'الفحص قراءة بس')
+  const panel = web('app/attendance/schedule-tools/RulesPanel.tsx')
+  assert.match(panel, /\{tools\.companyWide && data\.skills\.length > 0 && \(/)
+  assert.match(web('app/attendance/schedule-tools/page.tsx'), /<RulesPanel tools=\{data\} week=\{publish\.week\} branchId=\{publish\.branchId\} \/>/)
 })

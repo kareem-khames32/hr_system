@@ -31,6 +31,7 @@ import { HolidayWorkOrder } from './holiday-work.entities'
 import { HolidayWorkController } from './holiday-work.controller'
 import { HolidayWorkService } from './holiday-work.service'
 
+import { ScheduleRule, ScheduleViolation, ShiftCoverageRule } from './schedule-checks'
 import { SchedulePublication, ShiftRotation } from './schedule-tools'
 import { ScheduleToolsController } from './schedule-tools.controller'
 import { ScheduleToolsService } from './schedule-tools.service'
@@ -65,6 +66,9 @@ import { ScheduleToolsService } from './schedule-tools.service'
       // B5.5: أدوات الجدولة (ميزة shifts.advanced، مقفولة افتراضيًا)
       ShiftRotation,
       SchedulePublication,
+      ScheduleRule,
+      ShiftCoverageRule,
+      ScheduleViolation,
     ]),
   ],
   controllers: [AttendanceController, AttendanceExemptionsController, AttendanceRuleController, HolidayWorkController, ScheduleToolsController],
