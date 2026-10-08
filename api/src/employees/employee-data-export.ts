@@ -5,6 +5,7 @@ import { recordAudit } from '../audit/audit'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, inBranchScope, userHasPerm } from '../auth/guards'
 import { LOAN_DEFERRAL_TYPE } from '../requests/loan-installment-requests'
+import { confidentialTexts, scrubConfidentialTexts } from './confidential-text'
 import { Employee } from './employee.entity'
 import { readGosiFirstRegistered } from './employee-gosi-registration'
 import { partialMaskingOn } from './employee-privacy'
@@ -15,12 +16,18 @@ import { canSeeEmployeesFinance, projectEmployee } from './employee-projection'
 // مش في الملف: حسابات الدخول، وملفات القضايا والتحقيقات وتقييمات الغير (فيها بيانات ناس تانية)، والملفات المرفوعة نفسها (مراجعها بس)،
 // والطلبات السرّية (بتتقري من أطرافها بس). والأقسام المالية والجزاءات بتطلع للي معاه صلاحيتها بس — اللي اتشال بيتقال في `omitted`.
 // P4A-B04: السرّية بحكم تعريف الطلب الفعلي (definitionCode ثم typeCode — زي شاشة الطلب)، وأي سجل اتعمل من طلب سري (عمود requestId) برّه كمان.
+// P4C-B01: رابط إنشاء الصف مابيحميش نص اتنسخ له بعدين بالتحديث (سبب حذف معال، وصف فقد عهدة، سبب أرشفة في ملف الموظف) — فأي خانة نصية
+// في ملف الموظف أو في أي قسم فيها نص سردي من طلب سري له بتطلع محجوبة (`confidential-text.ts`). وP4C-N02: أقساط السلف بتتصدّر عن طريق سلفتها.
 // P4B-B01: «سجل اتعمل من طلب سري» بكل أعمدة الربط الفعلية للطلب (مش `requestId` بس — قيد الدفتر بيشاور بـ`sourceRequestId`)، وبالقفزة التانية
 // (قسط السلفة ← السلفة ← الطلب). وP4B-N01: لو SQL اختار التصدير ضحية تعارض أقفال (1205) بيتعاد كله من الأول — التصدير قراءة وماكتبش حاجة.
 // P4A-B05: التصدير كله في معاملة واحدة ماسكة صف الموظف — حكم النطاق والبيانات المصدّرة من نفس اللحظة، ونقل الفرع بيستنى لحد ما التصدير يخلص.
 
 /** access: القسم محتاج صلاحية زيادة عن «تعديل الموظفين» — finance (البيانات المالية) أو penalties (لائحة الجزاءات) */
-export interface EmployeeDataSection { key: string; label: string; table: string; column: string; access?: 'finance' | 'penalties' }
+export interface EmployeeDataSection {
+  key: string; label: string; table: string; column: string; access?: 'finance' | 'penalties'
+  /** الجدول مالوش عمود موظف: سطوره لسطور الموظف في الجدول الأب (القسط ← السلفة). column هنا هو عمود الربط بالأب */
+  owner?: { table: string; column: string }
+}
 const FINANCE_SECTIONS: readonly string[] = ['salaryHistory', 'paymentChanges', 'loans', 'loanInstallments', 'deductions', 'bonuses', 'obligations', 'payrollItems']
 export const EMPLOYEE_DATA_EXCLUDED: readonly string[] = ['حساب الدخول', 'ملفات القضايا والتحقيقات', 'تقييمات الغير', 'الطلبات السرّية وأي سجل اتعمل منها', 'الملفات المرفوعة نفسها (مراجعها بس)']
 export const EMPLOYEE_DATA_SECTION_LIMIT = 5000
@@ -36,7 +43,9 @@ export const EMPLOYEE_DATA_SECTIONS: readonly EmployeeDataSection[] = [
   ['custody', 'العهد', 'custody_assignments'], ['issuedDocuments', 'المستندات الصادرة', 'hr_issued_documents'], ['letters', 'طلبات الخطابات', 'letter_requests'],
   ['policyAcknowledgements', 'إقرارات السياسات', 'policy_acknowledgements'], ['promotions', 'الترقيات', 'promotions'], ['goals', 'الأهداف', 'performance_goals'],
   ['onboardingTasks', 'مهام التهيئة', 'onboarding_tasks'], ['offboarding', 'ملفات إنهاء الخدمة', 'offboarding_cases'],
-].map(([key, label, table]): EmployeeDataSection => ({ key, label, table, column: 'employeeId',
+].map(([key, label, table]): EmployeeDataSection => ({ key, label, table,
+  // P4C-N02: أقساط السلف مالهاش عمود موظف — عن طريق سلفتها
+  ...(key === 'loanInstallments' ? { column: 'loanId', owner: { table: 'loans', column: 'employeeId' } } : { column: 'employeeId' }),
   ...(FINANCE_SECTIONS.includes(key) ? { access: 'finance' as const } : key === 'penalties' ? { access: 'penalties' as const } : {}) }))
   .concat([{ key: 'requests', label: 'الطلبات (غير السرّية)', table: 'requests', column: 'requesterId' }])
 
@@ -79,7 +88,11 @@ export class EmployeeDataExportService {
       if (!locked || !inBranchScope(scope, locked.branchId == null ? null : Number(locked.branchId))) throw new NotFoundException(EMPLOYEE_NOT_FOUND)
       const entity = await em.getRepository(Employee).findOneOrFail({ where: { id: employeeId } })
       entity.gosiFirstRegisteredAt = (await readGosiFirstRegistered(em, [employeeId])).get(employeeId) ?? null
-      const employee = projectEmployee(entity, user, await partialMaskingOn(em))
+      // النصوص السردية في الطلبات السرية اللي الموظف صاحبها أو موضوعها — أي خانة اتنسخت فيها بتتحجب
+      const confidential: Array<{ payload: string | null }> = await em.query(`SELECT r.[payload] FROM dbo.[requests] r
+        WHERE (r.[requesterId] = @0 OR (ISJSON(r.[payload]) = 1 AND TRY_CONVERT(int, JSON_VALUE(r.[payload], '$.employeeId')) = @0)) AND ${CONFIDENTIAL_REQUEST_SQL}`, [employeeId])
+      const secrets = confidentialTexts(confidential.map(row => row.payload))
+      const employee = scrubConfidentialTexts(projectEmployee(entity, user, await partialMaskingOn(em)), secrets)
       const column = async (table: string, name: string) => {
         const [exists]: Array<{ ok: number }> = await em.query('SELECT CASE WHEN COL_LENGTH(@0, @1) IS NOT NULL THEN 1 ELSE 0 END AS [ok]', [`dbo.${table}`, name])
         return Number(exists?.ok) === 1
@@ -105,13 +118,14 @@ export class EmployeeDataExportService {
         if (section.access === 'penalties' && !userHasPerm(user, 'cases.penalties')) { omitted.push({ key: section.key, label: section.label, reason: 'محتاج صلاحية لائحة الجزاءات' }); continue }
         if (section.access === 'finance' && !canSeeEmployeesFinance(user)) { omitted.push({ key: section.key, label: section.label, reason: 'محتاج صلاحية البيانات المالية' }); continue }
         // أسماء الجداول والأعمدة ثوابت من الكود (مش من الطلب)؛ الجدول أو العمود الناقص (قبل ترحيله) بيتعدّى
-        if (!(await column(section.table, section.column))) continue
+        if (!(await column(section.table, section.column)) || (section.owner && !(await column(section.owner.table, section.owner.column)))) continue
+        const mine = section.owner ? `s.[${section.column}] IN (SELECT o.[id] FROM dbo.[${section.owner.table}] o WHERE o.[${section.owner.column}] = @0)` : `s.[${section.column}] = @0`
         // الطلبات: السرّي بيتقري من أطرافه بس — برّه الملف خالص. وأي جدول سطره مشتق من طلب (بأي عمود ربط، أو عن طريق أبوه): السطر اللي طلبه سري برّه كمان
         const rows: unknown[] = section.key === 'requests'
           ? await em.query(`SELECT TOP (${EMPLOYEE_DATA_SECTION_LIMIT + 1}) r.* FROM dbo.[requests] r WHERE r.[requesterId] = @0 AND NOT ${CONFIDENTIAL_REQUEST_SQL} ORDER BY r.[id]`, [employeeId])
-          : await em.query(`SELECT TOP (${EMPLOYEE_DATA_SECTION_LIMIT + 1}) s.* FROM dbo.[${section.table}] s WHERE s.[${section.column}] = @0${notFromConfidential(section.table)} ORDER BY 1`, [employeeId])
+          : await em.query(`SELECT TOP (${EMPLOYEE_DATA_SECTION_LIMIT + 1}) s.* FROM dbo.[${section.table}] s WHERE ${mine}${notFromConfidential(section.table)} ORDER BY 1`, [employeeId])
         const truncated = rows.length > EMPLOYEE_DATA_SECTION_LIMIT
-        sections.push({ key: section.key, label: section.label, count: Math.min(rows.length, EMPLOYEE_DATA_SECTION_LIMIT), truncated, rows: truncated ? rows.slice(0, EMPLOYEE_DATA_SECTION_LIMIT) : rows })
+        sections.push({ key: section.key, label: section.label, count: Math.min(rows.length, EMPLOYEE_DATA_SECTION_LIMIT), truncated, rows: scrubConfidentialTexts(truncated ? rows.slice(0, EMPLOYEE_DATA_SECTION_LIMIT) : rows, secrets) })
       }
       const counts = Object.fromEntries(sections.filter(section => section.count > 0).map(section => [section.key, section.count]))
       await recordAudit(em, { category: 'EXPORT', action: 'EMPLOYEE_DATA_EXPORT', entityType: 'employee', entityId: employeeId, actorUserId: user.sub, branchId: entity.branchId ?? null,

@@ -84,7 +84,13 @@ test('EPU-04: مصدر الكود — الإعداد مبذور مقفول، و�
     { loan_installments: { column: 'loanId', table: 'loans' }, employment_periods: { column: 'offboardingCaseId', table: 'offboarding_cases' } }])
   assert.match(exporter, /AND NOT EXISTS \(SELECT 1 FROM dbo\.\[requests\] r WHERE r\.\[id\] = s\.\[\$\{name\}\] AND \$\{CONFIDENTIAL_REQUEST_SQL\}\)/)
   assert.match(exporter, /INNER JOIN dbo\.\[requests\] r ON r\.\[id\] = p\.\[\$\{name\}\] WHERE p\.\[id\] = s\.\[\$\{parent\.column\}\] AND \$\{CONFIDENTIAL_REQUEST_SQL\}/)
-  assert.match(exporter, /s\.\[\$\{section\.column\}\] = @0\$\{notFromConfidential\(section\.table\)\} ORDER BY 1/)
+  assert.match(exporter, /s WHERE \$\{mine\}\$\{notFromConfidential\(section\.table\)\} ORDER BY 1/)
+  // P4C-B01: ملف الموظف وكل الأقسام بيعدّوا على حجب النص المنسوخ من طلب سري؛ وP4C-N02: الأقساط عن طريق سلفتها
+  assert.match(exporter, /const employee = scrubConfidentialTexts\(projectEmployee\(entity, user, await partialMaskingOn\(em\)\), secrets\)/)
+  assert.match(exporter, /rows: scrubConfidentialTexts\(truncated \? rows\.slice\(0, EMPLOYEE_DATA_SECTION_LIMIT\) : rows, secrets\) \}\)/)
+  assert.match(exporter, /r\.\[requesterId\] = @0 OR \(ISJSON\(r\.\[payload\]\) = 1 AND TRY_CONVERT\(int, JSON_VALUE\(r\.\[payload\], '\$\.employeeId'\)\) = @0\)\) AND \$\{CONFIDENTIAL_REQUEST_SQL\}/)
+  assert.deepEqual(exportRules.EMPLOYEE_DATA_SECTIONS.find(section => section.key === 'loanInstallments'), { key: 'loanInstallments', label: 'أقساط السلف', table: 'loan_installments', column: 'loanId',
+    owner: { table: 'loans', column: 'employeeId' }, access: 'finance' })
   // كل عمود في مصدر الكيانات اسمه بيخلص بـRequestId وبيشاور على جدول requests لازم يبقى في القايمة (deductionRequestId وbonusRequestId جداولهم المصنّفة)
   const linkNames = new Set()
   const walk = dir => { for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -119,4 +125,29 @@ test('EPU-05 (CR4-SELF): سجل تغيير الهوية والجواز بنفس 
   const extras = fs.readFileSync(path.join(apiRoot, 'src', 'assets', 'employee-extras.controller.ts'), 'utf8').replace(/\r\n/g, '\n')
   assert.equal((extras.match(/projectEmployeeHistory\(/g) ?? []).length, (extras.match(/projectEmployeeHistory\([^\n]*(masking|partialMaskingOn\(this\.custody\.manager\))\)/g) ?? []).length, 'كل رد بسجل الموظف بياخد حكم الإخفاء')
   assert.match(extras, /documents: maskDocuments \? empDocs\.map\(doc => \(\{ \.\.\.doc, number: maskIdentityPartial\(doc\.number\) \}\)\) : empDocs,/)
+})
+
+test('EPU-06 (P4C-B01): حجب النص السردي المنسوخ من طلب سري — كله، أو مقطوع، أو قدامه بادئة؛ والأكواد والأرقام والتواريخ زي ما هي', () => {
+  const text = require('../src/employees/confidential-text')
+  const long = 'الموظف طلب حذف المعال بسبب خلاف عائلي خاص جدًا لا يجوز تداوله خارج لجنة شؤون الموظفين مطلقًا'
+  const secrets = text.confidentialTexts([JSON.stringify({ reason: ' طلاق ', description: long, leaveTypeCode: 'ANNUAL', fromDate: '2026-10-01', phone: '0551234567', amount: 321, newStatus: 'archived', payMethod: 'cash', startsAt: '2026-10-01 09:30',
+    nested: { notes: ['family issue'], rejectionReason: 'divorce', type: 'divorce2', detailsCode: 'PRIVATE_ARCHIVE_REASON', comment: '2026-10-01', remarks: '12345' } }), null, '', 'نص مش JSON'])
+  // السردي بس، والأطول أولًا: تحت خانة سردية أي نص بيدخل (كلمة واحدة، أو حروف كبيرة زي الأكواد) غير الأرقام والتواريخ؛ وتحت خانة بيانات (type، newStatus) لأ
+  assert.deepEqual(secrets, [long, 'PRIVATE_ARCHIVE_REASON', 'family issue', 'نص مش JSON', 'divorce', 'طلاق'])
+  assert.deepEqual([text.isConfidentialCopy('PRIVATE_ARCHIVE_REASON', secrets), text.isConfidentialCopy('ARCHIVE', secrets), text.isConfidentialCopy('12345', secrets)], [true, false, false])
+  const copy = value => text.isConfidentialCopy(value, secrets)
+  // النص كله، بمسافات، بادئة قدامه، مقطوع (أول 100 حرف)، بادئة ومقطوع، وجوه JSON
+  assert.deepEqual(['طلاق', '  طلاق  ', 'مكافأة: طلاق', long.slice(0, 100), ('مرحّل من قيد #5: ' + long).slice(0, 60), JSON.stringify({ note: long }), 'family issue'].map(copy), [true, true, true, true, true, true, true])
+  // جزء من النص السري (8 حروف سردية فأكتر) = نسخة مقطوعة من النص
+  assert.deepEqual([copy('خلاف عائلي خاص'), copy('family'), copy('عائلي')], [true, false, false])
+  // قيم البيانات مش سردية: الكود والتاريخ والموبايل والمبلغ، ونص تاني مالوش علاقة
+  assert.deepEqual(['ANNUAL', '2026-10-01', '0551234567', '321', 'سبب عادي مش من الطلب', 'ACTIVE', '', 'archived', 'cash', '2026-10-01 09:30'].map(copy),
+    [false, false, false, false, false, false, false, false, false, false])
+  // الكلمة السرية جوه خانة تانية (حتى ملزوقة في غيرها) = محجوبة — القراءة الأأمن
+  assert.deepEqual([copy('divorce'), copy('Reason: divorce'), copy('divorce2')], [true, true, true])
+  const at = new Date('2026-10-01T00:00:00Z')
+  const row = { id: 7, removeReason: 'طلاق', note: 'عادي', amount: 321.5, at, nested: [{ label: 'مصروفات: family issue', code: 'ANNUAL' }], empty: null }
+  assert.deepEqual(text.scrubConfidentialTexts(row, secrets), { id: 7, removeReason: text.CONFIDENTIAL_TEXT_MARK, note: 'عادي', amount: 321.5, at, nested: [{ label: text.CONFIDENTIAL_TEXT_MARK, code: 'ANNUAL' }], empty: null })
+  assert.equal(text.scrubConfidentialTexts(row, []), row, 'من غير طلبات سرية: نفس الكائن ومن غير أي شغل')
+  assert.doesNotMatch(fs.readFileSync(path.join(apiRoot, 'src', 'employees', 'confidential-text.ts'), 'utf8'), /EntityManager|getRepository|\.query\(/)
 })
