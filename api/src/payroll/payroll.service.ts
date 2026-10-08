@@ -66,6 +66,8 @@ import { postPayrollObligations, readPayrollNetProtectionSettings, readTypedObli
 import { describePayrollObligationLines } from './payroll-obligation-trace'
 import { describePayrollItemsLines, payrollLineColumns } from './payroll-item-lines'
 import { readSalaryItemOrder } from './salary-items'
+import { payrollItemStatutoryCents } from './payroll-statutory'
+import { applyPayrollStatutory, readPayrollStatutoryContext } from './payroll-statutory-run'
 import { approvedPayrollOvertimeClaims, assertUniqueOvertimeDays, closedOvertimePeriod, legacyExemptOvertimeSource, overtimeFinancialValue, overtimeTraceMatchesStoredTotals, projectOvertimeFinancialValue } from './overtime-financial'
 import { findPayrollPeriodContinuity, payrollPeriodBounds, PayrollPeriodError, payrollPolicyPeriodBounds, shiftPayrollPeriod } from './payroll-period'
 import { PAYROLL_SALARY_EVIDENCE_MODE_KEY, parsePayrollSalaryEvidenceMode, samePayrollRunSalarySource, selectPayrollRunSalary } from './payroll-run-salary'
@@ -828,6 +830,8 @@ export class PayrollService {
     // B1.5: القيم المؤرخة السارية في آخر يوم في الفترة (بتتجمّد مع النتيجة في breakdown.socialInsurance)، وتاريخ أول تسجيل لكل موظف
     const socialInsuranceRates = socialInsuranceContext.ratesAt(endDate)
     const gosiFirstRegistered = await readGosiFirstRegistered(em, covered.map(({ emp }) => emp.id))
+    // B4.4 (ب): الخصومات القانونية المصرية (ضريبة كسب العمل، صندوق الشهداء) — null والإعدادين مقفولين (الافتراضي): ولا خطوة زيادة في الحساب
+    const statutoryContext = await readPayrollStatutoryContext(em, { period: run.period, endDate, runType: run.runType })
     // الإجازة المرضية بأجر متدرج (قرار المالك 16 سبتمبر): شرائح كل نوع من فئة SICK، تُقرأ مرة للمسير
     const sickTiersByCode = new Map<string, SickPayTier[]>((await em.getRepository(LeaveType).find({ where: { category: 'SICK' } }))
       .map(type => [type.code, parseSickPayTiers(type.sickPayTiers)]))
@@ -1199,7 +1203,7 @@ export class PayrollService {
       const leaveLinesAll = payrollLeaveDeductionLines(paid.unpaidDeduction, unpaidOnlyDeduction, unpaidDays, sick.lines)
       const leaveLines = { ...leaveLinesAll, lines: withSuspensionLine(leaveLinesAll.lines, suspension.days) }
 
-      prepared.push(
+      const preparedItem = (
         items.create({
           employeeId: emp.id,
           // الخطوة 20: المصروف = القديم (LEGACY/SHADOW) أو نتيجة المحرك (POLICY) — paid يحمل المصدر المختار
@@ -1307,6 +1311,12 @@ export class PayrollService {
           }),
         })
       )
+      // B4.4 (ب): الخصومات القانونية بتتحسب على البند بعد ما اتبنى زي النهارده بالحرف (من سطور قسيمته نفسها) وبتتطرح من صافيه في الآخر —
+      // بعد حماية الصافي والتأمينات والأقساط وبدل ضغط العمل — وبتتسجّل في breakdown.statutory. الإعداد مقفول أو فرع مش مصري = البند زي ما هو
+      if (statutoryContext) {
+        totalNet = round2(totalNet - await applyPayrollStatutory(em, statutoryContext, run, preparedItem, emp.id, (member.snapshot as { branchId?: number | null } | null)?.branchId ?? emp.branchId))
+      }
+      prepared.push(preparedItem)
     }
 
     // الخطوة 20: POLICY لا يصرف نتيجة فيها قيمة غائبة أو فرق بلا سبب مكتوب؛ تُرجع المعاملة كلها.
@@ -1435,6 +1445,10 @@ export class PayrollService {
     const socialInsurance = Number(item.socialInsuranceDeduction ?? 0)
     const netBefore = round2(earned + Number(item.overtimeAmount) + Number(item.otherAdditions) - consumed - Number(item.unpaidLeaveDeduction) - socialInsurance)
     const deducted = legacyInstallmentNumber(plan.allocation.totals.deductedAmount)
+    // B4.4 (ب): الخصومات القانونية (ضريبة، صندوق) بتتطرح من الصافي بعد الخطة — زي بدل ضغط العمل بالعكس. بند من غيرها = صفر = نفس المقارنة بالحرف
+    const statutoryCents = payrollItemStatutoryCents(breakdown)
+    if (statutoryCents === null) throw new ConflictException('الخصومات القانونية في تفصيل المسير غير صالحة؛ أعد حساب المسودة')
+    const statutory = statutoryCents / 100
     const ids = plan.allocation.lines.filter(line => line.eligible).map(line => Number(line.installmentRef)).sort((a, b) => a - b)
     // الخطوة 22 (B5): لو سبقت السلف فئات أخرى بترتيب المالك فخطة الأقساط على رصيد موضعها المحفوظ، لا على الصافي بعد كل الخصومات.
     const slot = breakdown.collection?.loanSlot ?? null
@@ -1444,7 +1458,7 @@ export class PayrollService {
     const planNet = slot ? round2(Number(slot.netBeforeLoans) - socialInsurance).toFixed(2) : netBefore.toFixed(2), planCap = slot ? Number(slot.capConsumed).toFixed(2) : consumed.toFixed(2)
     if (plan.context.period !== run.period || plan.context.endDate !== run.endDate || plan.context.earnedFixedGross !== earned.toFixed(2) ||
         plan.context.capConsumed !== planCap || plan.context.netBeforeLoans !== planNet ||
-        Number(item.loanInstallments) !== deducted || Number(item.netPay) !== round2(netBefore - deducted + workPressure) ||
+        Number(item.loanInstallments) !== deducted || Number(item.netPay) !== round2(netBefore - deducted + workPressure - statutory) ||
         !Array.isArray(breakdown.installmentIds) || JSON.stringify([...breakdown.installmentIds].sort((a, b) => a - b)) !== JSON.stringify(ids)) {
       throw new ConflictException('مبالغ المسير أو مصادره لا تطابق خطة الأقساط المحفوظة؛ أعد حساب المسودة')
     }

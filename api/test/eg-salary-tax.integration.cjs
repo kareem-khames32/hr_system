@@ -132,7 +132,7 @@ test('EG-01: مسير حقيقي — راتب 15,000 مؤمَّن عليه ← 1
   assert.deepEqual(shown.rows.map(row => row.employeeId).sort((a, b) => a - b), [full.id, half.id, housed.id], 'موظف الفرع السعودي برّه المعاينة')
   // مثال C-EG-01 بالحرف
   assert.deepEqual(rowOf(full), { itemId: itemOf(full).id, employeeId: full.id, employeeName: full.fullName, employeeCode: full.employeeCode, netIncome: 13350, days: 30, annualized: 160200, taxable: 140200,
-    annualTax: 17790, tax: 1482.5 })
+    annualTax: 17790, tax: 1482.5, stored: false })
   // المتعيّن يوم 17 (15 يوم من 30): دخله بيتحوّل لسنوي بأيامه، وضريبته بنسبة أيامه
   const halfItem = itemOf(half), halfRow = rowOf(half)
   assert.equal(JSON.parse(halfItem.breakdown).prorataFactor, 0.5)

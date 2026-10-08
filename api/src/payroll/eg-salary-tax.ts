@@ -11,6 +11,8 @@ import { salaryItemCodeOf } from './salary-items'
 export const EG_TAX_COUNTRY = 'EG'
 export const EG_TAX_BRACKETS_KEY = 'eg.salary_tax.brackets'
 export const EG_TAX_HIGH_INCOME_KEY = 'eg.salary_tax.high_income'
+/** بنود قانونية برّه وعاء الضريبة دايمًا */
+export const EG_TAX_EXCLUDED_ITEMS: readonly string[] = ['INCOME_TAX', 'MARTYRS_FUND', 'HEALTH_INSURANCE']
 /** أيام الشهر الكامل في سنة الضريبة (360 ÷ 12) */
 export const EG_TAX_MONTH_DAYS = 30
 
@@ -96,12 +98,15 @@ export interface EgPeriodTax {
   tax: number
 }
 
-/** ضريبة فترة بالطريقة التراكمية. فترة من غير أيام (مفيش خدمة فيها) ضريبتها صفر */
+/**
+ * ضريبة فترة بالطريقة التراكمية. من غير أي أيام في السنة (ولا في الفترة ولا قبلها) الضريبة صفر. دخل من غير أيام جديدة (مسير تكميلي
+ * لفترة أيامها اتحسبت) بيتضاف للتراكمي بأيام السنة المسجّلة.
+ */
 export function egPeriodTax(input: EgPeriodTaxInput, table: EgTaxTable): EgPeriodTax {
   const days = Math.max(0, Math.min(EG_TAX_MONTH_DAYS, Math.round(input.days)))
   const cumulativeDays = Math.max(0, Math.round(input.ytdDays ?? 0)) + days
   const cumulativeNetIncome = round2((input.ytdNetIncome ?? 0) + input.netIncome)
-  if (!days || !cumulativeDays) {
+  if (!cumulativeDays) {
     return { days, cumulativeNetIncome, cumulativeDays, annualized: 0, exemption: table.exemption, taxable: 0, annualTax: 0, cumulativeTax: 0, tax: 0 }
   }
   const annualized = round2(Math.max(0, cumulativeNetIncome) * table.yearDays / cumulativeDays)
@@ -116,9 +121,10 @@ export function egPeriodTax(input: EgPeriodTaxInput, table: EgTaxTable): EgPerio
  * (خصومات الحضور، الإجازة بدون راتب، حصة التأمينات). السطر اللي مالوش بند مابيتحسبش.
  */
 export function egNetIncomeOfLines(lines: Pick<PayrollItemLines, 'earnings' | 'deductions'>, taxable: ReadonlyMap<string, boolean>): number {
+  // السطور القانونية نفسها (الضريبة والصناديق) برّه الوعاء مهما كانت علامتها — الضريبة ماتقللش وعاء نفسها
   const sum = (list: PayrollItemLines['earnings']) => list.reduce((total, line) => {
     const code = salaryItemCodeOf(line.key)
-    return code && taxable.get(code) === true ? total + Math.round(line.amount * 100) : total
+    return code && !EG_TAX_EXCLUDED_ITEMS.includes(code) && taxable.get(code) === true ? total + Math.round(line.amount * 100) : total
   }, 0)
   return (sum(lines.earnings) - sum(lines.deductions)) / 100
 }

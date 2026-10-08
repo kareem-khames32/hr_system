@@ -38,8 +38,8 @@ export class EgSalaryTaxService {
     const em = this.ds.manager
     const run = await em.getRepository(PayrollRun).findOneOrFail({ where: { id: runId } })
     const table = egTaxTableAt(await readStatutoryEntries(em), String(run.endDate).slice(0, 10))
-    const base = { runId, period: run.period, basis: 'FROM_THIS_PERIOD' as const }
-    if (!table) return { ...base, available: false, message: EG_TAX_MISSING, table: null, rows: [], totals: { netIncome: 0, tax: 0 } }
+    const base = { runId, period: run.period }
+    if (!table) return { ...base, basis: 'FROM_THIS_PERIOD' as const, available: false, message: EG_TAX_MISSING, table: null, rows: [], totals: { netIncome: 0, tax: 0 } }
     const facts: Array<{ id: number; employeeId: number; breakdown: string | null; fullName: string; employeeCode: string | null; branchId: number | null; country: string | null }> = lines.rows.length ? await em.query(
       `SELECT i.[id], i.[employeeId], i.[breakdown], e.[fullName], e.[employeeCode], e.[branchId], b.[country]
        FROM [payroll_items] i INNER JOIN [employees] e ON e.[id] = i.[employeeId] LEFT JOIN [branches] b ON b.[id] = e.[branchId]
@@ -51,14 +51,22 @@ export class EgSalaryTaxService {
       const fact = byItem.get(line.itemId)
       // موظفي الفروع اللي دولتها مصر بس (دولة فرع الموظف الحالي) — وموظف فرعه الحالي برّه نطاق الحساب مابيظهرش باسمه ولا برقمه
       if (!fact || branchCountryOf(fact.country) !== EG_TAX_COUNTRY || !inBranchScope(scope, fact.branchId)) return []
-      let breakdown: { prorataFactor?: unknown } | null = null
+      let breakdown: { prorataFactor?: unknown; statutory?: { egTax?: Record<string, unknown> } } | null = null
       try { breakdown = fact.breakdown ? JSON.parse(fact.breakdown) : null } catch { breakdown = null }
+      const identity = { itemId: line.itemId, employeeId: line.employeeId, employeeName: fact.fullName, employeeCode: fact.employeeCode }
+      // B4.4 (ب): بند ضريبته اتحسبت واتسجّلت في المسير: المعاينة بتعرض المحفوظ (بالرصيد التراكمي بتاعه) مش حساب تاني
+      const stored = breakdown?.statutory?.egTax
+      const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : 0
+      if (stored && typeof stored === 'object') {
+        return [{ ...identity, netIncome: number(stored.netIncome), days: number(stored.days), annualized: number(stored.annualized), taxable: number(stored.taxable), annualTax: number(stored.annualTax),
+          tax: number(stored.tax), stored: true }]
+      }
       const netIncome = egNetIncomeOfLines(line, flags)
       const result = egPeriodTax({ netIncome, days: egTaxDaysOf(breakdown) }, table)
-      return [{ itemId: line.itemId, employeeId: line.employeeId, employeeName: fact.fullName, employeeCode: fact.employeeCode, netIncome: round2(netIncome), days: result.days,
-        annualized: result.annualized, taxable: result.taxable, annualTax: result.annualTax, tax: result.tax }]
+      return [{ ...identity, netIncome: round2(netIncome), days: result.days, annualized: result.annualized, taxable: result.taxable, annualTax: result.annualTax, tax: result.tax, stored: false }]
     })
-    return { ...base, available: true, table: { effectiveFrom: table.effectiveFrom, verified: table.verified, exemption: table.exemption, yearDays: table.yearDays }, rows,
+    // الأساس: المحفوظ في المسير لو ضريبته اتخصمت، وإلا «لو الضريبة بدأت من الفترة دي»
+    return { ...base, basis: rows.some((row) => row.stored) ? 'STORED' as const : 'FROM_THIS_PERIOD' as const, available: true, table: { effectiveFrom: table.effectiveFrom, verified: table.verified, exemption: table.exemption, yearDays: table.yearDays }, rows,
       totals: { netIncome: round2(rows.reduce((sum, row) => sum + row.netIncome, 0)), tax: round2(rows.reduce((sum, row) => sum + row.tax, 0)) } }
   }
 }

@@ -44,7 +44,8 @@ export default function EgTaxPreviewPanel({ runId }: { runId: number }) {
             <AlertTriangle size={16} className="mt-0.5 shrink-0" />
             <span>
               الشرائح السارية من {formatDate(data.table.effectiveFrom)} (إعفاء شخصي {formatMoney(data.table.exemption)} في السنة، سنة {data.table.yearDays} يوم)
-              {data.table.verified ? '.' : ' — لسه «محتاجة تحقق» من محاسب في حزمة الدولة.'} الحساب على أساس إن الضريبة بتبدأ من الفترة دي.
+              {data.table.verified ? '.' : ' — لسه «محتاجة تحقق» من محاسب في حزمة الدولة.'}{' '}
+              {data.basis === 'STORED' ? 'الأرقام دي هي المحفوظة في المسير (اتخصمت من الصافي).' : 'الحساب على أساس إن الضريبة بتبدأ من الفترة دي.'}
             </span>
           </div>
           {!data.rows.length ? (

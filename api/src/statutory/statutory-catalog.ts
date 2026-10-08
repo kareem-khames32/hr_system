@@ -18,8 +18,9 @@ export interface StatutoryKeyInfo {
 const pct = (label: string) => `${label} (%)`
 const INSURANCE = 'حساب التأمينات الاجتماعية'
 
-// B4.4 (أ): مفتاحي الضريبة بتقراهم المعاينة عند الطلب — للعرض بس، ومفيش مبلغ بيتخصم بيهم لحد ما الخصم يتفعّل بإعداده
-const TAX_PREVIEW = 'معاينة ضريبة كسب العمل (للعرض بس — مابتتخصمش)'
+// B4.4: مفتاحي الضريبة بتقراهم المعاينة عند الطلب، وحساب المسير لو إعداد الضريبة مفتوح (مقفول افتراضيًا)؛ وصندوق الشهداء بإعداده
+const TAX_PREVIEW = 'ضريبة كسب العمل: المعاينة، والمسير لو إعدادها مفتوح (مقفول افتراضيًا)'
+const MARTYRS_FUND = 'صندوق الشهداء في المسير لو إعداده مفتوح (مقفول افتراضيًا)'
 export const STATUTORY_CATALOG: readonly StatutoryKeyInfo[] = [
   // ===== مصر =====
   { country: 'EG', key: EG_INSURANCE_WAGE_LIMITS, label: 'حدود أجر التأمين', card: 'C-EG-03', usedBy: INSURANCE, codes: { min_salary: 'الحد الأدنى للأجر', max_salary: 'الحد الأقصى للأجر' } },
@@ -33,7 +34,7 @@ export const STATUTORY_CATALOG: readonly StatutoryKeyInfo[] = [
     codes: { tier_1_from: 'الفئة 1: صافي الدخل من', tier_1_first_to: 'الفئة 1: أول', tier_1_first_pct: pct('الفئة 1: نسبة الأول'), tier_2_from: 'الفئة 2: صافي الدخل من', tier_2_first_to: 'الفئة 2: أول',
       tier_2_first_pct: pct('الفئة 2: نسبة الأول'), tier_3_from: 'الفئة 3: صافي الدخل من', tier_3_first_to: 'الفئة 3: أول', tier_3_first_pct: pct('الفئة 3: نسبة الأول'), tier_4_from: 'الفئة 4: صافي الدخل من',
       tier_4_first_to: 'الفئة 4: أول', tier_4_first_pct: pct('الفئة 4: نسبة الأول'), tier_5_from: 'الفئة 5: صافي الدخل من', tier_5_first_to: 'الفئة 5: أول', tier_5_first_pct: pct('الفئة 5: نسبة الأول') } },
-  { country: 'EG', key: 'eg.martyrs_fund', label: 'صندوق تكريم الشهداء (مشاركة اجتماعية)', card: 'C-EG-04', usedBy: null, codes: { employee_pct: pct('من إجمالي الراتب') } },
+  { country: 'EG', key: 'eg.martyrs_fund', label: 'صندوق تكريم الشهداء (مشاركة اجتماعية)', card: 'C-EG-04', usedBy: MARTYRS_FUND, codes: { employee_pct: pct('من إجمالي الراتب') } },
   { country: 'EG', key: 'eg.health_insurance', label: 'التأمين الصحي الشامل', card: 'C-EG-04', usedBy: null,
     codes: { employee_pct: pct('حصة الموظف'), employer_pct: pct('حصة صاحب العمل'), spouse_pct: pct('الزوجة غير العاملة'), dependent_pct: pct('لكل معال') } },
   { country: 'EG', key: 'eg.training_fund', label: 'صندوق التدريب', card: 'C-EG-04', usedBy: null,

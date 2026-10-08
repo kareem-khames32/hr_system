@@ -1,3 +1,4 @@
+import { PAYROLL_STATUTORY_TOTAL_LABEL, payrollItemStatutoryCents } from './payroll-statutory'
 import { payrollItemWorkPressureEarned } from './payroll-work-pressure'
 
 // B1.6 (R03): الموظف اللي صافيه سالب بيمنع اعتماد المسير وصرفه (حماية الصافي). القايمة دي بتقول مين وليه، بالمبالغ اللي في البند نفسه،
@@ -52,6 +53,8 @@ export function explainPayrollNegativeNet(item: PayrollNegativeNetItem, identity
   add('OTHER_DEDUCTIONS', 'الخصومات ودفتر المديونيات', other, -1)
   add('SOCIAL_INSURANCE', 'التأمينات (حصة الموظف)', insurance, -1)
   add('LOANS', 'أقساط السلف', loans, -1)
+  // B4.4 (ب): الخصومات القانونية المحفوظة في التفصيل (ضريبة، صندوق) — جزء من الصافي المحفوظ، فلازم تبان في تفسيره
+  add('STATUTORY', PAYROLL_STATUTORY_TOTAL_LABEL, payrollItemStatutoryCents(breakdown) ?? 0, -1)
   // السبب: الإجازة بدون راتب لوحدها أكبر من المستحق والإضافات = الرصيد سالب قبل أي خصم؛ وإلا التأمينات لو الصافي من غيرها مش سالب
   const cause: PayrollNegativeNetCause = unpaid > earned + additions ? 'UNPAID_LEAVE' : insurance > 0 && net + insurance >= 0 ? 'SOCIAL_INSURANCE' : 'DEDUCTIONS'
   return { employeeId: item.employeeId, employeeCode: identity.employeeCode ?? null, fullName: identity.fullName ?? null, net: net / 100, lines, cause,

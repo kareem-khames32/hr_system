@@ -122,7 +122,7 @@ export default function SalaryItemsPage() {
                         <div className="text-xs text-gray-500" dir="ltr">{item.nameEn}</div>
                         <div className="flex flex-wrap gap-1 mt-1">
                           {item.statutory && <span className="text-xs bg-indigo-50 text-indigo-700 rounded-full px-2 py-0.5">قانوني</span>}
-                          {!item.computed && <span className="text-xs bg-amber-50 text-amber-800 rounded-full px-2 py-0.5">لسه مش بيتحسب</span>}
+                          {!item.computed && <span className="text-xs bg-amber-50 text-amber-800 rounded-full px-2 py-0.5">بيتحسب بإعداد مقفول افتراضيًا</span>}
                         </div>
                       </td>
                       <td className="px-4 py-3 text-gray-600">{PRORATION_LABELS[item.proration]}</td>

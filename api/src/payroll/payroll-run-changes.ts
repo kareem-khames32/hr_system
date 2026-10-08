@@ -9,6 +9,7 @@ import { PayrollItem, PayrollRun, PayrollRunMember } from './payroll.entities'
 import { payrollRunSeriesName } from './payroll-run-membership-moves'
 import { payrollRunRefVisibility } from './payroll-run-visibility'
 import { PAYROLL_LINE_NAMES } from './payroll-item-lines'
+import { PAYROLL_STATUTORY_TOTAL_LABEL, payrollItemStatutoryCentsOfText } from './payroll-statutory'
 
 // B1.7 (R10): «اتغيّر إيه من آخر مسير» — لكل موظف في المسير: الراتب والحساب البنكي وطريقة الصرف، ومين غيّر وإمتى، من بعد آخر مسير
 // معتمد أو مصروف ليه. المصدر: تاريخ الراتب الشهري (مين وإمتى)، وسجل تغييرات الصرف (ترحيل 081)، وقبله أو قبل أول صف فيه سجل تغييرات
@@ -246,7 +247,9 @@ export function payrollNetChange(previous: Partial<PayrollItem> | null | undefin
   if (before === after) return null
   const percent = before > 0 ? Math.round(Math.abs(after - before) / before * 1000) / 10 : null
   if (percent !== null && percent < thresholdPercent) return null
-  const lines = NET_CHANGE_LINES.map(([column, label]) => ({ label, previous: centsOf(previous[column]) / 100, current: centsOf(current[column]) / 100 }))
+  // B4.4 (ب): الخصومات القانونية المحفوظة في التفصيل (ضريبة، صندوق) بند من بنود الفرق زي الأعمدة — من غيرها في البندين مابتظهرش
+  const lines = [...NET_CHANGE_LINES.map(([column, label]) => ({ label, previous: centsOf(previous[column]) / 100, current: centsOf(current[column]) / 100 })),
+    { label: PAYROLL_STATUTORY_TOTAL_LABEL, previous: payrollItemStatutoryCentsOfText(previous.breakdown) / 100, current: payrollItemStatutoryCentsOfText(current.breakdown) / 100 }]
     .filter(line => line.previous !== line.current)
   return { previousNet: before / 100, currentNet: after / 100, percent, lines }
 }

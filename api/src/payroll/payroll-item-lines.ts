@@ -5,6 +5,7 @@ import { branchScopeOf } from '../auth/guards'
 import { PAYROLL_OBLIGATION_CATEGORY_LABELS } from './payroll-obligation-trace'
 import { hiddenRunPeriodsByEmployee, scrubRunPeriodsDeep } from './payroll-run-visibility'
 import { DEFAULT_SALARY_ITEM_ORDER, readSalaryItemOrder, salaryItemRank, type SalaryItemOrder } from './salary-items'
+import { PAYROLL_STATUTORY_NAMES, payrollItemStatutoryLines } from './payroll-statutory'
 
 // بنود الاستحقاقات والاستقطاعات لكل موظف في المسير (طلب المالك 19 سبتمبر): كل بند عمود باسمه بدل «البدلات» و«إضافات أخرى» و«خصومات أخرى».
 // قراءة فقط من المحفوظ مع البند: أعمدة payroll_items + تفصيل breakdown (مكونات الراتب، أيام الحضور، سطور الإجازة) + قيود الدفتر بأسمائها.
@@ -231,6 +232,11 @@ export function projectPayrollItemLines(item: PayrollLineItem, facts: ReadonlyMa
   mergeWithRemainder(deductions, debits, cents(item.otherDeductions), 'OTHER_DEDUCTIONS', PAYROLL_LINE_NAMES.OTHER_DEDUCTIONS)
   deductions.add('LOAN', PAYROLL_LINE_NAMES.LOAN, cents(item.loanInstallments))
   deductions.add('SOCIAL_INSURANCE', PAYROLL_LINE_NAMES.SOCIAL_INSURANCE, cents(item.socialInsuranceDeduction))
+  // B4.4 (ب): الخصومات القانونية المحفوظة في تفصيل البند (ضريبة كسب العمل، صندوق الشهداء) — سطر باسم كل واحدة، ومجموعها جوه إجمالي
+  // الاستقطاعات (الصافي المحفوظ بعدها). بند من غيرها (الإعداد مقفول، أو مسير قديم) = نفس السطور والمجاميع بالحرف
+  const statutory = payrollItemStatutoryLines(breakdown) ?? []
+  for (const line of statutory) deductions.add(line.code, PAYROLL_STATUTORY_NAMES[line.code], line.cents)
+  const statutoryCents = statutory.reduce((sum, line) => sum + line.cents, 0)
 
   const earningLines = earnings.lines(order)
   // الأساسي يظهر دايمًا (حتى لو صفر) عشان صف الموظف وقسيمته يبدأوا بيه
@@ -241,7 +247,7 @@ export function projectPayrollItemLines(item: PayrollLineItem, facts: ReadonlyMa
     totals: {
       earnings: money(basic + allowances + cents(item.overtimeAmount) + otherAdditions),
       deductions: money(cents(item.latenessDeduction) + shortfall + cents(item.absenceDeduction) + unpaid + cents(item.loanInstallments) +
-        cents(item.otherDeductions) + cents(item.socialInsuranceDeduction)),
+        cents(item.otherDeductions) + cents(item.socialInsuranceDeduction) + statutoryCents),
       net: money(cents(item.netPay)),
     },
   }
