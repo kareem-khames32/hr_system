@@ -24,6 +24,7 @@ const SHELL: Record<string, string> = {
   'اجتماعات 1:1': '1:1 meetings',
   'استثناء الحضور': 'Attendance exemptions',
   'استيراد بيانات التجهيز': 'Setup data import',
+  'التكاملات': 'Integrations',
   'الأدوار والصلاحيات': 'Roles & permissions',
   'الأذونات': 'Permissions',
   'الأمان': 'Security',

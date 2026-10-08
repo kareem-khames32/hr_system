@@ -57,6 +57,7 @@ import { ExpensesModule } from './expenses/expenses.module'
 import { SkillsModule } from './skills/skills.module'
 import { SafetyModule } from './safety/safety.module'
 import { TimesheetsModule } from './timesheets/timesheets.module'
+import { IntegrationsModule } from './integrations/integrations.module'
 import { StatutoryModule } from './statutory/statutory.module'
 import { validateEnv } from './auth/jwt-secret'
 import { dbPacketSize } from './common/sql-packet-size'
@@ -169,6 +170,8 @@ import { dbPacketSize } from './common/sql-packet-size'
     SafetyModule,
     // B5.8: ساعات المشاريع (موديول timesheets، مقفول افتراضيًا)
     TimesheetsModule,
+    // B6.3: التكاملات — مفاتيح والـAPI العام /public/v1 (موديول integrations، مقفول افتراضيًا)
+    IntegrationsModule,
     // B2.13-ب: التقارير المحفوظة والمجدولة
     SavedReportsModule,
     // B5.9: بانِي التقارير (ميزة reports.builder، مقفولة افتراضيًا)

@@ -326,6 +326,8 @@ const adminMenuDefs: MenuItem[] = [
       { label: 'قوالب الخطابات', href: '/settings/letter-templates', perm: 'settings.manage' },
       // B6.1 (ب): استيراد الهيكل والموظفين من Excel عند تجهيز عميل (لحساب بكل الفروع — الخادم اللي بيحكم)
       { label: 'استيراد بيانات التجهيز', href: '/settings/import', perm: 'settings.manage' },
+      // B6.3: مفاتيح الـAPI العام والـwebhooks (الموديول مقفول افتراضيًا: البند بيظهر لما يتفعّل)
+      { label: 'التكاملات', href: '/settings/integrations', perm: 'integrations.manage' },
       { label: 'المستخدمين', href: '/settings/users', perm: 'users.manage' },
       { label: 'سجل الدخول', href: '/settings/login-log', perm: 'users.manage' },
       { label: 'سجل التدقيق', href: '/settings/audit', perm: 'audit.view' },

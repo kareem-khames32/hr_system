@@ -25,6 +25,11 @@ const EXCEPTIONS = {
   'CareersController.detail': 'PUBLIC_OK', // GET /careers/jobs/:id — B3.3-ب: وظيفة منشورة «خارجي» بس
   'CareersController.list': 'PUBLIC_OK', // GET /careers/jobs — B3.3-ب: الوظائف المنشورة «خارجي» بس
   'HealthController.check': 'PUBLIC_OK', // GET /health
+  // B6.3: الـAPI العام — من غير جلسة مستخدم: بمفتاح تكامل (حارسه IntegrationKeyGuard: مفتاح صالح، حد طلبات، نطاق قراءة) وموديول مقفول افتراضيًا
+  'PublicApiController.employee': 'PUBLIC_OK', // GET /public/v1/employees/:id
+  'PublicApiController.employees': 'PUBLIC_OK', // GET /public/v1/employees
+  'PublicApiController.openapi': 'PUBLIC_OK', // GET /public/v1/openapi.json
+  'PublicApiController.structure': 'PUBLIC_OK', // GET /public/v1/structure
   // ===== SELF (26) — خدمة ذاتية: بيشتغل على بيانات صاحب الحساب بس (user.sub / user.employeeId) — دور «موظف» صلاحياته فاضية فمفيش مفتاح ينفع =====
   // B2.16: لوحة الإعلانات وتسجيل القراءة — الموظف لنفسه (الإعلان ساري وهو في جمهوره؛ الفحص في الخدمة)
   'AnnouncementsController.board': 'SELF', // GET /announcements/board

@@ -489,6 +489,13 @@ export const MODULES = {
       },
     },
   }),
+  // B6.3: التكاملات — مفاتيح بنطاقات قراءة ونطاق فروع، والـAPI العام للقراءة، والـwebhooks. موديول جديد = مقفول لحد ما الشركة تفعّله
+  integrations: moduleDef({
+    nameAr: 'التكاملات', group: 'core', dependsOn: ['employees'], preset: 'full', defaultEnabled: false,
+    description: 'مفاتيح تكامل لأنظمة خارجية (كل مفتاح بنطاقات قراءة وفروع)، وAPI عام للقراءة بس، وأحداث موقّعة بتتبعت لنقاط استقبال',
+    permissions: ['integrations.manage'],
+    routes: ['/settings/integrations'],
+  }),
   // B2.11: الوظائف المعتمدة — وظيفة في وحدة بعدد معتمد، وتقرير «معتمد / مشغول / شاغر». موديول جديد = مقفول لحد ما الشركة تفعّله
   // (أول موديول defaultEnabled: false: مفيش حاجة كانت شغالة قبله)
   positions: moduleDef({
