@@ -746,6 +746,7 @@ export class SettingsController {
     'loan.request_open': ['true', 'false'],
     // B4.5 (أ): مكافأة نهاية الخدمة مطبّقة لكل دولة
     'suspension.paid_precautionary.enabled': ['true', 'false'],
+    'compensation.band_basis': ['BASIC', 'GROSS'],
     'privacy.partial_masking.enabled': ['true', 'false'],
     'eos.applies.eg': ['true', 'false'],
     'eos.applies.sa': ['true', 'false'],

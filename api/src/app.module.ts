@@ -49,6 +49,7 @@ import { HelpdeskModule } from './helpdesk/helpdesk.module'
 import { CasesModule } from './cases/cases.module'
 import { SurveysModule } from './surveys/surveys.module'
 import { DependentsModule } from './dependents/dependents.module'
+import { CompensationModule } from './compensation/compensation.module'
 import { StatutoryModule } from './statutory/statutory.module'
 import { validateEnv } from './auth/jwt-secret'
 import { dbPacketSize } from './common/sql-packet-size'
@@ -147,6 +148,8 @@ import { dbPacketSize } from './common/sql-packet-size'
     CasesModule,
     SurveysModule,
     DependentsModule,
+    // B5.1: تخطيط الزيادات وسلّم الرواتب (موديول compensation، مقفول افتراضيًا)
+    CompensationModule,
     // B2.13-ب: التقارير المحفوظة والمجدولة
     SavedReportsModule,
     // B2.16: الإعلانات (موديول اختياري مقفول افتراضيًا)

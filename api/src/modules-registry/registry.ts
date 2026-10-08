@@ -363,6 +363,13 @@ export const MODULES = {
     // B3.14: وجهة «تحديث المعالين» (أي نوع طلب وجهته دي بيتبع الموديول)
     requestHandlers: ['dependents_update'],
   }),
+  // B5.1: تخطيط الزيادات وسلّم الرواتب — نطاقات الدرجات ونسبة المقارنة ودورة الزيادات. موديول جديد = مقفول لحد ما الشركة تفتحه، وفي الباقة الكاملة
+  compensation: moduleDef({
+    nameAr: 'تخطيط الزيادات وسلّم الرواتب', group: 'money', dependsOn: ['payroll'], softUses: ['performance', 'positions'], preset: 'full', defaultEnabled: false,
+    description: 'نطاق راتب لكل درجة ونسبة المقارنة، ودورة زيادات سنوية بميزانية لكل إدارة واقتراحات المديرين، والتطبيق على شهر المسير من تاريخ الراتب',
+    permissions: ['compensation.manage'],
+    routes: ['/compensation'],
+  }),
   // B2.11: الوظائف المعتمدة — وظيفة في وحدة بعدد معتمد، وتقرير «معتمد / مشغول / شاغر». موديول جديد = مقفول لحد ما الشركة تفعّله
   // (أول موديول defaultEnabled: false: مفيش حاجة كانت شغالة قبله)
   positions: moduleDef({

@@ -182,6 +182,8 @@ const adminMenuDefs: MenuItem[] = [
       { label: 'الخصومات', href: '/payroll/deductions' },
       { label: 'السلف والقروض', href: '/payroll/loans' },
       { label: 'التأمينات', href: '/payroll/gosi' },
+      // B5.1: سلّم الرواتب ودورة الزيادات (بتظهر لما موديول تخطيط الزيادات مفتوح)
+      { label: 'سلّم الرواتب والزيادات', href: '/compensation' },
       { label: 'تقرير الرواتب', href: '/payroll/reports' },
       { label: 'كشف البنوك', href: '/payroll/bank-sheet' },
       // قرار المالك (22 سبتمبر): المالك بيرتب سلسلة اعتماد المسير بنفسه (سلسلة الشركة + سلسلة خاصة بمسير دائم)

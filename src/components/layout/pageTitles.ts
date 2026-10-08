@@ -83,6 +83,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/payroll/allowances', 'البدلات'],
   ['/payroll/loans', 'السلف والقروض'],
   ['/payroll/gosi', 'التأمينات'],
+  ['/compensation', 'سلّم الرواتب والزيادات'],
   ['/payroll/reports', 'تقرير الرواتب'],
   ['/payroll/bank-sheet', 'كشف البنوك'],
   // قرار المالك (22 سبتمبر): سلسلة اعتماد المسير، وصرف المسير موظف بموظف
