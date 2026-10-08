@@ -61,6 +61,7 @@ import {
 } from './permissions'
 import { Role } from './role.entity'
 import { roleStampOf } from './role-stamp'
+import { lockEmployeeAccountSlot } from './employee-account-slot'
 import { User, UserRole } from './user.entity'
 import { Employee } from '../employees/employee.entity'
 import { recordLoginAccountUnlinked } from '../employees/employee-change-log'
@@ -201,7 +202,9 @@ export const SCOPE_ALL_BRANCHES_ACCOUNT_LOCKED = 'الحساب ده نطاقه �
 // (وإلا مدير الفرع 2 يعيّن كلمة مرور لحساب على الفرع 2 و3 ويدخل بيه على الفرع 3)
 export const SCOPE_BRANCHES_OUTSIDE_ACTOR = 'تقدر تدّي فروع جوه نطاقك بس'
 /** الدور المطلوب إسناده اتغيّرت حزمته أو حالته بعد ما الإسناد اتحكم عليه — CRP3G */
-export const ASSIGNED_ROLE_CHANGED = 'الدور المختار اتغيّرت صلاحياته — حدّث الصفحة وحاول تاني'
+// CRP3I: الموظف المطلوب ربطه اتغيّر (فرعه) أو اتشال بين الحكم والحفظ
+export const LINKED_EMPLOYEE_CHANGED = 'بيانات الموظف المربوط اتغيّرت — حدّث الصفحة وحاول تاني'
+export const ASSIGNED_ROLE_CHANGED ='الدور المختار اتغيّرت صلاحياته — حدّث الصفحة وحاول تاني'
 /** الحساب اتغيّر (دوره أو صلاحياته أو نطاقه أو حالته) بعد ما التعديل اتحكم عليه — CRP3F */
 export const ACCOUNT_CHANGED_MEANWHILE = 'بيانات الحساب اتغيّرت — حدّث الصفحة وحاول تاني'
 export const SCOPE_WIDER_ACCOUNT_LOCKED = 'الحساب ده نطاقه فيه فروع برّه نطاقك — تعديله لحساب نطاقه يغطي كل فروعه'
@@ -377,6 +380,17 @@ export class UsersController {
       throw new ConflictException(`الموظف مرتبط بالفعل بحساب ${linked.email}`)
     }
     return employee
+  }
+
+  /**
+   * CRP3I (P3I-B01): نفس حكم assertLinkableEmployee تحت حجز الموظف (قفل صفه) جوه معاملة الحفظ: الموظف لسه موجود وفي فرعه اللي اتحكم
+   * عليه، ومفيش حساب تاني مربوط بيه. فحساب مجال اتعمل للموظف (أو حساب تاني اتربط بيه) بعد الحكم بيترفض هنا، والعكس بيستنى
+   */
+  private async holdLinkableEmployee(em: EntityManager, judged: Employee, exceptUserId?: number) {
+    const slot = await lockEmployeeAccountSlot(em, judged.id)
+    if (!slot.employee || (slot.employee.branchId ?? null) !== (judged.branchId ?? null)) throw new ConflictException(LINKED_EMPLOYEE_CHANGED)
+    const linked = slot.accounts.find((account) => account.id !== exceptUserId)
+    if (linked) throw new ConflictException(`الموظف مرتبط بالفعل بحساب ${linked.email}`)
   }
 
   // كلمة المرور وإعادة التفعيل = السيطرة على الحساب: لو الحساب (بعد التعديل) يملك صلاحية إدارية
@@ -608,6 +622,8 @@ export class UsersController {
     // للدور والطلب في الطريق)
     const saved = await this.users.manager.transaction(async (em) => {
       if ((await this.roleStamp(dto.role, em)) !== judgedRole) throw new ConflictException(ASSIGNED_ROLE_CHANGED)
+      // CRP3I: حجز الموظف المربوط وإعادة حكمه قبل الإدراج (الدور ثم الموظف ثم الحساب)
+      if (employee) await this.holdLinkableEmployee(em, employee)
       return em.getRepository(User).save(
       em.getRepository(User).create({
         email,
@@ -777,9 +793,8 @@ export class UsersController {
     if (branchChanged) {
       await this.assertAssignableBranch(actor, dto.branchId ?? null)
     }
-    if (employeeChanged && dto.employeeId != null) {
-      await this.assertLinkableEmployee(actor, dto.employeeId, id)
-    }
+    // CRP3I: الموظف زي ما اتحكم عليه — بيتحجز ويتعاد حكمه جوه معاملة الحفظ
+    const judgedEmployee = employeeChanged && dto.employeeId != null ? await this.assertLinkableEmployee(actor, dto.employeeId, id) : null
     if (dto.password) {
       // B1.3: سياسة كلمة السر (NIST)
       await this.security.assertPassword(dto.password, { email: user.email, displayName: user.displayName })
@@ -821,6 +836,8 @@ export class UsersController {
     const saved = await this.users.manager.transaction(async (em) => {
       // CRP3G-B02: صف الدور المقترح بيتقفل الأول (نفس ترتيب تعديل الدور: صف الدور ثم صفوف حساباته)، وبعده صف الحساب
       if (judgedRole !== null && (await this.roleStamp(dto.role as string, em)) !== judgedRole) throw new ConflictException(ASSIGNED_ROLE_CHANGED)
+      // CRP3I: حجز الموظف الجديد (لو الربط بيتغيّر لموظف) قبل صف الحساب
+      if (judgedEmployee) await this.holdLinkableEmployee(em, judgedEmployee, id)
       const fresh = await em.getRepository(User).findOne({ where: { id }, lock: { mode: 'pessimistic_write' } })
       if (!fresh || (fresh.tokenVersion ?? 0) !== seenVersion) throw new ConflictException(ACCOUNT_CHANGED_MEANWHILE)
       if (unlinkedEmployeeId != null) {

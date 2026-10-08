@@ -102,9 +102,17 @@ test('TT-03: an enrolled account is asked for the app code before the mail gate;
   // CRP3G-B02: الدور المقترح بيتقري قبل الحكم، وصفه بيتقفل ويتقارن قبل صف الحساب جوه معاملة الحفظ — في التعديل والإنشاء
   const assign = read('api/src/auth/users.controller.ts')
   assert.match(assign, /const judgedRole = roleChanged \? await this\.roleStamp\(dto\.role as string\) : null\n\s+if \(roleChanged\) await this\.assertAssignableRole\(dto\.role as string\)/)
-  assert.match(assign, /if \(judgedRole !== null && \(await this\.roleStamp\(dto\.role as string, em\)\) !== judgedRole\) throw new ConflictException\(ASSIGNED_ROLE_CHANGED\)\n\s+const fresh = await em\.getRepository\(User\)\.findOne\(\{ where: \{ id \}, lock: \{ mode: 'pessimistic_write' \} \}\)/)
+  // CRP3I: الترتيب في التعديل — صف الدور، ثم حجز الموظف الجديد، ثم صف الحساب
+  assert.match(assign, /if \(judgedRole !== null && \(await this\.roleStamp\(dto\.role as string, em\)\) !== judgedRole\) throw new ConflictException\(ASSIGNED_ROLE_CHANGED\)\n\s+\/\/[^\n]*\n\s+if \(judgedEmployee\) await this\.holdLinkableEmployee\(em, judgedEmployee, id\)\n\s+const fresh = await em\.getRepository\(User\)\.findOne\(\{ where: \{ id \}, lock: \{ mode: 'pessimistic_write' \} \}\)/)
   assert.match(assign, /const judgedRole = await this\.roleStamp\(dto\.role\)\n\s+await this\.assertAssignableRole\(dto\.role\)/)
-  assert.match(assign, /if \(\(await this\.roleStamp\(dto\.role, em\)\) !== judgedRole\) throw new ConflictException\(ASSIGNED_ROLE_CHANGED\)\n\s+return em\.getRepository\(User\)\.save\(/)
+  // CRP3I: وفي الإنشاء — صف الدور، ثم حجز الموظف المربوط، ثم الإدراج
+  assert.match(assign, /if \(\(await this\.roleStamp\(dto\.role, em\)\) !== judgedRole\) throw new ConflictException\(ASSIGNED_ROLE_CHANGED\)\n\s+\/\/[^\n]*\n\s+if \(employee\) await this\.holdLinkableEmployee\(em, employee\)\n\s+return em\.getRepository\(User\)\.save\(/)
+  // CRP3I (P3I-B01): إنشاء حساب المجال تحت حجز الموظف، والحكم بيتعاد تحته قبل الإدراج؛ والدخول بيعيد الحكم مرة واحدة
+  const slot = read('api/src/auth/employee-account-slot.ts'), domainLogin = read('api/src/auth/domain-login.service.ts')
+  assert.match(slot, /findOne\(\{ where: \{ id: employeeId \}, lock: \{ mode: 'pessimistic_write' \} \}\)\n\s+const accounts = employee \? await em\.getRepository\(User\)\.find\(\{ where: \{ employeeId \}/)
+  assert.match(domainLogin, /const slot = await lockEmployeeAccountSlot\(em, employee\.id\)\n\s+if \(!slot\.employee\) throw new UnauthorizedException\(REFUSALS\.noMatch\)\n\s+this\.assertEmployeeRowOpen\(slot\.employee\)\n\s+if \(slot\.accounts\.length > 0\) throw new DomainAccountChangedError\(\)\n[^\n]*domainObjectGuid: directory\.objectGuid[^\n]*throw new DomainAccountChangedError\(\)\n\s+return em\.getRepository\(User\)\.save\(/)
+  assert.match(domainLogin, /if \(!\(error instanceof DomainAccountChangedError\)\) throw error\n\s+return this\.resolveOnce\(directory\)/)
+  assert.doesNotMatch(domainLogin, /this\.users\.save\(/, 'مفيش إدراج حساب برّه معاملة الحجز')
   assert.match(assign, /\.where\('id = :id AND tokenVersion = :seen', \{ id: target\.id, seen: target\.tokenVersion \?\? 0 \}\)/, 'كلمة السر المؤقتة بشرط الإصدار اللي اتحكم عليه')
   // CRP3F: تعديل الحساب وتعديل الدور بيقفلوا الصف ويقروه من جديد جوه معاملة الحفظ ويرفضوا لو اتغيّر بعد الحكم
   const accountEdit = read('api/src/auth/users.controller.ts')

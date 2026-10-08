@@ -671,3 +671,95 @@ test('I1 (CRP3H) — الربط مابيتكتبش على حساب اتنقل ل
   const linked = expect(await loginDomain('z-plain', AD.get('z-plain').password), 201, 'plain link:')
   assert.deepEqual([linked.user.id, (await repo('User').findOneByOrFail({ id: plain.id })).domainObjectGuid], [plain.id, 'guid-z-plain'])
 })
+
+test('I2 (CRP3I) — حساب المجال بيتعمل تحت حجز الموظف: حساب ظهر للموظف بعد المطابقة بيتحكم عليه من جديد، ودخولين مع بعض = حساب واحد', async () => {
+  const { DomainLoginService } = require('../src/auth/domain-login.service')
+  const { UsersController } = require('../src/auth/users.controller')
+  const domainLogin = app.get(DomainLoginService), usersController = app.get(UsersController)
+  const department = await repo('Department').findOneByOrFail({ name: 'قسم أ' })
+  const person = (code, fullName) => repo('Employee').save({ employeeCode: code, fingerprintCode: null, fullName, branchId: branchA.id, departmentId: department.id, jobTitle: 'محاسب',
+    joinDate: '2020-01-01', basicSalary: 6000, housingAllowance: 0, transportAllowance: 0, phoneAllowance: 0, workNatureAllowance: 0, otherAllowance: 0, currency: 'SAR',
+    status: 'active', isActive: true, payMethod: 'transfer' })
+  const directory = (sam, employeeCode, mail) => { AD.set(sam, { objectGuid: 'guid-' + sam, sAMAccountName: sam, userPrincipalName: sam + '@maharah.local', mail, displayName: null,
+    employeeId: employeeCode, disabled: false, objectClasses: ['top', 'person', 'organizationalPerson', 'user'], password: pass() }); return AD.get(sam) }
+  const accountsOf = employeeId => repo('User').find({ where: { employeeId }, order: { id: 'ASC' } })
+  const enter = sam => loginDomain(sam, AD.get(sam).password)
+
+  // ===== (1) دخول أول واقف بعد المطابقة وقبل الإنشاء، والموارد البشرية عملت حساب للموظف وعطّلته (طلبين فعليين) =====
+  const first = await person('DSJ01', 'موظف حسابه ظهر في النص')
+  directory('y-pending', first.employeeCode, 'pending.owner@maharah.pro')
+  const realCreate = domainLogin.createDomainOnlyUser
+  let made = null
+  domainLogin.createDomainOnlyUser = async function (found, employee, ...rest) {
+    if (!made && employee.id === first.id) {
+      made = expect(await http(adminToken, 'POST', '/users', { email: 'made-meanwhile@dsync.invalid', displayName: 'حساب اتعمل في النص', password: pass(), role: 'employee',
+        branchId: branchA.id, employeeId: first.id }), 201, 'create meanwhile:')
+      expect(await http(adminToken, 'PATCH', '/users/' + made.id, { isActive: false }), 200, 'deactivate meanwhile:')
+    }
+    return realCreate.call(this, found, employee, ...rest)
+  }
+  let pending
+  try { pending = await enter('y-pending') } finally { domainLogin.createDomainOnlyUser = realCreate }
+  assert.ok(made, 'نقطة التوقف اتوصلت')
+  // الحكم اتعاد على الوضع الحالي: حساب الموظف معطّل = الدخول مرفوض، ومفيش حساب تاني
+  assert.equal(pending.status, 401, JSON.stringify(pending.body))
+  let rows = await accountsOf(first.id)
+  assert.deepEqual([rows.length, rows[0].id, rows[0].isActive, rows[0].domainObjectGuid ?? null], [1, made.id, false, null])
+  assert.equal((await enter('y-pending')).status, 401, 'والدخول الجديد نفس الحكم')
+
+  // ===== (2) دخولين أولين مع بعض بهويتين مختلفتين بيطابقوا نفس الموظف: حساب واحد، والتاني مرفوض زي المتتابع =====
+  const second = await person('DSJ02', 'موظف بهويتين')
+  directory('y-one', second.employeeCode, 'one.owner@maharah.pro'); directory('y-two', second.employeeCode, 'two.owner@maharah.pro')
+  const both = await Promise.all([enter('y-one'), enter('y-two')])
+  assert.deepEqual(both.map(response => response.status).sort(), [201, 401], JSON.stringify(both.map(response => response.body?.message)))
+  rows = await accountsOf(second.id)
+  assert.equal(rows.length, 1, 'حساب واحد للموظف')
+  assert.ok(['guid-y-one', 'guid-y-two'].includes(rows[0].domainObjectGuid))
+
+  // ===== (3) نفس الهوية مرتين مع بعض (P3I-N01): حساب واحد، ومن غير 500 =====
+  const third = await person('DSJ03', 'موظف بدخولين لنفس الهوية')
+  directory('y-same', third.employeeCode, 'same.owner@maharah.pro')
+  const twice = await Promise.all([enter('y-same'), enter('y-same')])
+  assert.deepEqual(twice.map(response => response.status), [201, 201], JSON.stringify(twice.map(response => response.body?.message)))
+  rows = await accountsOf(third.id)
+  assert.deepEqual([rows.length, twice[0].body.user.id, twice[1].body.user.id], [1, rows[0].id, rows[0].id])
+
+  // ===== (4) العكس: إنشاء حساب للموظف، وحساب مجال اتعمل له بعد الحكم وقبل الحفظ =====
+  const fourth = await person('DSJ04', 'موظف دخل بالمجال وحسابه بيتعمل')
+  directory('y-fourth', fourth.employeeCode, 'fourth.owner@maharah.pro')
+  const policy = usersController.security, realAssert = policy.assertPassword
+  let entered = null
+  policy.assertPassword = async function (...args) {
+    if (!entered) entered = expect(await enter('y-fourth'), 201, 'domain login meanwhile:')
+    return realAssert.apply(this, args)
+  }
+  let created
+  try {
+    created = await http(adminToken, 'POST', '/users', { email: 'late-local@dsync.invalid', displayName: 'حساب متأخر', password: pass(), role: 'employee', branchId: branchA.id, employeeId: fourth.id })
+  } finally { policy.assertPassword = realAssert }
+  assert.ok(entered)
+  assert.equal(created.status, 409, JSON.stringify(created.body))
+  assert.match(msg(created), /الموظف مرتبط بالفعل بحساب/)
+  rows = await accountsOf(fourth.id)
+  assert.deepEqual([rows.length, rows[0].id], [1, entered.user.id])
+
+  // ===== (5) ونفس الحكم في تغيير ربط حساب قايم لموظف ظهر له حساب مجال في النص =====
+  const fifth = await person('DSJ05', 'موظف هيتربط بيه حساب')
+  directory('y-fifth', fifth.employeeCode, 'fifth.owner@maharah.pro')
+  const loose = await repo('User').save({ email: 'loose@dsync.invalid', displayName: 'حساب من غير موظف', role: 'employee', permissions: '[]', passwordHash: await bcrypt.hash(pass(), 10),
+    branchId: branchA.id, passwordChangedAt: new Date() })
+  let lateEntry = null
+  policy.assertPassword = async function (...args) {
+    if (!lateEntry) lateEntry = expect(await enter('y-fifth'), 201, 'domain login before relink save:')
+    return realAssert.apply(this, args)
+  }
+  let relinked
+  try { relinked = await http(adminToken, 'PATCH', '/users/' + loose.id, { employeeId: fifth.id, password: pass() }) } finally { policy.assertPassword = realAssert }
+  assert.ok(lateEntry)
+  assert.equal(relinked.status, 409, JSON.stringify(relinked.body))
+  rows = await accountsOf(fifth.id)
+  assert.deepEqual([rows.length, rows[0].id, (await repo('User').findOneByOrFail({ id: loose.id })).employeeId ?? null], [1, lateEntry.user.id, null])
+  // ومن غير تداخل: الربط العادي شغال
+  const sixth = await person('DSJ06', 'ربط عادي من الشاشة')
+  assert.equal(expect(await http(adminToken, 'PATCH', '/users/' + loose.id, { employeeId: sixth.id }), 200, 'plain relink:').employeeId, sixth.id)
+})
