@@ -110,6 +110,9 @@ const EXCEPTIONS = {
   // B5.6: بصمة الموبايل — بصمة صاحب الحساب هو (الخدمة بتحكم بـuser.employeeId تحت قفل صفه)
   'MobilePunchController.mine': 'SELF', // GET /attendance/mobile-punch
   'MobilePunchController.punch': 'SELF', // POST /attendance/mobile-punch
+  // B5.7: السلامة — بلاغات صاحب الحساب وبلاغ جديد (الخدمة بتحكم بملف الموظف المربوط بالحساب وبفرعه الحالي)
+  'SafetyController.mine': 'SELF', // GET /safety/my
+  'SafetyController.report': 'SELF', // POST /safety/my
   // B2.7: قراءة نسخة سياسة وملفها — لصاحب صلاحية السياسات، أو للموظف اللي السياسة في جمهوره (الحكم في الخدمة)
   'PoliciesController.version': 'SERVICE_CHECK', // GET /policies/versions/:versionId
   'PoliciesController.versionFile': 'SERVICE_CHECK', // GET /policies/versions/:versionId/file

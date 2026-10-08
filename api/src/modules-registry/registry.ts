@@ -437,6 +437,13 @@ export const MODULES = {
       },
     },
   }),
+  // B5.7: السلامة وإصابات العمل — بلاغ حادث من البوابة وسجل حوادث بتحقيق وإجراءات تصحيحية (مهام). موديول جديد = مقفول لحد ما الشركة تفعّله
+  safety: moduleDef({
+    nameAr: 'السلامة وإصابات العمل', group: 'people', dependsOn: ['employees'], softUses: ['leave', 'custody'], preset: 'full', defaultEnabled: false,
+    description: 'بلاغ حادث من الموظف، وسجل حوادث بتصنيف وتحقيق وقفل، وإجراءات تصحيحية ومهمة إبلاغ الجهة كمهام بمواعيد، وربط الحادث بإجازة المصاب',
+    permissions: ['safety.manage'],
+    routes: ['/safety', '/my/safety'],
+  }),
   // B2.11: الوظائف المعتمدة — وظيفة في وحدة بعدد معتمد، وتقرير «معتمد / مشغول / شاغر». موديول جديد = مقفول لحد ما الشركة تفعّله
   // (أول موديول defaultEnabled: false: مفيش حاجة كانت شغالة قبله)
   positions: moduleDef({

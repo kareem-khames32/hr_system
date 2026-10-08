@@ -137,6 +137,14 @@ const adminMenuDefs: MenuItem[] = [
     href: '/skills/succession',
     perm: 'succession.manage',
   },
+  // B5.7: سجل حوادث السلامة (الموديول مقفول افتراضيًا: البند بيظهر لما يتفعّل)
+  {
+    id: 'safety',
+    label: 'السلامة وإصابات العمل',
+    icon: <ShieldCheck size={20} />,
+    href: '/safety',
+    perm: 'safety.manage',
+  },
   // B2.5: قايمة كل المهام العامة في نطاق الحساب («مهامي» لكل حساب في بنود البوابة)
   {
     id: 'tasks',
@@ -536,6 +544,8 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
       // B5.6: تسجيل البصمة من الموبايل (بتظهر لما ميزة «بصمة الموبايل» مفتوحة)
       { id: 'my-punch', label: 'بصمتي', icon: <Clock size={20} />, href: '/my/punch' },
       { id: 'my-leaves', label: 'إجازاتي وأرصدتي', icon: <Calendar size={20} />, href: '/my/leaves' },
+      // B5.7: بلاغ حادث ومتابعة بلاغاتي (بتظهر لما موديول السلامة مفتوح)
+      { id: 'my-safety', label: 'بلاغات السلامة', icon: <ShieldCheck size={20} />, href: '/my/safety' },
       { id: 'my-payslips', label: 'قسائم راتبي', icon: <Wallet size={20} />, href: '/my/payslips' },
       { id: 'my-loans', label: 'سلفي', icon: <Wallet size={20} />, href: '/my/loans' },
       // الخطوة 25: الخصومات المصنفة عليّ، ومساحة المدير لإنشاء خصومات فريقه ومتابعة اعتمادها

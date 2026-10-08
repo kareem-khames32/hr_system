@@ -53,6 +53,7 @@ import { CompensationModule } from './compensation/compensation.module'
 import { BenefitsModule } from './benefits/benefits.module'
 import { ExpensesModule } from './expenses/expenses.module'
 import { SkillsModule } from './skills/skills.module'
+import { SafetyModule } from './safety/safety.module'
 import { StatutoryModule } from './statutory/statutory.module'
 import { validateEnv } from './auth/jwt-secret'
 import { dbPacketSize } from './common/sql-packet-size'
@@ -159,6 +160,8 @@ import { dbPacketSize } from './common/sql-packet-size'
     ExpensesModule,
     // B5.4: المهارات والإحلال (موديول skills، مقفول افتراضيًا)
     SkillsModule,
+    // B5.7: السلامة وإصابات العمل (موديول safety، مقفول افتراضيًا)
+    SafetyModule,
     // B2.13-ب: التقارير المحفوظة والمجدولة
     SavedReportsModule,
     // B2.16: الإعلانات (موديول اختياري مقفول افتراضيًا)

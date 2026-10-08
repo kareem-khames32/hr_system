@@ -136,6 +136,8 @@ export const PERMISSIONS: Record<string, string> = {
   'skills.manage': 'إدارة المهارات ومتطلبات الوظائف',
   // B5.4 (ب): الإحلال — بيانات سرّية (الوظائف الحرجة وخلفاؤها)
   'succession.manage': 'خطط الإحلال (سرّي)',
+  // B5.7: السلامة — سجل الحوادث والتحقيق والإجراءات التصحيحية في نطاق الفروع
+  'safety.manage': 'إدارة حوادث السلامة وإصابات العمل',
   // B2.11: الوظائف المعتمدة
   'positions.view': 'عرض الوظائف المعتمدة',
   'positions.manage': 'إدارة الوظائف المعتمدة',
@@ -164,6 +166,7 @@ export const PERMISSION_MODULES: Array<{ key: string; labelAr: string; permissio
   { key: 'benefits', labelAr: 'المزايا والتأمين الطبي', permissions: ['benefits.manage'] },
   { key: 'expenses', labelAr: 'المصروفات', permissions: ['expenses.manage'] },
   { key: 'skills', labelAr: 'المهارات والإحلال', permissions: ['skills.manage', 'succession.manage'] },
+  { key: 'safety', labelAr: 'السلامة وإصابات العمل', permissions: ['safety.manage'] },
   { key: 'positions', labelAr: 'الوظائف المعتمدة', permissions: ['positions.view', 'positions.manage'] },
   { key: 'announcements', labelAr: 'الإعلانات', permissions: ['announcements.manage'] },
   { key: 'org', labelAr: 'الهيكل التنظيمي', permissions: ['org.manage'] },
@@ -218,6 +221,7 @@ export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   'positions.view': 'يفتح شاشة «الوظائف المعتمدة»: الوظائف وأعدادها وتقرير «معتمد / مشغول / شاغر» لكل قسم وشاغلي كل وظيفة — في نطاق فروعه',
   'announcements.manage': 'يكتب الإعلانات وينشرها ويسحبها ويشوف مين قراها — حساب الفروع لإعلانات فروعه بس',
   'dependents.manage': 'يشوف معالين موظف في نطاق فروعه ويضيف ويعدّل ويحذف (بسبب) مباشرة — من غير طلب',
+  'safety.manage': 'يشوف حوادث السلامة في نطاق فروعه ويصنّفها ويحقق فيها، ويفتح إجراءات تصحيحية ومهمة إبلاغ الجهة كمهام، ويربط الحادث بإجازة المصاب، ويقفله',
   'succession.manage': 'يعلّم وظائف نطاق فروعه «حرجة» ويرشّح خلفاءها بدرجة جاهزية — بيانات سرّية مابتظهرش للموظف المرشح',
   'skills.manage': 'يعرّف مكتبة المهارات (حساب بكل الفروع)، ويحدد المهارات المطلوبة لوظائف نطاق فروعه، ويقيّم مهارات موظفيه ويشوف مصفوفة الفجوة',
   'expenses.manage': 'يعرّف فئات المصروف وحدودها (حساب بكل الفروع)، ويشوف تقارير مصروفات موظفين نطاق فروعه — الاعتماد والصرف في سلسلة الطلب',
@@ -444,6 +448,8 @@ export const ROLE_PRESETS: Array<{
       'skills.manage',
       // B5.4 (ب): الإحلال سرّي — في حزمة الكود بس (والموديول نفسه مقفول افتراضيًا)
       'succession.manage',
+      // B5.7: زي المهام — في حزمة الكود بس (والموديول نفسه مقفول افتراضيًا)
+      'safety.manage',
       // خطة المراجعة 24: طلب استثناء الحضور واعتماده وإنهاؤه — لا يعتمد أحد ما أنشأه (فصل مهام في الخدمة).
       // الاعتماد التنفيذي approve_executive يبقى لمدير النظام (ترحيل 20260914_*_c1_attendance_exemption_roles)
       'attendance_exemption.view', 'attendance_exemption.manage', 'attendance_exemption.approve',
