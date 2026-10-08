@@ -6,10 +6,12 @@ import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, inBranchScope, userHasPerm } from '../auth/guards'
 import { User } from '../auth/user.entity'
 import { Employee } from '../employees/employee.entity'
+import { StoredFile } from '../files/stored-file.entity'
+import { ModulesService } from '../modules-registry/modules.service'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { HrCase, HrCaseEvent, HrCaseParty, type CaseEventKind, type CasePartyRole } from './case.entities'
 import {
-  CASES_MIGRATION_MISSING, CASES_PERMISSION, CASE_CLOSED, CASE_CONFLICT, CASE_DUE_PROCESS, CASE_EMPLOYEE, CASE_EVENT_LABELS, CASE_EVENT_PARTY, CASE_HANDLER, CASE_KIND_LABELS, CASE_NOT_DECIDED,
+  CASES_MIGRATION_MISSING, CASES_PERMISSION, CASE_ATTACHMENT_INVALID, CASE_CLOSED, CASE_FILE_NOT_FOUND, CASE_UPLOAD_RULE, CASE_CONFLICT, CASE_DUE_PROCESS, CASE_EMPLOYEE, CASE_EVENT_LABELS, CASE_EVENT_PARTY, CASE_HANDLER, CASE_KIND_LABELS, CASE_NOT_DECIDED,
   CASE_NOT_FOUND, CASE_NO_INVESTIGATOR, CASE_OBJECTED, CASE_OBJECTION_KEY, CASE_OBJECTION_LATE, CASE_OUTCOME_LABELS, CASE_PARTY_EXISTS, CASE_ROLE_LABELS, CASE_STATUS_LABELS, caseConflict, casesReady,
   cleanCaseId, cleanCaseKind, cleanCaseOutcome, cleanCaseText, cleanCaseTitle, cleanEventKind, cleanPartyRole, objectionDays,
 } from './case-rules'
@@ -21,7 +23,7 @@ export interface CaseInput { kind?: unknown; title?: unknown; description?: unkn
 // مطّلع ولا محقق. الخط الزمني بيتزوّد بس. كل كتابة تحت قفل صف القضية، والحكم (العضوية والتعارض والحالة) تحته.
 @Injectable()
 export class CasesService {
-  constructor(@InjectDataSource() private readonly ds: DataSource) {}
+  constructor(@InjectDataSource() private readonly ds: DataSource, private readonly modules: ModulesService) {}
 
   private async assertReady(em: EntityManager) {
     if (!(await casesReady(em))) throw new BadRequestException(CASES_MIGRATION_MISSING)
@@ -54,8 +56,40 @@ export class CasesService {
     if (caseConflict(respondents, handlers.map((row) => row.employeeId))) throw new BadRequestException(CASE_CONFLICT)
   }
 
-  private event(em: EntityManager, caseId: number, kind: CaseEventKind, body: string, userId: number, employeeId: number | null = null) {
-    return em.getRepository(HrCaseEvent).insert({ caseId, kind, body, employeeId, fileId: null, createdByUserId: userId, createdAt: new Date() })
+  private event(em: EntityManager, caseId: number, kind: CaseEventKind, body: string, userId: number, employeeId: number | null = null, fileId: number | null = null) {
+    return em.getRepository(HrCaseEvent).insert({ caseId, kind, body, employeeId, fileId, createdByUserId: userId, createdAt: new Date() })
+  }
+
+  // ===== المرفقات (B3.11-ب) =====
+
+  /** رفع مرفق قضية (/files/upload): لحساب مطّلع على قضية واحدة على الأقل، والموديول مفتوح له */
+  async assertCanUpload(user: JwtPayload) {
+    const em = this.ds.manager
+    if (!(await this.modules.allowedFor('cases', user)) || !(await casesReady(em)) || !(await em.getRepository(HrCaseParty).count({ where: { role: 'HANDLER', userId: user.sub } }))) {
+      throw new ForbiddenException(CASE_UPLOAD_RULE)
+    }
+  }
+
+  /** تحميل مرفق قضية (/files/:id) بحكم القضية نفسها دايمًا: قبل ربطه بحدث لرافعه بس؛ وبعده للمطّلعين على قضيته — غير كده نفس رد الملف اللي مش موجود */
+  async assertFileAccess(user: JwtPayload, file: Pick<StoredFile, 'id' | 'uploadedBy' | 'entityId'>) {
+    const missing = new NotFoundException(CASE_FILE_NOT_FOUND)
+    const em = this.ds.manager
+    if (!(await this.modules.allowedFor('cases', user)) || !(await casesReady(em))) throw missing
+    if (!file.entityId) {
+      if (!!user.sub && file.uploadedBy === user.sub) return
+      throw missing
+    }
+    if (!(await em.getRepository(HrCaseParty).count({ where: { caseId: file.entityId, role: 'HANDLER', userId: user.sub } }))) throw missing
+  }
+
+  /** ربط مرفق بقضية تحت قفل صفها: ملف «قضية» رفعه الحساب نفسه ولسه مااتربطش — كتابة مشروطة، فالملف مايتربطش مرتين */
+  private async attach(em: EntityManager, user: JwtPayload, caseId: number, raw: unknown): Promise<number | null> {
+    if (raw === undefined || raw === null || raw === '') return null
+    const id = cleanCaseId(raw)
+    const claimed = id ? await em.getRepository(StoredFile).createQueryBuilder().update().set({ entityId: caseId })
+      .where('id = :id AND entityType = :type AND entityId IS NULL AND uploadedBy = :user', { id, type: 'case', user: user.sub }).execute() : null
+    if (!claimed?.affected) throw new BadRequestException(CASE_ATTACHMENT_INVALID)
+    return id
   }
 
   private summary(row: HrCase) {
@@ -105,13 +139,16 @@ export class CasesService {
     const userIds = [...new Set([...parties.map((entry) => entry.userId), ...events.map((entry) => entry.createdByUserId), row.investigatorUserId].filter((value): value is number => !!value))]
     const people = new Map((employeeIds.length ? await em.getRepository(Employee).find({ where: { id: In(employeeIds) } }) : []).map((entry) => [entry.id, entry.fullName]))
     const accounts = new Map((userIds.length ? await em.getRepository(User).find({ where: { id: In(userIds) } }) : []).map((entry) => [entry.id, entry.displayName]))
+    const fileIds = events.map((entry) => entry.fileId).filter((value): value is number => value != null)
+    const files = new Map((fileIds.length ? await em.getRepository(StoredFile).find({ where: { id: In(fileIds) } }) : []).map((entry) => [entry.id, entry.originalName]))
     return { ...this.summary(row), description: row.description ?? null, outcomeNote: row.outcomeNote ?? null, fromRequest: row.requestId != null,
       investigatorName: row.investigatorUserId ? accounts.get(row.investigatorUserId) ?? null : null,
       parties: parties.filter((entry) => entry.role !== 'HANDLER').map((entry) => ({ id: entry.id, role: entry.role, roleLabel: CASE_ROLE_LABELS[entry.role] ?? entry.role, employeeId: entry.employeeId,
         employeeName: entry.employeeId != null ? people.get(entry.employeeId) ?? '—' : '—' })),
       handlers: parties.filter((entry) => entry.role === 'HANDLER').map((entry) => ({ userId: entry.userId, name: entry.userId != null ? accounts.get(entry.userId) ?? '—' : '—', investigator: entry.userId === row.investigatorUserId })),
       events: events.map((entry) => ({ id: entry.id, kind: entry.kind, kindLabel: CASE_EVENT_LABELS[entry.kind] ?? entry.kind, body: entry.body, employeeName: entry.employeeId != null ? people.get(entry.employeeId) ?? null : null,
-        byName: entry.createdByUserId ? accounts.get(entry.createdByUserId) ?? null : null, at: entry.createdAt })) }
+        byName: entry.createdByUserId ? accounts.get(entry.createdByUserId) ?? null : null, at: entry.createdAt,
+        file: entry.fileId != null ? { id: entry.fileId, name: files.get(entry.fileId) ?? 'مرفق' } : null })) }
   }
 
   /** إجراء مطّلع على قضية — تحت قفل صفها، والعضوية بتتحكم تحته */
@@ -157,7 +194,7 @@ export class CasesService {
   }
 
   /** حدث في الخط الزمني (ملاحظة، إفادة، دليل، جلسة، إخطار، محضر دفاع). الإفادة والدفاع لطرف من أطراف القضية */
-  addEvent(user: JwtPayload, id: number, input: { kind?: unknown; body?: unknown; employeeId?: unknown }) {
+  addEvent(user: JwtPayload, id: number, input: { kind?: unknown; body?: unknown; employeeId?: unknown; fileId?: unknown }) {
     const kind = cleanEventKind(input.kind), body = cleanCaseText(input.body) as string
     return this.act(user, id, async (em, row) => {
       if (row.status === 'CLOSED') throw new BadRequestException(CASE_CLOSED)
@@ -168,7 +205,7 @@ export class CasesService {
         if (!party || party.role === 'HANDLER') throw new BadRequestException(CASE_EVENT_PARTY)
         employeeId = party.employeeId
       }
-      await this.event(em, row.id, kind, body, user.sub, employeeId)
+      await this.event(em, row.id, kind, body, user.sub, employeeId, await this.attach(em, user, row.id, input.fileId))
     })
   }
 

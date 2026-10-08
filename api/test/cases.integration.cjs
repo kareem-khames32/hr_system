@@ -243,3 +243,54 @@ test('CS-03: من الطلب — «شكوى» بوجهة «فتح ملف قضي�
   try { assert.equal(expectStatus(await request(users.victim, 'GET', '/requests/types'), 200).some(row => row.code === 'GRIEVANCE'), false) }
   finally { expectStatus(await request(users.admin, 'PUT', '/modules/cases', { enabled: true }), 200); modules.invalidate() }
 })
+
+// ملف PNG صغير حقيقي (فحص نوع الملف بيقرا المحتوى)
+function png(shade = 255) {
+  const zlib = require('node:zlib')
+  const chunk = (kind, data) => {
+    const length = Buffer.alloc(4); length.writeUInt32BE(data.length)
+    const crc = Buffer.alloc(4); crc.writeUInt32BE(zlib.crc32(Buffer.concat([Buffer.from(kind), data])) >>> 0)
+    return Buffer.concat([length, Buffer.from(kind), data, crc])
+  }
+  const header = Buffer.alloc(13); header.writeUInt32BE(1, 0); header.writeUInt32BE(1, 4); header[8] = 8; header[9] = 2
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', header), chunk('IDAT', zlib.deflateSync(Buffer.from([0, shade, 0, 0]))), chunk('IEND', Buffer.alloc(0))])
+}
+async function upload(user, search = 'entityType=case', bytes = png()) {
+  const form = new FormData()
+  form.append('file', new Blob([bytes], { type: 'image/png' }), 'evidence.png')
+  const response = await fetch(`${base}/files/upload?${search}`, { method: 'POST', headers: { Authorization: `Bearer ${jwt.sign(payloadOf(user))}` }, body: form })
+  const text = await response.text()
+  return { status: response.status, body: text ? JSON.parse(text) : null }
+}
+const download = async (user, fileId) => (await fetch(`${base}/files/${fileId}`, { headers: { Authorization: `Bearer ${jwt.sign(payloadOf(user))}` } })).status
+
+test('CS-04: مرفق الدليل — رفعه للمطّلعين على قضية بس، وبيتربط بحدثه تحت قفل القضية مرة واحدة، وتحميله بحكم القضية نفسها (حتى لرافعه)', async () => {
+  // قضية جديدة مفتوحة للمرفقات: مطّلعها الموارد البشرية بس
+  const id = expectStatus(await request(users.hr, 'POST', C, { kind: 'OTHER', title: 'قضية المرفقات', respondentEmployeeId: emps.accused.id }), 201).id
+  // الرفع: للمطّلع على قضية بس؛ ومن غير رقم كيان ولا موظف
+  assert.deepEqual([(await upload(users.victim)).status, (await upload(users.accused)).status, (await upload(users.hrOther)).status, (await upload(users.hr, `entityType=case&entityId=${id}`)).status,
+    (await upload(users.hr, `entityType=case&employeeId=${emps.accused.id}`)).status], [403, 403, 403, 400, 400])
+  const fileId = expectStatus(await upload(users.hr), 201).id
+  const stored = await repo('StoredFile').findOneByOrFail({ id: fileId })
+  assert.deepEqual([stored.entityType, stored.entityId ?? null, stored.employeeId ?? null, stored.uploadedBy], ['case', null, null, users.hr.id], 'مش تبع موظف، ولسه مااتربطش')
+  // قبل الربط: لرافعه بس
+  assert.deepEqual([await download(users.hr, fileId), await download(users.officer, fileId), await download(users.admin, fileId), await download(users.accused, fileId)], [200, 404, 404, 404])
+  // الربط بحدث: ملف «قضية» رفعه الحساب نفسه ولسه مااتربطش
+  const other = expectStatus(await upload(users.approver), 201).id
+  const plain = expectStatus(await upload(users.hr, 'entityType=request'), 201).id
+  for (const bad of [other, plain, 987654, 'x']) assert.deepEqual(answer(await post(users.hr, id, 'events', { kind: 'EVIDENCE', body: 'صورة المحادثة', fileId: bad })), [400, rules.CASE_ATTACHMENT_INVALID], String(bad))
+  assert.equal(await repo('HrCaseEvent').count({ where: { caseId: id } }), 0, 'المرفوض ماكتبش حدث')
+  const attached = expectStatus(await post(users.hr, id, 'events', { kind: 'EVIDENCE', body: 'صورة المحادثة', fileId }), 200)
+  assert.deepEqual([attached.events.at(-1).file, (await repo('StoredFile').findOneByOrFail({ id: fileId })).entityId], [{ id: fileId, name: 'evidence.png' }, id])
+  // الملف مايتربطش مرتين (ولا بقضية تانية)
+  assert.deepEqual(answer(await post(users.hr, id, 'events', { kind: 'NOTE', body: 'تاني', fileId })), [400, rules.CASE_ATTACHMENT_INVALID])
+  // التحميل بحكم القضية: المطّلعين عليها بس — والمحقق لما يتضاف بيشوف؛ وصاحب الصلاحية التاني ومدير النظام والأطراف لأ
+  assert.deepEqual([await download(users.hr, fileId), await download(users.officer, fileId), await download(users.hrOther, fileId), await download(users.admin, fileId), await download(users.accused, fileId)],
+    [200, 404, 404, 404, 404])
+  expectStatus(await post(users.hr, id, 'investigator', { employeeId: emps.officer.id }), 200)
+  assert.equal(await download(users.officer, fileId), 200)
+  // الموديول مقفول: لا رفع ولا تحميل
+  expectStatus(await request(users.admin, 'PUT', '/modules/cases', { enabled: false }), 200); modules.invalidate()
+  try { assert.deepEqual([(await upload(users.hr)).status, await download(users.hr, fileId)], [403, 404]) }
+  finally { expectStatus(await request(users.admin, 'PUT', '/modules/cases', { enabled: true }), 200); modules.invalidate() }
+})

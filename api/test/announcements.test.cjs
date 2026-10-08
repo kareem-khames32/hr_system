@@ -187,7 +187,8 @@ test('AU-04: the attachment is bound once under the row lock and read by the ann
   const files = read('api/src/files/files.controller.ts')
   assert.match(files, /if \(entityType === 'announcement'\) \{\s+if \(entityId !== undefined \|\| employeeId !== undefined\) throw new BadRequestException\([^)]*\)\s+await this\.announcements\.assertCanUpload\(user\)/)
   assert.match(files, /\} else if \(f\.entityType === 'announcement'\) \{[\s\S]{0,200}await this\.announcements\.assertFileAccess\(user, f\)/)
-  assert.match(files, /employeeId: entityType === 'policy' \|\| entityType === 'announcement' \? undefined : /)
+  // B3.11-ب: + مرفق القضية (برضه مش تبع موظف)
+  assert.match(files, /employeeId: entityType === 'policy' \|\| entityType === 'announcement' \|\| entityType === 'case' \? undefined : /)
   assert.match(read('api/src/files/files.module.ts'), /imports: \[RequestsModule, CommentsModule, AnnouncementsModule, /)
 
   // الميزة الفرعية: مقفولة افتراضيًا، ومسارها بحارسها

@@ -74,7 +74,8 @@ test('TU-03: كارت المهمة ونموذج التكليف — الأزرا�
   assert.match(card, /if \(uploaded\.current\?\.file !== file\) uploaded\.current = \{ file, id: \(await uploadFile\(file, \{ entityType: 'task' \}\)\)\.id \}\s+proofFileId = uploaded\.current\.id/)
   // نوع ملف الإثبات مقبول في الرفع، وتحميله بحكم المهمة
   const files = read('api/src/files/files.controller.ts')
-  assert.match(files, /'leave_attachment', 'task'\]\.includes\(entityType\)/)
+  // B3.11-ب: + تصنيف مرفق القضية بعد «مهمة»
+  assert.match(files, /'leave_attachment', 'task', 'case'\]\.includes\(entityType\)/)
   assert.match(files, /else if \(f\.entityType === 'task'\) \{[\s\S]{0,260}await assertTaskFileAccess\(this\.ds\.manager, user, f\)/)
   const form = read('src/components/tasks/TaskFormModal.tsx')
   // مهمة الدور لصاحب «إدارة المهام» بس، والمسؤول بيتبعت في التعديل لما يتغيّر

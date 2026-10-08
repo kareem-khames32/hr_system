@@ -21,6 +21,7 @@ class EventDto {
   @IsOptional() kind?: unknown
   @IsOptional() body?: unknown
   @IsOptional() employeeId?: unknown
+  @IsOptional() fileId?: unknown
 }
 class DecisionDto {
   @IsOptional() outcome?: unknown

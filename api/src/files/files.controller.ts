@@ -37,6 +37,7 @@ import { assertCandidateCvAccess } from '../recruitment/candidate-applications'
 import { assertExecutionProofAccess } from '../requests/execution-tasks'
 import { CommentsService } from '../comments/comments.service'
 import { AnnouncementsService } from '../announcements/announcements.service'
+import { CasesService } from '../cases/cases.service'
 import { RequireModule } from '../modules-registry/module.guard'
 import {
   classifyUpload, FILE_TYPE_EXTENSIONS, FILE_TYPE_MIME, FILES_ALLOWED_TYPES_KEY, FILES_MAX_SIZE_KEY, FILES_MAX_SIZE_LIMIT_MB,
@@ -63,7 +64,8 @@ export class FilesController {
     private readonly ds: DataSource,
     private readonly requests: RequestsService,
     private readonly comments: CommentsService,
-    private readonly announcements: AnnouncementsService
+    private readonly announcements: AnnouncementsService,
+    private readonly cases: CasesService
   ) {}
 
   // B2.2: الحد والأنواع من الإعدادات وقت الرفع (files.max_size_mb وfiles.allowed_types)
@@ -85,7 +87,7 @@ export class FilesController {
     @Query('employeeId') employeeId?: string
   ) {
     if (!file) throw new BadRequestException('لم يصل ملف — أرسل الحقل file')
-    if (entityType && !['request', 'employee_photo', 'company_logo', 'document', 'contract', 'policy', 'comment', 'announcement', 'leave_attachment', 'task'].includes(entityType)) {
+    if (entityType && !['request', 'employee_photo', 'company_logo', 'document', 'contract', 'policy', 'comment', 'announcement', 'leave_attachment', 'task', 'case'].includes(entityType)) {
       throw new BadRequestException('تصنيف الملف غير صالح')
     }
     for (const value of [entityId, employeeId]) {
@@ -99,6 +101,11 @@ export class FilesController {
     if (entityType === 'announcement') {
       if (entityId !== undefined || employeeId !== undefined) throw new BadRequestException('مرفق الإعلان بيترفع من غير رقم كيان أو موظف')
       await this.announcements.assertCanUpload(user)
+    }
+    // B3.11-ب: مرفق قضية بيتربط بحدثه من مسار القضايا (تحت قفل صف القضية) — العميل مايحددش رقم كيان ولا موظف؛ ولحساب مطّلع على قضية بس
+    if (entityType === 'case') {
+      if (entityId !== undefined || employeeId !== undefined) throw new BadRequestException('مرفق القضية بيترفع من غير رقم كيان أو موظف')
+      await this.cases.assertCanUpload(user)
     }
     const LOGO_RULE = 'رفع شعار الشركة يتطلب صلاحية الإعدادات وملف صورة'
     if (entityType === 'company_logo' && !userHasPerm(user, 'settings.manage')) throw new ForbiddenException(LOGO_RULE)
@@ -137,7 +144,7 @@ export class FilesController {
           entityType: entityType || undefined,
           entityId: entityId ? Number(entityId) : undefined,
           // الافتراضي: الملف تبع موظف رافعه — إلا لو الإدارة حددت غيره. ملف السياسة ومرفق الإعلان مش تبع موظف
-          employeeId: entityType === 'policy' || entityType === 'announcement' ? undefined : employeeId ? Number(employeeId) : (user.employeeId ?? undefined),
+          employeeId: entityType === 'policy' || entityType === 'announcement' || entityType === 'case' ? undefined : employeeId ? Number(employeeId) : (user.employeeId ?? undefined),
           uploadedBy: user.sub,
         }))
         return { saved: row, hashed: await recordStoredFileHash(em, row.id, sha256) }
@@ -187,6 +194,9 @@ export class FilesController {
     } else if (f.entityType === 'announcement') {
       // B2.16-ب: مرفق إعلان — بحكم الإعلان نفسه (اللي بيديره، أو موظف الإعلان ساري له وهو في جمهوره)، مش بملكية الرفع العامة
       await this.announcements.assertFileAccess(user, f)
+    } else if (f.entityType === 'case') {
+      // B3.11-ب: مرفق قضية — بحكم القضية نفسها (المطّلعين عليها بس)، مش بملكية الرفع العامة
+      await this.cases.assertFileAccess(user, f)
     } else if (f.entityType === 'candidate_cv') {
       // B3.3-ب: السيرة الذاتية لمتقدّم من اللينك العام — بحكم المرشح (إدارة التوظيف ونطاق فرعه)، مش بملكية الرفع العامة
       await assertCandidateCvAccess(this.ds.manager, user, f)

@@ -31,6 +31,7 @@ import {
   Target,
   GraduationCap,
   LifeBuoy,
+  Scale,
   FileText,
   Settings,
   ChevronDown,
@@ -502,6 +503,8 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
       { id: 'announcements', label: 'الإعلانات', icon: <Megaphone size={20} />, href: '/announcements' },
       // B3.10: استفسارات الموظف للموارد البشرية (بتظهر لما موديول مركز الخدمات مفتوح)
       { id: 'helpdesk', label: 'مركز الخدمات', icon: <LifeBuoy size={20} />, href: '/helpdesk' },
+      // B3.11: قضايا الحساب (المطّلع عليها) وقضايا الموظف الطرف (بتظهر لما موديول الشكاوى والتحقيقات مفتوح)
+      { id: 'cases', label: 'الشكاوى والتحقيقات', icon: <Scale size={20} />, href: '/cases' },
       { id: 'notifications', label: 'الإشعارات', icon: <Bell size={20} />, href: '/notifications' },
       { id: 'calendar', label: 'التقويم', icon: <Calendar size={20} />, href: '/calendar' },
     ]

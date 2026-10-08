@@ -336,13 +336,13 @@ export const MODULES = {
     routes: ['/helpdesk'],
     requestTypes: ['INQUIRY_PAYROLL', 'INQUIRY_LEAVES', 'INQUIRY_DATA', 'INQUIRY_GENERAL'],
   }),
-  // B3.11: الشكاوى والتحقيقات — ملف قضية بأطرافه ومطّلعيه وخطه الزمني، والاطلاع على مستوى القضية (الخادم أولًا؛ الشاشات في الجزء ب).
+  // B3.11: الشكاوى والتحقيقات — ملف قضية بأطرافه ومطّلعيه وخطه الزمني، والاطلاع على مستوى القضية.
   // موديول جديد = مقفول لحد ما الشركة تفتحه
   cases: moduleDef({
     nameAr: 'الشكاوى والتحقيقات', group: 'people', dependsOn: ['employees'], preset: 'standard', defaultEnabled: false,
     description: 'ملف قضية سرّي للشكوى أو التظلم أو المخالفة: أطراف ومحقق وخط زمني (إفادات، أدلة، جلسات، إخطار ودفاع)، وقرار، واعتراض في مهلة — مايشوفوش غير المطّلعين عليه',
     permissions: ['cases.investigate'],
-    routes: [],
+    routes: ['/cases', '/cases/*'],
     // وجهة «فتح ملف قضية» (أي نوع طلب وجهته دي بيتبع الموديول)
     requestHandlers: ['case_open'],
   }),
