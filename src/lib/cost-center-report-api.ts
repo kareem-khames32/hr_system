@@ -65,3 +65,39 @@ export function exportCostCenterReportCsv(report: CostCenterReport) {
   }
   downloadCsv(`cost-centers-${report.period}.csv`, header, rows)
 }
+
+// ===== B6.5: القيد المحاسبي للمسيرات المعتمدة بمراكز التكلفة — GET /reports/cost-centers/journal (قراءة بس) =====
+export interface PayrollJournalLine { account: string; label: string; debit: string; credit: string }
+export interface PayrollJournalCenter {
+  costCenterId: number | null; code: string | null; name: string; currency: string | null; headcount: number
+  lines: PayrollJournalLine[]; debit: string; credit: string; balanced: boolean
+  /** الاستحقاقات ناقص الخصومات ناقص الصافي — غير الصفر بيطلع سطر «فرق تسوية الصافي» */
+  adjustment: string
+}
+export interface PayrollJournal {
+  period: string; branchId: number | null; runId: number | null; employerInsuranceAvailable: boolean
+  runs: Array<{ id: number; name: string | null; status: string }>
+  centers: PayrollJournalCenter[]
+  totals: Array<{ currency: string | null; debit: string; credit: string; balanced: boolean }>
+  balanced: boolean; adjusted: number
+}
+
+export function fetchPayrollJournal(params: { period: string; branchId?: string; org?: OrgFilterParams }) {
+  const query = new URLSearchParams({ period: params.period })
+  if (params.branchId) query.set('branchId', params.branchId)
+  appendOrgFilterParams(query, params.org)
+  return apiFetch<PayrollJournal>(`/reports/cost-centers/journal?${query.toString()}`)
+}
+
+/** CSV عام للقيد: سطر لكل حساب تحت مركزه وعملته (مدين/دائن)، وبعده إجمالي المركز. */
+export function exportPayrollJournalCsv(journal: PayrollJournal) {
+  const header = ['الفترة', 'مركز التكلفة', 'كود المركز', 'العملة', 'مفتاح الحساب', 'الحساب', 'مدين', 'دائن']
+  const rows: unknown[][] = []
+  for (const center of journal.centers) {
+    const currency = center.currency ? currencyLabel(center.currency) : ''
+    for (const line of center.lines) rows.push([journal.period, center.name, center.code ?? '', currency, line.account, line.label, line.debit, line.credit])
+    rows.push([journal.period, `إجمالي ${center.name}`, center.code ?? '', currency, '', center.balanced ? 'متوازن' : 'غير متوازن', center.debit, center.credit])
+  }
+  for (const total of journal.totals) rows.push([journal.period, 'إجمالي القيد', '', total.currency ? currencyLabel(total.currency) : '', '', total.balanced ? 'متوازن' : 'غير متوازن', total.debit, total.credit])
+  downloadCsv(`payroll-journal-${journal.period}.csv`, header, rows)
+}

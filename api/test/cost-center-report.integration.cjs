@@ -160,3 +160,38 @@ test('ملف الشركة: الآيبان والبريد بصيغة صحيحة،
   expectStatus(await request(U.admin, 'PATCH', '/settings/config', { key: 'company.email', value: '' }), 200)
   assert.equal((await request(U.branchA, 'PATCH', '/settings/config', { key: 'company.email', value: 'hr@company.com' })).status, 403)
 })
+
+test('B6.5 — القيد المحاسبي: نفس أرقام التقرير، مدين = دائن لكل مركز، المعتمد والمصروف بس، مسير واحد بالطلب، ونطاق الفرع وصلاحية الرواتب', async () => {
+  const journal = expectStatus(await request(U.admin, 'GET', '/reports/cost-centers/journal?period=2026-08'), 200)
+  const report = expectStatus(await request(U.admin, 'GET', '/reports/cost-centers?period=2026-08'), 200)
+  const lines = center => Object.fromEntries(center.lines.map(line => [line.account, [line.debit, line.credit]]))
+  assert.deepEqual([journal.centers.map(center => [center.name, center.code, center.headcount, center.debit, center.credit, center.balanced, center.adjustment]), journal.balanced, journal.adjusted, journal.employerInsuranceAvailable],
+    [[['المشاريع', 'P1', 3, '15838.05', '15838.05', true, '0.00']], true, 0, true])
+  assert.deepEqual(lines(journal.centers[0]), { SALARIES: ['15000.00', '0.00'], OVERTIME: ['250.55', '0.00'], EMPLOYER_INSURANCE: ['587.50', '0.00'], NET_PAYABLE: ['0.00', '14652.94'], ATTENDANCE_DEDUCTIONS: ['0.00', '100.10'],
+    OTHER_DEDUCTIONS: ['0.00', '10.01'], INSURANCE_PAYABLE: ['0.00', '1075.00'] })
+  // نفس مصدر التقرير: المدين = إجمالي التقرير + حصة صاحب العمل، والصافي الدائن = صافي التقرير
+  const cents = value => Math.round(Number(value) * 100)
+  assert.equal(cents(journal.centers[0].debit), cents(report.centers[0].gross) + cents(report.centers[0].employerInsurance))
+  assert.equal(lines(journal.centers[0]).NET_PAYABLE[1], report.centers[0].net)
+  assert.deepEqual([journal.totals.length, journal.totals[0].debit, journal.totals[0].credit, journal.totals[0].balanced], [1, '15838.05', '15838.05', true])
+  // المسودة والملغى والمعكوس وعكس الصرف مش في القيد؛ والمسيرات المذكورة هي المعتمد والمصروف بس
+  assert.deepEqual(journal.runs.map(run => run.status).sort(), ['APPROVED', 'PAID'])
+  // مسير واحد بالطلب: المسير القديم المصروف (موظف واحد من فرع ب)
+  const paidRun = journal.runs.find(run => run.status === 'PAID')
+  const one = expectStatus(await request(U.admin, 'GET', `/reports/cost-centers/journal?period=2026-08&runId=${paidRun.id}`), 200)
+  assert.deepEqual([one.runId, one.runs.map(run => run.id), one.centers.map(center => [center.headcount, center.debit, center.credit]), lines(one.centers[0])],
+    [paidRun.id, [paidRun.id], [[1, '5000.00', '5000.00']], { SALARIES: ['5000.00', '0.00'], NET_PAYABLE: ['0.00', '4989.99'], OTHER_DEDUCTIONS: ['0.00', '10.01'] }])
+  // شهر صافيه المحفوظ مش بيساوي الاستحقاقات ناقص الخصومات: الفرق سطر صريح والقيد متوازن ومعلَّم
+  const july = expectStatus(await request(U.admin, 'GET', '/reports/cost-centers/journal?period=2026-07'), 200)
+  assert.deepEqual([lines(july.centers[0]), july.centers[0].adjustment, july.centers[0].balanced, july.adjusted, july.balanced],
+    [{ SALARIES: ['5000.00', '0.00'], NET_PAYABLE: ['0.00', '7777.00'], NET_ADJUSTMENT: ['2777.00', '0.00'] }, '-2777.00', true, 1, true])
+  // شهر من غير مسيرات معتمدة: قيد فاضي
+  assert.deepEqual((({ centers, totals, balanced }) => [centers, totals, balanced])(expectStatus(await request(U.admin, 'GET', '/reports/cost-centers/journal?period=2026-06'), 200)), [[], [], true])
+  // حساب الفرع: فرعه بس؛ فرع تاني ومن غير صلاحية الرواتب ممنوع؛ وشهر غلط 400
+  const own = expectStatus(await request(U.branchA, 'GET', '/reports/cost-centers/journal?period=2026-08'), 200)
+  assert.deepEqual([own.branchId, own.centers.map(center => [center.headcount, center.debit, center.credit, center.balanced])], [B.a.id, [[2, '10838.05', '10838.05', true]]])
+  assert.deepEqual([(await request(U.branchA, 'GET', `/reports/cost-centers/journal?period=2026-08&branchId=${B.b.id}`)).status, (await request(U.noPayroll, 'GET', '/reports/cost-centers/journal?period=2026-08')).status,
+    (await request(U.admin, 'GET', '/reports/cost-centers/journal?period=2026-13')).status, (await request(U.admin, 'GET', '/reports/cost-centers/journal?period=2026-08&runId=x')).status], [403, 403, 400, 400])
+  // قراءة بس: ولا صف اتغيّر
+  assert.deepEqual([await repo('PayrollItem').count(), await repo('PayrollRun').count()], [7, 6])
+})

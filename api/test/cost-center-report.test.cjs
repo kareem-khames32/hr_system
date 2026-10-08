@@ -105,3 +105,50 @@ test('cost center endpoint: branch scoped, payroll.view required, registered in 
   // B2.13: ومعاه خدمة المؤشرات ورسّام PDF التقارير
   assert.match(appModule, /providers: \[CostCenterReportService[,\]]/)
 })
+
+test('B6.5 — القيد المحاسبي: مدين = دائن لكل مركز وعملة بالقروش الصحيحة، والفرق سطر صريح، والسالب بيتقلب، وحصة صاحب العمل لو مصدرها متاح بس', () => {
+  const journal = require('../src/reports/payroll-journal')
+  const row = (employeeId, costCenterId, money, extra = {}) => ({ runId: 1, runName: 'مسير', runStatus: 'APPROVED', employeeId, employeeCode: 'E' + employeeId, fullName: 'موظف', branchId: extra.branchId ?? 1, branchName: 'فرع',
+    costCenterId, costCenterCode: costCenterId ? 'CC' + costCenterId : null, costCenterName: costCenterId ? 'مركز ' + costCenterId : null, ...money, ...(extra.employerInsurance !== undefined ? { employerInsurance: extra.employerInsurance } : {}) })
+  const currencyOf = item => (item.branchId === 2 ? 'EGP' : 'SAR')
+  const built = journal.buildPayrollJournal([
+    row(1, 7, { basicSalary: '5000.00', allowances: '1000.10', overtimeAmount: '250.55', latenessDeduction: '100.10', loanInstallments: '500.00', socialInsuranceDeduction: '487.50', statutoryDeductions: '33.33', netPay: '5129.72' }, { employerInsurance: '587.50' }),
+    row(2, 7, { basicSalary: '0.10', otherAdditions: '0.20', absenceDeduction: '0.05', netPay: '0.25' }),
+    row(3, null, { basicSalary: '3000.00', otherDeductions: '10.01', netPay: '2989.99' }),
+    row(4, 7, { basicSalary: '4000.00', netPay: '4000.00' }, { branchId: 2 }),
+  ], true, currencyOf)
+  const lines = center => Object.fromEntries(center.lines.map(line => [line.account, [line.debit, line.credit]]))
+  assert.deepEqual(built.centers.map(center => [center.currency, center.name, center.code, center.headcount, center.debit, center.credit, center.balanced, center.adjustment]),
+    [['EGP', 'مركز 7', 'CC7', 1, '4000.00', '4000.00', true, '0.00'], ['SAR', 'مركز 7', 'CC7', 2, '6838.45', '6838.45', true, '0.00'], ['SAR', 'بدون مركز تكلفة', null, 1, '3000.00', '3000.00', true, '0.00']])
+  assert.deepEqual(lines(built.centers[1]), { SALARIES: ['6000.20', '0.00'], OVERTIME: ['250.55', '0.00'], OTHER_EARNINGS: ['0.20', '0.00'], EMPLOYER_INSURANCE: ['587.50', '0.00'], NET_PAYABLE: ['0.00', '5129.97'],
+    ATTENDANCE_DEDUCTIONS: ['0.00', '100.15'], LOANS: ['0.00', '500.00'], INSURANCE_PAYABLE: ['0.00', '1075.00'], STATUTORY_PAYABLE: ['0.00', '33.33'] })
+  assert.deepEqual([built.totals, built.balanced, built.adjusted], [[{ currency: 'EGP', debit: '4000.00', credit: '4000.00', balanced: true }, { currency: 'SAR', debit: '9838.45', credit: '9838.45', balanced: true }], true, 0])
+  // حصة صاحب العمل من غير مصدر: مابتدخلش في المدين ولا في التأمينات المستحقة
+  const noInsurance = journal.buildPayrollJournal([row(1, 7, { basicSalary: '5000.00', socialInsuranceDeduction: '487.50', netPay: '4512.50' }, { employerInsurance: '587.50' })], false, currencyOf)
+  assert.deepEqual(lines(noInsurance.centers[0]), { SALARIES: ['5000.00', '0.00'], NET_PAYABLE: ['0.00', '4512.50'], INSURANCE_PAYABLE: ['0.00', '487.50'] })
+  // الصافي المحفوظ مش بيساوي الاستحقاقات ناقص الخصومات: الفرق سطر صريح على الجانب الناقص، والقيد متوازن ومعلَّم
+  const more = journal.buildPayrollJournal([row(1, 7, { basicSalary: '5000.00', latenessDeduction: '100.00', netPay: '4950.00' })], true, currencyOf)
+  const less = journal.buildPayrollJournal([row(1, 7, { basicSalary: '5000.00', latenessDeduction: '100.00', netPay: '4800.00' })], true, currencyOf)
+  assert.deepEqual([lines(more.centers[0]).NET_ADJUSTMENT, more.centers[0].adjustment, more.centers[0].debit, more.centers[0].credit, more.centers[0].balanced, more.adjusted], [['50.00', '0.00'], '-50.00', '5050.00', '5050.00', true, 1])
+  assert.deepEqual([lines(less.centers[0]).NET_ADJUSTMENT, less.centers[0].adjustment, less.centers[0].debit, less.centers[0].credit, less.centers[0].balanced], [['0.00', '100.00'], '100.00', '5000.00', '5000.00', true])
+  // مبلغ سالب على حساب (تسوية عكسية): بيتقلب للجانب التاني بقيمته
+  const negative = journal.buildPayrollJournal([row(1, 7, { basicSalary: '5000.00', otherDeductions: '-200.00', netPay: '5200.00' })], true, currencyOf)
+  assert.deepEqual([lines(negative.centers[0]), negative.centers[0].debit, negative.centers[0].credit], [{ SALARIES: ['5000.00', '0.00'], NET_PAYABLE: ['0.00', '5200.00'], OTHER_DEDUCTIONS: ['200.00', '0.00'] }, '5200.00', '5200.00'])
+  assert.deepEqual(journal.buildPayrollJournal([], true, currencyOf), { centers: [], totals: [], balanced: true, adjusted: 0 })
+  // كل عمود فلوس في التقرير متوزّع على حساب (مفيش عمود بيضيع من القيد)
+  const report = require('../src/reports/cost-center-report')
+  const covered = new Set(journal.JOURNAL_ACCOUNTS.flatMap(account => account.fields))
+  for (const field of [...report.COST_CENTER_EARNING_FIELDS, ...report.COST_CENTER_DEDUCTION_FIELDS, 'netPay', 'employerInsurance']) assert.ok(covered.has(field), field)
+  assert.equal(new Set(journal.JOURNAL_ACCOUNTS.map(account => account.key)).size, journal.JOURNAL_ACCOUNTS.length)
+  // المصدر: نفس صفوف التقرير، ومن غير مسودات، ومسار قراءة بصلاحية الرواتب ونطاق الفروع
+  const fs = require('node:fs'), path = require('node:path')
+  const read = file => fs.readFileSync(path.join(__dirname, '..', 'src', 'reports', file), 'utf8').replace(/\r\n/g, '\n')
+  const service = read('cost-center-report.service.ts'), controller = read('cost-center-report.controller.ts')
+  assert.match(service, /async report\(query: CostCenterReportQuery\) \{\n\s+const \{ insurance, rows \} = await this\.itemRows\(query\)/)
+  assert.match(service, /const \{ insurance, rows \} = await this\.itemRows\(\{ \.\.\.query, includeDraft: false \}\)/)
+  assert.doesNotMatch(service.slice(service.indexOf('async journal(')), /INSERT INTO|UPDATE |\.save\(|\.insert\(/)
+  const route = controller.slice(controller.indexOf("@Get('journal')"))
+  assert.match(route, /^@Get\('journal'\)\n  async journal\([^\n]+\n\s+if \(!userHasPerm\(user, 'payroll\.view'\)\) throw new ForbiddenException/)
+  assert.match(route, /if \(query\.branchId !== undefined && !inBranchScope\(scope, query\.branchId\)\) \{\n\s+throw new ForbiddenException/)
+  assert.doesNotMatch(controller, /@(Post|Put|Patch|Delete)\(/)
+})

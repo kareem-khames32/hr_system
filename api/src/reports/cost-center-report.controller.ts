@@ -28,6 +28,10 @@ export class CostCenterReportQueryDto {
 
   @IsOptional() @Transform(toBoolean) @IsBoolean({ message: 'إظهار المسودات يقبل true أو false فقط' })
   includeDraft?: boolean
+
+  // B6.5: مسير واحد (للقيد المحاسبي)
+  @IsOptional() @Type(() => Number) @IsInt({ message: 'رقم المسير غير صالح' }) @Min(1)
+  runId?: number
 }
 
 // تقرير مراكز التكلفة لشهر: مبالغ رواتب فردية، فيحتاج صلاحية عرض الرواتب فوق التقارير. حساب الفرع يشوف فرعه بس.
@@ -48,6 +52,19 @@ export class CostCenterReportController {
     // الفرع المطلوب، أو فرع الحساب لو فرع واحد (زي الأول بالحرف)، وإلا null + نطاق فروعه كله (branchScope)
     const branchId = query.branchId ?? (scope !== null && scope.length === 1 ? scope[0] : null)
     return this.service.report({ period: query.period, branchId, branchScope: scope, includeDraft: query.includeDraft === true,
+      departmentIds: query.departmentIds?.length ? [...new Set(query.departmentIds)] : null, teamId: query.teamId ?? null })
+  }
+
+  // B6.5: القيد المحاسبي للمسيرات المعتمدة بمراكز التكلفة — نفس صلاحيتَي التقرير ونفس نطاق الفروع (قراءة بس)
+  @Get('journal')
+  async journal(@Query() query: CostCenterReportQueryDto, @CurrentUser() user: JwtPayload) {
+    if (!userHasPerm(user, 'payroll.view')) throw new ForbiddenException('القيد المحاسبي محتاج صلاحية عرض الرواتب')
+    const scope = branchScopeOf(user)
+    if (query.branchId !== undefined && !inBranchScope(scope, query.branchId)) {
+      throw new ForbiddenException(scope !== null && scope.length > 1 ? 'حساب الفروع يشوف تقارير فروعه بس' : 'حساب الفرع يشوف تقرير فرعه بس')
+    }
+    const branchId = query.branchId ?? (scope !== null && scope.length === 1 ? scope[0] : null)
+    return this.service.journal({ period: query.period, branchId, branchScope: scope, runId: query.runId ?? null,
       departmentIds: query.departmentIds?.length ? [...new Set(query.departmentIds)] : null, teamId: query.teamId ?? null })
   }
 }

@@ -11,7 +11,9 @@ import { currencyTotalRows, moneyByCurrency } from '@/lib/currency-totals'
 import { formatMoney } from '@/lib/money'
 import {
   exportCostCenterReportCsv,
+  exportPayrollJournalCsv,
   fetchCostCenterReport,
+  fetchPayrollJournal,
   RUN_STATUS_LABELS,
   type CostCenterReport,
 } from '@/lib/cost-center-report-api'
@@ -61,6 +63,20 @@ export default function CostCenterReportPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(load, [period, org.paramsKey, includeDraft])
 
+  // B6.5: القيد المحاسبي — بيتقري من الخادم وقت التصدير (المعتمد والمصروف بس، مش المسودات)
+  const [journalBusy, setJournalBusy] = useState(false)
+  const exportJournal = () => {
+    setJournalBusy(true)
+    setError('')
+    fetchPayrollJournal({ period, org: org.params })
+      .then((journal) => {
+        if (journal.centers.length === 0) { setError('مفيش مسيرات معتمدة أو مصروفة في الشهر ده بالفلتر الحالي — مفيش قيد يتصدّر'); return }
+        exportPayrollJournalCsv(journal)
+      })
+      .catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل القيد المحاسبي'))
+      .finally(() => setJournalBusy(false))
+  }
+
   return (
     <MainLayout>
       <div className="space-y-6">
@@ -89,6 +105,11 @@ export default function CostCenterReportPage() {
             >
               <Download size={18} />
               تصدير CSV
+            </button>
+            {/* B6.5: القيد المحاسبي للمسيرات المعتمدة والمصروفة في الشهر بنفس الفلتر (مدين/دائن لكل مركز) */}
+            <button onClick={exportJournal} className="btn-secondary flex items-center gap-2" disabled={!period || journalBusy} data-payroll-journal>
+              <Download size={18} />
+              تصدير القيد المحاسبي
             </button>
           </div>
         </div>

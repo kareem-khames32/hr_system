@@ -8,6 +8,7 @@ import { singleCurrency, totalsByCurrency } from '../org/currency-totals'
 import { payrollLineNotReversedSql } from '../payroll/payroll-reversal-sql'
 import { aggregateCostCenterReport, COST_CENTER_DEDUCTION_FIELDS, COST_CENTER_EARNING_FIELDS, COST_CENTER_STATUTORY_FIELD, type CostCenterReportRow } from './cost-center-report'
 import { payrollStatutorySql } from '../payroll/payroll-statutory'
+import { buildPayrollJournal } from './payroll-journal'
 
 // خصم التأمينات (حصة الموظف) عمود من ترحيل 049 — لو مش موجود لسه نتخطاه، وحصة صاحب العمل تظهر «—»
 const INSURANCE_DEDUCTION_COLUMN = 'socialInsuranceDeduction'
@@ -24,6 +25,8 @@ export interface CostCenterReportQuery {
   teamId?: number | null
   /** true = يشمل المسيرات المحسوبة غير المعتمدة (مسودة) */
   includeDraft: boolean
+  /** B6.5: مسير واحد بعينه (للقيد المحاسبي) */
+  runId?: number | null
 }
 
 @Injectable()
@@ -35,7 +38,8 @@ export class CostCenterReportService {
     return rows[0]?.size !== null && rows[0]?.size !== undefined
   }
 
-  async report(query: CostCenterReportQuery) {
+  /** B6.5: صفوف بنود المسيرات لمراكز التكلفة — مصدر واحد للتقرير وللقيد المحاسبي */
+  private async itemRows(query: CostCenterReportQuery): Promise<{ insurance: boolean; rows: CostCenterReportRow[] }> {
     const insurance = await this.insuranceAvailable()
     const moneyColumns = [...COST_CENTER_EARNING_FIELDS, ...COST_CENTER_DEDUCTION_FIELDS, 'netPay'].filter(column => insurance || column !== INSURANCE_DEDUCTION_COLUMN)
     const statuses = query.includeDraft ? `r.[status] <> 'CANCELLED'` : `r.[status] IN ('APPROVED', 'PAID')`
@@ -51,6 +55,7 @@ export class CostCenterReportService {
     // الفلتر الموحد (الإدارة/القسم بأقسامه الفرعية، والفريق) بمعاملات بس
     if (query.departmentIds?.length) where.push(`x.[departmentId] IN (${query.departmentIds.map(id => `@${params.push(id) - 1}`).join(', ')})`)
     if (query.teamId != null) where.push(`x.[teamId] = @${params.push(query.teamId) - 1}`)
+    if (query.runId != null) where.push(`x.[runId] = @${params.push(query.runId) - 1}`)
     const branchFilter = where.length ? `WHERE ${where.join(' AND ')}` : ''
     // الفرع والقسم والفريق ومركز التكلفة من لقطة العضو وقت المسير، ولو مفيش لقطة (مسير قديم) من ملف الموظف الحالي
     const rows: CostCenterReportRow[] = await this.ds.query(
@@ -80,6 +85,11 @@ export class CostCenterReportService {
        ${branchFilter}`,
       params,
     )
+    return { insurance, rows }
+  }
+
+  async report(query: CostCenterReportQuery) {
+    const { insurance, rows } = await this.itemRows(query)
     // B1.1: البند بعملة فرعه في لقطة المسير؛ المركز اللي فيه فرعين بعملتين عملته null، والإجمالي لكل عملة بنفس دالة التجميع
     const currencyOfBranch = await readBranchCurrencyOf(this.ds.manager)
     const ofRow = (row: CostCenterReportRow) => currencyOfBranch(row.branchId == null ? null : Number(row.branchId))
@@ -91,5 +101,17 @@ export class CostCenterReportService {
         currency: singleCurrency(rows.filter(row => centerKey(row.costCenterId) === center.costCenterId).map(ofRow)),
         employees: center.employees.map(row => ({ ...row, currency: ofItem.get(`${row.runId}:${row.employeeId}`) ?? null })) })),
       byCurrency: totalsByCurrency(rows, ofRow, group => aggregateCostCenterReport(group, insurance).totals) }
+  }
+
+  /**
+   * B6.5: القيد المحاسبي لمسيرات شهر (أو مسير واحد) بمراكز التكلفة — من نفس صفوف التقرير، والمعتمد والمصروف بس (مفيش قيد لمسودة).
+   * قراءة بس: مدين/دائن لكل عملة ومركز، متوازن، والفرق لو موجود سطر صريح.
+   */
+  async journal(query: Omit<CostCenterReportQuery, 'includeDraft'>) {
+    const { insurance, rows } = await this.itemRows({ ...query, includeDraft: false })
+    const currencyOfBranch = await readBranchCurrencyOf(this.ds.manager)
+    const journal = buildPayrollJournal(rows, insurance, row => currencyOfBranch(row.branchId == null ? null : Number(row.branchId)))
+    const runs = [...new Map(rows.map(row => [Number(row.runId), { id: Number(row.runId), name: row.runName ?? null, status: row.runStatus }])).values()].sort((a, b) => a.id - b.id)
+    return { period: query.period, branchId: query.branchId, runId: query.runId ?? null, employerInsuranceAvailable: insurance, runs, ...journal }
   }
 }
