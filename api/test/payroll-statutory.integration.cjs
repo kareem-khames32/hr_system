@@ -54,6 +54,9 @@ const runFor = async (period, employees, name) => expectStatus(await request(use
 const itemOf = (result, emp) => result.items.find(row => row.employeeId === emp.id)
 const statutoryOf = item => JSON.parse(item.breakdown).statutory
 const settings = rows => repo('RequestsConfig').save(Object.entries(rows).map(([key, value]) => ({ key, value })))
+const CALCULATOR_KEYS = ['eg.salary_tax.brackets', 'eg.salary_tax.high_income', 'eg.martyrs_fund', 'eg.health_insurance']
+const verify = (verified, keys = CALCULATOR_KEYS) => ds.query(`UPDATE [statutory_definitions] SET [verified] = @0 WHERE [key] IN (${keys.map((_, index) => `@${index + 1}`).join(', ')})`, [verified ? 1 : 0, ...keys])
+const ytdOf = ({ sourceItemIds, ...figures }) => figures
 const approve = async runId => {
   const unassigned = expectStatus(await request(users.approver, 'GET', `/payroll/runs/${runId}/unassigned`), 200)
   expectStatus(await request(users.approver, 'POST', `/payroll/runs/${runId}/unassigned-ack`, { reportHash: unassigned.reportHash }), 201)
@@ -88,6 +91,8 @@ before(async () => {
   users.admin = await user('admin'); users.approver = await user('approver')
   await settings({ 'payroll.cycle_start_day': '1', 'payroll.monthly_days': '30', 'payroll.daily_hours': '8', 'payroll.exempt_overtime_eligible': 'false',
     'payroll.exempt_unpaid_leave_deductible': 'true', 'payroll.salary_evidence_mode': 'MONTHLY_HISTORY_OR_CURRENT_FILE' })
+  // P4A-B01: الحساب بيقرا صف «اتأكد» بس — صفوف الضريبة وصندوق الشهداء والتأمين الصحي متراجعة في الاختبار ده (زي ما التفعيل بيشترط)
+  await verify(true)
   state.full = await employee(org.cairo)
   state.raised = await employee(org.cairo)
   state.saudi = await employee(org.riyadh, { nationality: 'سعودي', gosiBaseSalary: null, isGosiRegistered: false })
@@ -141,7 +146,7 @@ test('PS-02: الإعدادين مفتوحين — ضريبة 1,482.50 وصند�
   assert.deepEqual([Number(item.socialInsuranceDeduction), Number(item.netPay)], [1650, 15000 - 1650 - 1482.5 - 7.5])
   assert.deepEqual([stored.total, stored.lines], [1490, [{ code: 'INCOME_TAX', amount: 1482.5 }, { code: 'MARTYRS_FUND', amount: 7.5 }]])
   assert.deepEqual(stored.egTax, { netIncome: 13350, days: 30, ytdNetIncome: 0, ytdDays: 0, ytdTax: 0, annualized: 160200, exemption: 20000, taxable: 140200, annualTax: 17790, cumulativeTax: 1482.5, tax: 1482.5,
-    tableEffectiveFrom: '2024-03-01', tableVerified: false, startPeriod: '2026-08' })
+    tableEffectiveFrom: '2024-03-01', tableVerified: true, startPeriod: '2026-08', sourceItemIds: [] })
   assert.deepEqual(stored.martyrsFund, { base: 15000, pct: 0.05, amount: 7.5, effectiveFrom: '2021-01-01' })
   // الفرع السعودي: ولا خصم ولا لقطة
   const saudi = itemOf(august, state.saudi)
@@ -199,7 +204,13 @@ test('PS-03: التراكمي — الشهر التاني بياخد اللي ا
 })
 
 test('PS-04: قارئ الرصيد التراكمي — من فترة البداية وفي نفس السنة، والمسير نفسه برّه، ونفس الفترة «متعدّة»، والمعكوس صرفه والملغى برّه', async () => {
-  const read = (employee, target, start = '2026-08') => run.readEgTaxYearToDate(ds.manager, employee.id, target, start)
+  const full = (employee, target, start = '2026-08', finalOnly = false) => run.readEgTaxYearToDate(ds.manager, employee.id, target, start, finalOnly)
+  const read = async (...args) => ytdOf(await full(...args))
+  // P4A-B02: المصادر بأرقام بنودها؛ و«المعتمد والمصروف بس» من غير سبتمبر (محسوب)
+  const augustItem = (await repo('PayrollItem').findOneByOrFail({ runId: state.august, employeeId: state.full.id })).id
+  const septemberItem = (await repo('PayrollItem').findOneByOrFail({ runId: state.september, employeeId: state.full.id })).id
+  assert.deepEqual([(await full(state.full, { id: null, period: '2026-10' })).sourceItemIds, (await full(state.full, { id: null, period: '2026-10' }, '2026-08', true)).sourceItemIds],
+    [[augustItem, septemberItem].sort((a, b) => a - b), [augustItem]])
   // مسير جديد لأكتوبر: أغسطس وسبتمبر متسجّلين
   assert.deepEqual(await read(state.full, { id: null, period: '2026-10' }), { netIncome: 26700, days: 60, tax: 2965, periodCounted: false })
   // مسير تاني لسبتمبر (تكميلي): الفترة نفسها متعدّة — أيامها ماتتحسبش تاني
@@ -358,4 +369,81 @@ test('PS-08: تقرير صندوق التدريب — سنوي بتكلفة ال
   await ds.query(`UPDATE [statutory_definitions] SET [effectiveFrom] = '2027-06-01' WHERE [key] = N'eg.training_fund'`)
   try { assert.deepEqual([expectStatus(await request(users.admin, 'GET', T), 200).available, expectStatus(await request(users.admin, 'GET', T), 200).entities], [false, []]) }
   finally { await ds.query(`UPDATE [statutory_definitions] SET [effectiveFrom] = '2025-09-01' WHERE [key] = N'eg.training_fund'`) }
+})
+
+test('PS-09 (P4A-B01): صف «محتاج تحقق» في آخر يوم المسير مابيتحسبش بيه — حتى والحساب مفعّل وصف أحدث «اتأكد»', async () => {
+  const emp = await employee(org.cairo)
+  const context = (period, endDate) => run.readPayrollStatutoryContext(ds.manager, { period, endDate })
+  assert.ok((await context('2026-08', '2026-08-31')).tax, 'الصف متأكد: الضريبة في السياق')
+  try {
+    await verify(false, ['eg.salary_tax.brackets'])
+    // صف أحدث «اتأكد» بيبدأ سبتمبر: أغسطس لسه على الصف القديم «محتاج تحقق»
+    const old = await repo('StatutoryDefinition').findOneByOrFail({ country: 'EG', key: 'eg.salary_tax.brackets' })
+    const made = await repo('StatutoryDefinition').save({ country: 'EG', key: 'eg.salary_tax.brackets', effectiveFrom: '2026-09-01', verified: true, source: 'اختبار' })
+    await repo('StatutoryValue').save((await repo('StatutoryValue').findBy({ definitionId: old.id })).map(value => ({ definitionId: made.id, code: value.code, value: value.value })))
+    try {
+      const august = await context('2026-08', '2026-08-31'), september = await context('2026-09', '2026-09-30')
+      assert.deepEqual([august.tax, august.martyrs.pct, september.tax.table.effectiveFrom, september.tax.table.verified], [null, 0.05, '2026-09-01', true])
+      // مسير أغسطس: صندوق الشهداء بس — ولا ضريبة بالصف القديم
+      const result = await runFor('2026-08', [emp])
+      const snapshot = statutoryOf(itemOf(result, emp))
+      assert.deepEqual([snapshot.lines, 'egTax' in snapshot, Number(itemOf(result, emp).netPay)], [[{ code: 'MARTYRS_FUND', amount: 7.5 }], false, 15000 - 1650 - 7.5])
+      // وصف الصندوق نفسه «محتاج تحقق»: مفيش أي خصم قانوني
+      await verify(false, ['eg.martyrs_fund'])
+      const none = expectStatus(await request(users.admin, 'POST', `/payroll/runs/${result.id}/recalculate`, { reason: 'إعادة حساب وصف الصندوق محتاج تحقق' }), 201)
+      assert.deepEqual([Number(itemOf(none, emp).netPay), 'statutory' in JSON.parse(itemOf(none, emp).breakdown)], [13350, false])
+      await repo('PayrollRun').update({ id: result.id }, { status: 'CANCELLED' })
+    } finally {
+      await repo('StatutoryValue').delete({ definitionId: made.id }); await repo('StatutoryDefinition').delete({ id: made.id })
+    }
+  } finally { await verify(true) }
+})
+
+test('PS-10 (P4A-B02): الضريبة التراكمية بمصادر مثبتة — الاعتماد بيرفض لو مصدرها لسه محسوب أو اتلغى، وإعادة فتح مصدر مسير معتمد مرفوضة', async () => {
+  const emp = await employee(org.cairo)
+  const ack = async runId => {
+    const unassigned = expectStatus(await request(users.approver, 'GET', `/payroll/runs/${runId}/unassigned`), 200)
+    expectStatus(await request(users.approver, 'POST', `/payroll/runs/${runId}/unassigned-ack`, { reportHash: unassigned.reportHash }), 201)
+  }
+  const tryApprove = runId => request(users.approver, 'POST', `/payroll/runs/${runId}/approve`)
+  const codeOf = response => [response.status, response.body?.code]
+  const taxOf = async runId => statutoryOf(await repo('PayrollItem').findOneByOrFail({ runId, employeeId: emp.id })).egTax
+  // أغسطس محسوب (مش معتمد)، وسبتمبر اتحسب عليه
+  const august = await runFor('2026-08', [emp]), augustItem = itemOf(august, emp).id
+  const september = await runFor('2026-09', [emp])
+  assert.deepEqual([(await taxOf(september.id)).sourceItemIds, (await taxOf(september.id)).ytdTax], [[augustItem], 1482.5])
+  await ack(september.id)
+  // مصدره لسه «محسوب»: الاعتماد مرفوض
+  assert.deepEqual(codeOf(await tryApprove(september.id)), [409, 'PAYRUN-TAX-SOURCES-CHANGED'])
+  // سيناريو التقرير: أغسطس اتلغى — سبتمبر لسه مايتعتمدش بضريبة محسوبة عليه
+  expectStatus(await request(users.admin, 'POST', `/payroll/runs/${august.id}/cancel`, { reason: 'إلغاء مسير أغسطس التجريبي' }), 201)
+  assert.deepEqual([codeOf(await tryApprove(september.id)), (await repo('PayrollRun').findOneByOrFail({ id: september.id })).status], [[409, 'PAYRUN-TAX-SOURCES-CHANGED'], 'CALCULATED'])
+  // إعادة الحساب: من غير الدخل الملغى — وبيتعتمد
+  const recalculated = expectStatus(await request(users.admin, 'POST', `/payroll/runs/${september.id}/recalculate`, { reason: 'إعادة حساب بعد إلغاء أغسطس' }), 201)
+  const fresh = statutoryOf(itemOf(recalculated, emp)).egTax
+  assert.deepEqual([fresh.sourceItemIds, fresh.ytdNetIncome, fresh.ytdTax, fresh.tax], [[], 0, 0, 1482.5])
+  await ack(september.id)
+  expectStatus(await tryApprove(september.id), 201)
+  const septemberItem = (await repo('PayrollItem').findOneByOrFail({ runId: september.id, employeeId: emp.id })).id
+  // أكتوبر على سبتمبر المعتمد: بيتعتمد؛ وبعدها سبتمبر مايتفتحش وأكتوبر المعتمد محسوب عليه
+  const october = await runFor('2026-10', [emp])
+  assert.deepEqual((await taxOf(october.id)).sourceItemIds, [septemberItem])
+  await ack(october.id)
+  expectStatus(await tryApprove(october.id), 201)
+  const reopen = (runId, reason) => request(users.admin, 'POST', `/payroll/runs/${runId}/reopen`, { reason })
+  assert.deepEqual([codeOf(await reopen(september.id, 'تصحيح سبتمبر')), (await repo('PayrollRun').findOneByOrFail({ id: september.id })).status], [[409, 'PAYRUN-TAX-HAS-DEPENDENTS'], 'APPROVED'])
+  // اللاحق الأول، وبعده السابق
+  expectStatus(await reopen(october.id, 'فتح أكتوبر الأول'), 201)
+  expectStatus(await reopen(september.id, 'تصحيح سبتمبر'), 201)
+  // سبتمبر اتفتح (محسوب): أكتوبر بمصدره المثبت مايتعتمدش لحد ما سبتمبر يتعتمد تاني
+  assert.deepEqual(codeOf(await tryApprove(october.id)), [409, 'PAYRUN-TAX-SOURCES-CHANGED'])
+  await ack(september.id)
+  expectStatus(await tryApprove(september.id), 201)
+  expectStatus(await tryApprove(october.id), 201)
+  // مسير من غير ضريبة (فرع السعودية): الاعتماد وإعادة الفتح زي الأول
+  const saudi = await employee(org.riyadh, { nationality: 'سعودي', gosiBaseSalary: null, isGosiRegistered: false })
+  const plain = await runFor('2026-08', [saudi])
+  await ack(plain.id)
+  expectStatus(await tryApprove(plain.id), 201)
+  expectStatus(await reopen(plain.id, 'فتح مسير من غير ضريبة'), 201)
 })

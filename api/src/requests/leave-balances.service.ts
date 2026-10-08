@@ -305,6 +305,19 @@ export class LeaveBalancesService {
     return { tiers, facts: new Map(rows.map(row => [Number(row.id), { country: row.country ?? null, birthDate: row.birthDate ?? null }])) }
   }
 
+  /**
+   * P4A-B03: إعدادات الحساب بحقائق شريحة الموظف (دولة فرعه وتاريخ ميلاده) مقروءة بمدير المعاملة **بعد قفل صفه**. الكاتب اللي بيقفل الموظف
+   * مايحكمش بالخريطة اللي اتقرت بالجملة قبل القفل — نقل فرع اتثبّت في النص كان بيكتب صف السنة بشريحة الدولة القديمة.
+   * من غير شرائح = نفس الإعدادات ومن غير قراءة.
+   */
+  private async settingsAfterLock(em: EntityManager, employeeId: number, settings: AccrualSettings): Promise<AccrualSettings> {
+    if (!settings.annualTiers) return settings
+    const rows: Array<{ birthDate: string | null; country: string | null }> = await em.query(
+      'SELECT CONVERT(char(10), e.[birthDate], 23) AS [birthDate], b.[country] FROM [employees] e LEFT JOIN [branches] b ON b.[id] = e.[branchId] WHERE e.[id] = @0', [employeeId])
+    return { ...settings, annualTiers: { tiers: settings.annualTiers.tiers,
+      facts: new Map(rows.map(row => [employeeId, { country: row.country ?? null, birthDate: row.birthDate ?? null }])) } }
+  }
+
   private contextOf(
     emp: (Pick<Employee, 'joinDate' | 'annualLeaveEntitled'> & { id?: number }) | null,
     s: AccrualSettings
@@ -781,7 +794,7 @@ export class LeaveBalancesService {
           })
           const fresh = now ? this.yearRowDate(period, now.joinDate) : null
           if (!now || !fresh) return false
-          const repo = em.getRepository(LeaveBalance), current = this.contextOf(now, settings)
+          const repo = em.getRepository(LeaveBalance), current = this.contextOf(now, await this.settingsAfterLock(em, e.id, settings))
           if ((await this.resolveAt(repo, e.id, t, fresh, current)).entry) return false
           await this.ensureAt(repo, e.id, t, fresh, current)
           return true
@@ -904,7 +917,7 @@ export class LeaveBalancesService {
   private async rolloverRow(em: EntityManager, rowId: number, employeeId: number, t: TypedBalance, fromPeriod: string, today: string, settings: AccrualSettings): Promise<boolean> {
     await this.lockEmployee(em, employeeId, true)
     const repo = em.getRepository(LeaveBalance)
-    const ctx = await this.accrualContext(employeeId, em, settings)
+    const ctx = await this.accrualContext(employeeId, em, await this.settingsAfterLock(em, employeeId, settings))
     const all = await repo.find({ where: { employeeId, balanceType: t } })
     const timeline = balanceTimeline(all, ctx.joinDate, this.basisOf(ctx, t))
     const own = timeline.find((e) => e.row.id === rowId)
@@ -1236,7 +1249,7 @@ export class LeaveBalancesService {
               { employeeId: e.id, balanceType: typeIn, period: Like(`${year - 1}-%`) },
             ],
           })
-          return this.renewEmployee(repo, now, fresh, today, settings, true)
+          return this.renewEmployee(repo, now, fresh, today, await this.settingsAfterLock(em, e.id, settings), true)
         })
         created += done.created
         carried += done.carried

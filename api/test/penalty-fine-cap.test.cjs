@@ -46,3 +46,9 @@ test('FCU-03: مصدر الكود — ورا إعداده المقفول، وت�
   assert.equal(configSeed.some(row => row.key === cap.PENALTY_FINE_CAP_KEY), false, 'مش مبذور: مساره حزمة الدولة بس')
   assert.equal(fs.readFileSync(path.join(apiRoot, '..', 'src', 'app', 'settings', 'policies', 'page.tsx'), 'utf8').includes(cap.PENALTY_FINE_CAP_KEY), false)
 })
+
+test('PFU-05 (P4A-B01): صف «محتاج تحقق» بتاريخ الواقعة = من غير حد قانوني', () => {
+  const cap = require('../src/cases/penalty-fine-cap')
+  const unverified = entries.map(entry => ({ ...entry, verified: false }))
+  assert.deepEqual([cap.legalFineCap(unverified, 'SA', '2026-10-08'), cap.legalFineCap(entries, 'SA', '2026-10-08') !== null], [null, true])
+})

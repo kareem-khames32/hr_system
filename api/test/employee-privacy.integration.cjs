@@ -157,7 +157,7 @@ test('EP-03: تصدير بيانات الموظف — ملف الموظف وكل
   // CR4-SELF: الطلب السرّي برّه الملف (والعادي جوّه)، وقسم الجزاءات محتاج صلاحيته — اللي اتشال متقال من غير أعداد
   assert.deepEqual(data.sections.find(section => section.key === 'requests').rows.map(row => row.typeCode), ['LEAVE'])
   assert.doesNotMatch(JSON.stringify(data), /شكوى سرّية جدًا|GRIEVANCE/)
-  assert.deepEqual([data.omitted, 'penalties' in counts, data.excluded.includes('الطلبات السرّية')], [[{ key: 'penalties', label: 'الجزاءات', reason: 'محتاج صلاحية لائحة الجزاءات' }], false, true])
+  assert.deepEqual([data.omitted, 'penalties' in counts, data.excluded.includes('الطلبات السرّية وأي سجل اتعمل منها')], [[{ key: 'penalties', label: 'الجزاءات', reason: 'محتاج صلاحية لائحة الجزاءات' }], false, true])
   const withPenalties = ok(await request(admin, 'GET', route), 200)
   assert.deepEqual([withPenalties.omitted, withPenalties.sections.some(section => section.key === 'penalties'), withPenalties.sections.find(section => section.key === 'requests').count], [[], true, 1])
   // سجلات الموظف ده بس
@@ -170,4 +170,65 @@ test('EP-03: تصدير بيانات الموظف — ملف الموظف وكل
   assert.deepEqual(audit.map(row => [row.category, Number(row.entityId), row.actorUserId, row.branchId]), [['EXPORT', E.target.id, U.editor.id, B.one.id], ['EXPORT', E.target.id, admin.id, B.one.id]])
   // التصدير قراءة بس
   assert.deepEqual([await repo('Leave').countBy({ employeeId: E.target.id }), await repo('EmployeeDocument').countBy({ employeeId: E.target.id })], [1, 2])
+})
+
+test('EP-04 (P4A-B04): طلب بتعريف سري (نوعه العام مش سري) وأي سجل اتعمل منه برّه التصدير', async () => {
+  const route = `/employees/${E.target.id}/data-export`
+  const requests = async () => ok(await request(admin, 'GET', route), 200).sections.find(section => section.key === 'requests').rows
+  const made = await repo('Request').save({ typeCode: 'LEAVE', definitionCode: 'LEAVE_ANNUAL', requesterId: E.target.id, branchId: B.one.id, status: 'SUBMITTED', payload: '{"reason":"سبب إجازة سري جدًا"}' })
+  const type = await repo('RequestType').findOneBy({ code: 'LEAVE_ANNUAL' }) ?? await repo('RequestType').save({ code: 'LEAVE_ANNUAL', nameAr: 'إجازة سنوية', category: 'LEAVE', isActive: true, isConfidential: false })
+  // التعريف مش سري: الطلب جوه الملف
+  await repo('RequestType').update({ id: type.id }, { isConfidential: false })
+  assert.ok((await requests()).some(row => row.id === made.id))
+  // التعريف سري ونوع الطلب العام (LEAVE) لأ: برّه الملف — بنفس حكم شاشة الطلب
+  await repo('RequestType').update({ id: type.id }, { isConfidential: true })
+  const data = ok(await request(admin, 'GET', route), 200)
+  assert.equal(data.sections.find(section => section.key === 'requests').rows.some(row => row.id === made.id), false)
+  assert.doesNotMatch(JSON.stringify(data), /سبب إجازة سري جدًا/)
+  // سجل اتعمل من الطلب السري (تغيير بيانات صرف مربوط بيه): برّه كمان
+  const paymentRows = async () => ok(await request(admin, 'GET', route), 200).sections.find(section => section.key === 'paymentChanges')?.rows ?? []
+  const change = await repo('EmployeePaymentChange').save({ employeeId: E.target.id, field: 'iban', oldValue: null, newValue: 'قيمة من طلب سري', changedByUserId: admin.id, changedAt: new Date(), source: 'REQUEST', requestId: made.id })
+  assert.equal((await paymentRows()).some(row => row.id === change.id), false, 'سطر طلبه سري')
+  await repo('RequestType').update({ id: type.id }, { isConfidential: false })
+  assert.equal((await paymentRows()).some(row => row.id === change.id), true, 'نفس السطر وطلبه مش سري')
+  await repo('EmployeePaymentChange').delete({ id: change.id })
+  await repo('RequestType').update({ id: type.id }, { isConfidential: false })
+  await repo('Request').delete({ id: made.id })
+})
+
+test('EP-05 (P4A-B05): التصدير ماسك صف الموظف من حكم النطاق لآخر قراءة — نقل الفرع بيستنى، والتصدير اللي بعده «غير موجود»', async () => {
+  const route = `/employees/${E.target.id}/data-export`
+  const original = ds.transaction
+  let reached, release, paused = false
+  const arrived = new Promise(resolve => { reached = resolve }), gate = new Promise(resolve => { release = resolve })
+  // التصدير بيقف بعد ما قفل صف الموظف وحكم على نطاقه (أول استعلامين)، وقبل ما يقرا الأقسام
+  ds.transaction = function (...args) {
+    const work = args[args.length - 1]
+    if (paused || typeof work !== 'function') return original.apply(this, args)
+    paused = true
+    return original.call(this, async em => {
+      const query = em.query.bind(em); let seen = 0
+      em.query = async (...queryArgs) => { const result = await query(...queryArgs); if (++seen === 1) { reached(); await gate } return result }
+      return work(em)
+    })
+  }
+  const pending = request(U.editor, 'GET', route)
+  let moved = false
+  try {
+    await Promise.race([arrived, pending.then(() => { throw new Error('export finished before the barrier') })])
+    ds.transaction = original
+    // نقل الموظف لفرع برّه نطاق القارئ: واقف على قفل الصف طول ما التصدير شغال
+    const moving = repo('Employee').update({ id: E.target.id }, { branchId: B.two.id }).then(() => { moved = true })
+    await new Promise(resolve => setTimeout(resolve, 400))
+    assert.equal(moved, false, 'النقل مستني التصدير')
+    release()
+    const data = ok(await pending, 200)
+    assert.equal(data.employee.branchId, B.one.id, 'التصدير كله من لحظة حكم النطاق')
+    await moving
+    assert.equal(moved, true)
+    assert.equal((await request(U.editor, 'GET', route)).status, 404)
+  } finally {
+    release(); ds.transaction = original; await pending.catch(() => {})
+    await repo('Employee').update({ id: E.target.id }, { branchId: B.one.id })
+  }
 })

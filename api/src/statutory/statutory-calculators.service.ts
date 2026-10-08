@@ -16,8 +16,9 @@ import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { StatutoryDefinition } from './statutory.entities'
 
 // B4.4 (ج): تفعيل الحسابات القانونية اللي ورا إعداد (ضريبة كسب العمل، صندوق الشهداء) — المسار الوحيد اللي بيفتحها.
-// مقدمة المرحلة 4: الحساب اللي بيعتمد على رقم «محتاج تحقق» مقفول لحد ما المالك يعلّم إنه اتراجع — فالتفعيل لمدير النظام بس، وبس لو صفوف
-// الحزمة السارية النهارده والجاية متعلّمة «اتأكد»، تحت قفل صفوفها. وطول ما الحساب مفتوح حزمة الدولة مابتقبلش صف «محتاج تحقق» لمفاتيحه.
+// مقدمة المرحلة 4: الحساب اللي بيعتمد على رقم «محتاج تحقق» مقفول لحد ما المالك يعلّم إنه اتراجع — فالتفعيل لمدير النظام بس، وبس لو **كل** صفوف
+// مفاتيحه في الحزمة (القديمة والسارية والجاية) متعلّمة «اتأكد»، تحت قفل صفوفها. (P4A-B01: الحساب بيختار الصف بتاريخ المسير أو يوم الإضافي،
+// فصف قديم «محتاج تحقق» كان بيتحسب بيه لفترة قديمة — والحاسبات نفسها بترفض صف مش «اتأكد» كمان.) وطول ما الحساب مفتوح حزمة الدولة مابتقبلش صف «محتاج تحقق» لمفاتيحه.
 // التفعيل بيسري على المسيرات اللي هتتحسب بعده بس — المحسوب والمعتمد لقطته زي ما هي.
 
 export const CALCULATOR_ADMIN_ONLY = 'تفعيل الحسابات القانونية لمدير النظام بس'
@@ -77,7 +78,7 @@ export async function enabledCalculatorsOf(em: EntityManager, country: string, k
 export class StatutoryCalculatorsService {
   constructor(@InjectDataSource() private readonly ds: DataSource) {}
 
-  /** صفوف مفاتيح الحساب السارية النهارده والجاية (القديمة اللي اتبدّلت مش بتتحسب بيها) */
+  /** كل صفوف مفاتيح الحساب — القديمة كمان: فترة قديمة بتتحسب بالصف الساري في تاريخها (P4A-B01) */
   private async rowsOf(em: EntityManager, calculator: StatutoryCalculator, lock: boolean) {
     const today = localDateOf(new Date())
     const result: Array<{ key: string; required: boolean; effectiveFrom: string; verified: boolean; current: boolean }> = []
@@ -86,7 +87,6 @@ export class StatutoryCalculatorsService {
         ...(lock ? { lock: { mode: 'pessimistic_write' as const } } : {}) })
       const current = [...rows].reverse().find((row) => day(row.effectiveFrom) <= today)
       for (const row of rows) {
-        if (current && day(row.effectiveFrom) < day(current.effectiveFrom)) continue
         result.push({ key: used.key, required: used.required, effectiveFrom: day(row.effectiveFrom), verified: row.verified === true, current: row.id === current?.id })
       }
     }

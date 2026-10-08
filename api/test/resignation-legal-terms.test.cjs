@@ -9,7 +9,8 @@ require('../node_modules/ts-node').register({ project: path.join(apiRoot, 'tscon
 const terms = require('../src/requests/resignation-legal-terms')
 const wage = require('../src/payroll/minimum-wage-alert')
 const { STATUTORY_SEED } = require('../src/statutory/statutory-data')
-const entries = STATUTORY_SEED.map(seed => ({ ...seed, verified: false }))
+// P4A-B01: المدد القانونية بتتقري من صف «اتأكد» بس؛ وتنبيه الحد الأدنى للأجور (عرض) بيعلّم الصف زي ما هو
+const entries = STATUTORY_SEED.map(seed => ({ ...seed, verified: seed.key !== 'eg.minimum_wage' }))
 const of = (country, submittedOn, lastWorkingDate, today = submittedOn, rows = entries) => terms.resignationLegalTerms(rows, country, { submittedOn, lastWorkingDate, today })
 
 test('RTU-01: مصر — إخطار 3 شهور من تاريخ التقديم ومهلة رد 10 أيام؛ والإخطار الأقصر والمهلة اللي عدّت متعلّمين', () => {
@@ -57,4 +58,9 @@ test('RTU-04: مصدر الكود — عرض بس: ورا إعداده المق�
   assert.match(alert, /if \(!inBranchScope\(scope, Number\(branch\.id\)\)\) continue/)
   assert.doesNotMatch(alert, /\.save\(|\.update\(|\.insert\(|UPDATE |INSERT |DELETE /, 'تقرير قراءة بس')
   assert.doesNotMatch(alert.replace(/\/\/.*$/gm, ''), /\b7000\b/, 'ولا رقم قانوني في الكود')
+})
+
+test('RTU-06 (P4A-B01): صف «محتاج تحقق» يوم التقديم = مفيش مدد قانونية', () => {
+  const unverified = entries.map(entry => ({ ...entry, verified: false }))
+  assert.deepEqual([of('EG', '2026-10-08', null, '2026-10-08', unverified), of('SA', '2026-10-08', null, '2026-10-08', unverified)], [null, null])
 })

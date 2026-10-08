@@ -1,5 +1,5 @@
 import { EG_TERMINATION_KEY } from '../employees/employee-suspension-paid'
-import { statutoryAt, statutoryNumber, type StatutoryEntry } from '../statutory/statutory'
+import { statutoryNumber, verifiedStatutoryAt, type StatutoryEntry } from '../statutory/statutory'
 
 // B4.5 (هـ): المدد القانونية لطلب الاستقالة من حزمة الدولة (C-EG-07، C-SA-06) — حساب نقي من غير قاعدة بيانات، وعرض بس.
 // ورا إعداد مقفول بيتفتح من مسار الحسابات القانونية بس (الصف لازم «اتأكد»). مقفول = تفاصيل الطلب زي ما هي بالحرف.
@@ -35,20 +35,20 @@ function addMonths(date: string, months: number): string {
   return `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-${String(Math.min(day, last)).padStart(2, '0')}`
 }
 
-/** المدد القانونية لاستقالة اتقدمت يوم submittedOn، أو null لو الدولة مالهاش صف أو التاريخ ناقص */
+/** المدد القانونية لاستقالة اتقدمت يوم submittedOn، أو null لو الدولة مالهاش صف أو التاريخ ناقص — أو صف يوم التقديم «محتاج تحقق» (P4A-B01) */
 export function resignationLegalTerms(entries: readonly StatutoryEntry[], country: string | null | undefined,
   input: { submittedOn: string | null | undefined; lastWorkingDate: string | null | undefined; today: string }): ResignationLegalTerms | null {
   const submittedOn = String(input.submittedOn ?? '').slice(0, 10)
   if (!DAY.test(submittedOn) || !DAY.test(input.today)) return null
   let noticeLabel: string, noticeEndsOn: string, replyDays: number | null
   if (country === 'EG') {
-    const row = statutoryAt(entries, 'EG', EG_TERMINATION_TERMS_KEY, submittedOn)
+    const row = verifiedStatutoryAt(entries, 'EG', EG_TERMINATION_TERMS_KEY, submittedOn)
     const months = statutoryNumber(row, 'notice_months')
     replyDays = statutoryNumber(row, 'resignation_reply_days')
     if (!row || months === null || !Number.isInteger(months) || months <= 0) return null
     noticeLabel = `${months} شهور`; noticeEndsOn = addMonths(submittedOn, months)
   } else if (country === 'SA') {
-    const row = statutoryAt(entries, 'SA', SA_TERMINATION_TERMS_KEY, submittedOn)
+    const row = verifiedStatutoryAt(entries, 'SA', SA_TERMINATION_TERMS_KEY, submittedOn)
     const days = statutoryNumber(row, 'notice_employee_days')
     replyDays = statutoryNumber(row, 'resignation_silence_days')
     if (!row || days === null || !Number.isInteger(days) || days <= 0) return null
