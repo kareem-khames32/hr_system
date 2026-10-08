@@ -71,6 +71,7 @@ import { assertLeaveOutsideSuspension } from '../employees/employee-suspension-o
 import { DATA_PLACEHOLDER_REJECTED, isDataPlaceholder } from '../common/data-placeholders'
 import { applyPersonalDataRequest, PERSONAL_DATA_COLUMNS } from './personal-data-requests'
 import { executePositionRequest, POSITION_REQUEST_HANDLER } from '../positions/position-requests'
+import { executeRequisition, REQUISITION_HANDLER } from '../recruitment/requisition-requests'
 import { DOCUMENT_RENEWAL_HANDLER, executeDocumentRenewal } from '../assets/document-renewal'
 
 // ناتج تنفيذ الوجهة: المرجع الدائم + هل اكتمل فوراً أم ينتظر (سريان/تأكيد استلام)
@@ -1064,6 +1065,8 @@ export class DestinationsService {
     contracts_register: executeContract,
     // B2.11-ب: «وظيفة جديدة / زيادة عدد» — الاعتماد بيعمل الوظيفة المعتمدة أو يزوّد عددها
     [POSITION_REQUEST_HANDLER]: executePositionRequest,
+    // B3.2-أ: «احتياج توظيف» — الاعتماد بيعمل وظيفة شاغرة مسودة على قسم مقدّم الطلب المتثبّت
+    [REQUISITION_HANDLER]: executeRequisition,
     // B2.15-ب: «تجديد مستند» — الاعتماد بيحدّث تاريخ انتهاء مستند صاحب الطلب وبيقفل مهمة تجديده
     [DOCUMENT_RENEWAL_HANDLER]: executeDocumentRenewal,
     shift_schedule: executeShiftSwap,

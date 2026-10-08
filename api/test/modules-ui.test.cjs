@@ -145,8 +145,9 @@ test('MU-02: القايمة الجانبية من السجل — الوهمي و
   assert.match(source, /const enabledModules = useModules\(\) \?\? DEFAULT_MODULES/)
   // بنود مجموعة التوظيف والتقارير: الوهمي منها بيتشال لوحده
   const visible = (enabled, hrefs) => hrefs.filter(href => registry.routeAvailable(href, enabled))
-  const recruitment = ['/recruitment', '/recruitment/applicants', '/recruitment/interviews', '/recruitment/offers', '/recruitment/add']
-  assert.deepEqual(visible(state(), recruitment), ['/recruitment', '/recruitment/applicants'])
+  const recruitment = ['/recruitment', '/recruitment/jobs', '/recruitment/applicants', '/recruitment/interviews', '/recruitment/offers', '/recruitment/add']
+  assert.deepEqual(visible(state(), recruitment), ['/recruitment', '/recruitment/jobs', '/recruitment/applicants'])
+  assert.deepEqual(visible(state({ recruitment: false }, DEMO_ON), recruitment), [], 'موديول التوظيف مقفول = ولا بند')
   assert.deepEqual(visible(state({}, DEMO_ON), recruitment), recruitment)
   assert.deepEqual(visible(state(), ['/reports', '/reports/custom', '/reports/cost-centers']), ['/reports', '/reports/cost-centers'])
   assert.deepEqual(visible(state({ payroll: false }), ['/reports', '/reports/custom', '/reports/cost-centers']), ['/reports'])

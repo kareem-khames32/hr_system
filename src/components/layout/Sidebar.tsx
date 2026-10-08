@@ -199,6 +199,7 @@ const adminMenuDefs: MenuItem[] = [
     perm: 'candidates.manage',
     children: [
       { label: 'الوظائف الشاغرة', href: '/recruitment' },
+      { label: 'إدارة الوظائف', href: '/recruitment/jobs' },
       { label: 'المتقدمين', href: '/recruitment/applicants' },
       { label: 'المقابلات', href: '/recruitment/interviews' },
       { label: 'عروض العمل', href: '/recruitment/offers' },

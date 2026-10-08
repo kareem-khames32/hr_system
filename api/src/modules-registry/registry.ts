@@ -263,10 +263,13 @@ export const MODULES = {
   // ===== التوظيف والمواهب =====
   recruitment: moduleDef({
     nameAr: 'التوظيف', group: 'talent', dependsOn: ['employees'], preset: 'standard',
-    description: 'مسار المرشحين والتعيين منه',
+    description: 'احتياج التوظيف والوظائف الشاغرة، ومسار المرشحين والتعيين منه',
     permissions: ['candidates.manage'],
-    // المتقدمين شاشة حقيقية؛ باقي ما تحت /recruitment شاشات عرض (DEMO_ROUTES) لحد ما الموديول الكامل ينزل
-    routes: ['/recruitment', '/recruitment/applicants'],
+    // المتقدمين والوظائف الشاغرة (B3.2) شاشات حقيقية؛ باقي ما تحت /recruitment شاشات عرض (DEMO_ROUTES) لحد ما الموديول الكامل ينزل
+    routes: ['/recruitment', '/recruitment/applicants', '/recruitment/jobs'],
+    // B3.2-أ: طلب «احتياج توظيف» ووجهته (الاعتماد بيعمل وظيفة شاغرة مسودة)
+    requestTypes: ['RECRUITMENT_REQUISITION'],
+    requestHandlers: ['recruitment_requisition'],
   }),
   // B2.16: الإعلانات — إعلان لجمهور «مين + فين» بتاريخ نشر وانتهاء، ولوحته في البوابة، وتقرير مين قرا. موديول جديد = مقفول لحد ما
   // الشركة تفتحه، وفي الباقة الأساسية
