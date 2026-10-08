@@ -183,6 +183,13 @@ export const MODULES = {
         default: false,
         routes: ['/attendance/schedule-tools'],
       },
+      // B5.5 (ج): طلب تبديل الوردية القايم مابيتنفّذش غير بموافقة الطرف التاني — مقفولة لحد ما الشركة تقرر
+      'shifts.swap_consent': {
+        nameAr: 'تبديل الوردية بموافقة الطرف التاني',
+        description: 'الزميل المطلوب التبديل معاه لازم يوافق قبل ما التبديل يتنفّذ بعد اعتماد المدير',
+        default: false,
+        routes: ['/my/shift-swaps'],
+      },
     },
   }),
   overtime: moduleDef({

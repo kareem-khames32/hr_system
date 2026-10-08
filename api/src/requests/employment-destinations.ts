@@ -8,6 +8,7 @@ import { Branch } from '../org/entities/branch.entity'
 import { Shift, WorkSchedule } from '../assets/assets.entities'
 import { ScheduleDayOverride, ScheduleEntry } from '../attendance/attendance.entities'
 import { localDateOf, weekKeyOf } from '../attendance/attendance.service'
+import { assertSwapConsent } from '../attendance/swap-consents'
 import { isValidYmd } from '../offboarding/eos'
 import { Request } from './entities/request.entity'
 import { RequestType } from './entities/request-type.entity'
@@ -257,6 +258,8 @@ async function validateSwap(em: EntityManager, req: Request, p: Record<string, a
 export async function executeShiftSwap(em: EntityManager, req: Request, type: RequestType, p: Record<string, any>) {
   assertEmploymentValues(type, p)
   const swap = await validateSwap(em, req, p, true)
+  // B5.5 (ج): لو للطلب صف موافقة (اتقدّم والميزة مفتوحة) الطرف التاني لازم يكون وافق — بعد قفل الموظفين وقبل أي كتابة
+  await assertSwapConsent(em, req, swap.other.id)
   for (const [employee, date, before, after] of [
     [swap.employee, swap.date, swap.ownShift, swap.otherShift],
     [swap.other, swap.withDate, swap.otherShift, swap.ownShift],

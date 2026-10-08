@@ -35,6 +35,9 @@ import { ScheduleRule, ScheduleViolation, ShiftCoverageRule } from './schedule-c
 import { SchedulePublication, ShiftRotation } from './schedule-tools'
 import { ScheduleToolsController } from './schedule-tools.controller'
 import { ScheduleToolsService } from './schedule-tools.service'
+import { ShiftSwapConsent } from './swap-consents'
+import { SwapConsentsController } from './swap-consents.controller'
+import { SwapConsentsService } from './swap-consents.service'
 
 @Module({
   imports: [
@@ -69,10 +72,11 @@ import { ScheduleToolsService } from './schedule-tools.service'
       ScheduleRule,
       ShiftCoverageRule,
       ScheduleViolation,
+      ShiftSwapConsent,
     ]),
   ],
-  controllers: [AttendanceController, AttendanceExemptionsController, AttendanceRuleController, HolidayWorkController, ScheduleToolsController],
-  providers: [AttendanceService, DeviceSyncService, AttendanceScheduler, AttendanceExemptionsService, HolidayWorkService, ScheduleToolsService],
+  controllers: [AttendanceController, AttendanceExemptionsController, AttendanceRuleController, HolidayWorkController, ScheduleToolsController, SwapConsentsController],
+  providers: [AttendanceService, DeviceSyncService, AttendanceScheduler, AttendanceExemptionsService, HolidayWorkService, ScheduleToolsService, SwapConsentsService],
   exports: [AttendanceService],
 })
 export class AttendanceModule {}

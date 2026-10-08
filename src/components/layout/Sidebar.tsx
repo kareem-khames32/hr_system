@@ -526,6 +526,8 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
       { id: 'my-reviews', label: 'التقييمات', icon: <ClipboardList size={20} />, href: '/performance' },
       // B3.9: دورات الموظف التدريبية وشهاداته (بتظهر لما موديول التدريب مفتوح)
       { id: 'my-training', label: 'دوراتي', icon: <GraduationCap size={20} />, href: '/training/my-courses' },
+      // B5.5 (ج): طلبات تبديل الوردية اللي الموظف طرف تاني فيها (بتظهر لما ميزة «تبديل الوردية بموافقة الطرف التاني» مفتوحة)
+      { id: 'my-shift-swaps', label: 'تبديل ورديتي', icon: <Clock size={20} />, href: '/my/shift-swaps' },
       // B5.4: فجوة مهارات الموظف ومصفوفة فريقه (بتظهر لما موديول المهارات مفتوح)
       { id: 'my-skills', label: 'مهاراتي', icon: <GraduationCap size={20} />, href: '/my/skills' },
       { id: 'my-attendance', label: 'حضوري', icon: <Clock size={20} />, href: '/my/attendance' },

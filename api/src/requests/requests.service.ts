@@ -117,6 +117,7 @@ import {
   EXPENSE_REPORT_CLIENT_KEYS, EXPENSE_REPORT_HANDLER, EXPENSE_REPORT_STAGED_KEYS, EXPENSE_REPORTS_FEATURE, expenseReportFields, stageExpenseReport,
 } from '../expenses/expense-reports'
 import { stageTravelAdvance, TRAVEL_ADVANCE_CLIENT_KEYS, TRAVEL_ADVANCE_HANDLER } from '../expenses/travel-advances'
+import { stageSwapConsent, SWAP_CONSENT_FEATURE } from '../attendance/swap-consents'
 import { POSITION_REQUEST_HANDLER, POSITION_REQUEST_STAGED_KEYS, positionRequestFields, positionRequestTitles, stagePositionRequest } from '../positions/position-requests'
 import { REVIEW_OBJECTION_CLIENT_KEYS, REVIEW_OBJECTION_STAGED_KEYS, stageReviewObjection } from '../performance/review-objections'
 import { REVIEW_OBJECTION_TYPE } from '../performance/review-rules'
@@ -597,6 +598,8 @@ export class RequestsService {
     }
     await this.assertAttachmentOwnership(req, user)
     await validateEmploymentRequest(em, req, type)
+    // B5.5 (ج): «تبديل وردية» والميزة مفتوحة — موافقة الطرف التاني بتتطلب من جديد عند كل تقديم وإعادة تقديم
+    if (type.destinationHandler === 'shift_schedule') await stageSwapConsent(em, req, !!this.modules && await this.modules.isFeatureEnabled(SWAP_CONSENT_FEATURE))
     // «تحديث بيانات شخصية»: نفس فحوص الاعتماد النهائي بدري (الشكل والإلزام والتفرد) — ولا حاجة بتتطبق قبل الاعتماد
     if (type.destinationHandler === PERSONAL_DATA_HANDLER) await validatePersonalDataRequest(em, req)
     // B2.11-ب: «وظيفة جديدة / زيادة عدد»: المسمى من الكتالوج والعدد (نفس فحوص الاعتماد النهائي بدري)، وقسم الوظيفة بيتثبّت على الطلب

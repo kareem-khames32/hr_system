@@ -1,0 +1,51 @@
+// B5.5 (ج) — تبديل الوردية بموافقة الطرف التاني: قرار الطرف، ومصدر الكود (الميزة المقفولة، صف الموافقة عند التقديم، شرط الموافقة قبل أي كتابة في التنفيذ) والواجهة.
+// حساب نقي بلا قاعدة بيانات.
+const { test } = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
+const apiRoot = path.resolve(__dirname, '..')
+require('../node_modules/ts-node').register({ project: path.join(apiRoot, 'tsconfig.json'), transpileOnly: true })
+require('../node_modules/reflect-metadata')
+const rules = require('../src/attendance/swap-consents')
+const registry = require('../src/modules-registry/registry')
+const read = rel => fs.readFileSync(path.join(apiRoot, 'src', rel), 'utf8').replace(/\r\n/g, '\n')
+const web = rel => fs.readFileSync(path.join(apiRoot, '..', 'src', rel), 'utf8').replace(/\r\n/g, '\n')
+
+test('SWU-01: قرار الطرف التاني — موافق أو لأ صريح، وملاحظة اختيارية بحدها', () => {
+  assert.deepEqual(rules.consentFields({ accept: true }).fields, { accept: true, note: null })
+  assert.deepEqual(rules.consentFields({ accept: false, note: '  عندي   ظرف ' }).fields, { accept: false, note: 'عندي ظرف' })
+  assert.deepEqual([{}, { accept: 1 }, { accept: 'true' }, { accept: true, note: 5 }, { accept: true, note: 'x'.repeat(301) }, null].map(body => rules.consentFields(body).fields), [null, null, null, null, null, null])
+  assert.deepEqual(Object.keys(rules.SWAP_CONSENT_STATUS_LABELS), ['PENDING', 'ACCEPTED', 'DECLINED'])
+})
+
+test('SWU-02: مصدر الكود — ميزة مقفولة بمسارها؛ صف الموافقة بيتسجّل عند كل تقديم والميزة مفتوحة بس؛ والتنفيذ بيشترط الموافقة بعد قفل الموظفين وقبل أي كتابة', () => {
+  const feature = registry.MODULES.shifts.features['shifts.swap_consent']
+  assert.deepEqual([feature.default, feature.routes, registry.routeOwner('/my/shift-swaps')], [false, ['/my/shift-swaps'], { module: 'shifts', feature: 'shifts.swap_consent' }])
+  const controller = read('attendance/swap-consents.controller.ts')
+  assert.match(controller, /@RequireModule\('shifts'\)\n@RequireFeature\('shifts\.swap_consent'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)/)
+  const requests = read('requests/requests.service.ts')
+  assert.match(requests, /if \(type\.destinationHandler === 'shift_schedule'\) await stageSwapConsent\(em, req, !!this\.modules && await this\.modules\.isFeatureEnabled\(SWAP_CONSENT_FEATURE\)\)/)
+  assert.ok(requests.indexOf('await validateEmploymentRequest(em, req, type)\n    // B5.5 (ج)') > 0, 'بعد فحص التبديل نفسه')
+  const core = read('attendance/swap-consents.ts')
+  assert.match(core, /if \(!featureOn \|\| !\(await swapConsentsReady\(em\)\)\) return/)
+  assert.match(core, /FROM dbo\.shift_swap_consents WITH \(UPDLOCK, HOLDLOCK\) WHERE \[requestId\] = @0/)
+  assert.match(core, /if \(!row\) return\n  if \(row\.status === 'DECLINED'\) throw new BadRequestException\(SWAP_CONSENT_DECLINED\)\n  if \(row\.status !== 'ACCEPTED' \|\| Number\(row\.partnerEmployeeId\) !== partnerEmployeeId\) throw new BadRequestException\(SWAP_CONSENT_PENDING\)/)
+  const execute = read('requests/employment-destinations.ts')
+  const body = execute.slice(execute.indexOf('export async function executeShiftSwap'))
+  assert.ok(body.indexOf('await validateSwap(em, req, p, true)') < body.indexOf('await assertSwapConsent(em, req, swap.other.id)') && body.indexOf('await assertSwapConsent(em, req, swap.other.id)') < body.indexOf('repo.save('))
+  const service = read('attendance/swap-consents.service.ts')
+  const decide = service.slice(service.indexOf('async decide('))
+  assert.ok(decide.indexOf('FROM dbo.requests WITH (UPDLOCK, ROWLOCK)') < decide.indexOf(`lock: { mode: 'pessimistic_write' }`), 'صف الطلب قبل صف الموافقة')
+  assert.match(decide, /!request \|\| !row \|\| row\.partnerEmployeeId !== Number\(user\.employeeId\)\) throw new NotFoundException\(SWAP_CONSENT_NOT_FOUND\)/)
+  assert.match(service, /WHERE c\.\[partnerEmployeeId\] = @0/)
+})
+
+test('SWU-03: الواجهة — «تبديل ورديتي»: موافق أو مش موافق للطلب المفتوح بس، والقايمة والعنوان', () => {
+  const page = web('app/my/shift-swaps/page.tsx')
+  assert.match(page, />\s*تبديل ورديتي\s*<\/h1>/)
+  assert.match(page, /\{row\.open && \(\n\s+<div className="flex flex-wrap items-end gap-3">/)
+  assert.match(page, /onClick=\{\(\) => answer\(row\.requestId, true\)\}>موافق<\/button>/)
+  assert.match(web('components/layout/Sidebar.tsx'), /\{ id: 'my-shift-swaps', label: 'تبديل ورديتي', icon: <Clock size=\{20\} \/>, href: '\/my\/shift-swaps' \}/)
+  assert.match(web('components/layout/pageTitles.ts'), /\['\/my\/shift-swaps', 'تبديل ورديتي'\]/)
+})
