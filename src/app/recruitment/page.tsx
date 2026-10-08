@@ -25,7 +25,10 @@ import {
   updateCandidate,
   fetchBranches,
   fetchFileObjectUrl,
+  fetchCandidateHistory,
+  moveCandidates,
   type ApiCandidate,
+  type ApiCandidateStageLine,
   type ApiBranch,
 } from '@/lib/api'
 import { formatDate } from '@/lib/dates'
@@ -78,6 +81,12 @@ export default function RecruitmentPage() {
   const [addForm, setAddForm] = useState(emptyAddForm)
   const [addError, setAddError] = useState('')
   const [addSaving, setAddSaving] = useState(false)
+  // B3.4-أ: تحديد مرشحين ونقلهم مرة واحدة، وسجل المرشح
+  const [selected, setSelected] = useState<number[]>([])
+  const [bulkStage, setBulkStage] = useState('screening')
+  const [bulkReason, setBulkReason] = useState('')
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [history, setHistory] = useState<{ name: string; lines: ApiCandidateStageLine[] | null } | null>(null)
   // B3.3-أ: الوظائف المفتوحة للمرشحين (منشورة أو موقوفة)
   const [jobs, setJobs] = useState<ApiRecruitmentJob[]>([])
 
@@ -117,6 +126,32 @@ export default function RecruitmentPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذر نقل المرشح بين المراحل')
     }
+  }
+
+  // B3.4-أ: النقل الجماعي — الخادم بينقلهم كلهم أو ولا واحد
+  const toggle = (id: number) => setSelected((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]))
+  const moveSelected = async () => {
+    setBulkBusy(true)
+    setError('')
+    try {
+      await moveCandidates(selected, bulkStage, bulkReason.trim() || undefined)
+      setSelected([])
+      setBulkReason('')
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر نقل المرشحين')
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+  const openHistory = (candidate: ApiCandidate) => {
+    setHistory({ name: candidate.fullName, lines: null })
+    fetchCandidateHistory(candidate.id)
+      .then((result) => setHistory({ name: candidate.fullName, lines: result.lines }))
+      .catch((err) => {
+        setHistory(null)
+        setError(err instanceof Error ? err.message : 'تعذر تحميل سجل المرشح')
+      })
   }
 
   const openAdd = () => {
@@ -294,6 +329,26 @@ export default function RecruitmentPage() {
           </div>
         </div>
 
+        {selected.length > 0 && (
+          <div className="bg-primary-50 rounded-xl p-4 flex items-center gap-3 flex-wrap text-sm" data-bulk-move>
+            <span className="font-medium text-primary-800">{selected.length} مرشح محدد</span>
+            <select className="input text-sm w-auto" value={bulkStage} onChange={(e) => setBulkStage(e.target.value)} aria-label="المرحلة">
+              {stageOrder.filter((stage) => stage !== 'hired').map((stage) => (
+                <option key={stage} value={stage}>
+                  {stageLabels[stage]}
+                </option>
+              ))}
+            </select>
+            <input className="input text-sm flex-1 min-w-[12rem]" maxLength={300} placeholder="سبب النقل (اختياري)" value={bulkReason} onChange={(e) => setBulkReason(e.target.value)} />
+            <button onClick={moveSelected} disabled={bulkBusy} className="btn-primary text-sm disabled:opacity-50">
+              نقل المحددين
+            </button>
+            <button onClick={() => setSelected([])} className="btn-secondary text-sm">
+              إلغاء التحديد
+            </button>
+          </div>
+        )}
+
         {/* Candidates List */}
         {loading ? (
           <div className="flex justify-center py-12">
@@ -312,6 +367,9 @@ export default function RecruitmentPage() {
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
                       <div className="flex items-center gap-3 mb-2">
+                        {candidate.stage !== 'hired' && (
+                          <input type="checkbox" aria-label={`تحديد ${candidate.fullName}`} checked={selected.includes(candidate.id)} onChange={() => toggle(candidate.id)} />
+                        )}
                         <h3 className="text-lg font-bold text-gray-800">{candidate.fullName}</h3>
                         <span
                           className={`px-3 py-1 rounded-full text-xs font-medium ${
@@ -396,6 +454,9 @@ export default function RecruitmentPage() {
                           <UserPlus size={18} className="text-success-600" />
                         </button>
                       )}
+                      <button onClick={() => openHistory(candidate)} className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors" title="سجل المراحل">
+                        <Calendar size={18} className="text-gray-600" />
+                      </button>
                       <Link
                         href="/recruitment/applicants"
                         className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
@@ -452,6 +513,36 @@ export default function RecruitmentPage() {
             </div>
           </div>
         </div>
+
+        {history && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" role="dialog" aria-modal="true" aria-label="سجل المراحل">
+            <div className="bg-white rounded-xl w-full max-w-lg max-h-[80vh] overflow-auto">
+              <div className="p-4 border-b border-gray-100 flex items-center justify-between">
+                <h2 className="text-lg font-bold text-gray-800">سجل المراحل — {history.name}</h2>
+                <button onClick={() => setHistory(null)} className="text-gray-400 hover:text-gray-600" aria-label="إغلاق">
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="p-4 space-y-3">
+                {history.lines === null && <p className="text-gray-500 text-sm">جارٍ التحميل…</p>}
+                {history.lines?.length === 0 && <p className="text-gray-500 text-sm">مفيش نقل مسجّل للمرشح ده.</p>}
+                {history.lines?.map((line) => (
+                  <div key={line.id} className="border border-gray-100 rounded-lg p-3 text-sm">
+                    <p className="font-medium text-gray-800">
+                      {line.fromLabel ? `${line.fromLabel} ← ` : ''}
+                      {line.toLabel}
+                    </p>
+                    <p className="text-gray-500 mt-1">
+                      {formatDate(line.at)}
+                      {line.byName ? ` · ${line.byName}` : ''}
+                    </p>
+                    {line.reason && <p className="text-gray-700 mt-1">{line.reason}</p>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Add Candidate Modal */}
         {showAdd && (

@@ -4,6 +4,7 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
   NotFoundException,
   Param,
   ParseIntPipe,
@@ -31,6 +32,7 @@ import { CreateEmployeeDto } from '../employees/employees.dto'
 import { Candidate, CandidateStage } from './assets.entities'
 import { RequireModule } from '../modules-registry/module.guard'
 import { CandidateApplicationsService } from '../recruitment/candidate-applications.service'
+import { CandidateStagesService } from '../recruitment/candidate-stages.service'
 
 const STAGES: CandidateStage[] = [
   'applied',
@@ -99,6 +101,17 @@ class UpdateCandidateDto {
   @IsString()
   @MaxLength(200)
   positionTitle?: string
+
+  // B3.4-أ: سبب النقل (اختياري) — بيتسجّل مع النقل في سجل المرشح. بيتفحص في الخدمة برسالته
+  @IsOptional()
+  reason?: unknown
+}
+
+// B3.4-أ: نقل جماعي — القيم كلها بتتفحص في الخدمة برسايلها
+class MoveCandidatesDto {
+  @IsOptional() ids?: unknown
+  @IsOptional() stage?: unknown
+  @IsOptional() reason?: unknown
 }
 
 // التعيين = بيانات إضافة الموظف كاملة بنفس الحقول الإجبارية والتحقق (الاسم بالعربي، الجنسية، الجنس، الميلاد، الجوال،
@@ -115,7 +128,8 @@ export class CandidatesController {
     @InjectRepository(Candidate)
     private readonly candidates: Repository<Candidate>,
     private readonly employeesService: EmployeesService,
-    private readonly applications: CandidateApplicationsService
+    private readonly applications: CandidateApplicationsService,
+    private readonly stages: CandidateStagesService
   ) {}
 
   // فصل الفروع: المقيد بفروع يرى مرشحي فروعه (وغير المسندين لفرع — نفس قاعدة التعيين) فقط
@@ -160,8 +174,27 @@ export class CandidatesController {
     if (c.stage === 'hired') {
       throw new BadRequestException('المرشح مُعيَّن بالفعل — لا يُعدَّل')
     }
-    Object.assign(c, dto)
-    return this.candidates.save(c)
+    // B3.4-أ: نقل المرحلة من مكانه الواحد (تحت قفل الصف، وبسطر في السجل)، وباقي الخانات المبعوتة بس بتتكتب (مش الكيان كله)
+    if (dto.stage !== undefined && dto.stage !== c.stage) await this.stages.move(user, [id], dto.stage, dto.reason)
+    else if (dto.reason !== undefined && dto.reason !== null) throw new BadRequestException('سبب النقل بيتبعت مع نقل المرحلة')
+    const patch: Partial<Candidate> = {}
+    if (dto.notes !== undefined) patch.notes = dto.notes
+    if (dto.positionTitle !== undefined) patch.positionTitle = dto.positionTitle
+    if (Object.keys(patch).length) await this.candidates.update({ id }, patch)
+    return this.candidates.findOne({ where: { id } })
+  }
+
+  // B3.4-أ: نقل جماعي لمرحلة (كلهم أو ولا واحد)
+  @Post('stage')
+  @HttpCode(200)
+  moveMany(@Body() dto: MoveCandidatesDto, @CurrentUser() user: JwtPayload) {
+    return this.stages.move(user, dto.ids, dto.stage, dto.reason)
+  }
+
+  // B3.4-أ: سجل نقل المرشح بين المراحل
+  @Get(':id/history')
+  history(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: JwtPayload) {
+    return this.stages.history(user, id)
   }
 
   // التعيين: ينشئ الموظف فعلياً (بكل تحقق الموظفين) ويقفل المرشح.
@@ -182,9 +215,12 @@ export class CandidatesController {
       throw new BadRequestException('المرشح مرفوض — أعد فتح مرحلته أولاً')
     }
     const employee = await this.employeesService.create(Object.assign(dto, { status: dto.status ?? 'probation' }), user.sub, scope)
+    const previousStage = c.stage
     c.stage = 'hired'
     c.hiredEmployeeId = employee.id
     await this.candidates.save(c)
+    // B3.4-أ: التعيين سطر في سجل المرشح
+    await this.stages.recordHire(user, c.id, previousStage)
     return { candidate: c, employee }
   }
 }

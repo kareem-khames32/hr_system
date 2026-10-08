@@ -2,6 +2,7 @@
 // B3.3-أ: المرشح على وظيفة شاغرة — فحص من غير قاعدة (الدورة الفعلية في candidate-applications.integration.cjs):
 //  CU-01) القواعد: تطبيع الموبايل والبريد والهوية، ورقم الهوية والمصدر المكتوبين.
 //  CU-02) الربط: الإضافة والتقديم تحت قفل صف الوظيفة والحكم بعده، والتقديم الداخلي بقفل صف الموظف وفرعه الحالي، والمسارات محروسة.
+//  CU-04) (B3.4-أ) نقل المراحل: القيم، والنقل تحت قفل الصف بترتيب الأرقام وبخانة المرحلة بس، والتعديل القايم بيعدّي عليه.
 //  CU-03) (ب) اللينك العام: قيم المتقدّم والموافقة، وحد المحاولات، والمسارات بميزة مقفولة ومن غير حارس جلسة عن قصد، والتقديم تحت قفل الوظيفة.
 // Run (من api/): node --test test/candidate-applications.test.cjs
 const { test } = require('node:test')
@@ -91,4 +92,27 @@ test('CU-03: public applications — applicant values and consent, the attempt l
   assert.match(apply, /if \(cv && !kept\) await storage\.remove\(cv\.storedName\)/)
   assert.doesNotMatch(service.slice(service.indexOf('private view('), service.indexOf('async list(')), /salary|reason|department/i, 'من غير راتب ولا قسم ولا سبب')
   assert.match(read('api/src/files/files.controller.ts'), /\} else if \(f\.entityType === 'candidate_cv'\) \{\n[^\n]*\n\s+await assertCandidateCvAccess\(this\.ds\.manager, user, f\)/)
+})
+
+test('CU-04: stage moves — values, rows locked in id order, the stage column only, and the standing edit goes through the same place', () => {
+  const stages = require('../src/recruitment/candidate-stages.service')
+  assert.deepEqual([stages.cleanCandidateIds([5, 2, 5, 9]), stages.cleanStage('offer'), stages.cleanStageReason('  سبب   واضح '), stages.cleanStageReason('   '), stages.cleanStageReason(undefined)],
+    [[2, 5, 9], 'offer', 'سبب واضح', null, null])
+  for (const bad of [[], 'x', [0], [1.5], ['1'], null, Array.from({ length: 201 }, (_, index) => index + 1)]) refuses(() => stages.cleanCandidateIds(bad), 'ids')
+  for (const bad of ['done', '', null, 5, 'Applied']) refuses(() => stages.cleanStage(bad), 'stage ' + String(bad))
+  refuses(() => stages.cleanStageReason(5), 'reason type'); refuses(() => stages.cleanStageReason('س'.repeat(301)), 'reason length')
+  assert.deepEqual([...stages.CANDIDATE_STAGES], ['applied', 'screening', 'interview', 'offer', 'hired', 'rejected'])
+  const service = read('api/src/recruitment/candidate-stages.service.ts')
+  const move = service.slice(service.indexOf('async move('), service.indexOf('async recordHire('))
+  const order = ['cleanCandidateIds(rawIds)', 'this.ds.transaction(', 'for (const id of ids)', "lock: { mode: 'pessimistic_write' }", '!inBranchScope(scope, row.branchId)', "row.stage === 'hired'", 'if (row.stage === stage) continue',
+    'await candidates.update({ id: row.id }, { stage })', 'getRepository(CandidateStageLog).insert('].map(part => move.indexOf(part))
+  assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), JSON.stringify(order))
+  assert.match(service, /return \[\.\.\.new Set\(raw as number\[\]\)\]\.sort\(\(a, b\) => a - b\)/, 'القفل بترتيب الأرقام')
+  assert.doesNotMatch(move, /\.save\(/, 'مفيش حفظ للكيان كله')
+  assert.match(service, /const visible = !!actor && \(actor\.id === user\.sub \|\| inBranchScope\(scope, actor\.branchId\)\)/)
+  const candidates = read('api/src/assets/candidates.controller.ts')
+  assert.match(candidates, /if \(dto\.stage !== undefined && dto\.stage !== c\.stage\) await this\.stages\.move\(user, \[id\], dto\.stage, dto\.reason\)/)
+  const update = candidates.slice(candidates.indexOf("@Patch(':id')"), candidates.indexOf("@Post('stage')"))
+  assert.doesNotMatch(update, /Object\.assign\(c, dto\)|\.save\(c\)/, 'التعديل بالخانات المبعوتة بس')
+  assert.match(candidates, /await this\.stages\.recordHire\(user, c\.id, previousStage\)/)
 })

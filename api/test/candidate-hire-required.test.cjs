@@ -55,10 +55,14 @@ test('التعيين بيبعت بيانات النموذج كاملة للخد�
   const candidates = [{ id: 3, branchId: 1, stage: 'offer', fullName: 'Ahmed Ali' }]
   const repo = { findOne: async ({ where }) => candidates.find(row => row.id === where.id) ?? null, save: async row => row }
   const calls = []
-  const controller = new CandidatesController(repo, { create: async (dto, actor, scope) => { calls.push({ dto: { ...dto }, actor, scope }); return { id: 99 } } })
+  // B3.4-أ: التعيين بيسجّل سطر «مُعيَّن» في سجل المرشح (من المرحلة اللي كان فيها)
+  const hires = []
+  const controller = new CandidatesController(repo, { create: async (dto, actor, scope) => { calls.push({ dto: { ...dto }, actor, scope }); return { id: 99 } } }, {},
+    { recordHire: async (actor, candidateId, fromStage) => { hires.push([actor.sub, candidateId, fromStage]) } })
   const hrBranch1 = { sub: 12, role: 'hr_manager', branchId: 1, employeeId: 21, permissions: ['candidates.manage', 'employees.create'] }
   const result = await controller.hire(3, Object.assign(new HireCandidateDto(), complete()), hrBranch1)
   assert.equal(result.candidate.stage, 'hired'); assert.equal(result.candidate.hiredEmployeeId, 99)
+  assert.deepEqual(hires, [[12, 3, 'offer']])
   assert.equal(calls.length, 1)
   assert.deepEqual(calls[0].scope, [1]); assert.equal(calls[0].actor, 12)
   assert.equal(calls[0].dto.fullName, 'أحمد محمد السعيد', 'الاسم العربي من النموذج مش اسم المرشح القديم')

@@ -1659,6 +1659,11 @@ export const fetchCandidates = () => get<ApiCandidate[]>('/candidates')
 /** مع jobId: المسمى والفرع من الوظيفة، والخادم بيفحص التكرار (موبايل، بريد، هوية) على نفس الوظيفة */
 export const createCandidate = (c: Partial<ApiCandidate> & { jobId?: number; nationalId?: string; source?: string }) => post<ApiCandidate>('/candidates', c)
 export const updateCandidate = (id: number, c: Partial<ApiCandidate>) => patch<ApiCandidate>(`/candidates/${id}`, c)
+// B3.4-أ: نقل جماعي لمرحلة (كلهم أو ولا واحد) بسبب اختياري، وسجل نقل المرشح بين المراحل
+export interface ApiCandidateStageLine { id: number; fromLabel: string | null; toLabel: string; reason: string | null; at: string; byName: string | null }
+export const moveCandidates = (ids: number[], stage: string, reason?: string) =>
+  post<{ moved: number }>('/candidates/stage', { ids, stage, ...(reason ? { reason } : {}) })
+export const fetchCandidateHistory = (id: number) => get<{ available: boolean; lines: ApiCandidateStageLine[] }>(`/candidates/${id}/history`)
 // التعيين = بيانات إضافة الموظف كاملة (نفس الحقول الإجبارية) من نموذج الإضافة المفتوح من المرشح
 export const hireCandidate = (id: number, employee: Clearable<ApiEmployee>) =>
   post<{ candidate: ApiCandidate; employee: ApiEmployee }>(`/candidates/${id}/hire`, employee)

@@ -27,9 +27,11 @@ test('candidates: a branch user lists only his branch (and unassigned), creates 
     findOne: async ({ where }) => rows.find(row => row.id === where.id) ?? null,
     create: dto => ({ ...dto }),
     save: async row => row,
+    // B3.4-أ: التعديل بيكتب الخانات المبعوتة بس
+    update: async ({ id }, patch) => { Object.assign(rows.find(row => row.id === id), patch) },
   }
-  // B3.3-أ: خدمة التقديم على وظيفة (القايمة بتعدّي عليها) — هنا مرشحين من غير وظايف
-  const controller = new CandidatesController(repo, {}, { attach: async (_user, list) => list })
+  // B3.3-أ: خدمة التقديم على وظيفة (القايمة بتعدّي عليها) — هنا مرشحين من غير وظايف. B3.4-أ: وخدمة نقل المراحل (مش مستخدمة هنا)
+  const controller = new CandidatesController(repo, {}, { attach: async (_user, list) => list }, {})
   const opOf = value => ({ type: value?.type ?? value?._type, value: value?.value ?? value?._value })
   await controller.list(hrBranch1)
   assert.equal(seen[0].length, 2)

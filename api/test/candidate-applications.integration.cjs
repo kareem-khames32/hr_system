@@ -10,6 +10,8 @@
 //  CA-05) (ب) التقديم من اللينك: القيم والموافقة، والسيرة الذاتية بنوعها الحقيقي (PDF/Word بس)، والمرشح بيتعمل على الوظيفة بمصدره وموافقته
 //         وملفه؛ المكرر بياخد نفس الرد من غير صف ولا ملف؛ وظيفة مش منشورة خارجيًا = غير موجودة؛ والحد بالعنوان 429.
 //  CA-06) (ب) السيرة الذاتية بتتقري بحكم المرشح: مسؤول توظيف فرعه 200، فرع تاني 404، ومن غير الصلاحية 403.
+//  CA-07) (B3.4-أ) نقل المراحل: كل نقل سطر في السجل (من، لـ، السبب، مين)، ونفس المرحلة من غير سطر؛ النقل الجماعي كلهم أو ولا واحد (مرشح برّه
+//         النطاق أو مُعيَّن بيوقف الكل)؛ السجل بنطاق المرشح واسم اللي نقل بنطاق القارئ؛ والتعديل بيكتب الخانات المبعوتة بس.
 // Run (من api/): node --test test/candidate-applications.integration.cjs
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
@@ -339,4 +341,57 @@ test('CA-06: السيرة الذاتية بتتقري بحكم المرشح — 
   // المرشح اتنقل لفرع تاني (وظيفته في فرع ب): مسؤول فرع أ مابقاش يقراه
   await repo('Candidate').update({ id: candidate.id }, { branchId: org.branchB.id })
   try { assert.deepEqual([await read(users.recruiterA), await read(users.recruiterB)], [404, 200]) } finally { await repo('Candidate').update({ id: candidate.id }, { branchId: org.branchA.id }) }
+})
+
+test('CA-07: نقل المراحل — كل نقل سطر في السجل، والجماعي كلهم أو ولا واحد، والسجل بنطاق المرشح واسم اللي نقل بنطاق القارئ', async () => {
+  const stages = require('../src/recruitment/candidate-stages.service')
+  const make = (fullName, extra = {}) => repo('Candidate').save({ fullName, positionTitle: 'محاسب', branchId: org.branchA.id, stage: 'applied', ...extra })
+  const one = await make('مرشح للنقل 1'), two = await make('مرشح للنقل 2'), three = await make('مرشح للنقل 3')
+  const foreign = await make('مرشح فرع ب', { branchId: org.branchB.id }), hired = await make('مرشح متعيّن', { stage: 'hired' })
+  const stageOf = async row => (await repo('Candidate').findOneByOrFail({ id: row.id })).stage
+  const linesOf = async row => (await repo('CandidateStageLog').find({ where: { candidateId: row.id }, order: { id: 'ASC' } })).map(line => [line.fromStage, line.toStage, line.reason, line.byUserId])
+  const move = (user, body) => request(user, 'POST', '/candidates/stage', body)
+  const patchOne = (user, row, body) => request(user, 'PATCH', '/candidates/' + row.id, body)
+
+  // النقل من التعديل القايم: بيتسجّل بسببه، ونفس المرحلة من غير سطر، والسبب لوحده مرفوض
+  const moved = expectStatus(await patchOne(users.recruiterA, one, { stage: 'screening', reason: '  مناسب  مبدئيًا ' }), 200)
+  assert.deepEqual([moved.stage, await linesOf(one)], ['screening', [['applied', 'screening', 'مناسب مبدئيًا', users.recruiterA.id]]])
+  expectStatus(await patchOne(users.recruiterA, one, { stage: 'screening' }), 200)
+  assert.equal((await linesOf(one)).length, 1, 'نفس المرحلة من غير سطر')
+  assert.deepEqual(answer(await patchOne(users.recruiterA, one, { reason: 'سبب من غير نقل' })), [400, 'سبب النقل بيتبعت مع نقل المرحلة'])
+  assert.deepEqual(answer(await patchOne(users.recruiterA, one, { stage: 'interview', reason: 'س'.repeat(301) })), [400, 'سبب النقل لا يتجاوز 300 حرف'])
+  // التعديل بيكتب الخانات المبعوتة بس: مرحلة اتغيّرت من طلب تاني مابترجعش بتعديل ملاحظة
+  await repo('Candidate').update({ id: two.id }, { stage: 'interview' })
+  const noted = expectStatus(await patchOne(users.recruiterA, two, { notes: 'ملاحظة بس' }), 200)
+  assert.deepEqual([noted.notes, noted.stage, (await linesOf(two)).length], ['ملاحظة بس', 'interview', 0])
+  await repo('Candidate').update({ id: two.id }, { stage: 'applied' })
+
+  // النقل الجماعي: كلهم أو ولا واحد
+  for (const [body, status, message] of [
+    [{ ids: [one.id, two.id, foreign.id], stage: 'interview' }, 404, stages.CANDIDATE_NOT_FOUND], [{ ids: [one.id, hired.id, two.id], stage: 'interview' }, 400, stages.CANDIDATE_HIRED],
+    [{ ids: [one.id, 987654], stage: 'interview' }, 404, stages.CANDIDATE_NOT_FOUND], [{ ids: [], stage: 'interview' }, 400, stages.STAGE_MOVE_IDS],
+    [{ ids: 'all', stage: 'interview' }, 400, stages.STAGE_MOVE_IDS], [{ ids: [one.id, 1.5], stage: 'interview' }, 400, stages.STAGE_MOVE_IDS],
+    [{ ids: Array.from({ length: 201 }, (_, index) => index + 1), stage: 'interview' }, 400, stages.STAGE_MOVE_IDS], [{ ids: [one.id], stage: 'done' }, 400, 'مرحلة غير صالحة'],
+    [{ ids: [one.id] }, 400, 'مرحلة غير صالحة'], [{ ids: [one.id], stage: 'interview', reason: 7 }, 400, 'سبب النقل نص'],
+  ]) assert.deepEqual(answer(await move(users.recruiterA, body)), [status, message], JSON.stringify(body).slice(0, 80))
+  assert.deepEqual([await stageOf(one), await stageOf(two), await stageOf(three), (await linesOf(two)).length], ['screening', 'applied', 'applied', 0], 'المرفوض مانقلش حد')
+  assert.equal((await move(users.nobody, { ids: [one.id], stage: 'interview' })).status, 403)
+  // التكرار في القايمة بيتحسب مرة، واللي في نفس المرحلة مابيتعدّش
+  assert.deepEqual(expectStatus(await move(users.recruiterA, { ids: [three.id, one.id, two.id, one.id], stage: 'screening', reason: 'فرز الأسبوع' }), 200), { moved: 2 })
+  assert.deepEqual([await stageOf(one), await stageOf(two), await stageOf(three)], ['screening', 'screening', 'screening'])
+  assert.deepEqual([(await linesOf(one)).length, await linesOf(two)], [1, [['applied', 'screening', 'فرز الأسبوع', users.recruiterA.id]]])
+  // مدير النظام بيرفض واحد بسبب
+  assert.deepEqual(expectStatus(await move(users.admin, { ids: [two.id], stage: 'rejected', reason: 'مش مناسب للوظيفة' }), 200), { moved: 1 })
+
+  // السجل: الأحدث أولًا بتسميات المراحل؛ واسم اللي نقل لو حسابه في نطاق القارئ (مدير النظام من غير فرع = مخفي عن مسؤول الفرع)
+  const history = expectStatus(await request(users.recruiterA, 'GET', '/candidates/' + two.id + '/history'), 200)
+  assert.deepEqual([history.available, history.lines.map(line => [line.fromLabel, line.toLabel, line.reason, line.byName])],
+    [true, [['فرز', 'مرفوض', 'مش مناسب للوظيفة', null], ['تقدّم', 'فرز', 'فرز الأسبوع', 'حساب recruiter-a']]])
+  const full = expectStatus(await request(users.admin, 'GET', '/candidates/' + two.id + '/history'), 200)
+  assert.deepEqual(full.lines.map(line => line.byName), ['مدير النظام', 'حساب recruiter-a'])
+  assert.deepEqual(answer(await request(users.recruiterB, 'GET', '/candidates/' + two.id + '/history')), [404, stages.CANDIDATE_NOT_FOUND])
+  assert.equal((await request(users.nobody, 'GET', '/candidates/' + two.id + '/history')).status, 403)
+  assert.deepEqual(expectStatus(await request(users.recruiterA, 'GET', '/candidates/' + three.id + '/history'), 200).lines.length, 1)
+  // المُعيَّن مابيتنقلش من التعديل برضه
+  assert.deepEqual(answer(await patchOne(users.recruiterA, hired, { stage: 'rejected' })), [400, stages.CANDIDATE_HIRED])
 })
