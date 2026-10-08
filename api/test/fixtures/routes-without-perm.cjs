@@ -107,7 +107,11 @@ const EXCEPTIONS = {
   'MyInterviewsController.submit': 'SELF', // POST /recruitment/my-interviews/:id/scorecard — B3.4-ب: بطاقة المحاور نفسه، مرة واحدة
   'OfferLinkController.answer': 'PUBLIC_OK', // POST /careers/offers/:token — B3.5-أ: رد المرشح على عرضه برمز اللينك (ميزة مقفولة افتراضيًا، مرة واحدة، وحد بالعنوان)
   'OfferLinkController.view': 'PUBLIC_OK', // GET /careers/offers/:token — B3.5-أ: العرض لصاحب رمز اللينك
-  'PortalController.dismissNotification': 'SELF', // DELETE /notifications/:id
+  'PortalController.dismissNotification': 'SELF',
+  'ReviewsController.form': 'SERVICE_CHECK', // GET /performance/reviews/:id — B3.7: لصاحب التكليف، أو مقيِّمه، أو إدارة الأداء في نطاقه
+  'ReviewsController.mine': 'SELF', // GET /performance/reviews/mine — B3.7: تكليفات الموظف نفسه
+  'ReviewsController.submit': 'SERVICE_CHECK', // POST /performance/reviews/:id/submit — B3.7: الموظف لتقييمه الذاتي، أو المدير المقيِّم — مرة واحدة
+  'ReviewsController.team': 'SERVICE_CHECK', // GET /performance/reviews/team — B3.7: التكليفات اللي الحساب مقيِّمها // DELETE /notifications/:id
   'PortalController.markNotificationsRead': 'SELF', // PATCH /notifications/read
   'PortalController.notifications': 'SELF', // GET /notifications
   'RecruitmentOpeningsController.apply': 'SELF', // POST /recruitment/openings/:id/apply — B3.3-أ: تقديم الموظف نفسه على وظيفة داخلية في فرعه الحالي

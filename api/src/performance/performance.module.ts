@@ -9,6 +9,9 @@ import { ApproverResolver } from '../requests/approver-resolver.service'
 import { PerformanceGoal, PerformanceGoalUpdate } from './goal.entities'
 import { GoalsController } from './goals.controller'
 import { GoalsService } from './goals.service'
+import { ReviewAssignment, ReviewCycle, ReviewResponse, ReviewTemplate } from './review.entities'
+import { ReviewsController } from './reviews.controller'
+import { ReviewsService } from './reviews.service'
 
 // B3.6: إدارة الأداء — الأهداف (الدورات والقوالب في B3.7، والمعايرة والربط بالفلوس في B3.8). موديول جديد مقفول لحد ما الشركة تفتحه.
 @Module({
@@ -16,6 +19,11 @@ import { GoalsService } from './goals.service'
     TypeOrmModule.forFeature([
       PerformanceGoal,
       PerformanceGoalUpdate,
+      // B3.7: نماذج التقييم ودوراته وتكليفاته وردوده
+      ReviewTemplate,
+      ReviewCycle,
+      ReviewAssignment,
+      ReviewResponse,
       // لحل المدير المباشر (ApproverResolver)
       Employee,
       User,
@@ -24,8 +32,8 @@ import { GoalsService } from './goals.service'
       Branch,
     ]),
   ],
-  controllers: [GoalsController],
-  providers: [GoalsService, ApproverResolver],
-  exports: [GoalsService],
+  controllers: [GoalsController, ReviewsController],
+  providers: [GoalsService, ReviewsService, ApproverResolver],
+  exports: [GoalsService, ReviewsService],
 })
 export class PerformanceModule {}
