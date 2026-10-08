@@ -121,6 +121,9 @@ const EXCEPTIONS = {
   'CasesController.detail': 'SERVICE_CHECK', // GET /cases/:id
   'CasesController.investigator': 'SERVICE_CHECK', // POST /cases/:id/investigator
   'CasesController.list': 'SERVICE_CHECK', // GET /cases — القضايا اللي الحساب مطّلع عليها بس
+  'SurveysController.form': 'SERVICE_CHECK', // GET /surveys/:id — B3.13: نموذج استبيان للموظف المدعو له بس
+  'SurveysController.mine': 'SELF', // GET /surveys/mine — B3.13: الاستبيانات المفتوحة اللي الموظف نفسه مدعو لها ولسه ماردّش
+  'SurveysController.respond': 'SELF', // POST /surveys/:id/respond — B3.13: رد الموظف المدعو نفسه (مرة واحدة)
   'PenaltiesController.mine': 'SELF', // GET /penalties/mine — B3.12: جزاءات الموظف نفسه السارية
   'CasesController.mine': 'SELF', // GET /cases/mine — القضايا اللي الموظف نفسه شاكي أو مشكو في حقه فيها (بعد إخطاره)
   'CasesController.object': 'SELF', // POST /cases/:id/objection — اعتراض المشكو في حقه نفسه

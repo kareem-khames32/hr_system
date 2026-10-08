@@ -32,6 +32,7 @@ const FILES = [
   ['20261009_123_kb_articles.sql', 'kb_articles', 123], ['20261009_124_hr_cases.sql', 'hr_cases', 124],
   ['20261009_125_hr_case_parties.sql', 'hr_case_parties', 125], ['20261009_126_hr_case_events.sql', 'hr_case_events', 126],
   ['20261009_127_penalty_violations.sql', 'penalty_violations', 127], ['20261009_128_employee_penalties.sql', 'employee_penalties', 128],
+  ['20261009_129_surveys.sql', 'surveys', 129], ['20261009_130_survey_invitations.sql', 'survey_invitations', 130], ['20261009_131_survey_responses.sql', 'survey_responses', 131],
 ]
 let app, master, pool, created = false
 

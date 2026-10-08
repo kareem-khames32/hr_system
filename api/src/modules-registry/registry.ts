@@ -347,6 +347,13 @@ export const MODULES = {
     // وجهة «فتح ملف قضية» (أي نوع طلب وجهته دي بيتبع الموديول)
     requestHandlers: ['case_open'],
   }),
+  // B3.13: الاستبيانات — مجهولة بسرية حقيقية أو بالاسم، ونتايج مجمّعة بحد أدنى للمجموعة. موديول جديد = مقفول لحد ما الشركة تفتحه
+  surveys: moduleDef({
+    nameAr: 'الاستبيانات', group: 'people', dependsOn: ['employees'], preset: 'standard', defaultEnabled: false,
+    description: 'استبيانات الرضا والـeNPS والنبض لجمهور محدد: الرد المجهول مايتربطش بصاحبه، والنتايج مجمّعة ومابتظهرش لمجموعة أقل من الحد الأدنى',
+    permissions: ['surveys.manage'],
+    routes: ['/surveys', '/surveys/*'],
+  }),
   // B2.11: الوظائف المعتمدة — وظيفة في وحدة بعدد معتمد، وتقرير «معتمد / مشغول / شاغر». موديول جديد = مقفول لحد ما الشركة تفعّله
   // (أول موديول defaultEnabled: false: مفيش حاجة كانت شغالة قبله)
   positions: moduleDef({

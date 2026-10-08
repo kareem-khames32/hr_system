@@ -12,6 +12,8 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/cases/penalties', 'لائحة الجزاءات'],
   [/^\/cases\/[^/]+/, 'ملف قضية'],
   ['/cases', 'الشكاوى والتحقيقات'],
+  [/^\/surveys\/[^/]+/, 'استبيان'],
+  ['/surveys', 'الاستبيانات'],
   ['/my/policies', 'سياساتي'],
   ['/my/probation', 'فترات التجربة'],
   ['/my/jobs', 'وظائف داخلية'],
