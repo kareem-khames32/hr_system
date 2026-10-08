@@ -1,8 +1,8 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common'
+import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Put, Query, UseGuards } from '@nestjs/common'
 import { IsOptional } from 'class-validator'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
-import { RequireModule } from '../modules-registry/module.guard'
+import { RequireFeature, RequireModule } from '../modules-registry/module.guard'
 import { BenefitsMembersService } from './benefits-members.service'
 import { BenefitsService } from './benefits.service'
 
@@ -25,6 +25,11 @@ class ClassDto {
   @IsOptional() isActive?: unknown
 }
 
+class TicketDto {
+  @IsOptional() ticketsPerYear?: unknown
+  @IsOptional() includesDependents?: unknown
+  @IsOptional() note?: unknown
+}
 class MemberRequestDto {
   @IsOptional() employeeId?: unknown
   @IsOptional() dependentId?: unknown
@@ -113,6 +118,28 @@ export class BenefitsController {
   @Post('insurance/requests/:id/cancel')
   cancelRequest(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: RequestStepDto) {
     return this.members.step(user, id, 'cancel', dto)
+  }
+
+  // (ج) حصص الموظفين الشهرية — قراءة بس، بنطاق فروع الحساب
+  @Perm('benefits.manage')
+  @Get('insurance/shares')
+  shares(@CurrentUser() user: JwtPayload) {
+    return this.members.shares(user)
+  }
+
+  // (ج) تذاكر السفر السنوية بالدرجة — ميزة فرعية مقفولة افتراضيًا؛ التعريف لحساب بكل الفروع (في الخدمة)
+  @RequireFeature('benefits.tickets')
+  @Perm('benefits.manage')
+  @Get('tickets')
+  tickets(@CurrentUser() user: JwtPayload) {
+    return this.service.tickets(user)
+  }
+
+  @RequireFeature('benefits.tickets')
+  @Perm('benefits.manage')
+  @Put('tickets/:gradeId')
+  setTickets(@CurrentUser() user: JwtPayload, @Param('gradeId', ParseIntPipe) gradeId: number, @Body() dto: TicketDto) {
+    return this.service.setTickets(user, gradeId, dto)
   }
 
   // تقرير الأهلية: موظفين نطاق الحساب بوثيقة دولة فرعهم وفئة درجتهم

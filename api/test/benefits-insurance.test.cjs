@@ -49,14 +49,15 @@ test('BIU-04: مصدر الكود — الموديول مقفول افتراضي
   const module = registry.MODULES.benefits
   assert.deepEqual([module.defaultEnabled, module.preset, module.group, module.dependsOn, module.softUses, module.permissions, module.routes, module.core],
     [false, 'full', 'people', ['dependents'], ['payroll', 'offboarding'], ['benefits.manage'], ['/benefits'], false])
+  assert.deepEqual(Object.keys(module.features), ['benefits.tickets'])
   const controller = read('benefits/benefits.controller.ts')
   assert.match(controller, /@RequireModule\('benefits'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)/)
-  assert.deepEqual([(controller.match(/@Perm\('benefits\.manage'\)/g) ?? []).length, (controller.match(/@(Get|Post|Put|Patch|Delete)\(/g) ?? []).length, /@Delete\(/.test(controller)], [13, 13, false]) // (ب): + 7 مسارات للاشتراكات والطلبات
+  assert.deepEqual([(controller.match(/@Perm\('benefits\.manage'\)/g) ?? []).length, (controller.match(/@(Get|Post|Put|Patch|Delete)\(/g) ?? []).length, /@Delete\(/.test(controller)], [16, 16, false]) // (ب): + 7 مسارات للاشتراكات والطلبات؛ (ج): + الحصص والتذاكر
   const service = read('benefits/benefits.service.ts')
-  assert.equal((service.match(/assertCompanyWideWrite\(user\)/g) ?? []).length, 4, 'الوثيقة وتعديلها والفئة وتعديلها لحساب بكل الفروع')
+  assert.equal((service.match(/assertCompanyWideWrite\(user\)/g) ?? []).length, 5, 'الوثيقة وتعديلها والفئة وتعديلها (واستحقاق التذاكر — ج) لحساب بكل الفروع')
   assert.match(service, /findOne\(\{ where: \{ id \}, lock: \{ mode: 'pessimistic_write' \} \}\)/)
   assert.equal((service.match(/await this\.lockPolicy\(em, /g) ?? []).length, 3, 'تعديل الوثيقة وإضافة الفئة وتعديلها تحت قفل صف الوثيقة')
-  assert.doesNotMatch(service, /getRepository\(InsurancePolicy\)\.delete|getRepository\(InsuranceClass\)\.delete|repo\.delete|employee_obligations|deduction/i, 'مفيش مسح وثيقة أو فئة، ومفيش خصم')
+  assert.doesNotMatch(service, /getRepository\(InsurancePolicy\)\.delete|getRepository\(InsuranceClass\)\.delete|employee_obligations|deduction/i, 'مفيش مسح وثيقة أو فئة، ومفيش خصم')
   assert.match(service, /people\.filter\(row => inBranchScope\(scope, row\.branchId == null \? null : Number\(row\.branchId\)\)\)/)
   assert.doesNotMatch(read('benefits/insurance.ts').replace(/export async function insuranceReady[\s\S]*$/, ''), /getRepository|\.query\(/)
   assert.ok(JSON.stringify(require('../src/auth/permissions')).includes('benefits.manage'))

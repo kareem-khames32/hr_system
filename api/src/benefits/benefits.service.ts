@@ -5,6 +5,7 @@ import { localDateOf } from '../attendance/attendance.service'
 import { recordAudit } from '../audit/audit'
 import type { JwtPayload } from '../auth/auth.service'
 import { assertCompanyWideWrite, branchScopeOf, inBranchScope } from '../auth/guards'
+import { TicketEntitlement, ticketEntitlementsReady, ticketFields } from './ticket-entitlements'
 import { classFields, eligibleCoverage, InsuranceClass, InsuranceClassGrade, InsurancePolicy, insuranceReady, POLICY_STATE_LABELS, policyFields, policyState } from './insurance'
 
 // B5.2 (أ): وثائق التأمين الطبي وفئاتها وأهلية الفئة بالدرجة. الوثائق تعريف للشركة كلها: القراءة بصلاحية الموديول، والكتابة لحساب بكل الفروع،
@@ -144,6 +145,47 @@ export class BenefitsService {
       await this.saveClass(em, user, policy, existing, body)
     })
     return this.overview(user)
+  }
+
+  // ===== (ج) تذاكر السفر السنوية بالدرجة =====
+
+  /** استحقاق كل درجة مفعّلة (أو ليها استحقاق) وعدد موظفيها النشطين في نطاق الحساب */
+  async tickets(user: JwtPayload) {
+    const em = this.ds.manager, canEdit = branchScopeOf(user) === null
+    if (!(await ticketEntitlementsReady(em))) return { ready: false, canEdit, rows: [] }
+    const scope = branchScopeOf(user)
+    const grades: Array<{ id: number; name: string; isActive: boolean | number }> = await em.query('SELECT [id], [name], [isActive] FROM [grades] ORDER BY [id]')
+    const entitlements = new Map((await em.getRepository(TicketEntitlement).find()).map(row => [row.gradeId, row]))
+    const people: Array<{ gradeId: number | null; branchId: number | null }> = await em.query(`SELECT e.[gradeId], e.[branchId] FROM [employees] e WHERE ${ACTIVE} AND e.[gradeId] IS NOT NULL`)
+    const headcount = new Map<number, number>()
+    for (const person of people) if (inBranchScope(scope, person.branchId == null ? null : Number(person.branchId))) headcount.set(Number(person.gradeId), (headcount.get(Number(person.gradeId)) ?? 0) + 1)
+    return { ready: true, canEdit, rows: grades.filter(grade => flag(grade.isActive) || entitlements.has(Number(grade.id))).map(grade => {
+      const row = entitlements.get(Number(grade.id))
+      return { gradeId: Number(grade.id), gradeName: grade.name, ticketsPerYear: row?.ticketsPerYear ?? 0, includesDependents: row ? flag(row.includesDependents) : false, note: row?.note ?? null, headcount: headcount.get(Number(grade.id)) ?? 0 }
+    }) }
+  }
+
+  /** استحقاق درجة: العدد (صفر = من غير تذاكر، وبيشيل صفها) — لحساب بكل الفروع، تحت قفل مدى على صف الدرجة في الجدول */
+  async setTickets(user: JwtPayload, gradeId: number, body: unknown) {
+    assertCompanyWideWrite(user)
+    const checked = ticketFields(body)
+    if (checked.fields === null) throw new BadRequestException(checked.error)
+    const fields = checked.fields
+    await this.ds.transaction(async em => {
+      if (!(await ticketEntitlementsReady(em))) throw new BadRequestException('جدول تذاكر السفر ناقص — طبّق ترحيل 148 الأول')
+      const [grade]: Array<{ name: string }> = await em.query('SELECT [name] FROM [grades] WHERE [id] = @0', [gradeId])
+      if (!grade) throw new NotFoundException('الدرجة الوظيفية مش موجودة')
+      const existing: Array<{ id: number; ticketsPerYear: number; includesDependents: boolean | number; note: string | null }> = await em.query(
+        'SELECT [id], [ticketsPerYear], [includesDependents], [note] FROM [ticket_entitlements] WITH (UPDLOCK, HOLDLOCK) WHERE [gradeId] = @0', [gradeId])
+      const repo = em.getRepository(TicketEntitlement), values = { ...fields, updatedByUserId: user.sub, updatedAt: new Date() }
+      if (fields.ticketsPerYear === 0) { if (existing.length) await repo.delete({ gradeId }) }
+      else if (existing.length) await repo.update({ gradeId }, values)
+      else await repo.insert({ gradeId, ...values })
+      await recordAudit(em, { category: 'SETTINGS', action: 'TICKET_ENTITLEMENT_SET', entityType: 'ticket_entitlement', entityId: String(gradeId), actorUserId: user.sub,
+        summary: `تذاكر السفر السنوية لدرجة «${grade.name}»: ${fields.ticketsPerYear}${fields.includesDependents ? ' (وللمعالين)' : ''}`,
+        before: existing.length ? { ticketsPerYear: Number(existing[0].ticketsPerYear), includesDependents: flag(existing[0].includesDependents) } : undefined, after: { ...fields } })
+    })
+    return this.tickets(user)
   }
 
   /** تقرير الأهلية: كل موظف نشط في نطاق الحساب بوثيقة دولة فرعه وفئة درجته (قراءة بس) */

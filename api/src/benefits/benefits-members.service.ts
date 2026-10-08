@@ -6,6 +6,7 @@ import { recordAudit } from '../audit/audit'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, inBranchScope } from '../auth/guards'
 import { canSeeFullIdentity, maskIdentityPartial, partialMaskingOn } from '../employees/employee-privacy'
+import { readBranchCurrencyOf } from '../org/branch-currency-db'
 import { eligibleCoverage, InsuranceClass, InsuranceClassGrade, InsurancePolicy, insuranceReady } from './insurance'
 import { InsuranceEnrollment, InsuranceMemberRequest, insuranceMembersReady, MEMBER_REQUEST_KIND_LABELS, MEMBER_REQUEST_ORIGIN_LABELS, MEMBER_REQUEST_STATUS_LABELS, OPEN_REQUEST_STATUSES,
   requestOutcome, requestReason, requestStepAllowed, type MemberRequestStatus } from './insurance-members'
@@ -126,6 +127,24 @@ export class BenefitsMembersService {
           policyName: row.policyName ?? null, policyNumber: row.policyNumber ?? null, className: row.className ?? null, cardNumber: row.cardNumber ?? null, reason: row.reason ?? null }
       }),
     }
+  }
+
+  /**
+   * (ج) حصص الموظفين الشهرية — قراءة بس: لكل موظف في نطاق الحساب له اشتراكات سارية، عدد أعضائه ومجموع حصة فئاتهم بعملة فرعه.
+   * مفيش خصم بيتعمل من هنا: ده الرقم اللي الخصم هيتبني عليه لما المالك يقرر (Q-065).
+   */
+  async shares(user: JwtPayload) {
+    const em = this.ds.manager
+    await this.assertReady(em)
+    const scope = branchScopeOf(user), currencyOf = await readBranchCurrencyOf(em)
+    const rows: Array<{ employeeId: number; fullName: string; employeeCode: string | null; branchId: number | null; members: number; total: string | number }> = await em.query(
+      `SELECT e.[id] AS [employeeId], e.[fullName], e.[employeeCode], e.[branchId], COUNT(*) AS [members], SUM(c.[employeeShareMonthly]) AS [total]
+       FROM [insurance_enrollments] n INNER JOIN [insurance_classes] c ON c.[id] = n.[classId] INNER JOIN [employees] e ON e.[id] = n.[employeeId]
+       WHERE n.[status] = N'ACTIVE' GROUP BY e.[id], e.[fullName], e.[employeeCode], e.[branchId] ORDER BY e.[fullName], e.[id]`)
+    const visible = rows.filter(row => inBranchScope(scope, idOf(row.branchId))).map(row => ({ employeeId: Number(row.employeeId), fullName: row.fullName, employeeCode: row.employeeCode ?? null,
+      currency: currencyOf(idOf(row.branchId)), members: Number(row.members), total: Math.round(Number(row.total) * 100) / 100 }))
+    return { rows: visible, totals: [...new Set(visible.map(row => row.currency))].map(currency => ({ currency, employees: visible.filter(row => row.currency === currency).length,
+      total: Math.round(visible.filter(row => row.currency === currency).reduce((sum, row) => sum + Math.round(row.total * 100), 0)) / 100 })) }
   }
 
   // ===== الكتابة =====

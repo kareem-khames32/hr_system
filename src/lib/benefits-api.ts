@@ -72,3 +72,19 @@ export const requestInsuranceRemove = (enrollmentId: number, reason: string) => 
 export const sendInsuranceRequest = (id: number) => apiFetch<ApiInsuranceMembers>(`${I}/requests/${id}/send`, json('POST', {}))
 export const doneInsuranceRequest = (id: number, effectiveDate: string, cardNumber: string) => apiFetch<ApiInsuranceMembers>(`${I}/requests/${id}/done`, json('POST', { effectiveDate, ...(cardNumber ? { cardNumber } : {}) }))
 export const cancelInsuranceRequest = (id: number, reason: string) => apiFetch<ApiInsuranceMembers>(`${I}/requests/${id}/cancel`, json('POST', { reason }))
+
+// ===== (ج) حصص الموظفين الشهرية، وتذاكر السفر السنوية =====
+
+export interface ApiInsuranceShares {
+  /** مجموع حصة فئات الاشتراكات السارية لكل موظف — للعلم بس (مفيش خصم) */
+  rows: Array<{ employeeId: number; fullName: string; employeeCode: string | null; currency: string; members: number; total: number }>
+  totals: Array<{ currency: string; employees: number; total: number }>
+}
+export interface ApiTicketEntitlements {
+  ready: boolean; canEdit: boolean
+  rows: Array<{ gradeId: number; gradeName: string; ticketsPerYear: number; includesDependents: boolean; note: string | null; headcount: number }>
+}
+export const fetchInsuranceShares = () => apiFetch<ApiInsuranceShares>(`${I}/shares`)
+export const fetchTicketEntitlements = () => apiFetch<ApiTicketEntitlements>('/benefits/tickets')
+export const setTicketEntitlement = (gradeId: number, body: { ticketsPerYear: number; includesDependents: boolean; note?: string }) =>
+  apiFetch<ApiTicketEntitlements>(`/benefits/tickets/${gradeId}`, json('PUT', body))
