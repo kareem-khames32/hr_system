@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common'
+import { ModuleRef } from '@nestjs/core'
 import { AttendanceService } from '../attendance/attendance.service'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, userHasPerm } from '../auth/guards'
@@ -6,8 +7,12 @@ import { projectEmployee } from '../employees/employee-projection'
 import { EmployeesService } from '../employees/employees.service'
 import type { ModuleKey } from '../modules-registry/registry'
 import { ModulesService } from '../modules-registry/modules.service'
+import { parseOrgFilter } from '../org/org-filter-params'
+import { OrgService } from '../org/org.service'
 import { PayrollService } from '../payroll/payroll.service'
 import { PoliciesService } from '../policies/policies.service'
+import { METRICS } from '../reports/metrics'
+import { MetricsService } from '../reports/metrics.service'
 import { LeaveBalancesService } from '../requests/leave-balances.service'
 import { RequestsService } from '../requests/requests.service'
 import { AI_UNAVAILABLE_DATA } from './ai-rules'
@@ -17,7 +22,7 @@ import type { LlmToolDef } from './llm-provider'
 // بيانات السائل الشخصية (رصيدي، قسيمتي، حضوري، طلباتي) بتتقري لملفه هو بس — مفيش أداة بتاخد رقم موظف ليها. للقراءة بس.
 // «مش موجود» و«برّه النطاق» و«الموديول مقفول ليك» = نفس الرد (`AI_UNAVAILABLE_DATA`).
 
-interface ReadTool { def: LlmToolDef; label: string; module: ModuleKey | null; run(user: JwtPayload, input: Record<string, unknown>): Promise<unknown> }
+interface ReadTool { def: LlmToolDef; label: string; module: ModuleKey | null; /** صلاحية لازمة عشان الأداة تتعرض وتتنفّذ */ perm?: string; run(user: JwtPayload, input: Record<string, unknown>): Promise<unknown> }
 const noInput = { type: 'object', properties: {}, additionalProperties: false }
 const pick = <T extends Record<string, unknown>>(row: T, keys: readonly string[]) => Object.fromEntries(keys.filter(key => row?.[key] !== undefined).map(key => [key, row[key]]))
 const words = (value: unknown) => (typeof value === 'string' ? value.trim().toLowerCase().slice(0, 100) : '')
@@ -27,7 +32,7 @@ export class AiToolsService {
   private readonly tools: ReadTool[]
 
   constructor(private readonly modules: ModulesService, private readonly balances: LeaveBalancesService, private readonly requests: RequestsService, private readonly attendance: AttendanceService,
-    private readonly payroll: PayrollService, private readonly policies: PoliciesService, private readonly employees: EmployeesService) {
+    private readonly payroll: PayrollService, private readonly policies: PoliciesService, private readonly employees: EmployeesService, private readonly org: OrgService, private readonly moduleRef: ModuleRef) {
     this.tools = [
       { label: 'رصيد إجازاتي', module: 'leave', def: { name: 'my_leave_balance', description: 'أرصدة إجازات المستخدم نفسه للسنة الجارية (نفس شاشة «إجازاتي وأرصدتي»): لكل نوع المتبقي والمستهلك والاستحقاق.', inputSchema: noInput },
         run: async user => (user.employeeId ? (await this.balances.allBalances(user.employeeId)).map(row => pick(row as unknown as Record<string, unknown>, ['balanceType', 'period', 'periodStart', 'periodEnd', 'remaining', 'totalTaken', 'annualEntitlement', 'accruedToDate', 'opening'])) : AI_UNAVAILABLE_DATA) },
@@ -66,13 +71,56 @@ export class AiToolsService {
           if (!rows.length) return AI_UNAVAILABLE_DATA
           return rows.slice(0, 5).map(row => pick(row, ['employeeCode', 'fullName', 'fullNameEn', 'jobTitle', 'status', 'branchId', 'departmentId', 'joinDate']))
         } },
+      // B6.9: تقارير باللغة الطبيعية — النموذج بيختار مفتاح مؤشر من القاموس وفلاتر بالاسم بس (مفيش نص استعلام)، والرقم من دالة التقرير نفسها
+      { label: 'مؤشرات التقارير', module: 'reports', perm: 'reports.view', def: { name: 'report_metric',
+        description: `رقم مؤشر من قاموس مؤشرات التقارير (نفس رقم شاشة التقارير) بنطاق المستخدم. المؤشرات: ${METRICS.map(metric => `${metric.key} = ${metric.label}`).join('، ')}. الفلاتر اختيارية: شهر الرواتب، واسم فرع أو إدارة/قسم أو فريق. أرقام الحساب (زي عدد أيام الغياب) في parts.`,
+        inputSchema: { type: 'object', additionalProperties: false, required: ['metric'], properties: { metric: { type: 'string', enum: METRICS.map(metric => metric.key) },
+          period: { type: 'string', description: 'شهر الرواتب YYYY-MM؛ فاضي = الشهر الجاري' }, branch: { type: 'string', description: 'اسم الفرع' },
+          department: { type: 'string', description: 'اسم الإدارة أو القسم' }, team: { type: 'string', description: 'اسم الفريق' } } } },
+        run: (user, input) => this.metric(user, input) },
     ]
+  }
+
+  /**
+   * B6.9 — مؤشر من القاموس بفلاتر بالاسم. الأسماء بتتحول لأرقام من شجرة نطاق الحساب (نفس مصدر فلتر شاشة التقارير): الاسم اللي برّه
+   * النطاق مش فيها، فردّه زي اللي مش موجود. والقيمة من `MetricsService.values` — نفس دالة `GET /reports/metrics` بنطاقها وموديولاتها وصلاحية كل مؤشر.
+   */
+  private async metric(user: JwtPayload, input: Record<string, unknown>) {
+    const key = words(input.metric), period = typeof input.period === 'string' ? input.period.trim() : ''
+    if (!METRICS.some(metric => metric.key === key) || (period !== '' && !/^\d{4}-(0[1-9]|1[0-2])$/.test(period))) return AI_UNAVAILABLE_DATA
+    const tree = await this.org.filterContext(branchScopeOf(user))
+    const choose = <T extends { id: number; name: string }>(rows: T[], raw: unknown, what: string): { row: T | null; stop?: unknown } => {
+      const name = words(raw)
+      if (!name) return { row: null }
+      const found = rows.filter(row => row.name.toLowerCase().includes(name)), exact = found.filter(row => row.name.toLowerCase() === name)
+      if (exact.length === 1 || found.length === 1) return { row: exact.length === 1 ? exact[0] : found[0] }
+      return { row: null, stop: found.length ? { status: 'NEEDS_INPUT', missing: `اسم ${what} بالظبط`, options: found.slice(0, 12).map(row => row.name) } : AI_UNAVAILABLE_DATA }
+    }
+    const branch = choose(tree.branches, input.branch, 'الفرع')
+    if (branch.stop) return branch.stop
+    const unit = choose(tree.units.filter(row => !branch.row || row.branchId === branch.row.id), input.department, 'الإدارة أو القسم')
+    if (unit.stop) return unit.stop
+    // الإدارة المختارة بأقسامها الفرعية جوه فرعها (زي فلتر الشاشة)
+    let departmentIds: number[] | null = null
+    if (unit.row) {
+      const ids = new Set<number>([unit.row.id])
+      for (let grew = true; grew;) { grew = false; for (const row of tree.units) if (row.parentId != null && row.branchId === unit.row.branchId && ids.has(row.parentId) && !ids.has(row.id)) { ids.add(row.id); grew = true } }
+      departmentIds = [...ids].sort((a, b) => a - b)
+    }
+    const team = choose(tree.teams.filter(row => (!branch.row || row.branchId === branch.row.id) && (!departmentIds || departmentIds.includes(row.departmentId))), input.team, 'الفريق')
+    if (team.stop) return team.stop
+    const report = await this.moduleRef.get(MetricsService, { strict: false }).values(user, parseOrgFilter({ branchId: branch.row?.id, departmentIds: departmentIds ?? undefined, teamId: team.row?.id }), period || undefined)
+    const found = report.metrics.find(metric => metric.key === key)
+    // مؤشر موديوله مقفول للحساب أو صلاحيته ناقصة مابيطلعش من دالة التقرير: نفس الرد
+    if (!found) return AI_UNAVAILABLE_DATA
+    return { source: 'قاموس مؤشرات التقارير', payrollPeriod: report.period, from: report.from, to: report.to, date: report.date,
+      filter: { branch: branch.row?.name ?? null, department: unit.row?.name ?? null, team: team.row?.name ?? null }, metric: found }
   }
 
   /** الأدوات المتاحة للمستخدم ده: اللي موديولها مفعّل له (جمهور التفعيل داخل) */
   async available(user: JwtPayload): Promise<LlmToolDef[]> {
     const defs: LlmToolDef[] = []
-    for (const tool of this.tools) if (tool.module === null || await this.modules.allowedFor(tool.module, user)) defs.push(tool.def)
+    for (const tool of this.tools) if ((tool.perm === undefined || userHasPerm(user, tool.perm)) && (tool.module === null || await this.modules.allowedFor(tool.module, user))) defs.push(tool.def)
     return defs
   }
 
@@ -83,7 +131,7 @@ export class AiToolsService {
   /** تنفيذ أداة بهوية المستخدم. أداة مش معروفة، أو موديولها مقفول له، أو رفض من الخدمة (مش موجود / ممنوع) = «مش متاح». */
   async run(user: JwtPayload, name: string, input: Record<string, unknown>): Promise<{ ok: boolean; result: unknown }> {
     const tool = this.tools.find(candidate => candidate.def.name === name)
-    if (!tool || (tool.module !== null && !(await this.modules.allowedFor(tool.module, user)))) return { ok: false, result: AI_UNAVAILABLE_DATA }
+    if (!tool || (tool.perm !== undefined && !userHasPerm(user, tool.perm)) || (tool.module !== null && !(await this.modules.allowedFor(tool.module, user)))) return { ok: false, result: AI_UNAVAILABLE_DATA }
     try {
       const result = await tool.run(user, input && typeof input === 'object' ? input : {})
       return { ok: result !== AI_UNAVAILABLE_DATA, result }

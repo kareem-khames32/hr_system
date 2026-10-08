@@ -75,7 +75,7 @@ test('AIU-05: مصدر الكود — المسارات ورا الموديول �
   const tools = read('ai/ai-tools.service.ts')
   // للقراءة بس: مفيش نداء كتابة على أي خدمة، ومفيش مستودع ولا استعلام مباشر
   assert.doesNotMatch(tools, /\.(save|insert|update|delete|remove|create|adjust|submit|approve|reject|act|query)\(|getRepository|DataSource|EntityManager/)
-  assert.deepEqual([...tools.matchAll(/def: \{ name: '([a-z_]+)'/g)].map(found => found[1]), ['my_leave_balance', 'my_requests', 'my_attendance_today', 'my_payslips', 'company_policies', 'pending_my_approval', 'employee_lookup'])
+  assert.deepEqual([...tools.matchAll(/def: \{ name: '([a-z_]+)'/g)].map(found => found[1]), ['my_leave_balance', 'my_requests', 'my_attendance_today', 'my_payslips', 'company_policies', 'pending_my_approval', 'employee_lookup', 'report_metric'])
   // بيانات السائل الشخصية لملفه هو: الرقم من التوكن، ومفيش أداة مخططها فيه رقم موظف أو حساب
   assert.doesNotMatch(tools, /employeeId: \{|userId: \{|properties: \{ id:/)
   assert.equal((tools.match(/user\.employeeId/g) ?? []).length >= 6, true)
@@ -131,4 +131,56 @@ test('AIU-07: مصدر الكود — أدوات الاقتراح مابتكتب
   // B6.8: قايمة «اقتراحاتي المستنية» لصاحبها بس ولسه مستنية قراره
   assert.match(service, /where: \{ userId: user\.sub, kind: AI_KIND_ACTION, status: 'OK', confirmed: IsNull\(\) \}/)
   assert.doesNotMatch(read('ai/ai-tools.service.ts'), /propose_|bulkSubmit|requests\.create/)
+})
+
+// ===== B6.9: تقارير باللغة الطبيعية وخادم MCP =====
+test('AIU-08: أداة المؤشرات — مفتاح من القاموس وفلاتر بالاسم بس (مفيش نص استعلام)، بصلاحية التقارير، والرقم من دالة التقرير نفسها', () => {
+  const tools = read('ai/ai-tools.service.ts')
+  const metric = tools.slice(tools.indexOf('private async metric('), tools.indexOf('/** الأدوات المتاحة للمستخدم ده'))
+  assert.match(tools, /module: 'reports', perm: 'reports\.view', def: \{ name: 'report_metric'/)
+  assert.match(tools, /metric: \{ type: 'string', enum: METRICS\.map\(metric => metric\.key\) \}/, 'المؤشر من قايمة القاموس بس')
+  assert.match(metric, /if \(!METRICS\.some\(metric => metric\.key === key\)/)
+  assert.match(metric, /const tree = await this\.org\.filterContext\(branchScopeOf\(user\)\)/, 'الأسماء من شجرة نطاق الحساب')
+  assert.match(metric, /this\.moduleRef\.get\(MetricsService, \{ strict: false \}\)\.values\(user, parseOrgFilter\(/, 'نفس دالة GET /reports/metrics')
+  assert.doesNotMatch(metric, /SELECT|FROM |WHERE |\.query\(|sql/i, 'مفيش استعلام في الأداة')
+  assert.equal((tools.match(/tool\.perm !== undefined && !userHasPerm\(user, tool\.perm\)|tool\.perm === undefined \|\| userHasPerm\(user, tool\.perm\)/g) ?? []).length, 2, 'الصلاحية في العرض وفي التنفيذ')
+})
+
+test('AIU-09: خادم MCP — للقراءة بس فوق الـAPI العام: الأدوات ومخططاتها، طلب GET بالمفتاح وبالمعاملات المسموحة بس، والأخطاء من غير المفتاح', async () => {
+  const mcp = require('../scripts/mcp-server.cjs')
+  const source = fs.readFileSync(path.join(apiRoot, 'scripts', 'mcp-server.cjs'), 'utf8')
+  assert.doesNotMatch(source, /method: '(POST|PUT|PATCH|DELETE)'|require\('(?!node:)[^.']/, 'GET بس ومن غير مكتبات')
+  assert.equal((source.match(/method: 'GET'/g) ?? []).length, 1)
+  assert.deepEqual([mcp.config({}), mcp.config({ HR_PUBLIC_API_URL: 'https://hr.example.invalid/api/public/v1/' }), mcp.config({ HR_PUBLIC_API_URL: 'ftp://x', HR_INTEGRATION_KEY: 'k' })], [null, null, null])
+  const settings = mcp.config({ HR_PUBLIC_API_URL: 'https://hr.example.invalid/api/public/v1/', HR_INTEGRATION_KEY: ' hrk_test ' })
+  assert.deepEqual(settings, { base: 'https://hr.example.invalid/api/public/v1', key: 'hrk_test' })
+  const calls = []
+  const fakeFetch = async (url, options) => { calls.push({ url, options }); return { status: 200, text: async () => '{"rows":[]}' } }
+  const rpc = (method, params, id = 1) => mcp.handle({ jsonrpc: '2.0', id, method, params }, settings, fakeFetch)
+  assert.deepEqual(await rpc('initialize', {}), { jsonrpc: '2.0', id: 1, result: { protocolVersion: mcp.PROTOCOL_VERSION, capabilities: { tools: {} }, serverInfo: { name: 'hr-public-api', version: '1.0.0' } } })
+  assert.deepEqual([await mcp.handle({ jsonrpc: '2.0', method: 'notifications/initialized' }, settings, fakeFetch), (await rpc('ping')).result, (await rpc('resources/list')).error.code], [null, {}, -32601])
+  const listed = (await rpc('tools/list')).result.tools
+  assert.deepEqual(listed.map(tool => tool.name), ['hr_employees', 'hr_employee', 'hr_structure', 'hr_attendance', 'hr_leaves', 'hr_payroll_runs'])
+  assert.equal(listed.every(tool => tool.inputSchema.type === 'object' && tool.inputSchema.additionalProperties === false && tool.description.length > 10), true)
+  // المعاملات المسموحة بس، ومرمّزة؛ والمفتاح في ترويسته
+  const done = await rpc('tools/call', { name: 'hr_attendance', arguments: { from: '2026-10-01', to: '2026-10-31', employeeId: 7, evil: '1', pageSize: 10 } })
+  assert.deepEqual(done.result, { isError: false, content: [{ type: 'text', text: '{"rows":[]}' }] })
+  assert.deepEqual([calls[0].url, calls[0].options.method, calls[0].options.redirect, calls[0].options.headers['X-API-Key']],
+    ['https://hr.example.invalid/api/public/v1/attendance?from=2026-10-01&to=2026-10-31&employeeId=7&pageSize=10', 'GET', 'manual', 'hrk_test'])
+  await rpc('tools/call', { name: 'hr_employee', arguments: { id: 12 } })
+  assert.equal(calls[1].url, 'https://hr.example.invalid/api/public/v1/employees/12')
+  await rpc('tools/call', { name: 'hr_employees', arguments: { status: 'a&b=c' } })
+  assert.equal(calls[2].url, 'https://hr.example.invalid/api/public/v1/employees?status=a%26b%3Dc')
+  // رقم مش رقم (محاولة مسار)، ومعامل كائن، وأداة مجهولة: خطأ مدخلات ومفيش طلب
+  for (const params of [{ name: 'hr_employee', arguments: { id: '../payroll/runs' } }, { name: 'hr_employee', arguments: {} }, { name: 'hr_employees', arguments: { status: { a: 1 } } }, { name: 'hr_delete', arguments: {} }])
+    assert.equal((await rpc('tools/call', params)).error.code, -32602)
+  assert.equal(calls.length, 3)
+  // رفض الـAPI (نطاق ناقص) نتيجة بخطأ؛ وعطل الشبكة رسالة عامة من غير المفتاح؛ ومن غير إعداد رسالة واضحة
+  const denied = await mcp.handle({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'hr_structure', arguments: {} } }, settings, async () => ({ status: 403, text: async () => '{"message":"denied"}' }))
+  assert.deepEqual(denied.result, { isError: true, content: [{ type: 'text', text: '{"message":"denied"}' }] })
+  const broken = await mcp.handle({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'hr_structure', arguments: {} } }, settings, async () => { throw new Error('connect failed with key hrk_test') })
+  assert.deepEqual([broken.result.isError, JSON.stringify(broken).includes('hrk_test')], [true, false])
+  const unset = await mcp.handle({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'hr_structure', arguments: {} } }, null, fakeFetch)
+  assert.deepEqual([unset.result.isError, calls.length], [true, 3])
+  assert.equal((await mcp.handle({ id: 5, method: 'ping' }, settings, fakeFetch)).error.code, -32600)
 })
