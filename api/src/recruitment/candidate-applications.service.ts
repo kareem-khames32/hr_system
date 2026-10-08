@@ -11,8 +11,9 @@ import { CandidateApplication } from './candidate-application.entity'
 import {
   CANDIDATE_APPLICATIONS_MIGRATION_MISSING, CANDIDATE_JOB_NOT_OPEN, SOURCE_INTERNAL, SOURCE_MANUAL, assertNotDuplicateOnJob, candidateApplicationsReady, cleanNationalId, cleanSource,
 } from './candidate-applications'
+import { CandidateOffer } from './offer.entity'
 import { RecruitmentJob } from './recruitment-job.entity'
-import { jobCode, recruitmentJobsReady } from './recruitment-rules'
+import { RECRUITMENT_JOB_STATUS_LABELS, jobCode, recruitmentJobsReady } from './recruitment-rules'
 
 export interface CandidateOnJobInput { jobId: number; fullName: string; email?: string; phone?: string; notes?: string; source?: unknown; nationalId?: unknown }
 
@@ -55,6 +56,42 @@ export class CandidateApplicationsService {
 
   /** وظيفة كل مرشح ومصدره لقايمة المرشحين (المرشح من غير وظيفة = null). الوظيفة بتتعرض لو لسه في نطاق فروع الحساب */
   async attach<T extends { id: number }>(user: JwtPayload, rows: T[]) {
+    const withJobs = await this.attachApplications(user, rows)
+    const accepted = await this.acceptedOffers(this.ds.manager, rows.map((row) => row.id))
+    // B3.5-ب: العرض المقبول (الراتب وتاريخ البدء) — نموذج التعيين بيتعبّى منه، والموارد البشرية بتراجعه قبل الحفظ
+    return withJobs.map((row) => ({ ...row, acceptedOffer: accepted.get(row.id) ?? null }))
+  }
+
+  /** آخر عرض مقبول لكل مرشح (قبل ترحيل 109: ولا واحد) */
+  private async acceptedOffers(em: EntityManager, candidateIds: number[]): Promise<Map<number, { salary: string; startDate: string | null }>> {
+    const [table] = candidateIds.length ? await em.query(`SELECT CASE WHEN OBJECT_ID(N'dbo.candidate_offers', N'U') IS NOT NULL THEN 1 ELSE 0 END AS [ready]`) : [{ ready: 0 }]
+    if (Number(table?.ready) !== 1) return new Map()
+    const offers = await em.getRepository(CandidateOffer).find({ where: { candidateId: In(candidateIds), status: 'ACCEPTED' }, order: { id: 'ASC' } })
+    return new Map(offers.map((offer) => [offer.candidateId, { salary: Number(offer.salary).toFixed(2), startDate: offer.startDate ? String(offer.startDate).slice(0, 10) : null }]))
+  }
+
+  /**
+   * B3.5-ب: بعد تعيين مرشح على وظيفة شاغرة — تحت قفل صف الوظيفة: لو عدد المُعيَّنين عليها وصل العدد المطلوب والوظيفة لسه مفتوحة، بتتقفل
+   * (بسطر تدقيق). باقي المرشحين عليها بيفضلوا في مراحلهم (مسؤول التوظيف بينقلهم).
+   */
+  async afterHire(user: JwtPayload, candidateId: number): Promise<{ jobClosed: boolean }> {
+    return this.ds.transaction(async (em) => {
+      if (!(await recruitmentJobsReady(em)) || !(await candidateApplicationsReady(em))) return { jobClosed: false }
+      const application = await em.getRepository(CandidateApplication).findOne({ where: { candidateId } })
+      const job = application ? await em.getRepository(RecruitmentJob).findOne({ where: { id: application.jobId }, lock: { mode: 'pessimistic_write' } }) : null
+      if (!job || job.status === 'CLOSED') return { jobClosed: false }
+      const onJob = await em.getRepository(CandidateApplication).find({ where: { jobId: job.id } })
+      const hired = await em.getRepository(Candidate).count({ where: { id: In(onJob.map((row) => row.candidateId)), stage: 'hired' } })
+      if (hired < job.openings) return { jobClosed: false }
+      await em.getRepository(RecruitmentJob).update({ id: job.id }, { status: 'CLOSED', closedAt: new Date() })
+      await recordAudit(em, { category: 'SETTINGS', action: 'RECRUITMENT_JOB_STATUS', entityType: 'recruitment_job', entityId: job.id, actorUserId: user.sub, branchId: job.branchId,
+        summary: `الوظيفة الشاغرة ${jobCode(job.id)} بقت «${RECRUITMENT_JOB_STATUS_LABELS.CLOSED}» — العدد المطلوب (${job.openings}) اكتمل بالتعيين`,
+        before: { status: job.status }, after: { status: 'CLOSED', hired } })
+      return { jobClosed: true }
+    })
+  }
+
+  private async attachApplications<T extends { id: number }>(user: JwtPayload, rows: T[]) {
     const em = this.ds.manager
     const empty = () => rows.map((row) => ({ ...row, application: null as null | { jobId: number; jobCode: string; source: string | null; nationalId: string | null; internal: boolean; cvFileId: number | null; consentAt: Date | null } }))
     if (!rows.length || !(await recruitmentJobsReady(em)) || !(await candidateApplicationsReady(em))) return empty()

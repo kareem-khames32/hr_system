@@ -57,12 +57,20 @@ test('التعيين بيبعت بيانات النموذج كاملة للخد�
   const calls = []
   // B3.4-أ: التعيين بيسجّل سطر «مُعيَّن» في سجل المرشح (من المرحلة اللي كان فيها)
   const hires = []
-  const controller = new CandidatesController(repo, { create: async (dto, actor, scope) => { calls.push({ dto: { ...dto }, actor, scope }); return { id: 99 } } }, {},
+  // B3.5-ب: وبعده قفل الوظيفة لو عددها اكتمل (afterHire)
+  const controller = new CandidatesController(repo, { create: async (dto, actor, scope) => { calls.push({ dto: { ...dto }, actor, scope }); return { id: 99 } } },
+    { afterHire: async (actor, candidateId) => { hires.push(['after', actor.sub, candidateId]); return { jobClosed: false } } },
     { recordHire: async (actor, candidateId, fromStage) => { hires.push([actor.sub, candidateId, fromStage]) } })
   const hrBranch1 = { sub: 12, role: 'hr_manager', branchId: 1, employeeId: 21, permissions: ['candidates.manage', 'employees.create'] }
   const result = await controller.hire(3, Object.assign(new HireCandidateDto(), complete()), hrBranch1)
   assert.equal(result.candidate.stage, 'hired'); assert.equal(result.candidate.hiredEmployeeId, 99)
-  assert.deepEqual(hires, [[12, 3, 'offer']])
+  assert.deepEqual(hires, [[12, 3, 'offer'], ['after', 12, 3]])
+  // B3.5-ب: نموذج التعيين بيتعبّى من العرض المقبول (الراتب الأساسي وتاريخ الالتحاق)، ومن غير عرض مابيتعبّوش
+  const fromOffer = hire.candidateHireInitial({ fullName: 'Ahmed Ali', acceptedOffer: { salary: '8500.00', startDate: '2026-11-01' } })
+  assert.deepEqual([fromOffer.basicSalary, fromOffer.joinDate], ['8500.00', '2026-11-01'])
+  const noOffer = hire.candidateHireInitial({ fullName: 'Ahmed Ali', acceptedOffer: null })
+  assert.deepEqual(['basicSalary' in noOffer, 'joinDate' in noOffer], [false, false])
+  assert.equal('joinDate' in hire.candidateHireInitial({ fullName: 'Ahmed Ali', acceptedOffer: { salary: '8500.00', startDate: null } }), false)
   assert.equal(calls.length, 1)
   assert.deepEqual(calls[0].scope, [1]); assert.equal(calls[0].actor, 12)
   assert.equal(calls[0].dto.fullName, 'أحمد محمد السعيد', 'الاسم العربي من النموذج مش اسم المرشح القديم')

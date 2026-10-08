@@ -19,6 +19,8 @@ export interface HireCandidateSource {
   phone?: string | null
   positionTitle?: string | null
   branchId?: number | null
+  /** B3.5-ب: العرض المقبول — الراتب الأساسي وتاريخ الالتحاق بيتعبّوا منه (والموارد البشرية بتراجعهم قبل الحفظ) */
+  acceptedOffer?: { salary: string; startDate: string | null } | null
 }
 
 /** القيم الابتدائية لنموذج الإضافة من بيانات المرشح (الباقي يكمله المستخدم). */
@@ -42,6 +44,10 @@ export function candidateHireInitial(candidate: HireCandidateSource): Partial<Em
   if (candidate.phone?.trim()) initial.phone = candidate.phone.trim()
   if (candidate.positionTitle?.trim()) initial.jobTitle = candidate.positionTitle.trim()
   if (candidate.branchId != null) initial.branchId = String(candidate.branchId)
+  if (candidate.acceptedOffer) {
+    initial.basicSalary = candidate.acceptedOffer.salary
+    if (candidate.acceptedOffer.startDate) initial.joinDate = candidate.acceptedOffer.startDate
+  }
   return initial
 }
 

@@ -2,6 +2,8 @@
 // B3.3-أ: المرشح على وظيفة شاغرة — فحص من غير قاعدة (الدورة الفعلية في candidate-applications.integration.cjs):
 //  CU-01) القواعد: تطبيع الموبايل والبريد والهوية، ورقم الهوية والمصدر المكتوبين.
 //  CU-02) الربط: الإضافة والتقديم تحت قفل صف الوظيفة والحكم بعده، والتقديم الداخلي بقفل صف الموظف وفرعه الحالي، والمسارات محروسة.
+//  CU-08) (B3.5-ج) أرقام التوظيف: حساب الأيام والمتوسط، والمسار بصلاحية التوظيف وبنطاق الفروع.
+//  CU-07) (B3.5-ب) التعيين من العرض: قفل الوظيفة تحت قفل صفها لما العدد يكمل، ومسار التعيين بينادي عليه بعد السجل.
 //  CU-06) (B3.5-أ) عروض العمل: قيم العرض، وبصمة الرمز، وحق كل إجراء، والانتقالات تحت قفل صف العرض، ولينك الرد من غير دخول بميزته.
 //  CU-05) (B3.4-ب) المقابلات: قيم المقابلة والبطاقة، وملف الدعوة (.ics)، وترتيب الحكم في التحديد والتسليم، والمسارات.
 //  CU-04) (B3.4-أ) نقل المراحل: القيم، والنقل تحت قفل الصف بترتيب الأرقام وبخانة المرحلة بس، والتعديل القايم بيعدّي عليه.
@@ -192,4 +194,29 @@ test('CU-06: offers — values, the token hash, who may do what, transitions und
   assert.match(controller, /@Perm\('candidates\.manage', 'candidates\.approve_offers'\)\n@Controller\('recruitment\/offers'\)/)
   assert.match(controller, /@RequireModule\('recruitment'\)\n@RequireFeature\(PUBLIC_CAREERS_FEATURE\)\n@Controller\('careers\/offers'\)/)
   assert.doesNotMatch(controller.slice(controller.indexOf("@Controller('careers/offers')")), /UseGuards|CurrentUser/)
+})
+
+test('CU-07: hiring from an offer — the job closes under its row lock when its openings are filled, after the hire is recorded', () => {
+  const service = read('api/src/recruitment/candidate-applications.service.ts')
+  const after = service.slice(service.indexOf('async afterHire('), service.indexOf('private async attachApplications'))
+  const order = ['findOne({ where: { candidateId } })', "lock: { mode: 'pessimistic_write' }", "if (!job || job.status === 'CLOSED') return { jobClosed: false }", "stage: 'hired'", 'if (hired < job.openings) return { jobClosed: false }',
+    "update({ id: job.id }, { status: 'CLOSED', closedAt: new Date() })", 'await recordAudit('].map(part => after.indexOf(part))
+  assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), JSON.stringify(order))
+  assert.match(service, /status: 'ACCEPTED' \}, order: \{ id: 'ASC' \}/, 'العرض المقبول بس')
+  const candidates = read('api/src/assets/candidates.controller.ts')
+  assert.match(candidates, /await this\.stages\.recordHire\(user, c\.id, previousStage\)\n[^\n]*\n\s+await this\.applications\.afterHire\(user, c\.id\)/)
+  assert.match(read('src/lib/candidate-hire.ts'), /initial\.basicSalary = candidate\.acceptedOffer\.salary\n\s+if \(candidate\.acceptedOffer\.startDate\) initial\.joinDate = candidate\.acceptedOffer\.startDate/)
+})
+
+test('CU-08: recruitment numbers — day differences and averages, behind the recruitment permission and the branch scope', () => {
+  const metrics = require('../src/recruitment/recruitment-metrics.service')
+  assert.deepEqual([metrics.daysBetween('2026-10-01T00:00:00Z', '2026-10-04T12:00:00Z'), metrics.daysBetween('2026-10-04T00:00:00Z', '2026-10-01T00:00:00Z'), metrics.daysBetween(new Date(0), new Date(8_640_000))],
+    [3.5, 0, 0.1])
+  assert.deepEqual([metrics.average([]), metrics.average([2]), metrics.average([1, 2, 2]), metrics.average([0.1, 0.2])], [null, 2, 1.7, 0.2])
+  const service = read('api/src/recruitment/recruitment-metrics.service.ts')
+  assert.match(service, /filter\(\(row\) => row\.branchId == null \|\| inBranchScope\(scope, row\.branchId\)\)/)
+  assert.match(service, /filter\(\(job\) => inBranchScope\(scope, job\.branchId\)\)/)
+  assert.doesNotMatch(service, /\.save\(|\.update\(|\.insert\(|\.delete\(/, 'قراءة بس')
+  assert.match(read('api/src/recruitment/recruitment-jobs.controller.ts'), /@Get\('metrics'\)\n\s+metrics\(@CurrentUser\(\) user: JwtPayload\) \{\n\s+return this\.numbers\.metrics\(user\)/)
+  assert.ok(MODULES.recruitment.routes.includes('/recruitment/metrics'))
 })

@@ -269,7 +269,7 @@ export const MODULES = {
     // B3.3-أ: «وظائف داخلية» في البوابة (/my/jobs). B3.3-ب: صفحة الوظائف العامة (/careers) — صفحتها من غير دخول، والخادم بيقفلها بميزتها
     // B3.4-ب: شاشة المقابلات بقت حقيقية (كانت شاشة عرض)، و«مقابلاتي» للمحاور في البوابة
     // B3.5-أ: شاشة العروض بقت حقيقية (كانت شاشة عرض)، ولينك رد المرشح على عرضه (/careers/offers/<رمز>)
-    routes: ['/recruitment', '/recruitment/applicants', '/recruitment/jobs', '/recruitment/interviews', '/recruitment/offers', '/my/jobs', '/my/interviews', '/careers', '/careers/*',
+    routes: ['/recruitment', '/recruitment/applicants', '/recruitment/jobs', '/recruitment/interviews', '/recruitment/offers', '/recruitment/metrics', '/my/jobs', '/my/interviews', '/careers', '/careers/*',
       '/careers/offers/*'],
     // B3.2-أ: طلب «احتياج توظيف» ووجهته (الاعتماد بيعمل وظيفة شاغرة مسودة)
     requestTypes: ['RECRUITMENT_REQUISITION'],

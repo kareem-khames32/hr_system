@@ -10,6 +10,8 @@
 //  CA-05) (ب) التقديم من اللينك: القيم والموافقة، والسيرة الذاتية بنوعها الحقيقي (PDF/Word بس)، والمرشح بيتعمل على الوظيفة بمصدره وموافقته
 //         وملفه؛ المكرر بياخد نفس الرد من غير صف ولا ملف؛ وظيفة مش منشورة خارجيًا = غير موجودة؛ والحد بالعنوان 429.
 //  CA-06) (ب) السيرة الذاتية بتتقري بحكم المرشح: مسؤول توظيف فرعه 200، فرع تاني 404، ومن غير الصلاحية 403.
+//  CA-14) (B3.5-ج) أرقام التوظيف: بنطاق فروع الحساب، ومتطابقة مع الصفوف (العروض، المراحل، المصادر، الوظائف المفتوحة، المدد).
+//  CA-13) (B3.5-ب) التعيين من العرض: العرض المقبول مع المرشح في القايمة؛ والوظيفة بتتقفل لما عدد المُعيَّنين عليها يكمل (مرة واحدة، بسطر تدقيق).
 //  CA-11) (B3.5-أ) عرض العمل: القيم، ونطاق المرشح، وعرض مفتوح واحد، والتحذير لما الراتب برّه نطاق الوظيفة، والاعتماد بصلاحيته ولغير اللي عمله،
 //         والإرجاع بسبب، والإرسال بلينك برمز (بصمته بس المتخزّنة).
 //  CA-12) (B3.5-أ) رد المرشح: من اللينك مرة واحدة وبدليله، أو مسجّل من مسؤول التوظيف؛ والمسحوب والمنتهي والميزة المقفولة = اللينك مابيشتغلش.
@@ -652,4 +654,71 @@ test('CA-12: رد المرشح — من اللينك مرة واحدة وبدل�
   const service = app.get(offers.OffersService), real = service.limiter
   service.limiter = new (require('../src/recruitment/careers').AttemptLimiter)(1, 100, 60000)
   try { assert.deepEqual([(await view('b'.repeat(64))).status, (await view('b'.repeat(64))).status], [404, 429]) } finally { service.limiter = real }
+})
+
+test('CA-13: التعيين من العرض — العرض المقبول مع المرشح في القايمة، والوظيفة بتتقفل لما عدد المُعيَّنين يكمل', async () => {
+  const listed = expectStatus(await request(users.recruiterA, 'GET', '/candidates'), 200)
+  const acceptedId = (await repo('CandidateOffer').findOneByOrFail({ id: offerState.first })).candidateId
+  const accepted = listed.find(item => item.id === acceptedId), declined = listed.find(item => item.id === offerState.secondCandidate)
+  assert.deepEqual([accepted.acceptedOffer, declined.acceptedOffer, listed.filter(item => item.acceptedOffer).length], [{ salary: '8500.00', startDate: offerDay(30) }, null, 1],
+    'المقبول بس — المرفوض والمسحوب من غير عرض')
+
+  // وظيفة بعدد 2 وعليها تلات مرشحين: بتتقفل مع المُعيَّن التاني
+  const service = app.get(require('../src/recruitment/candidate-applications.service').CandidateApplicationsService)
+  const target = await job({ openings: 2, title: 'وظيفة بتتقفل بالتعيين' })
+  const onJob = []
+  for (const name of ['معيّن أول', 'معيّن تاني', 'لسه مرشح']) {
+    const row = await repo('Candidate').save({ fullName: name, positionTitle: target.title, branchId: org.branchA.id, stage: 'offer' })
+    await repo('CandidateApplication').save({ candidateId: row.id, jobId: target.id, source: 'يدوي', nationalId: null, applicantEmployeeId: null, cvFileId: null, consentAt: null, createdAt: new Date() })
+    onJob.push(row)
+  }
+  const actor = payloadOf(users.recruiterA)
+  const audits = async () => Number((await query('SELECT COUNT(*) AS [n] FROM [audit_log] WHERE [action] = N\'RECRUITMENT_JOB_STATUS\' AND [entityId] = @0', [target.id]))[0].n)
+  const statusOf = async () => (await repo('RecruitmentJob').findOneByOrFail({ id: target.id })).status
+  assert.deepEqual([await service.afterHire(actor, onJob[0].id), await statusOf()], [{ jobClosed: false }, 'PUBLISHED'], 'ولا حد اتعيّن لسه')
+  await repo('Candidate').update({ id: onJob[0].id }, { stage: 'hired' })
+  assert.deepEqual([await service.afterHire(actor, onJob[0].id), await statusOf(), await audits()], [{ jobClosed: false }, 'PUBLISHED', 0], 'واحد من اتنين')
+  await repo('Candidate').update({ id: onJob[1].id }, { stage: 'hired' })
+  assert.deepEqual([await service.afterHire(actor, onJob[1].id), await statusOf(), await audits()], [{ jobClosed: true }, 'CLOSED', 1])
+  const closed = await repo('RecruitmentJob').findOneByOrFail({ id: target.id })
+  assert.equal(closed.closedAt instanceof Date, true)
+  assert.deepEqual([await service.afterHire(actor, onJob[1].id), await audits()], [{ jobClosed: false }, 1], 'المقفولة مابتتقفلش تاني')
+  // المرشح التالت فضل في مرحلته، والمقفولة مابتقبلش مرشح جديد
+  assert.equal((await repo('Candidate').findOneByOrFail({ id: onJob[2].id })).stage, 'offer')
+  assert.deepEqual(answer(await add(users.recruiterA, { fullName: 'بعد القفل', phone: '0508887776', jobId: target.id })), [400, rules.CANDIDATE_JOB_NOT_OPEN])
+  // مرشح من غير وظيفة: التعيين مالوش أثر على وظايف
+  const loose = await repo('Candidate').save({ fullName: 'من غير وظيفة', positionTitle: 'سائق', branchId: org.branchA.id, stage: 'hired' })
+  assert.deepEqual(await service.afterHire(actor, loose.id), { jobClosed: false })
+})
+
+test('CA-14: أرقام التوظيف — بنطاق فروع الحساب ومتطابقة مع الصفوف', async () => {
+  const numbers = user => request(user, 'GET', '/recruitment/jobs/metrics')
+  const mine = expectStatus(await numbers(users.recruiterA), 200)
+  const visible = (await repo('Candidate').find()).filter(row => row.branchId === null || row.branchId === org.branchA.id)
+  const ids = new Set(visible.map(row => row.id))
+  const offers = (await repo('CandidateOffer').find()).filter(row => ids.has(row.candidateId))
+  const applications = (await repo('CandidateApplication').find()).filter(row => ids.has(row.candidateId))
+  const openJobs = (await repo('RecruitmentJob').find()).filter(row => row.branchId === org.branchA.id && ['PUBLISHED', 'PAUSED'].includes(row.status))
+  assert.equal(mine.candidates, visible.length)
+  // العروض: واحد مقبول وواحد مرفوض في فرع أ (CA-12) = 50%
+  assert.deepEqual(mine.offers, { accepted: offers.filter(row => row.status === 'ACCEPTED').length, declined: offers.filter(row => row.status === 'DECLINED').length, acceptanceRate: 50 })
+  assert.deepEqual([mine.offers.accepted, mine.offers.declined], [1, 1])
+  // المدد: العرض المقبول على وظيفة — الاتنين اتحسبوا من صف واحد، وفي نفس اليوم (أقل من يوم)
+  assert.deepEqual([mine.timeToHire.offers, mine.timeToFill.jobs, mine.timeToHire.averageDays >= 0 && mine.timeToHire.averageDays < 1, mine.timeToFill.averageDays >= 0 && mine.timeToFill.averageDays < 1], [1, 1, true, true])
+  assert.deepEqual([mine.openJobs.count, typeof mine.openJobs.averageAgeDays], [openJobs.length, 'number'])
+  // المراحل: الحالي = عدد المرشحين في كل مرحلة، ومجموعه = الكل؛ و«دخلها» من سجل النقل
+  assert.deepEqual(mine.stages.map(row => [row.stage, row.current]), ['applied', 'screening', 'interview', 'offer', 'hired', 'rejected'].map(stage => [stage, visible.filter(row => row.stage === stage).length]))
+  assert.equal(mine.stages.reduce((sum, row) => sum + row.current, 0), visible.length)
+  const moves = (await repo('CandidateStageLog').find()).filter(row => ids.has(row.candidateId))
+  assert.equal(mine.stages.find(row => row.stage === 'screening').entered, new Set(moves.filter(row => row.toStage === 'screening').map(row => row.candidateId)).size)
+  assert.equal(mine.stages.find(row => row.stage === 'screening').label, 'فرز')
+  // المصادر: مجموعها = عدد التقديمات، ومرتبة تنازلي
+  assert.equal(mine.sources.reduce((sum, row) => sum + row.count, 0), applications.length)
+  assert.deepEqual(mine.sources.map(row => row.count), [...mine.sources.map(row => row.count)].sort((a, b) => b - a))
+  assert.ok(mine.sources.some(row => row.source === 'داخلي') && mine.sources.some(row => row.source === 'لينك عام'))
+  // فرع ب: أرقامه هو بس (من غير عروض)، ومدير النظام شايف الكل، ومن غير الصلاحية 403
+  const other = expectStatus(await numbers(users.recruiterB), 200)
+  assert.deepEqual([other.offers, other.timeToHire, other.candidates < mine.candidates], [{ accepted: 0, declined: 0, acceptanceRate: null }, { averageDays: null, offers: 0 }, true])
+  assert.equal(expectStatus(await numbers(users.admin), 200).candidates, await repo('Candidate').count())
+  assert.equal((await numbers(users.nobody)).status, 403)
 })

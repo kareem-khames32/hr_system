@@ -221,6 +221,8 @@ export class CandidatesController {
     await this.candidates.save(c)
     // B3.4-أ: التعيين سطر في سجل المرشح
     await this.stages.recordHire(user, c.id, previousStage)
+    // B3.5-ب: لو المرشح على وظيفة شاغرة وعددها اكتمل، بتتقفل
+    await this.applications.afterHire(user, c.id)
     return { candidate: c, employee }
   }
 }

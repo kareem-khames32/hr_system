@@ -49,6 +49,18 @@ export const applyToOpening = (id: number, note?: string) =>
   apiFetch<{ jobId: number; applied: boolean }>(`/recruitment/openings/${id}/apply`, json('POST', note ? { note } : {}))
 
 export const fetchRecruitmentJobs = () => apiFetch<ApiRecruitmentJobsList>('/recruitment/jobs')
+
+// B3.5-ج: أرقام التوظيف (بنطاق فروع الحساب). المتوسطات null لحد ما يبقى فيه بيانات
+export interface ApiRecruitmentMetrics {
+  candidates: number
+  openJobs: { count: number; averageAgeDays: number | null }
+  timeToFill: { averageDays: number | null; jobs: number }
+  timeToHire: { averageDays: number | null; offers: number }
+  offers: { accepted: number; declined: number; acceptanceRate: number | null }
+  stages: Array<{ stage: string; label: string; current: number; entered: number }>
+  sources: Array<{ source: string; count: number }>
+}
+export const fetchRecruitmentMetrics = () => apiFetch<ApiRecruitmentMetrics>('/recruitment/jobs/metrics')
 export const fetchRecruitmentJobForm = () => apiFetch<ApiRecruitmentJobForm>('/recruitment/jobs/form')
 export const createRecruitmentJob = (body: RecruitmentJobBody) => apiFetch<ApiRecruitmentJob>('/recruitment/jobs', json('POST', body))
 /** التعديل بالخانات: الفرع والقسم مابيتبعتوش (مابيتغيّروش) */

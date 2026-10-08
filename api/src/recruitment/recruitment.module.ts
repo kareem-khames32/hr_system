@@ -13,6 +13,7 @@ import { InterviewsService } from './interviews.service'
 import { CandidateOffer } from './offer.entity'
 import { OfferLinkController, RecruitmentOffersController } from './offers.controller'
 import { OffersService } from './offers.service'
+import { RecruitmentMetricsService } from './recruitment-metrics.service'
 import { RecruitmentJob } from './recruitment-job.entity'
 import { RecruitmentJobsController } from './recruitment-jobs.controller'
 import { RecruitmentJobsService } from './recruitment-jobs.service'
@@ -29,7 +30,7 @@ import { RecruitmentOpeningsController } from './recruitment-openings.controller
   imports: [AuthModule, TypeOrmModule.forFeature([RecruitmentJob, CandidateApplication, CandidateStageLog, CandidateInterview, InterviewScorecard, CandidateOffer])],
   controllers: [RecruitmentJobsController, RecruitmentOpeningsController, CareersController, RecruitmentInterviewsController, MyInterviewsController, RecruitmentOffersController,
     OfferLinkController],
-  providers: [RecruitmentJobsService, CandidateApplicationsService, CareersService, CandidateStagesService, InterviewsService, OffersService],
+  providers: [RecruitmentJobsService, CandidateApplicationsService, CareersService, CandidateStagesService, InterviewsService, OffersService, RecruitmentMetricsService],
   exports: [RecruitmentJobsService, CandidateApplicationsService, CandidateStagesService],
 })
 export class RecruitmentModule {}

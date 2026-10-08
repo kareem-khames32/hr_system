@@ -5,6 +5,7 @@ import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { RequireModule } from '../modules-registry/module.guard'
 import { RECRUITMENT_JOB_STATUSES, type RecruitmentJobStatus } from './recruitment-job.entity'
 import { RecruitmentJobsService } from './recruitment-jobs.service'
+import { RecruitmentMetricsService } from './recruitment-metrics.service'
 
 const nullable = (_: unknown, value: unknown) => value !== null
 
@@ -50,7 +51,13 @@ class RecruitmentJobStatusDto {
 @Perm('candidates.manage')
 @Controller('recruitment/jobs')
 export class RecruitmentJobsController {
-  constructor(private readonly jobs: RecruitmentJobsService) {}
+  constructor(private readonly jobs: RecruitmentJobsService, private readonly numbers: RecruitmentMetricsService) {}
+
+  // B3.5-ج: أرقام التوظيف بنطاق فروع الحساب (قبل ‎:id — مسار ثابت)
+  @Get('metrics')
+  metrics(@CurrentUser() user: JwtPayload) {
+    return this.numbers.metrics(user)
+  }
 
   @Get()
   list(@CurrentUser() user: JwtPayload) {

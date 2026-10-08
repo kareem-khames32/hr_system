@@ -203,6 +203,7 @@ const adminMenuDefs: MenuItem[] = [
       { label: 'المتقدمين', href: '/recruitment/applicants' },
       { label: 'المقابلات', href: '/recruitment/interviews' },
       { label: 'عروض العمل', href: '/recruitment/offers' },
+      { label: 'أرقام التوظيف', href: '/recruitment/metrics' },
       { label: 'إضافة وظيفة', href: '/recruitment/add' },
     ],
   },

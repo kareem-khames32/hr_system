@@ -90,6 +90,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/recruitment/offers', 'عروض العمل'],
   ['/recruitment/add', 'إضافة وظيفة'],
   ['/recruitment/jobs', 'إدارة الوظائف'],
+  ['/recruitment/metrics', 'أرقام التوظيف'],
   [/^\/recruitment\/[^/]+/, 'تفاصيل الوظيفة'],
   ['/recruitment', 'الوظائف الشاغرة'],
   ['/performance/new', 'تقييم جديد'],
