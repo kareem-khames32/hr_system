@@ -1,0 +1,140 @@
+'use strict'
+// B6.1 (ب) على SQL حقيقي: مستوردات تجهيز العميل من Excel — الهيكل (فروع وأقسام) والموظفين: قالب، معاينة من غير كتابة بتقرير أخطاء بالصف، وتطبيق بخدمات
+// الإنشاء القايمة؛ لحساب بكل الفروع بصلاحية الإعدادات؛ والموجود بيتخطّى (إعادة رفع نفس الملف آمنة). قاعدة اختبار عشوائية تُحذف في النهاية.
+const { test, before, after } = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), crypto = require('node:crypto')
+const apiRoot = path.resolve(__dirname, '..')
+require('../node_modules/ts-node').register({ project: path.join(apiRoot, 'tsconfig.json'), transpileOnly: true })
+require('../node_modules/reflect-metadata')
+const sql = require('../node_modules/mssql')
+const env = require('../node_modules/dotenv').parse(fs.readFileSync(path.join(apiRoot, '.env')))
+const database = 'hr_setup_import_test_' + crypto.randomBytes(8).toString('hex')
+const NAME = /^hr_setup_import_test_[a-f0-9]{16}$/
+const uploads = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-setup-import-files-'))
+const secret = crypto.randomBytes(48).toString('hex')
+const jwt = new (require('../node_modules/@nestjs/jwt').JwtService)({ secret })
+const rules = require('../src/setup-import/setup-import')
+const { writeBulkWorkbook } = require('../src/employees/employee-bulk-update.sheet')
+let master, pool, app, ds, base, created = false
+const B = {}, U = {}
+const repo = name => { assert.match(database, NAME); assert.equal(ds.options.database, database); return ds.getRepository(name) }
+const token = user => jwt.sign({ sub: user.id, role: user.role, email: user.email, branchId: user.branchId ?? null, employeeId: user.employeeId ?? null,
+  tokenVersion: user.tokenVersion ?? 0, scopeAllBranches: user.scopeAllBranches ?? false, permissions: user.role === 'super_admin' ? ['*'] : JSON.parse(user.permissions || '[]') })
+const ok = (response, status = 200) => { assert.equal(response.status, status, JSON.stringify(response.body)); return response.body }
+const refused = (response, status, message) => { assert.deepEqual([response.status, response.body?.message], [status, message]) }
+/** ملف Excel بعناوين القالب (أو عناوين مبعوتة) وصفوفه */
+const sheet = (kind, rows, headers) => writeBulkWorkbook({ columns: (headers ?? rules.IMPORT_COLUMNS[kind].map(column => column.header)).map(header => ({ header, width: 16, text: true })), rows, references: [], instructions: [] })
+async function send(user, kind, step, buffer, fileName = 'import.xlsx') {
+  const form = new FormData()
+  if (buffer) form.append('file', new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), fileName)
+  const response = await fetch(`${base}/setup-import/${kind}/${step}`, { method: 'POST', headers: { Authorization: 'Bearer ' + token(user) }, body: form })
+  const raw = await response.text(); let parsed = null
+  try { parsed = raw ? JSON.parse(raw) : null } catch { parsed = raw }
+  return { status: response.status, body: parsed, type: response.headers.get('content-type') }
+}
+const structure = rows => sheet('structure', rows)
+const person = (print, name, extra = {}) => { const row = { fingerprintCode: print, fullName: name, fullNameEn: '', birthDate: '1990-05-10', gender: 'ذكر', nationality: 'مصري', nationalId: `2900510${String(print).padStart(7, '0')}`, passportNo: '',
+  phone: '+201001234567', joinDate: '2024-01-15', branchCode: 'RUH', department: 'المالية', jobTitle: 'محاسب', basicSalary: '8000', ...extra }
+  return rules.IMPORT_COLUMNS.employees.map(column => row[column.key]) }
+
+before(async () => {
+  assert.match(database, NAME); assert.notEqual(database, env.DB_DATABASE)
+  const connection = { server: env.DB_HOST || 'localhost', port: Number(env.DB_PORT || 1433), user: env.DB_USERNAME, password: env.DB_PASSWORD, options: { encrypt: false, trustServerCertificate: true } }
+  master = await new sql.ConnectionPool({ ...connection, database: 'master' }).connect()
+  await master.request().query(`CREATE DATABASE [${database}]`); created = true
+  Object.assign(process.env, env, { DB_DATABASE: database, DB_SYNCHRONIZE: 'true', NODE_ENV: 'test', JWT_SECRET: secret, UPLOADS_ROOT: uploads })
+  app = await require('../node_modules/@nestjs/core').NestFactory.create(require('../src/app.module').AppModule, { logger: ['error'], abortOnError: false })
+  // مفيش رسالة بريد حقيقية بتطلع من الاختبار
+  const mail = app.get(require('../src/auth/mail.service').MailService)
+  mail.isConfigured = () => false
+  mail.send = async () => { throw new Error('no mail in tests') }
+  app.setGlobalPrefix('api'); app.useGlobalPipes(new (require('../node_modules/@nestjs/common').ValidationPipe)({ whitelist: true, transform: true }))
+  await app.listen(0, '127.0.0.1'); ds = app.get(require('../node_modules/typeorm').DataSource)
+  assert.equal(ds.options.database, database)
+  for (const job of app.get(require('../node_modules/@nestjs/schedule').SchedulerRegistry).getCronJobs().values()) job.stop()
+  base = `http://127.0.0.1:${app.getHttpServer().address().port}/api`
+  pool = await new sql.ConnectionPool({ ...connection, database }).connect()
+  B.old = await repo('Branch').save({ code: 'OLD', name: 'فرع قديم', country: 'SA' })
+  await repo('Department').save({ name: 'قسم قديم', branchId: B.old.id, isActive: true })
+  U.admin = await repo('User').save({ email: 'admin@setup-import.invalid', displayName: 'مدير النظام', passwordHash: 'test-only', role: 'super_admin', scopeAllBranches: true, permissions: '[]', isActive: true })
+  U.branch = await repo('User').save({ email: 'branch@setup-import.invalid', displayName: 'مدير فرع', passwordHash: 'test-only', role: 'employee', branchId: B.old.id, permissions: JSON.stringify(['settings.manage', 'employees.edit']), isActive: true })
+  U.plain = await repo('User').save({ email: 'plain@setup-import.invalid', displayName: 'حساب عادي', passwordHash: 'test-only', role: 'employee', branchId: B.old.id, permissions: JSON.stringify(['employees.edit']), isActive: true })
+}, { timeout: 120000 })
+
+after(async t => {
+  if (app) await app.close()
+  if (pool) await pool.close()
+  try {
+    if (created) {
+      assert.match(database, NAME); assert.notEqual(database, env.DB_DATABASE)
+      await master.request().query(`ALTER DATABASE [${database}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [${database}]`)
+      assert.equal((await master.request().input('database', database).query('SELECT DB_ID(@database) AS id')).recordset[0].id, null)
+      t.diagnostic(`Cleanup verified: ${database} is absent from sys.databases.`)
+    }
+  } finally {
+    if (master) await master.close()
+    fs.rmSync(uploads, { recursive: true, force: true })
+  }
+})
+
+test('SI-01: الصلاحية والملف — بصلاحية الإعدادات ولحساب بكل الفروع؛ القالب بعناوينه؛ وملف بعناوين غلط أو فاضي مرفوض قبل أي حاجة', async () => {
+  const good = await structure([['RUH', 'فرع الرياض', 'SA', 'المالية']])
+  assert.deepEqual([(await send(U.plain, 'structure', 'preview', good)).status, (await send(U.branch, 'structure', 'preview', good)).status, (await send(U.branch, 'structure', 'apply', good)).status,
+    (await send(U.branch, 'employees', 'template')).status], [403, 403, 403, 403])
+  refused(await send(U.admin, 'payroll', 'preview', good), 400, 'نوع الاستيراد مش معروف')
+  refused(await send(U.admin, 'structure', 'preview'), 400, 'ارفع ملف القالب')
+  const template = await send(U.admin, 'employees', 'template')
+  assert.deepEqual([template.status, template.type], [200, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'])
+  for (const [file, message] of [[await sheet('structure', [['RUH', 'x']], ['كود الفرع', 'عمود غريب']), 'عمود مش في القالب: عمود غريب'], [await sheet('structure', [['x']], ['اسم الفرع']), 'أعمدة ناقصة: كود الفرع'],
+    [await structure([]), 'الملف مافيهوش صفوف بيانات']]) refused(await send(U.admin, 'structure', 'preview', file), 400, message)
+  assert.equal(await repo('Branch').count(), 1)
+})
+
+test('SI-02: الهيكل — المعاينة مابتكتبش وبتقول الجديد والموجود والأخطاء بالصف؛ ملف فيه خطأ مابيتطبقش منه حاجة؛ والتطبيق بخدمة الفروع والأقسام، وإعادة الرفع بتتخطّى الموجود', async () => {
+  const bad = await structure([['RUH', 'فرع الرياض', 'SA', 'المالية'], ['RUH', '', '', 'المبيعات'], ['RUH', '', '', 'المالية'], ['JED', '', 'SA', 'المالية'], ['x', 'فرع', 'US', ''], ['OLD', '', '', 'قسم قديم'], ['', 'من غير كود', 'SA', '']])
+  const preview = ok(await send(U.admin, 'structure', 'preview', bad))
+  assert.deepEqual([preview.kind, preview.total, preview.toCreate, preview.existing, preview.withErrors, preview.canApply, preview.rows.map(row => [row.row, row.status, row.errors])],
+    ['structure', 7, 2, 1, 4, false, [[2, 'NEW', []], [3, 'NEW', []], [4, 'ERROR', ['القسم ده مكرر في الملف لنفس الفرع']], [5, 'ERROR', ['«اسم الفرع» مطلوب لفرع جديد']],
+      [6, 'ERROR', ['«كود الفرع» من حرفين لحد 20: حروف إنجليزي وأرقام وشرطة', '«الدولة» EG أو SA']], [8, 'ERROR', ['«كود الفرع» مطلوب']]]])
+  // المعاينة ماكتبتش، وتطبيق ملف فيه أخطاء مابيكتبش برضه
+  const refusedApply = await send(U.admin, 'structure', 'apply', bad)
+  assert.deepEqual([refusedApply.status, refusedApply.body.message, refusedApply.body.report.withErrors, await repo('Branch').count(), await repo('Department').count()],
+    [400, 'الملف فيه 4 صف بأخطاء — صلّحها وارفعه تاني (مفيش حاجة اتحفظت)', 4, 1, 1])
+  const good = await structure([['RUH', 'فرع الرياض', 'SA', 'المالية'], ['RUH', '', '', 'المبيعات'], ['CAI', 'فرع القاهرة', 'eg', ''], ['OLD', '', '', 'قسم قديم'], ['OLD', '', '', 'قسم جديد']])
+  assert.deepEqual((({ toCreate, existing, withErrors, canApply }) => [toCreate, existing, withErrors, canApply])(ok(await send(U.admin, 'structure', 'preview', good))), [4, 1, 0, true])
+  assert.deepEqual(ok(await send(U.admin, 'structure', 'apply', good)), { kind: 'structure', total: 5, created: 4, existing: 1, stoppedAt: null })
+  const branches = await repo('Branch').find({ order: { id: 'ASC' } }), departments = await repo('Department').find({ order: { id: 'ASC' } })
+  B.ruh = branches.find(row => row.code === 'RUH'); B.cai = branches.find(row => row.code === 'CAI')
+  assert.deepEqual([branches.map(row => [row.code, row.name, row.country]), departments.map(row => [row.name, row.branchId])],
+    [[['OLD', 'فرع قديم', 'SA'], ['RUH', 'فرع الرياض', 'SA'], ['CAI', 'فرع القاهرة', 'EG']], [['قسم قديم', B.old.id], ['المالية', B.ruh.id], ['المبيعات', B.ruh.id], ['قسم جديد', B.old.id]]])
+  // إعادة رفع نفس الملف: كله موجود ومفيش حاجة تتعمل
+  const again = ok(await send(U.admin, 'structure', 'preview', good))
+  assert.deepEqual([again.toCreate, again.existing, again.canApply, ok(await send(U.admin, 'structure', 'apply', good)).created, await repo('Branch').count(), await repo('Department').count()], [0, 5, false, 0, 3, 4])
+})
+
+test('SI-03: الموظفين — نفس قواعد إنشاء الموظف في المعاينة (الإلزام والشكل والفرع والقسم والتكرار)، والتطبيق بخدمة إنشاء الموظف (الكود بيتولّد)، والموجود برقم بصمته بيتخطّى', async () => {
+  const bad = await sheet('employees', [person(1001, 'محمد أحمد علي حسن'), person(1001, 'سعيد محمود عبد الله', { nationalId: '29005109999999' }), person(1003, 'خالد سمير فتحي نور', { branchCode: 'NOPE' }), person(1004, 'ياسر كمال رضا عمر', { department: 'قسم مش موجود' }),
+    person(1005, 'هاني فؤاد صبحي عز', { gender: 'x', basicSalary: 'كتير' }), person(1006, '', { phone: '' }), person(1007, 'عمرو حسين جلال طه', { nationalId: '', passportNo: '' })])
+  const preview = ok(await send(U.admin, 'employees', 'preview', bad))
+  assert.deepEqual([preview.total, preview.toCreate, preview.withErrors, preview.canApply], [7, 1, 6, false])
+  const errorsOf = row => preview.rows.find(item => item.row === row).errors
+  assert.deepEqual([errorsOf(3), errorsOf(4), errorsOf(5), errorsOf(6), errorsOf(7)], [['«رقم البصمة» مكرر في الملف (الصف 2)'], ['«كود الفرع» مش موجود — ارفع ملف الهيكل الأول'], ['«القسم» مش موجود في الفرع ده — ارفع ملف الهيكل الأول'],
+    ['«الجنس» ذكر أو أنثى', '«الراتب الأساسي» رقم بكسرين بالكتير'], ['«الاسم الكامل بالعربي» مطلوب', '«رقم الجوال» مطلوب']])
+  assert.equal(errorsOf(8).length, 1, JSON.stringify(errorsOf(8)))
+  assert.equal((await send(U.admin, 'employees', 'apply', bad)).status, 400)
+  assert.equal(await repo('Employee').count(), 0)
+  const good = await sheet('employees', [person(1001, 'محمد أحمد علي حسن'), person(1002, 'سعيد محمود عبد الله', { department: 'المبيعات', gender: 'أنثى', basicSalary: '9,500.50' }),
+    person(1003, 'خالد سمير فتحي نور', { branchCode: 'old', department: 'قسم قديم', nationalId: '', passportNo: 'A1234567' })])
+  assert.deepEqual((({ toCreate, withErrors, canApply }) => [toCreate, withErrors, canApply])(ok(await send(U.admin, 'employees', 'preview', good))), [3, 0, true])
+  const applied = ok(await send(U.admin, 'employees', 'apply', good))
+  assert.deepEqual(applied, { kind: 'employees', total: 3, created: 3, existing: 0, stoppedAt: null }, JSON.stringify(applied))
+  const saved = await repo('Employee').find({ order: { fingerprintCode: 'ASC' } })
+  assert.deepEqual(saved.map(row => [row.fingerprintCode, row.fullName, row.branchId, row.gender, Number(row.basicSalary), /^EMP-\d+$/.test(row.employeeCode), String(row.joinDate).slice(0, 10)]),
+    [['1001', 'محمد أحمد علي حسن', B.ruh.id, 'male', 8000, true, '2024-01-15'], ['1002', 'سعيد محمود عبد الله', B.ruh.id, 'female', 9500.5, true, '2024-01-15'], ['1003', 'خالد سمير فتحي نور', B.old.id, 'male', 8000, true, '2024-01-15']])
+  // إعادة الرفع مع موظف جديد وهوية مستخدمة: الموجود بيتخطّى، والهوية المكررة خطأ
+  const more = await sheet('employees', [person(1001, 'محمد أحمد علي حسن'), person(1010, 'طارق نبيل شوقي زكي'), person(1011, 'مازن عادل فهمي سعد', { nationalId: saved[1].nationalId })])
+  const second = ok(await send(U.admin, 'employees', 'preview', more))
+  assert.deepEqual([second.toCreate, second.existing, second.withErrors, second.rows.find(row => row.status === 'ERROR').errors], [1, 1, 1, ['رقم الهوية أو الجواز مسجّل لموظف تاني']])
+  assert.equal(await repo('Employee').count(), 3)
+})

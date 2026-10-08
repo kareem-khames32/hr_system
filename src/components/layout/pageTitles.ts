@@ -164,6 +164,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/settings/documents', 'أنواع المستندات'],
   ['/settings/document-templates', 'قوالب المستندات'],
   ['/settings/letter-templates', 'قوالب الخطابات'],
+  ['/settings/import', 'استيراد بيانات التجهيز'],
   ['/settings/users', 'المستخدمين'],
   ['/settings/login-log', 'سجل الدخول'],
   ['/settings/audit', 'سجل التدقيق'],

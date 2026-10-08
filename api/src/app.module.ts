@@ -9,6 +9,7 @@ import { AuthModule } from './auth/auth.module'
 import { OrgModule } from './org/org.module'
 import { EmployeesModule } from './employees/employees.module'
 import { EmployeeBulkUpdateModule } from './employees/employee-bulk-update.module'
+import { SetupImportModule } from './setup-import/setup-import.module'
 import { RequestsModule } from './requests/requests.module'
 import { AttendanceModule } from './attendance/attendance.module'
 import { PayrollModule } from './payroll/payroll.module'
@@ -122,6 +123,8 @@ import { dbPacketSize } from './common/sql-packet-size'
     EmployeesModule,
     // تحديث بيانات مجموعة موظفين من ملف Excel/CSV
     EmployeeBulkUpdateModule,
+    // B6.1 (ب): مستوردات تجهيز العميل من Excel (الهيكل والموظفين)
+    SetupImportModule,
     RequestsModule,
     AttendanceModule,
     PayrollModule,
