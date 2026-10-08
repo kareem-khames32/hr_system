@@ -24,7 +24,21 @@ class AdvanceLinkDto {
 class AdvanceStepDto {
   @IsOptional() note?: unknown
 }
+class PerDiemDto {
+  @IsOptional() destination?: unknown
+  @IsOptional() days?: unknown
+  @IsOptional() expenseDate?: unknown
+  @IsOptional() note?: unknown
+}
+class RateDto {
+  @IsOptional() categoryId?: unknown
+  @IsOptional() gradeId?: unknown
+  @IsOptional() destination?: unknown
+  @IsOptional() dailyAmount?: unknown
+  @IsOptional() isActive?: unknown
+}
 class CategoryDto {
+  @IsOptional() gradeLimits?: unknown
   @IsOptional() name?: unknown
   @IsOptional() limitPerLine?: unknown
   @IsOptional() limitMode?: unknown
@@ -76,6 +90,12 @@ export class ExpensesController {
     return this.service.removeLine(user, id, lineId)
   }
 
+  // (ج) بند بدل يومي: الوجهة وعدد الأيام من الموظف، والمبلغ من الخادم
+  @Post('my/reports/:id/per-diem')
+  addPerDiem(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: PerDiemDto) {
+    return this.service.savePerDiem(user, id, dto)
+  }
+
   // (ب) ربط سلفة مأمورية مصروفة بالتقرير أو فكّها — الخدمة بتحكم بصاحب التقرير والسلفة
   @Put('my/reports/:id/advance')
   attachAdvance(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: AdvanceLinkDto) {
@@ -100,6 +120,19 @@ export class ExpensesController {
   @Post('categories')
   createCategory(@CurrentUser() user: JwtPayload, @Body() dto: CategoryDto) {
     return this.service.createCategory(user, dto)
+  }
+
+  // (ج) أسعار البدل اليومي بالدرجة والوجهة — تعريف لحساب بكل الفروع
+  @Perm('expenses.manage')
+  @Post('rates')
+  createRate(@CurrentUser() user: JwtPayload, @Body() dto: RateDto) {
+    return this.service.saveRate(user, dto)
+  }
+
+  @Perm('expenses.manage')
+  @Patch('rates/:id')
+  updateRate(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: RateDto) {
+    return this.service.saveRate(user, dto, id)
   }
 
   @Perm('expenses.manage')

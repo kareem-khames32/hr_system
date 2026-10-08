@@ -1,7 +1,8 @@
 'use strict'
 // B5.3 (أ) على SQL حقيقي: تقارير المصروفات — الميزة الفرعية مقفولة افتراضيًا، الترحيلات 149–151، الفئات وحدودها، البنود والإيصالات، التقديم كطلب
 // (الخادم بيثبّت الإجمالي والبنود)، الإرجاع والرفض، والاعتماد النهائي بقيد دائن واحد في الدفتر. و(ب): سلفة المأمورية (ترحيل 152) — طلبها، تسجيل
-// صرفها، ربطها بتقرير، وتسويتها في اعتماده (دائن أو مدين أو من غير قيد)، وبند إخلاء الطرف. قاعدة اختبار عشوائية تُحذف في النهاية.
+// صرفها، ربطها بتقرير، وتسويتها في اعتماده (دائن أو مدين أو من غير قيد)، وبند إخلاء الطرف. و(ج): حد الفئة بالدرجة (ترحيل 153)، وأسعار البدل اليومي
+// (154) وبند البدل اليومي المحسوب من الخادم. قاعدة اختبار عشوائية تُحذف في النهاية.
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), crypto = require('node:crypto')
@@ -19,10 +20,11 @@ const jwt = new (require('../node_modules/@nestjs/jwt').JwtService)({ secret })
 const rules = require('../src/expenses/expense-reports')
 const advanceRules = require('../src/expenses/travel-advances')
 const { openOffboardingCase } = require('../src/offboarding/offboarding-open')
-const MIGRATIONS = ['20261009_149_expense_categories.sql', '20261009_150_expense_reports.sql', '20261009_151_expense_lines.sql', '20261009_152_travel_advances.sql'].map(name => path.resolve(apiRoot, '..', 'docs', 'migrations', 'payroll', name))
-const TABLES = ['expense_categories', 'expense_reports', 'expense_lines', 'travel_advances']
+const MIGRATIONS = ['20261009_149_expense_categories.sql', '20261009_150_expense_reports.sql', '20261009_151_expense_lines.sql', '20261009_152_travel_advances.sql', '20261009_153_expense_category_limits.sql',
+  '20261009_154_per_diem_rates.sql'].map(name => path.resolve(apiRoot, '..', 'docs', 'migrations', 'payroll', name))
+const TABLES = ['expense_categories', 'expense_reports', 'expense_lines', 'travel_advances', 'expense_category_limits', 'per_diem_rates']
 let master, pool, app, ds, base, modules, created = false, sequence = 0
-const B = {}, E = {}, U = {}, C = {}
+const B = {}, E = {}, U = {}, C = {}, G = {}
 const repo = name => { assert.match(database, NAME); assert.equal(ds.options.database, database); return ds.getRepository(name) }
 const token = user => jwt.sign({ sub: user.id, role: user.role, email: user.email, branchId: user.branchId ?? null, employeeId: user.employeeId ?? null,
   tokenVersion: user.tokenVersion ?? 0, scopeAllBranches: user.scopeAllBranches ?? false, permissions: user.role === 'super_admin' ? ['*'] : JSON.parse(user.permissions || '[]') })
@@ -122,14 +124,18 @@ test('EX-01: الميزة الفرعية مقفولة افتراضيًا = مف�
   await runMigrations()
   for (const name of [...TABLES].reverse()) await pool.request().batch(`DROP TABLE dbo.${name}`)
   rules.resetExpenseReportsCache(); advanceRules.resetTravelAdvancesCache()
-  assert.deepEqual(Object.values(await tablesExist()), [null, null, null, null])
-  assert.deepEqual(await mine(U.one), { ready: false, currency: null, requestTypeCode: null, advanceTypeCode: null, categories: [], reports: [], advances: [] })
-  assert.deepEqual(ok(await request(U.admin, 'GET', '/expenses/overview')), { ready: false, canEdit: true, categories: [], reports: [], advances: [] })
+  assert.deepEqual(Object.values(await tablesExist()), [null, null, null, null, null, null])
+  assert.deepEqual(await mine(U.one), { ready: false, currency: null, requestTypeCode: null, advanceTypeCode: null, categories: [], reports: [], advances: [], perDiem: [] })
+  assert.deepEqual(ok(await request(U.admin, 'GET', '/expenses/overview')), { ready: false, canEdit: true, categories: [], grades: [], rates: [], reports: [], advances: [] })
   refused(await request(U.one, 'POST', '/requests', { typeCode: 'TRAVEL_ADVANCE', payload: { amount: 100, reason: 'مأمورية' }, submit: true }), 400, advanceRules.ADVANCE_MIGRATION_MISSING)
   refused(await request(U.one, 'POST', `${M}/reports`, { title: 'مأمورية' }), 400, rules.EXPENSE_MIGRATION_MISSING)
   refused(await request(U.admin, 'POST', '/expenses/categories', { name: 'انتقالات' }), 400, rules.EXPENSE_MIGRATION_MISSING)
+  // ترحيل واحد ناقص (154: أسعار البدل اليومي) = الميزة لسه مش جاهزة
+  for (const file of MIGRATIONS.slice(0, 5)) for (const batch of migrate.splitBatches(fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n'))) await pool.request().batch(batch)
+  assert.equal((await mine(U.one)).ready, false)
   await runMigrations(); await runMigrations()
   assert.ok(Object.values(await tablesExist()).every(id => id != null))
+  assert.deepEqual((await pool.request().query(`SELECT COL_LENGTH(N'dbo.expense_lines', N'perDiemRateId') AS a, COL_LENGTH(N'dbo.expense_lines', N'perDiemDays') AS b`)).recordset[0], { a: 4, b: 4 })
   const ready = await mine(U.one)
   assert.deepEqual([ready.ready, ready.currency, ready.requestTypeCode, ready.advanceTypeCode, ready.reports, ready.advances], [true, 'SAR', 'EXPENSE_REPORT', 'TRAVEL_ADVANCE', [], []])
   assert.equal((await mine(U.cairo)).currency, 'EGP')
@@ -460,4 +466,112 @@ test('EX-10: إنهاء الخدمة — سلف مأموريات مفتوحة ب
   assert.deepEqual(await advanceRules.openAdvancesOf(ds.manager, E.two.id), { count: 0, total: 0 })
   const clean = await ds.transaction(em => openOffboardingCase(em, { employeeId: E.two.id, lastWorkingDay: day(20), terminationReason: 'resignation', openedBy: U.admin.id }))
   assert.equal((await repo('ClearanceItem').find({ where: { caseId: clean.id } })).some(row => row.label.includes('سلف مأموريات')), false)
+})
+
+const category = async id => ok(await request(U.admin, 'GET', '/expenses/overview')).categories.find(row => row.id === id)
+const perDiem = (user, reportId, body) => request(user, 'POST', `${M}/reports/${reportId}/per-diem`, { expenseDate: day(-3), ...body })
+
+test('EX-11: حد الفئة بالدرجة — حد درجة الموظف بيسبق حد الفئة العام في التحذير والمنع، والموظف بيشوف حد درجته، والحدود بتتكتب كلها مع الفئة', async () => {
+  G.senior = await repo('Grade').save({ name: 'مدير أول', isActive: true }); G.junior = await repo('Grade').save({ name: 'موظف', isActive: true })
+  await repo('Employee').update({ id: E.one.id }, { gradeId: G.senior.id })
+  const taxi = { name: 'انتقالات', limitPerLine: 100, limitMode: 'WARN' }, hotel = { name: 'إقامة', limitPerLine: 500, limitMode: 'BLOCK', receiptRequired: true }
+  for (const [gradeLimits, message] of [[{ gradeId: G.senior.id }, 'حدود الدرجات قايمة (درجة وحد)'], [[{ gradeId: G.senior.id, limitPerLine: 0 }], 'حد الدرجة: اختار الدرجة واكتب مبلغ موجب بخانتين عشريتين بالكتير'],
+    [[{ gradeId: G.senior.id, limitPerLine: 300 }, { gradeId: G.senior.id, limitPerLine: 400 }], 'الدرجة متكررة في حدود الفئة'], [[{ gradeId: 999999, limitPerLine: 300 }], 'درجة من الدرجات مش موجودة']]) {
+    refused(await request(U.admin, 'PATCH', `/expenses/categories/${C.taxi}`, { ...taxi, gradeLimits }), 400, message)
+  }
+  assert.deepEqual((await category(C.taxi)).gradeLimits, [])
+  ok(await request(U.admin, 'PATCH', `/expenses/categories/${C.taxi}`, { ...taxi, gradeLimits: [{ gradeId: G.senior.id, limitPerLine: 300 }, { gradeId: G.junior.id, limitPerLine: 50 }] }))
+  ok(await request(U.admin, 'PATCH', `/expenses/categories/${C.hotel}`, { ...hotel, gradeLimits: [{ gradeId: G.senior.id, limitPerLine: 800 }] }))
+  assert.deepEqual([(await category(C.taxi)).gradeLimits, (await category(C.hotel)).gradeLimits], [[{ gradeId: G.senior.id, limitPerLine: 300 }, { gradeId: G.junior.id, limitPerLine: 50 }], [{ gradeId: G.senior.id, limitPerLine: 800 }]])
+  // تعديل من غير `gradeLimits` مايلمسش الحدود
+  ok(await request(U.admin, 'PATCH', `/expenses/categories/${C.taxi}`, taxi))
+  assert.equal((await category(C.taxi)).gradeLimits.length, 2)
+  assert.deepEqual(ok(await request(U.admin, 'GET', '/expenses/overview')).grades.map(row => row.name), ['مدير أول', 'موظف'])
+  // الموظف بيشوف حد درجته هو (ومن غير حدود باقي الدرجات)؛ واللي من غير درجة بيشوف الحد العام
+  const limitOf = async (user, id) => { const row = (await mine(user)).categories.find(item => item.id === id); return [row.limitPerLine, row.gradeLimits] }
+  assert.deepEqual([await limitOf(U.one, C.taxi), await limitOf(U.one, C.hotel), await limitOf(U.two, C.taxi), await limitOf(U.two, C.hotel)], [[300, []], [800, []], [100, []], [500, []]])
+  // التحذير والمنع بحد الدرجة
+  const senior = await newReport(U.one, 'مصروفات مدير أول'), plain = await newReport(U.two, 'مصروفات من غير درجة')
+  const own = await file(U.one, E.one.id)
+  assert.equal(ok(await line(U.one, senior, { categoryId: C.taxi, amount: 250 }), 201).warning, null)
+  assert.equal(ok(await line(U.one, senior, { categoryId: C.taxi, amount: 350 }), 201).warning, 'فوق حد الفئة (300.00)')
+  assert.equal(ok(await line(U.two, plain, { categoryId: C.taxi, amount: 250 }), 201).warning, 'فوق حد الفئة (100.00)')
+  ok(await line(U.one, senior, { categoryId: C.hotel, amount: 700, receiptFileId: own.id }), 201)
+  refused(await line(U.one, senior, { categoryId: C.hotel, amount: 800.01, receiptFileId: own.id }), 400, 'بند «إقامة» بمبلغ 800.01 فوق حد الفئة 800.00')
+  refused(await line(U.two, plain, { categoryId: C.hotel, amount: 700 }), 400, 'بند «إقامة» بمبلغ 700.00 فوق حد الفئة 500.00')
+  // التقديم بيثبّت المخالفة بحد درجة صاحب التقرير
+  const sent = ok(await send(U.one, senior), 201)
+  assert.deepEqual(JSON.parse((await repo('Request').findOneByOrFail({ id: sent.id })).payload).lines.map(row => [row.category, row.amount, row.warning]).sort((a, b) => a[1] - b[1]),
+    [['انتقالات', 250, null], ['انتقالات', 350, 'فوق حد الفئة (300.00)'], ['إقامة', 700, null]])
+  // الدرجة اتغيّرت بعد حفظ البند: الحكم بالدرجة الحالية — بند الإقامة بقى فوق حد المنع العام والتقديم بيقف
+  const moved = await newReport(U.one, 'قبل تغيير الدرجة'); ok(await line(U.one, moved, { categoryId: C.hotel, amount: 700, receiptFileId: own.id }), 201)
+  await repo('Employee').update({ id: E.one.id }, { gradeId: null })
+  assert.equal((await reportOf(U.one, moved)).lines[0].problem, 'بند «إقامة» بمبلغ 700.00 فوق حد الفئة 500.00')
+  refused(await send(U.one, moved), 400, 'بند «إقامة» بمبلغ 700.00 فوق حد الفئة 500.00')
+  await repo('Employee').update({ id: E.one.id }, { gradeId: G.senior.id })
+  // قايمة فاضية بتشيل حدود الدرجات
+  ok(await request(U.admin, 'PATCH', `/expenses/categories/${C.taxi}`, { ...taxi, gradeLimits: [] }))
+  assert.deepEqual([(await category(C.taxi)).gradeLimits, (await limitOf(U.one, C.taxi))[0]], [[], 100])
+})
+
+test('EX-12: البدل اليومي — السعر بالوجهة والدرجة تعريف للشركة كلها؛ والبند مبلغه من الخادم (الأيام × سعر درجة الموظف) ومايتعدّلش؛ وسعر اتغيّر قبل التقديم بيمنع', async () => {
+  C.daily = ok(await request(U.admin, 'POST', '/expenses/categories', { name: 'بدل يومي' }), 201).id
+  const rate = (body, id) => request(U.admin, id ? 'PATCH' : 'POST', id ? `/expenses/rates/${id}` : '/expenses/rates', { categoryId: C.daily, destination: 'الرياض', dailyAmount: 150, ...body })
+  assert.equal((await request(U.finance, 'POST', '/expenses/rates', { categoryId: C.daily, destination: 'الرياض', dailyAmount: 150 })).status, 403)
+  assert.equal((await request(U.loose, 'POST', '/expenses/rates', { categoryId: C.daily, destination: 'الرياض', dailyAmount: 150 })).status, 403)
+  for (const [body, message] of [[{ destination: 'ر' }, 'الوجهة من حرفين لحد 80 حرف'], [{ categoryId: 'x' }, 'اختار فئة المصروف اللي البدل بيتسجّل تحتها'], [{ dailyAmount: 0 }, 'سعر اليوم مبلغ موجب بخانتين عشريتين بالكتير (لحد 99999.99)'],
+    [{ gradeId: 'x' }, 'الدرجة مش صحيحة'], [{ categoryId: C.old }, 'فئة المصروف بتاعة البدل مش موجودة أو مقفولة'], [{ categoryId: 999999 }, 'فئة المصروف بتاعة البدل مش موجودة أو مقفولة'],
+    [{ gradeId: 999999 }, 'درجة من الدرجات مش موجودة']]) refused(await rate(body), 400, message)
+  assert.deepEqual((await mine(U.one)).perDiem, [])
+  const general = ok(await rate({ destination: '  الرياض ' }), 201).id
+  const seniorRate = ok(await rate({ gradeId: G.senior.id, dailyAmount: 250 }), 201).id
+  ok(await rate({ destination: 'جدة', dailyAmount: 120.5 }), 201)
+  refused(await rate({}), 409, 'فيه سعر مفعّل لنفس الوجهة والدرجة')
+  refused(await rate({ gradeId: G.senior.id, dailyAmount: 999 }), 409, 'فيه سعر مفعّل لنفس الوجهة والدرجة')
+  refused(await rate({}, 999999), 404, 'سعر البدل اليومي مش موجود')
+  assert.deepEqual(ok(await request(U.finance, 'GET', '/expenses/overview')).rates.map(row => [row.destination, row.gradeId, row.dailyAmount, row.isActive]),
+    [['الرياض', null, 150, true], ['الرياض', G.senior.id, 250, true], ['جدة', null, 120.5, true]])
+  // كل موظف بيشوف سعر درجته للوجهة
+  assert.deepEqual([(await mine(U.one)).perDiem, (await mine(U.two)).perDiem], [[{ destination: 'الرياض', dailyAmount: 250 }, { destination: 'جدة', dailyAmount: 120.5 }], [{ destination: 'الرياض', dailyAmount: 150 }, { destination: 'جدة', dailyAmount: 120.5 }]])
+  const trip = await newReport(U.one, 'مأمورية الرياض')
+  for (const [body, message] of [[{ days: 3 }, 'اختار الوجهة'], [{ destination: 'الرياض', days: 0 }, 'عدد الأيام رقم صحيح من 1 لحد 90'], [{ destination: 'الرياض', days: 91 }, 'عدد الأيام رقم صحيح من 1 لحد 90'],
+    [{ destination: 'الرياض', days: 1.5 }, 'عدد الأيام رقم صحيح من 1 لحد 90'], [{ destination: 'الرياض', days: 2, expenseDate: day(3) }, 'تاريخ المصروف في المستقبل'], [{ destination: 'دبي', days: 2 }, rules.PER_DIEM_NONE]]) {
+    refused(await perDiem(U.one, trip, body), 400, message)
+  }
+  refused(await perDiem(U.two, trip, { destination: 'الرياض', days: 2 }), 404, rules.REPORT_NOT_FOUND)
+  // العميل مايحددش المبلغ: الخادم بيحسبه بسعر درجة الموظف
+  const made = ok(await perDiem(U.one, trip, { destination: 'الرياض', days: 3, amount: 1, perDiemRateId: general, categoryId: C.taxi }), 201)
+  assert.deepEqual([made.amount, made.perDiem], [750, '3 يوم × 250.00 (الرياض)'])
+  const saved = await repo('ExpenseLine').findOneByOrFail({ id: made.id })
+  assert.deepEqual([Number(saved.amount), saved.categoryId, saved.perDiemRateId, saved.perDiemDays, saved.receiptFileId], [750, C.daily, seniorRate, 3, null])
+  // بند البدل مايتعدّلش من مسار البند العادي (وإلا مبلغه يتكتب باليد)
+  refused(await request(U.one, 'PATCH', `${M}/reports/${trip}/lines/${made.id}`, { categoryId: C.daily, expenseDate: day(-3), amount: 5000 }), 400, 'بند البدل اليومي مايتعدّلش — امسحه وضيفه تاني')
+  const view = (await reportOf(U.one, trip)).lines[0]
+  assert.deepEqual([view.categoryName, view.amount, view.perDiem, view.problem, view.warning], ['بدل يومي', 750, '3 يوم × 250.00 (الرياض)', null, null])
+  // موظف من غير درجة: سعر كل الدرجات
+  const plain = await newReport(U.two, 'مأمورية الرياض'); assert.equal(ok(await perDiem(U.two, plain, { destination: 'الرياض', days: 2 }), 201).amount, 300)
+  // السعر اتغيّر قبل التقديم: البند بيتعلّم والتقديم بيقف؛ يتمسح ويتضاف بالسعر الجديد
+  ok(await rate({ gradeId: G.senior.id, dailyAmount: 300 }, seniorRate))
+  assert.equal((await reportOf(U.one, trip)).lines[0].problem, rules.perDiemChanged('الرياض'))
+  refused(await send(U.one, trip), 400, rules.perDiemChanged('الرياض'))
+  ok(await request(U.one, 'DELETE', `${M}/reports/${trip}/lines/${made.id}`))
+  assert.equal(ok(await perDiem(U.one, trip, { destination: 'الرياض', days: 3 }), 201).amount, 900)
+  ok(await line(U.one, trip, { categoryId: C.meals, amount: 100 }), 201)
+  const sent = ok(await send(U.one, trip), 201)
+  const stored = JSON.parse((await repo('Request').findOneByOrFail({ id: sent.id })).payload)
+  assert.deepEqual([stored.amount, stored.lines.map(row => [row.category, row.amount, row.perDiem ?? null, row.receipt])], [1000, [['بدل يومي', 900, '3 يوم × 300.00 (الرياض)', null], ['وجبات', 100, null, null]]])
+  // السعر اتغيّر والطلب تحت الاعتماد: المبلغ اللي المعتمد شايفه هو اللي بيتصرف
+  ok(await rate({ gradeId: G.senior.id, dailyAmount: 400 }, seniorRate))
+  ok(await act(U.approver, sent.id, 'APPROVE'), 201)
+  assert.deepEqual((await entries(sent.id)).map(entry => [entry.type, entry.category, Number(entry.amount)]), [['CREDIT', 'expense', 1000]])
+  // سعر الدرجة اتقفل: الموظف بيرجع لسعر كل الدرجات، وبند محفوظ بالسعر المقفول بيتمنع
+  const later = await newReport(U.one, 'مأمورية تانية'); ok(await perDiem(U.one, later, { destination: 'الرياض', days: 1 }), 201)
+  ok(await rate({ gradeId: G.senior.id, dailyAmount: 400, isActive: false }, seniorRate))
+  assert.deepEqual([(await mine(U.one)).perDiem[0], (await reportOf(U.one, later)).lines[0].problem], [{ destination: 'الرياض', dailyAmount: 150 }, rules.perDiemChanged('الرياض')])
+  // فئة البدل اتقفلت: الوجهة بتختفي من اختيارات الموظف وبند جديد مرفوض
+  ok(await request(U.admin, 'PATCH', `/expenses/categories/${C.daily}`, { name: 'بدل يومي', isActive: false }))
+  assert.deepEqual((await mine(U.two)).perDiem, [])
+  refused(await perDiem(U.two, plain, { destination: 'جدة', days: 1 }), 400, 'فئة المصروف بتاعة البدل مش موجودة أو مقفولة')
+  const audit = await pool.request().query(`SELECT [action], COUNT(*) AS n FROM dbo.audit_log WHERE [entityType] = N'per_diem_rate' GROUP BY [action]`)
+  assert.deepEqual(Object.fromEntries(audit.recordset.map(item => [item.action, Number(item.n)])), { PER_DIEM_RATE_CREATED: 3, PER_DIEM_RATE_UPDATED: 3 })
 })

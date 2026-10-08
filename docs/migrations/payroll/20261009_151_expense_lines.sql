@@ -1,6 +1,7 @@
 -- 20261009_151: بنود تقارير المصروفات (خطة التنفيذ — B5.3: المصروفات والسفر).
 -- جدول جديد:
 --   expense_lines: بند في تقرير — فئته، وتاريخ المصروف، ومبلغه بعملة فرع الموظف، وملاحظة، وإيصاله (stored_files).
+--     بند «بدل يومي»: السعر اللي اتحسب بيه (per_diem_rates) وعدد الأيام — مبلغه = الأيام × سعر اليوم، والخادم بيحسبه. الفاضي = بند مصروف عادي.
 -- مفيش صفوف بتتضاف.
 -- الكود بيشتغل قبل الترحيل: الشاشة بتقول إن الترحيل ناقص.
 -- إضافي فقط: بلا حذف ولا تعبئة رجعية، ومن غير افتراضي (زي الكيان). آمن للتكرار.
@@ -19,6 +20,8 @@ IF OBJECT_ID(N'dbo.expense_lines', N'U') IS NOT NULL AND (EXISTS (
       (N'amount', N'decimal', 9, 12, 2, 0, 0),
       (N'note', N'nvarchar', 600, 0, 0, 1, 0),
       (N'receiptFileId', N'int', 4, 10, 0, 1, 0),
+      (N'perDiemRateId', N'int', 4, 10, 0, 1, 0),
+      (N'perDiemDays', N'int', 4, 10, 0, 1, 0),
       (N'createdAt', N'datetime2', 8, 27, 7, 0, 0)
     ) AS expected([name], [typeName], [maxLength], [precision], [scale], [nullable], [isIdentity])
     FULL OUTER JOIN (
@@ -51,6 +54,8 @@ CREATE TABLE dbo.expense_lines (
   [amount] decimal(12,2) NOT NULL,
   [note] nvarchar(300) NULL,
   [receiptFileId] int NULL,
+  [perDiemRateId] int NULL,
+  [perDiemDays] int NULL,
   [createdAt] datetime2 NOT NULL
 );
 GO
@@ -64,6 +69,8 @@ IF OBJECT_ID(N'dbo.expense_lines', N'U') IS NULL OR (EXISTS (
       (N'amount', N'decimal', 9, 12, 2, 0, 0),
       (N'note', N'nvarchar', 600, 0, 0, 1, 0),
       (N'receiptFileId', N'int', 4, 10, 0, 1, 0),
+      (N'perDiemRateId', N'int', 4, 10, 0, 1, 0),
+      (N'perDiemDays', N'int', 4, 10, 0, 1, 0),
       (N'createdAt', N'datetime2', 8, 27, 7, 0, 0)
     ) AS expected([name], [typeName], [maxLength], [precision], [scale], [nullable], [isIdentity])
     FULL OUTER JOIN (

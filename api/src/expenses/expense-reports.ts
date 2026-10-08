@@ -8,6 +8,7 @@ import { advanceCode, attachedAdvance, TravelAdvance } from './travel-advances'
 // B5.3 (أ): تقارير المصروفات — تقرير ببنود وإيصال لكل بند وحد لكل فئة. ميزة فرعية `expenses.reports` (مقفولة افتراضيًا) جوه موديول
 //  المصروفات القائم. الاعتماد كله في محرك الطلبات: التقرير بيتقدّم كطلب وجهته `expense_report`، والخادم بيثبّت إجماليه وبنوده في الحمولة
 //  عند كل تقديم، وعند الاعتماد النهائي بيتكتب قيد دائن واحد في الدفتر بنفس شكل قيد «صرف مصروفات» القائم.
+//  (ج) حد الفئة ممكن يختلف بدرجة الموظف، وبند «بدل يومي» مبلغه بيحسبه الخادم = الأيام × سعر درجة الموظف للوجهة.
 //  (ب) سلفة مأمورية مربوطة بالتقرير بتتسوّى في نفس الاعتماد: الصافي = الإجمالي − السلفة ← قيد دائن أو مدين أو من غير قيد.
 //  ترتيب الأقفال واحد: صف الطلب ← صف التقرير ← صف السلفة. كله بـem بس: مفيش نداء لخدمة تانية جوه معاملة.
 
@@ -17,7 +18,7 @@ export const EXPENSE_REPORT_HANDLER = 'expense_report'
 export const EXPENSE_REPORT_CLIENT_KEYS = ['reportId'] as const
 export const EXPENSE_REPORT_STAGED_KEYS = ['amount', 'reportTitle', 'tripFrom', 'tripTo', 'lines', 'advanceAmount', 'netAmount'] as const
 
-export const EXPENSE_MIGRATION_MISSING = 'جداول تقارير المصروفات ناقصة — طبّق ترحيلات 149 و150 و151 الأول'
+export const EXPENSE_MIGRATION_MISSING = 'جداول تقارير المصروفات ناقصة — طبّق ترحيلات 149 لحد 154 الأول'
 export const REPORT_NOT_FOUND = 'تقرير المصروفات غير موجود'
 export const REPORT_BUSY = 'التقرير متقدّم في طلب تاني لسه شغال'
 export const REPORT_DONE = 'التقرير اتعتمد واتصرف قبل كده'
@@ -28,6 +29,9 @@ export const REPORT_NOT_LINKED = 'تقرير المصروفات مش مربوط 
 export const REPORT_TOTAL_CHANGED = 'إجمالي بنود التقرير مش مطابق للمبلغ المتقدّم — رجّع الطلب لمقدّمه يقدّمه تاني'
 export const LINES_MAX = 50
 export const LINE_AMOUNT_MAX = 9_999_999.99
+export const PER_DIEM_DAYS_MAX = 90
+export const PER_DIEM_NONE = 'مفيش بدل يومي معرّف للوجهة دي لدرجتك'
+export const perDiemChanged = (destination: string) => `البدل اليومي لـ«${destination}» اتغيّر أو اتقفل — امسح البند وضيفه تاني`
 export const LIMIT_MODES = ['WARN', 'BLOCK'] as const
 export type LimitMode = (typeof LIMIT_MODES)[number]
 
@@ -49,6 +53,57 @@ export class ExpenseCategory {
 
   @Column({ type: 'bit' })
   receiptRequired: boolean
+
+  @Column({ type: 'bit' })
+  isActive: boolean
+
+  @Column({ type: 'int' })
+  updatedByUserId: number
+
+  @Column({ type: 'datetime2' })
+  updatedAt: Date
+}
+
+/** (ج) حد البند لفئة عند درجة وظيفية معيّنة — بيسبق حد الفئة العام لموظفين الدرجة */
+@Entity('expense_category_limits')
+export class ExpenseCategoryLimit {
+  @PrimaryGeneratedColumn({ primaryKeyConstraintName: 'PK_expense_category_limits' })
+  id: number
+
+  @Column({ type: 'int' })
+  categoryId: number
+
+  @Column({ type: 'int' })
+  gradeId: number
+
+  @Column({ type: 'decimal', precision: 12, scale: 2 })
+  limitPerLine: number
+
+  @Column({ type: 'int' })
+  updatedByUserId: number
+
+  @Column({ type: 'datetime2' })
+  updatedAt: Date
+}
+
+/** (ج) سعر البدل اليومي لوجهة — لدرجة معيّنة أو لكل الدرجات (gradeId فاضي)، وبيتسجّل تحت فئة مصروف */
+@Entity('per_diem_rates')
+export class PerDiemRate {
+  @PrimaryGeneratedColumn({ primaryKeyConstraintName: 'PK_per_diem_rates' })
+  id: number
+
+  @Column({ type: 'int' })
+  categoryId: number
+
+  @Column({ type: 'int', nullable: true })
+  gradeId: number | null
+
+  @Column({ type: 'nvarchar', length: 80 })
+  destination: string
+
+  /** بعملة فرع الموظف */
+  @Column({ type: 'decimal', precision: 12, scale: 2 })
+  dailyAmount: number
 
   @Column({ type: 'bit' })
   isActive: boolean
@@ -130,6 +185,13 @@ export class ExpenseLine {
   @Column({ type: 'int', nullable: true })
   receiptFileId: number | null
 
+  /** (ج) بند «بدل يومي»: السعر اللي اتحسب بيه وعدد الأيام (المبلغ = الأيام × سعر اليوم). الفاضي = بند مصروف عادي */
+  @Column({ type: 'int', nullable: true })
+  perDiemRateId: number | null
+
+  @Column({ type: 'int', nullable: true })
+  perDiemDays: number | null
+
   @Column({ type: 'datetime2' })
   createdAt: Date
 }
@@ -205,18 +267,86 @@ export function lineFields(body: unknown, today: string): { fields: LineFields |
   return { fields: { categoryId: input.categoryId, expenseDate: input.expenseDate, amount, note: note || null, receiptFileId }, error: null }
 }
 
+/** (ج) حدود الدرجات على فئة: قايمة درجة ← حد، من غير تكرار درجة. `undefined` = مااتبعتتش (ماتتغيّرش) */
+export function gradeLimitsOf(raw: unknown): { limits: Array<{ gradeId: number; limitPerLine: number }> | undefined; error: string | null } {
+  if (raw === undefined) return { limits: undefined, error: null }
+  if (!Array.isArray(raw) || raw.length > 100) return { limits: undefined, error: 'حدود الدرجات قايمة (درجة وحد)' }
+  const limits: Array<{ gradeId: number; limitPerLine: number }> = []
+  for (const item of raw as Array<Record<string, unknown> | null>) {
+    const gradeId = item?.gradeId, limitPerLine = expenseAmount(item?.limitPerLine)
+    if (typeof gradeId !== 'number' || !Number.isSafeInteger(gradeId) || gradeId < 1 || limitPerLine === null) return { limits: undefined, error: 'حد الدرجة: اختار الدرجة واكتب مبلغ موجب بخانتين عشريتين بالكتير' }
+    if (limits.some((row) => row.gradeId === gradeId)) return { limits: undefined, error: 'الدرجة متكررة في حدود الفئة' }
+    limits.push({ gradeId, limitPerLine })
+  }
+  return { limits, error: null }
+}
+
+export interface RateFields { categoryId: number; gradeId: number | null; destination: string; dailyAmount: number; isActive: boolean }
+/** (ج) سعر بدل يومي: الوجهة، والدرجة (فاضية = كل الدرجات)، وسعر اليوم، والفئة اللي البند بيتسجّل تحتها */
+export function rateFields(body: unknown): { fields: RateFields | null; error: string | null } {
+  const input = (body ?? {}) as Record<string, unknown>
+  const destination = cleanText(input.destination, 80)
+  if (!destination || destination.length < 2) return { fields: null, error: 'الوجهة من حرفين لحد 80 حرف' }
+  if (typeof input.categoryId !== 'number' || !Number.isSafeInteger(input.categoryId) || input.categoryId < 1) return { fields: null, error: 'اختار فئة المصروف اللي البدل بيتسجّل تحتها' }
+  let gradeId: number | null = null
+  if (input.gradeId !== undefined && input.gradeId !== null) {
+    if (typeof input.gradeId !== 'number' || !Number.isSafeInteger(input.gradeId) || input.gradeId < 1) return { fields: null, error: 'الدرجة مش صحيحة' }
+    gradeId = input.gradeId
+  }
+  const dailyAmount = expenseAmount(input.dailyAmount, 99_999.99)
+  if (dailyAmount === null) return { fields: null, error: 'سعر اليوم مبلغ موجب بخانتين عشريتين بالكتير (لحد 99999.99)' }
+  if (input.isActive !== undefined && typeof input.isActive !== 'boolean') return { fields: null, error: '«مفعّل» نعم أو لا' }
+  return { fields: { categoryId: input.categoryId, gradeId, destination, dailyAmount, isActive: input.isActive !== false }, error: null }
+}
+
+export interface PerDiemFields { destination: string; days: number; expenseDate: string; note: string | null }
+/** (ج) بند بدل يومي من العميل: الوجهة وعدد الأيام وتاريخ البداية — المبلغ من الخادم */
+export function perDiemFields(body: unknown, today: string): { fields: PerDiemFields | null; error: string | null } {
+  const input = (body ?? {}) as Record<string, unknown>
+  const destination = cleanText(input.destination, 80)
+  if (!destination) return { fields: null, error: 'اختار الوجهة' }
+  if (typeof input.days !== 'number' || !Number.isInteger(input.days) || input.days < 1 || input.days > PER_DIEM_DAYS_MAX) return { fields: null, error: `عدد الأيام رقم صحيح من 1 لحد ${PER_DIEM_DAYS_MAX}` }
+  if (!validYmd(input.expenseDate)) return { fields: null, error: 'تاريخ أول يوم مطلوب' }
+  if (input.expenseDate > today) return { fields: null, error: 'تاريخ المصروف في المستقبل' }
+  const note = cleanText(input.note, 300)
+  if (note === null) return { fields: null, error: 'الملاحظة 300 حرف بالكتير' }
+  return { fields: { destination, days: input.days, expenseDate: input.expenseDate, note: note || null }, error: null }
+}
+
+type RateRule = Pick<PerDiemRate, 'id' | 'gradeId' | 'destination' | 'dailyAmount' | 'isActive'>
+/** (ج) سعر الوجهة لدرجة الموظف: سعر درجته المفعّل، وإلا سعر «كل الدرجات» المفعّل */
+export function pickRate<T extends RateRule>(rates: readonly T[], destination: string, gradeId: number | null): T | null {
+  const open = rates.filter((rate) => flag(rate.isActive) && rate.destination === destination)
+  return (gradeId == null ? undefined : open.find((rate) => rate.gradeId != null && Number(rate.gradeId) === gradeId)) ?? open.find((rate) => rate.gradeId == null) ?? null
+}
+/** (ج) مبلغ البدل بالقروش = الأيام × سعر اليوم */
+export const perDiemCents = (days: number, dailyAmount: unknown) => days * cents(dailyAmount)
+/**
+ * (ج) حكم بند بدل يومي محفوظ: سعره لسه هو سعر درجة الموظف للوجهة دلوقتي، ومبلغه = الأيام × السعر الحالي. أي تغيير = مانع
+ * (البند بيتمسح ويتضاف تاني بالسعر الجديد) — المبلغ المحسوب مايتصرفش بسعر اتغيّر من غير ما صاحبه والمعتمد يشوفوه.
+ */
+export function perDiemIssue(rates: readonly RateRule[], line: { perDiemRateId: number | null; perDiemDays: number | null; amount: unknown }, gradeId: number | null): string | null {
+  const rate = rates.find((row) => row.id === line.perDiemRateId)
+  if (!rate) return 'سعر البدل اليومي للبند مش موجود — امسح البند وضيفه تاني'
+  const current = pickRate(rates, rate.destination, gradeId)
+  const days = Number(line.perDiemDays)
+  if (!current || current.id !== rate.id || !Number.isInteger(days) || days < 1 || perDiemCents(days, rate.dailyAmount) !== cents(line.amount)) return perDiemChanged(rate.destination)
+  return null
+}
+
 type CategoryRule = Pick<ExpenseCategory, 'name' | 'limitPerLine' | 'limitMode' | 'receiptRequired' | 'isActive'>
 /**
  * حكم السياسة على بند: `block` بيمنع (فئة مقفولة، فوق حد «منع»، ولو `atSubmit` إيصال إجباري ناقص)، و`warn` بيتعلّم للمعتمد (فوق حد «تحذير»).
- * الحكم بقيم الفئة دلوقتي — نفس الدالة عند حفظ البند وعند التقديم.
+ * الحكم بقيم الفئة دلوقتي — نفس الدالة عند حفظ البند وعند التقديم. (ج) `gradeLimit` = حد درجة الموظف على الفئة لو متعرّف: بيسبق حد الفئة العام.
  */
-export function lineIssue(category: CategoryRule | null | undefined, line: { amount: unknown; receiptFileId: number | null }, atSubmit: boolean): { block: string | null; warn: string | null } {
+export function lineIssue(category: CategoryRule | null | undefined, line: { amount: unknown; receiptFileId: number | null }, atSubmit: boolean, gradeLimit: number | null = null): { block: string | null; warn: string | null } {
   if (!category) return { block: 'فئة البند مش موجودة', warn: null }
   if (!flag(category.isActive)) return { block: `فئة «${category.name}» مقفولة — غيّر فئة البند`, warn: null }
-  const over = category.limitPerLine != null && cents(line.amount) > cents(category.limitPerLine)
-  if (over && category.limitMode === 'BLOCK') return { block: `بند «${category.name}» بمبلغ ${money(cents(line.amount))} فوق حد الفئة ${money(cents(category.limitPerLine))}`, warn: null }
+  const limit = gradeLimit ?? category.limitPerLine
+  const over = limit != null && cents(line.amount) > cents(limit)
+  if (over && category.limitMode === 'BLOCK') return { block: `بند «${category.name}» بمبلغ ${money(cents(line.amount))} فوق حد الفئة ${money(cents(limit))}`, warn: null }
   if (atSubmit && flag(category.receiptRequired) && !line.receiptFileId) return { block: `بند «${category.name}» محتاج إيصال`, warn: null }
-  return { block: null, warn: over ? `فوق حد الفئة (${money(cents(category.limitPerLine))})` : null }
+  return { block: null, warn: over ? `فوق حد الفئة (${money(cents(limit))})` : null }
 }
 
 export type ReportPhase = 'DRAFT' | 'PENDING' | 'RETURNED' | 'REJECTED' | 'APPROVED'
@@ -235,11 +365,12 @@ export const phaseEditable = (phase: ReportPhase) => phase === 'DRAFT' || phase 
 export const reportCode = (id: number) => `EXP-${String(id).padStart(5, '0')}`
 
 let ready: boolean | null = null
-/** جداول ترحيلات 149–151 موجودة؟ الموجود بيتحفظ؛ الناقص بيتفحص مع كل نداء لحد ما الترحيل يتطبق */
+/** جداول ترحيلات 149–151 و153–154 موجودة (وجدول البنود بعمودي البدل اليومي)؟ الموجود بيتحفظ؛ الناقص بيتفحص مع كل نداء لحد ما الترحيل يتطبق */
 export async function expenseReportsReady(em: EntityManager): Promise<boolean> {
   if (ready === true) return true
   const [row] = await em.query(`SELECT CASE WHEN OBJECT_ID(N'dbo.expense_categories', N'U') IS NOT NULL AND OBJECT_ID(N'dbo.expense_reports', N'U') IS NOT NULL
-    AND OBJECT_ID(N'dbo.expense_lines', N'U') IS NOT NULL THEN 1 ELSE 0 END AS [ready]`)
+    AND OBJECT_ID(N'dbo.expense_lines', N'U') IS NOT NULL AND OBJECT_ID(N'dbo.expense_category_limits', N'U') IS NOT NULL AND OBJECT_ID(N'dbo.per_diem_rates', N'U') IS NOT NULL
+    AND COL_LENGTH(N'dbo.expense_lines', N'perDiemRateId') IS NOT NULL AND COL_LENGTH(N'dbo.expense_lines', N'perDiemDays') IS NOT NULL THEN 1 ELSE 0 END AS [ready]`)
   ready = Number(row?.ready) === 1
   return ready
 }
@@ -266,16 +397,35 @@ export async function lockReport(em: EntityManager, reportId: number, held: { id
   return { report, linkedStatus }
 }
 
-export interface StagedLine { category: string; date: string; amount: number; note: string | null; receipt: string | null; warning: string | null }
-/** بنود التقرير بحكم السياسة دلوقتي: أول مانع (لو فيه)، والإجمالي بالقروش، والبنود زي ما هتتثبّت في الحمولة */
-export async function judgeLines(em: EntityManager, reportId: number): Promise<{ block: string | null; totalCents: number; lines: StagedLine[] }> {
-  const lines = await em.getRepository(ExpenseLine).find({ where: { reportId }, order: { expenseDate: 'ASC', id: 'ASC' } })
+export interface StagedLine { category: string; date: string; amount: number; note: string | null; receipt: string | null; warning: string | null; perDiem?: string }
+/** (ج) درجة الموظف دلوقتي، وحدود درجته على الفئات (فئة ← حد)، وأسعار البدل اليومي كلها */
+export async function gradePolicy(em: EntityManager, employeeId: number): Promise<{ gradeId: number | null; limits: Map<number, number>; rates: PerDiemRate[] }> {
+  const [person]: Array<{ gradeId: number | null }> = await em.query('SELECT [gradeId] FROM dbo.employees WHERE [id] = @0', [employeeId])
+  const gradeId = person?.gradeId == null ? null : Number(person.gradeId)
+  const limits = new Map<number, number>()
+  if (gradeId !== null) for (const row of await em.getRepository(ExpenseCategoryLimit).find({ where: { gradeId } })) limits.set(row.categoryId, Number(row.limitPerLine))
+  return { gradeId, limits, rates: await em.getRepository(PerDiemRate).find({ order: { id: 'ASC' } }) }
+}
+/** نص البدل اليومي على البند: «3 يوم × 200.00 (الرياض)» */
+export const perDiemText = (days: number | null, rate: Pick<PerDiemRate, 'destination' | 'dailyAmount'> | undefined) => `${days ?? 0} يوم × ${rate ? money(cents(rate.dailyAmount)) : '؟'} (${rate?.destination ?? '؟'})`
+/** بنود التقرير بحكم السياسة دلوقتي (بدرجة صاحبه الحالية): أول مانع (لو فيه)، والإجمالي بالقروش، والبنود زي ما هتتثبّت في الحمولة */
+export async function judgeLines(em: EntityManager, report: Pick<ExpenseReport, 'id' | 'employeeId'>): Promise<{ block: string | null; totalCents: number; lines: StagedLine[] }> {
+  const lines = await em.getRepository(ExpenseLine).find({ where: { reportId: report.id }, order: { expenseDate: 'ASC', id: 'ASC' } })
   const categories = new Map((await em.getRepository(ExpenseCategory).find()).map((row) => [row.id, row]))
+  const policy = await gradePolicy(em, report.employeeId)
   let block: string | null = null, totalCents = 0
   const staged: StagedLine[] = []
   for (const line of lines) {
     const category = categories.get(line.categoryId)
-    const issue = lineIssue(category, line, true)
+    if (line.perDiemRateId != null) {
+      // بند بدل يومي: مالوش إيصال ولا حد فئة — الحكم على سعره ومبلغه المحسوب
+      block ??= perDiemIssue(policy.rates, line, policy.gradeId)
+      totalCents += cents(line.amount)
+      staged.push({ category: category?.name ?? '—', date: ymd(line.expenseDate), amount: cents(line.amount) / 100, note: line.note ?? null, receipt: null, warning: null,
+        perDiem: perDiemText(line.perDiemDays, policy.rates.find((rate) => rate.id === line.perDiemRateId)) })
+      continue
+    }
+    const issue = lineIssue(category, line, true, policy.limits.get(line.categoryId) ?? null)
     block ??= issue.block
     totalCents += cents(line.amount)
     staged.push({ category: category?.name ?? '—', date: ymd(line.expenseDate), amount: cents(line.amount) / 100, note: line.note ?? null, receipt: line.receiptFileId ? `file:${line.receiptFileId}` : null, warning: issue.warn })
@@ -310,7 +460,7 @@ export async function stageExpenseReport(em: EntityManager, req: Pick<Request, '
   const own = report.requestId != null && Number(report.requestId) === req.id
   if (!own && reportPhase(report.status, linkedStatus) === 'PENDING') throw new ConflictException(REPORT_BUSY)
   if (!own && reportPhase(report.status, linkedStatus) === 'RETURNED') throw new ConflictException(REPORT_BUSY)
-  const judged = await judgeLines(em, report.id)
+  const judged = await judgeLines(em, report)
   // سلفة المأمورية المربوطة تحت قفل صفها (بعد قفل التقرير)
   const advance = await attachedAdvance(em, report.id)
   if (!judged.lines.length && !advance) throw new BadRequestException(REPORT_EMPTY)
@@ -336,7 +486,7 @@ export async function executeExpenseReport(em: EntityManager, req: Request, _typ
   const report = locked.report
   if (report.status === 'APPROVED') return { ref: reportCode(report.id), completed: true }
   if (report.status !== 'SUBMITTED') throw new BadRequestException(REPORT_NOT_LINKED)
-  const judged = await judgeLines(em, report.id)
+  const judged = await judgeLines(em, report)
   const advance = await attachedAdvance(em, report.id)
   const centsOf = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? cents(value) : NaN)
   const stagedAdvance = payload.advanceAmount === undefined || payload.advanceAmount === null ? null : centsOf(payload.advanceAmount)

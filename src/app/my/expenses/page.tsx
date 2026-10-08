@@ -10,7 +10,7 @@ import { createRequest, fetchFileObjectUrl, resubmitRequest, uploadFile } from '
 import { currencyLabel } from '@/lib/currency'
 import { formatMoney } from '@/lib/money'
 import {
-  addExpenseLine, attachTravelAdvance, createExpenseReport, fetchMyExpenses, removeExpenseLine, removeExpenseReport, type ApiExpenseReport, type ApiMyExpenses,
+  addExpenseLine, addPerDiemLine, attachTravelAdvance, createExpenseReport, fetchMyExpenses, removeExpenseLine, removeExpenseReport, type ApiExpenseReport, type ApiMyExpenses,
 } from '@/lib/expenses-api'
 
 const PHASE_STYLE: Record<string, string> = {
@@ -28,6 +28,7 @@ export default function MyExpensesPage() {
   const [draft, setDraft] = useState({ title: '', tripFrom: '', tripTo: '' })
   const [lines, setLines] = useState<Record<number, ReturnType<typeof emptyLine>>>({})
   const [advance, setAdvance] = useState({ amount: '', reason: '' })
+  const [daily, setDaily] = useState<Record<number, { destination: string; days: string; expenseDate: string }>>({})
 
   const load = useCallback(() => {
     fetchMyExpenses().then(setData).catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل تقارير المصروفات'))
@@ -55,6 +56,16 @@ export default function MyExpensesPage() {
       setLines((current) => ({ ...current, [report.id]: emptyLine() }))
       if (saved.warning) setInfo(`اتحفظ البند — ${saved.warning}`)
     }, 'اتحفظ البند')
+  }
+
+  // (ج) بند بدل يومي: الوجهة وعدد الأيام بس — المبلغ بيحسبه الخادم بسعر درجتك
+  const addDaily = (report: ApiExpenseReport) => {
+    const entry = daily[report.id] ?? { destination: '', days: '', expenseDate: today() }
+    if (!entry.destination || !/^\d{1,2}$/.test(entry.days.trim()) || Number(entry.days) < 1) return setError('اختار الوجهة واكتب عدد الأيام')
+    return run(async () => {
+      await addPerDiemLine(report.id, { destination: entry.destination, days: Number(entry.days), expenseDate: entry.expenseDate })
+      setDaily((current) => ({ ...current, [report.id]: { destination: '', days: '', expenseDate: today() } }))
+    }, 'اتضاف بند البدل اليومي')
   }
 
   // (ب) طلب سلفة مأمورية: طلب عادي في سلسلته؛ بعد اعتماده وتسجيل صرفه بيتربط بتقرير
@@ -93,7 +104,7 @@ export default function MyExpensesPage() {
 
         {error && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
         {info && <div role="status" className="bg-green-50 text-green-700 rounded-xl p-4">{info}</div>}
-        {data && !data.ready && <div className="card text-amber-800 bg-amber-50">جداول تقارير المصروفات لسه ماتطبّقتش على قاعدة البيانات (ترحيلات 149 و150 و151).</div>}
+        {data && !data.ready && <div className="card text-amber-800 bg-amber-50">جداول تقارير المصروفات لسه ماتطبّقتش على قاعدة البيانات (ترحيلات 149 لحد 154).</div>}
         {data?.ready && !data.requestTypeCode && (
           <div className="card text-amber-800 bg-amber-50">مفيش نوع طلب معرّف لتقديم تقارير المصروفات. مسؤول النظام يضيف نوع طلب وجهته «تقرير مصروفات ببنود» من إعدادات الطلبات.</div>
         )}
@@ -154,6 +165,8 @@ export default function MyExpensesPage() {
           const line = lines[report.id] ?? emptyLine()
           const change = (patch: Partial<ReturnType<typeof emptyLine>>) => setLines((current) => ({ ...current, [report.id]: { ...line, ...patch } }))
           const blocked = report.lines.find((row) => row.problem)
+          const dailyEntry = daily[report.id] ?? { destination: '', days: '', expenseDate: today() }
+          const changeDaily = (patch: Partial<typeof dailyEntry>) => setDaily((current) => ({ ...current, [report.id]: { ...dailyEntry, ...patch } }))
           // سلف الحساب المصروفة المفتوحة اللي مش مربوطة بتقرير تاني
           const linkable = (data?.advances ?? []).filter((row) => row.status === 'OPEN' && row.paid && (row.reportId === null || row.reportId === report.id))
           return (
@@ -183,6 +196,7 @@ export default function MyExpensesPage() {
                       {report.lines.map((row) => (
                         <tr key={row.id} className="border-t border-gray-100">
                           <td className="table-cell">{row.categoryName}
+                            {row.perDiem && <span className="block text-xs text-gray-500">{row.perDiem}</span>}
                             {row.warning && <span className="block text-xs text-amber-700">{row.warning}</span>}
                             {row.problem && <span className="block text-xs text-red-700">{row.problem}</span>}
                           </td>
@@ -228,6 +242,24 @@ export default function MyExpensesPage() {
                     <input type="file" className="block mt-1 text-xs" accept="image/*,application/pdf" onChange={(event) => change({ file: event.target.files?.[0] ?? null })} />
                   </label>
                   <button type="button" className="btn-secondary disabled:opacity-50" disabled={busy} onClick={() => addLine(report)}>إضافة بند</button>
+                </div>
+              )}
+
+              {report.editable && data!.perDiem.length > 0 && (
+                <div className="flex flex-wrap items-end gap-3 bg-gray-50 rounded-xl p-3" data-expense-per-diem-form>
+                  <label className="text-sm text-gray-600">بدل يومي — الوجهة
+                    <select className="input mt-1" value={dailyEntry.destination} onChange={(event) => changeDaily({ destination: event.target.value })}>
+                      <option value="">اختار</option>
+                      {data!.perDiem.map((rate) => <option key={rate.destination} value={rate.destination}>{rate.destination} ({formatMoney(rate.dailyAmount)} في اليوم)</option>)}
+                    </select>
+                  </label>
+                  <label className="text-sm text-gray-600">عدد الأيام
+                    <input className="input mt-1 w-20 text-center" dir="ltr" inputMode="numeric" value={dailyEntry.days} onChange={(event) => changeDaily({ days: event.target.value })} />
+                  </label>
+                  <label className="text-sm text-gray-600">أول يوم
+                    <input type="date" className="input mt-1" max={today()} value={dailyEntry.expenseDate} onChange={(event) => changeDaily({ expenseDate: event.target.value })} />
+                  </label>
+                  <button type="button" className="btn-secondary disabled:opacity-50" disabled={busy} onClick={() => addDaily(report)}>إضافة بدل يومي</button>
                 </div>
               )}
 

@@ -9,6 +9,7 @@ import { StoredFile } from '../files/stored-file.entity'
 import { readBranchCurrencyOf } from '../org/branch-currency-db'
 import { RequestType } from '../requests/entities/request-type.entity'
 import {
+  ExpenseCategoryLimit, gradeLimitsOf, gradePolicy, PER_DIEM_NONE, PerDiemRate, perDiemCents, perDiemFields, perDiemIssue, perDiemText, pickRate, rateFields,
   categoryFields, EXPENSE_MIGRATION_MISSING, EXPENSE_REPORT_HANDLER, ExpenseCategory, ExpenseLine, ExpenseReport, expenseReportsReady, lineFields, lineIssue, LINES_MAX, lockReport, phaseEditable,
   REPORT_NOT_FOUND, REPORT_PHASE_LABELS, reportCode, reportFields, reportPhase, type ReportPhase,
 } from './expense-reports'
@@ -17,6 +18,7 @@ import { ADVANCE_MIGRATION_MISSING, ADVANCE_NOT_FOUND, ADVANCE_STATUS_LABELS, ad
 // B5.3 (أ): تقارير المصروفات — الموظف لتقاريره (مسودة وبنود وإيصالات)، وصاحب `expenses.manage` للفئات (تعريف للشركة كلها) ولقراءة تقارير
 // موظفين نطاق فروعه (فرع الموظف الحالي). التقديم والاعتماد والصرف في محرك الطلبات (expense-reports.ts). أي تعديل تحت قفل صف التقرير،
 // بترتيب الأقفال الواحد: صف الطلب ← صف التقرير ← صف السلفة.
+// (ج) حدود الدرجات على الفئة وأسعار البدل اليومي تعريف للشركة كلها؛ وبند البدل اليومي مبلغه من الخادم (الأيام × سعر درجة الموظف للوجهة).
 // (ب) سلف المأموريات: الموظف بيربط سلفته المصروفة بتقريره؛ وصاحب الصلاحية بيسجّل صرف سلف موظفين نطاقه وقفلها «اترجّعت نقدًا».
 
 const NOT_EMPLOYEE = 'حسابك مش مربوط بملف موظف'
@@ -26,6 +28,11 @@ const CATEGORY_NOT_FOUND = 'فئة المصروف مش موجودة'
 const CATEGORY_NAME_TAKEN = 'فيه فئة بنفس الاسم'
 const RECEIPT_INVALID = 'إيصال البند لازم يكون ملف رفعته إنت لنفسك من الشاشة دي'
 const DELETE_FILED = 'تقرير اتقدّم قبل كده مايتمسحش'
+const PER_DIEM_LOCKED = 'بند البدل اليومي مايتعدّلش — امسحه وضيفه تاني'
+const GRADE_UNKNOWN = 'درجة من الدرجات مش موجودة'
+const RATE_NOT_FOUND = 'سعر البدل اليومي مش موجود'
+const RATE_TAKEN = 'فيه سعر مفعّل لنفس الوجهة والدرجة'
+const RATE_CATEGORY = 'فئة المصروف بتاعة البدل مش موجودة أو مقفولة'
 const ADVANCE_UNPAID = 'السلفة لسه مااتسجّلش صرفها — ماتتربطش بتقرير'
 const ADVANCE_TAKEN = 'السلفة مربوطة بتقرير تاني — فكّها منه الأول'
 const ADVANCE_CLOSED = 'السلفة اتقفلت قبل كده'
@@ -55,8 +62,13 @@ export class ExpenseReportsService {
       paid: row.paidAt != null, paidAt: row.paidAt ?? null, reportId: idOf(row.reportId), requestId: row.requestId, closedAt: row.closedAt ?? null, closeNote: row.closeNote ?? null }
   }
 
-  private categoryView(row: ExpenseCategory) {
-    return { id: row.id, name: row.name, limitPerLine: row.limitPerLine == null ? null : Number(row.limitPerLine), limitMode: row.limitMode, receiptRequired: flag(row.receiptRequired), isActive: flag(row.isActive) }
+  private categoryView(row: ExpenseCategory, limits: ExpenseCategoryLimit[] = []) {
+    return { id: row.id, name: row.name, limitPerLine: row.limitPerLine == null ? null : Number(row.limitPerLine), limitMode: row.limitMode, receiptRequired: flag(row.receiptRequired), isActive: flag(row.isActive),
+      gradeLimits: limits.filter(limit => limit.categoryId === row.id).map(limit => ({ gradeId: limit.gradeId, limitPerLine: Number(limit.limitPerLine) })) }
+  }
+
+  private rateView(row: PerDiemRate) {
+    return { id: row.id, categoryId: row.categoryId, gradeId: idOf(row.gradeId), destination: row.destination, dailyAmount: Number(row.dailyAmount), isActive: flag(row.isActive) }
   }
 
   /** تقارير بحالتها الفعلية (حالة التقرير + حالة طلبه) وبنودها بحكم السياسة دلوقتي */
@@ -72,14 +84,19 @@ export class ExpenseReportsService {
     }
     // (ب) السلفة المربوطة بكل تقرير: المفتوحة، أو اللي اتسوّت فيه
     const advances = (await travelAdvancesReady(em)) ? await em.getRepository(TravelAdvance).find({ where: { reportId: In(reports.map(row => row.id)), status: In(['OPEN', 'SETTLED']) }, order: { id: 'ASC' } }) : []
+    // (ج) الحكم بدرجة صاحب كل تقرير دلوقتي (حد درجته على الفئة، وسعر بدله اليومي)
+    const policies = new Map<number, Awaited<ReturnType<typeof gradePolicy>>>()
+    for (const employeeId of new Set(reports.map(row => row.employeeId))) policies.set(employeeId, await gradePolicy(em, employeeId))
     return reports.map(report => {
-      const requestId = idOf(report.requestId)
+      const requestId = idOf(report.requestId), policy = policies.get(report.employeeId)!
       const phase: ReportPhase = reportPhase(report.status, requestId === null ? null : statuses.get(requestId) ?? null)
       const own = lines.filter(line => line.reportId === report.id).map(line => {
         const category = categories.get(line.categoryId)
-        const issue = lineIssue(category, line, true)
+        const daily = line.perDiemRateId != null
+        const issue = daily ? { warn: null, block: perDiemIssue(policy.rates, line, policy.gradeId) } : lineIssue(category, line, true, policy.limits.get(line.categoryId) ?? null)
         return { id: line.id, categoryId: line.categoryId, categoryName: category?.name ?? '—', expenseDate: ymd(line.expenseDate), amount: Number(line.amount), note: line.note ?? null,
-          receiptFileId: idOf(line.receiptFileId), warning: issue.warn, problem: issue.block }
+          receiptFileId: idOf(line.receiptFileId), warning: issue.warn, problem: issue.block,
+          perDiem: daily ? perDiemText(line.perDiemDays, policy.rates.find(rate => rate.id === line.perDiemRateId)) : null }
       })
       const totalCents = Math.round(own.reduce((sum, line) => sum + Math.round(line.amount * 100), 0))
       const linked = advances.find(row => idOf(row.reportId) === report.id) ?? null
@@ -94,18 +111,25 @@ export class ExpenseReportsService {
   /** «مصروفاتي»: تقارير الحساب، والفئات المفعّلة، وعملة فرعه، ونوع الطلب اللي التقرير بيتقدّم بيه (لو متعرّف) */
   async mine(user: JwtPayload) {
     const em = this.ds.manager, employeeId = this.employeeOf(user)
-    if (!(await expenseReportsReady(em))) return { ready: false, currency: null, requestTypeCode: null, advanceTypeCode: null, categories: [], reports: [], advances: [] }
+    if (!(await expenseReportsReady(em))) return { ready: false, currency: null, requestTypeCode: null, advanceTypeCode: null, categories: [], reports: [], advances: [], perDiem: [] }
     const [person]: Array<{ branchId: number | null }> = await em.query('SELECT [branchId] FROM dbo.employees WHERE [id] = @0', [employeeId])
     const currencyOf = await readBranchCurrencyOf(em)
     const type = await em.getRepository(RequestType).findOne({ where: { destinationHandler: EXPENSE_REPORT_HANDLER, isActive: true }, order: { id: 'ASC' } })
     const categories = await em.getRepository(ExpenseCategory).find({ where: { isActive: true }, order: { name: 'ASC', id: 'ASC' } })
+    // (ج) الموظف بيشوف حد درجته هو على الفئة، وسعر بدله اليومي لكل وجهة (سعر درجته، وإلا سعر كل الدرجات) لفئة مفعّلة
+    const policy = await gradePolicy(em, employeeId)
+    const open = new Set(categories.map(row => row.id))
+    const perDiem = [...new Set(policy.rates.filter(rate => flag(rate.isActive)).map(rate => rate.destination))].sort((a, b) => a.localeCompare(b, 'ar'))
+      .map(destination => pickRate(policy.rates, destination, policy.gradeId)).filter((rate): rate is PerDiemRate => !!rate && open.has(rate.categoryId))
+      .map(rate => ({ destination: rate.destination, dailyAmount: Number(rate.dailyAmount) }))
     const reports = await em.getRepository(ExpenseReport).find({ where: { employeeId }, order: { id: 'DESC' } })
     // (ب) سلف المأموريات: نوع طلبها (لو متعرّف والترحيل متطبّق)، وسلف الحساب بحالتها
     const advancesReady = await travelAdvancesReady(em)
     const advanceType = advancesReady ? await em.getRepository(RequestType).findOne({ where: { destinationHandler: TRAVEL_ADVANCE_HANDLER, isActive: true }, order: { id: 'ASC' } }) : null
     const advances = advancesReady ? await em.getRepository(TravelAdvance).find({ where: { employeeId }, order: { id: 'DESC' } }) : []
-    return { ready: true, currency: currencyOf(idOf(person?.branchId)), requestTypeCode: type?.code ?? null, advanceTypeCode: advanceType?.code ?? null, categories: categories.map(row => this.categoryView(row)),
-      reports: await this.reportViews(em, reports), advances: advances.map(row => this.advanceView(row)) }
+    return { ready: true, currency: currencyOf(idOf(person?.branchId)), requestTypeCode: type?.code ?? null, advanceTypeCode: advanceType?.code ?? null,
+      categories: categories.map(row => ({ ...this.categoryView(row), limitPerLine: policy.limits.get(row.id) ?? (row.limitPerLine == null ? null : Number(row.limitPerLine)) })),
+      reports: await this.reportViews(em, reports), advances: advances.map(row => this.advanceView(row)), perDiem }
   }
 
   async createReport(user: JwtPayload, body: unknown) {
@@ -166,7 +190,8 @@ export class ExpenseReportsService {
       if (!existing && (await lines.count({ where: { reportId: report.id } })) >= LINES_MAX) throw new BadRequestException(`التقرير ${LINES_MAX} بند بالكتير`)
       const category = await em.getRepository(ExpenseCategory).findOne({ where: { id: fields.categoryId } })
       if (!category) throw new BadRequestException(CATEGORY_NOT_FOUND)
-      const issue = lineIssue(category, fields, false)
+      if (existing?.perDiemRateId != null) throw new BadRequestException(PER_DIEM_LOCKED)
+      const issue = lineIssue(category, fields, false, (await gradePolicy(em, report.employeeId)).limits.get(category.id) ?? null)
       if (issue.block) throw new BadRequestException(issue.block)
       if (fields.receiptFileId !== null && fields.receiptFileId !== idOf(existing?.receiptFileId)) {
         const file = await em.getRepository(StoredFile).findOne({ where: { id: fields.receiptFileId } })
@@ -175,6 +200,30 @@ export class ExpenseReportsService {
       const saved = existing ? await lines.save({ ...existing, ...fields }) : await lines.save(lines.create({ reportId: report.id, ...fields, createdAt: new Date() }))
       await em.getRepository(ExpenseReport).update({ id: report.id }, { updatedAt: new Date() })
       return { id: saved.id, warning: issue.warn }
+    })
+  }
+
+  /**
+   * (ج) بند بدل يومي: الموظف بيبعت الوجهة وعدد الأيام بس، والخادم بيحسب المبلغ = الأيام × سعر درجته للوجهة دلوقتي (تحت قفل التقرير)،
+   * والبند بيتسجّل تحت فئة السعر. من غير إيصال ولا حد فئة.
+   */
+  async savePerDiem(user: JwtPayload, reportId: number, body: unknown) {
+    const { fields, error } = perDiemFields(body, localDateOf(new Date()))
+    if (!fields) throw new BadRequestException(error)
+    return this.ds.transaction(async em => {
+      const report = await this.lockOwnEditable(em, user, reportId)
+      const lines = em.getRepository(ExpenseLine)
+      if ((await lines.count({ where: { reportId: report.id } })) >= LINES_MAX) throw new BadRequestException(`التقرير ${LINES_MAX} بند بالكتير`)
+      const policy = await gradePolicy(em, report.employeeId)
+      const rate = pickRate(policy.rates, fields.destination, policy.gradeId)
+      if (!rate) throw new BadRequestException(PER_DIEM_NONE)
+      const category = await em.getRepository(ExpenseCategory).findOne({ where: { id: rate.categoryId } })
+      if (!category || !flag(category.isActive)) throw new BadRequestException(RATE_CATEGORY)
+      const amount = perDiemCents(fields.days, rate.dailyAmount) / 100
+      const saved = await lines.save(lines.create({ reportId: report.id, categoryId: rate.categoryId, expenseDate: fields.expenseDate, amount, note: fields.note, receiptFileId: null, perDiemRateId: rate.id,
+        perDiemDays: fields.days, createdAt: new Date() }))
+      await em.getRepository(ExpenseReport).update({ id: report.id }, { updatedAt: new Date() })
+      return { id: saved.id, amount, perDiem: perDiemText(fields.days, rate) }
     })
   }
 
@@ -218,9 +267,13 @@ export class ExpenseReportsService {
   /** الفئات كلها (بالمقفولة)، وتقارير موظفين نطاق الحساب اللي اتقدّمت — بفرع الموظف الحالي */
   async overview(user: JwtPayload) {
     const em = this.ds.manager, canEdit = branchScopeOf(user) === null
-    if (!(await expenseReportsReady(em))) return { ready: false, canEdit, categories: [], reports: [], advances: [] }
+    if (!(await expenseReportsReady(em))) return { ready: false, canEdit, categories: [], grades: [], rates: [], reports: [], advances: [] }
     const scope = branchScopeOf(user), currencyOf = await readBranchCurrencyOf(em)
     const categories = await em.getRepository(ExpenseCategory).find({ order: { name: 'ASC', id: 'ASC' } })
+    // (ج) حدود الدرجات، وأسعار البدل اليومي، والدرجات المفعّلة (لاختيارات الشاشة)
+    const limits = await em.getRepository(ExpenseCategoryLimit).find({ order: { gradeId: 'ASC', id: 'ASC' } })
+    const rates = await em.getRepository(PerDiemRate).find({ order: { destination: 'ASC', id: 'ASC' } })
+    const grades: Array<{ id: number; name: string }> = (await em.query('SELECT [id], [name] FROM [grades] WHERE [isActive] = 1 ORDER BY [id]')).map((row: { id: number; name: string }) => ({ id: Number(row.id), name: row.name }))
     const filed = await em.getRepository(ExpenseReport).find({ where: { status: In(['SUBMITTED', 'APPROVED']) }, order: { id: 'DESC' }, take: 300 })
     // (ب) سلف المأموريات: المفتوحة كلها وآخر 100 اتقفلوا
     const advancesReady = await travelAdvancesReady(em)
@@ -236,7 +289,7 @@ export class ExpenseReportsService {
     const visible = filed.filter(row => { const person = people.get(row.employeeId); return !!person && inBranchScope(scope, person.branchId) })
     const views = await this.reportViews(em, visible)
     const named = <T extends { employeeId: number }>(view: T) => { const person = people.get(view.employeeId)!; return { ...view, employeeName: person.fullName, employeeCode: person.employeeCode, currency: currencyOf(person.branchId) } }
-    return { ready: true, canEdit, categories: categories.map(row => this.categoryView(row)), reports: views.map(named),
+    return { ready: true, canEdit, categories: categories.map(row => this.categoryView(row, limits)), grades, rates: rates.map(row => this.rateView(row)), reports: views.map(named),
       advances: advances.filter(row => { const person = people.get(row.employeeId); return !!person && inBranchScope(scope, person.branchId) }).map(row => named(this.advanceView(row))) }
   }
 
@@ -278,22 +331,39 @@ export class ExpenseReportsService {
     if (rows.some(row => Number(row.id) !== exceptId)) throw new ConflictException(CATEGORY_NAME_TAKEN)
   }
 
+  /** (ج) حدود الدرجات على الفئة بتتكتب كلها مع بعض (تحت قفل صف الفئة أو في معاملة إنشائها): القديم بيتشال والجديد بيتحط */
+  private async writeGradeLimits(em: EntityManager, categoryId: number, limits: Array<{ gradeId: number; limitPerLine: number }>, userId: number) {
+    if (limits.length) {
+      const found: Array<{ id: number }> = await em.query(`SELECT [id] FROM [grades] WHERE [id] IN (${limits.map((_, index) => `@${index}`).join(', ')})`, limits.map(row => row.gradeId))
+      if (found.length !== limits.length) throw new BadRequestException(GRADE_UNKNOWN)
+    }
+    const repo = em.getRepository(ExpenseCategoryLimit)
+    await repo.delete({ categoryId })
+    const now = new Date()
+    if (limits.length) await repo.save(limits.map(row => repo.create({ categoryId, gradeId: row.gradeId, limitPerLine: row.limitPerLine, updatedByUserId: userId, updatedAt: now })))
+  }
+
   async createCategory(user: JwtPayload, body: unknown) {
     assertCompanyWideWrite(user)
+    const grade = gradeLimitsOf(((body ?? {}) as Record<string, unknown>).gradeLimits)
+    if (grade.error) throw new BadRequestException(grade.error)
     const { fields, error } = categoryFields(body)
     if (!fields) throw new BadRequestException(error)
     return this.ds.transaction(async em => {
       await this.assertReady(em)
       await this.assertNameFree(em, fields.name, null)
       const row = await em.getRepository(ExpenseCategory).save(em.getRepository(ExpenseCategory).create({ ...fields, updatedByUserId: user.sub, updatedAt: new Date() }))
+      if (grade.limits) await this.writeGradeLimits(em, row.id, grade.limits, user.sub)
       await recordAudit(em, { category: 'SETTINGS', action: 'EXPENSE_CATEGORY_CREATED', entityType: 'expense_category', entityId: String(row.id), actorUserId: user.sub,
-        summary: `فئة مصروف جديدة «${row.name}»`, after: this.categoryView(row) })
+        summary: `فئة مصروف جديدة «${row.name}»`, after: { ...this.categoryView(row), gradeLimits: grade.limits ?? [] } })
       return { id: row.id }
     })
   }
 
   async updateCategory(user: JwtPayload, id: number, body: unknown) {
     assertCompanyWideWrite(user)
+    const grade = gradeLimitsOf(((body ?? {}) as Record<string, unknown>).gradeLimits)
+    if (grade.error) throw new BadRequestException(grade.error)
     const { fields, error } = categoryFields(body)
     if (!fields) throw new BadRequestException(error)
     return this.ds.transaction(async em => {
@@ -301,10 +371,38 @@ export class ExpenseReportsService {
       const row = await em.getRepository(ExpenseCategory).findOne({ where: { id }, lock: { mode: 'pessimistic_write' } })
       if (!row) throw new NotFoundException(CATEGORY_NOT_FOUND)
       await this.assertNameFree(em, fields.name, row.id)
-      const before = this.categoryView(row)
+      const before = this.categoryView(row, await em.getRepository(ExpenseCategoryLimit).find({ where: { categoryId: row.id }, order: { gradeId: 'ASC' } }))
       await em.getRepository(ExpenseCategory).update({ id: row.id }, { ...fields, updatedByUserId: user.sub, updatedAt: new Date() })
+      if (grade.limits) await this.writeGradeLimits(em, row.id, grade.limits, user.sub)
       await recordAudit(em, { category: 'SETTINGS', action: 'EXPENSE_CATEGORY_UPDATED', entityType: 'expense_category', entityId: String(row.id), actorUserId: user.sub,
-        summary: `تعديل فئة المصروف «${fields.name}»`, before, after: { id: row.id, ...fields } })
+        summary: `تعديل فئة المصروف «${fields.name}»`, before, after: { id: row.id, ...fields, gradeLimits: grade.limits ?? before.gradeLimits } })
+      return { id: row.id }
+    })
+  }
+
+  /**
+   * (ج) إضافة سعر بدل يومي (من غير `id`) أو تعديله — تعريف للشركة كلها: الفئة موجودة ومفعّلة، والدرجة موجودة (أو كل الدرجات)، وسعر مفعّل واحد
+   * للوجهة والدرجة (الحكم تحت قفل مدى على أسعار الوجهة). وبسطر تدقيق.
+   */
+  async saveRate(user: JwtPayload, body: unknown, id?: number) {
+    assertCompanyWideWrite(user)
+    const { fields, error } = rateFields(body)
+    if (!fields) throw new BadRequestException(error)
+    return this.ds.transaction(async em => {
+      await this.assertReady(em)
+      const rates = em.getRepository(PerDiemRate)
+      const same: Array<{ id: number; gradeId: number | null; isActive: boolean | number }> = await em.query('SELECT [id], [gradeId], [isActive] FROM dbo.per_diem_rates WITH (UPDLOCK, HOLDLOCK) WHERE [destination] = @0', [fields.destination])
+      const existing = id == null ? null : await rates.findOne({ where: { id }, lock: { mode: 'pessimistic_write' } })
+      if (id != null && !existing) throw new NotFoundException(RATE_NOT_FOUND)
+      if (fields.isActive && same.some(row => Number(row.id) !== id && flag(row.isActive) && idOf(row.gradeId) === fields.gradeId)) throw new ConflictException(RATE_TAKEN)
+      const category = await em.getRepository(ExpenseCategory).findOne({ where: { id: fields.categoryId } })
+      if (!category || (fields.isActive && !flag(category.isActive))) throw new BadRequestException(RATE_CATEGORY)
+      if (fields.gradeId !== null && !(await em.query('SELECT [id] FROM [grades] WHERE [id] = @0', [fields.gradeId])).length) throw new BadRequestException(GRADE_UNKNOWN)
+      const values = { ...fields, updatedByUserId: user.sub, updatedAt: new Date() }
+      const row = existing ? { ...existing, ...values } : await rates.save(rates.create(values))
+      if (existing) await rates.update({ id: existing.id }, values)
+      await recordAudit(em, { category: 'SETTINGS', action: existing ? 'PER_DIEM_RATE_UPDATED' : 'PER_DIEM_RATE_CREATED', entityType: 'per_diem_rate', entityId: String(row.id), actorUserId: user.sub,
+        summary: `${existing ? 'تعديل' : 'إضافة'} سعر البدل اليومي لـ«${fields.destination}»: ${fields.dailyAmount}`, before: existing ? this.rateView(existing) : undefined, after: { id: row.id, ...fields } })
       return { id: row.id }
     })
   }

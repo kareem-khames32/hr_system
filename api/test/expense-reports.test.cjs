@@ -78,10 +78,10 @@ test('EXU-05: الميزة الفرعية بتملك مساراتها — الش
 test('EXU-06: مصدر الكود — المسارات ورا الموديول والميزة، الفئات لحساب بكل الفروع، التعديل تحت قفل الطلب ثم التقرير، والقيد بيتكتب في مكان واحد', () => {
   const controller = read('expenses/expenses.controller.ts')
   assert.match(controller, /@RequireModule\('expenses'\)\n@RequireFeature\('expenses\.reports'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)/)
-  assert.deepEqual([(controller.match(/@Perm\('expenses\.manage'\)/g) ?? []).length, (controller.match(/@(Get|Post|Put|Patch|Delete)\(/g) ?? []).length], [4, 12]) // (ب): + ربط السلفة، وخطوة المالية
+  assert.deepEqual([(controller.match(/@Perm\('expenses\.manage'\)/g) ?? []).length, (controller.match(/@(Get|Post|Put|Patch|Delete)\(/g) ?? []).length], [6, 15]) // (ب): + ربط السلفة، وخطوة المالية؛ (ج): + بند البدل اليومي، وإضافة سعر وتعديله
   const service = read('expenses/expense-reports.service.ts')
-  assert.equal((service.match(/assertCompanyWideWrite\(user\)/g) ?? []).length, 2, 'إضافة الفئة وتعديلها لحساب بكل الفروع')
-  assert.equal((service.match(/await this\.lockOwnEditable\(em, user, /g) ?? []).length, 5, 'تعديل التقرير ومسحه وحفظ البند ومسحه وربط السلفة تحت قفل التقرير')
+  assert.equal((service.match(/assertCompanyWideWrite\(user\)/g) ?? []).length, 3, 'إضافة الفئة وتعديلها (وسعر البدل اليومي — ج) لحساب بكل الفروع')
+  assert.equal((service.match(/await this\.lockOwnEditable\(em, user, /g) ?? []).length, 6, 'تعديل التقرير ومسحه وحفظ البند ومسحه وربط السلفة (وبند البدل اليومي — ج) تحت قفل التقرير')
   assert.match(service, /locked\.report\.employeeId !== employeeId\) throw new NotFoundException\(REPORT_NOT_FOUND\)/)
   assert.match(service, /file\.entityType !== 'request' \|\| Number\(file\.uploadedBy\) !== Number\(user\.sub\) \|\| Number\(file\.employeeId\) !== report\.employeeId/)
   assert.match(service, /visible = filed\.filter\(row => \{ const person = people\.get\(row\.employeeId\); return !!person && inBranchScope\(scope, person\.branchId\) \}\)/)
@@ -161,4 +161,48 @@ test('EXU-08: سلفة المأمورية — المبلغ والغرض، ومص
   assert.match(mine, /disabled=\{busy \|\| \(report\.lines\.length === 0 && !report\.advance\) \|\| !!blocked\}/)
   assert.match(admin, /row\.status === 'OPEN' && !row\.paid && <button/)
   assert.match(admin, /row\.status === 'OPEN' && row\.paid && row\.reportId === null && \(/)
+})
+
+test('EXU-09: حد الدرجة والبدل اليومي — حد الدرجة بيسبق حد الفئة، وسعر درجة الموظف بيسبق سعر كل الدرجات، والمبلغ = الأيام × السعر، وأي تغيير في السعر بيمنع البند', () => {
+  const category = { name: 'إقامة', limitPerLine: 500, limitMode: 'BLOCK', receiptRequired: false, isActive: true }
+  const issue = (amount, gradeLimit) => rules.lineIssue(category, { amount, receiptFileId: null }, true, gradeLimit)
+  assert.deepEqual([issue(700, 800), issue(801, 800), issue(700, null), issue(300, 200)].map(result => result.block),
+    [null, 'بند «إقامة» بمبلغ 801.00 فوق حد الفئة 800.00', 'بند «إقامة» بمبلغ 700.00 فوق حد الفئة 500.00', 'بند «إقامة» بمبلغ 300.00 فوق حد الفئة 200.00'])
+  assert.equal(rules.lineIssue({ ...category, limitPerLine: null, limitMode: 'WARN' }, { amount: 90, receiptFileId: null }, true, 50).warn, 'فوق حد الفئة (50.00)')
+  assert.deepEqual(rules.gradeLimitsOf(undefined), { limits: undefined, error: null })
+  assert.deepEqual(rules.gradeLimitsOf([{ gradeId: 2, limitPerLine: '300.5' }]).limits, [{ gradeId: 2, limitPerLine: 300.5 }])
+  assert.deepEqual([{}, [{ gradeId: 2 }], [{ gradeId: '2', limitPerLine: 5 }], [{ gradeId: 2, limitPerLine: 5 }, { gradeId: 2, limitPerLine: 6 }], [null]].map(raw => rules.gradeLimitsOf(raw).limits), [undefined, undefined, undefined, undefined, undefined])
+  assert.deepEqual(rules.rateFields({ categoryId: 4, destination: '  الرياض ', dailyAmount: '250' }).fields, { categoryId: 4, gradeId: null, destination: 'الرياض', dailyAmount: 250, isActive: true })
+  assert.deepEqual([{ categoryId: 4, destination: 'ر', dailyAmount: 5 }, { destination: 'الرياض', dailyAmount: 5 }, { categoryId: 4, destination: 'الرياض', dailyAmount: 100000 }, { categoryId: 4, destination: 'الرياض', dailyAmount: 5, gradeId: 0 }]
+    .map(body => rules.rateFields(body).fields), [null, null, null, null])
+  const today = '2026-10-08'
+  assert.deepEqual(rules.perDiemFields({ destination: 'الرياض', days: 3, expenseDate: '2026-10-01', note: ' ملاحظة ' }, today).fields, { destination: 'الرياض', days: 3, expenseDate: '2026-10-01', note: 'ملاحظة' })
+  assert.deepEqual([{ days: 3, expenseDate: today }, { destination: 'الرياض', days: '3', expenseDate: today }, { destination: 'الرياض', days: 91, expenseDate: today }, { destination: 'الرياض', days: 3, expenseDate: '2026-10-09' }]
+    .map(body => rules.perDiemFields(body, today).fields), [null, null, null, null])
+  const rates = [{ id: 1, gradeId: null, destination: 'الرياض', dailyAmount: 150, isActive: true }, { id: 2, gradeId: 7, destination: 'الرياض', dailyAmount: '250.00', isActive: 1 },
+    { id: 3, gradeId: 8, destination: 'الرياض', dailyAmount: 400, isActive: false }, { id: 4, gradeId: 7, destination: 'جدة', dailyAmount: 90, isActive: true }]
+  assert.deepEqual([rules.pickRate(rates, 'الرياض', 7), rules.pickRate(rates, 'الرياض', 8), rules.pickRate(rates, 'الرياض', null), rules.pickRate(rates, 'جدة', null), rules.pickRate(rates, 'دبي', 7)].map(rate => rate?.id ?? null), [2, 1, 1, null, null])
+  assert.equal(rules.perDiemCents(3, '250.10'), 75030)
+  const judge = (line, gradeId) => rules.perDiemIssue(rates, line, gradeId)
+  assert.deepEqual([judge({ perDiemRateId: 2, perDiemDays: 3, amount: 750 }, 7), judge({ perDiemRateId: 2, perDiemDays: 3, amount: 751 }, 7), judge({ perDiemRateId: 2, perDiemDays: 3, amount: 750 }, null),
+    judge({ perDiemRateId: 3, perDiemDays: 1, amount: 400 }, 8), judge({ perDiemRateId: 99, perDiemDays: 1, amount: 5 }, 7), judge({ perDiemRateId: 1, perDiemDays: 2, amount: '300.00' }, 8)],
+    [null, rules.perDiemChanged('الرياض'), rules.perDiemChanged('الرياض'), rules.perDiemChanged('الرياض'), 'سعر البدل اليومي للبند مش موجود — امسح البند وضيفه تاني', null])
+  assert.equal(rules.perDiemText(3, rates[1]), '3 يوم × 250.00 (الرياض)')
+  // مصدر الكود: المبلغ من الخادم تحت قفل التقرير، والبند المحسوب مايتعدّلش من مسار البند العادي، والحكم بدرجة صاحب التقرير
+  const service = read('expenses/expense-reports.service.ts')
+  const daily = service.slice(service.indexOf('async savePerDiem('), service.indexOf('async removeLine('))
+  assert.ok(daily.indexOf('await this.lockOwnEditable(') < daily.indexOf('pickRate(policy.rates, fields.destination, policy.gradeId)'))
+  assert.match(daily, /const amount = perDiemCents\(fields\.days, rate\.dailyAmount\) \/ 100/)
+  assert.doesNotMatch(daily, /fields\.amount|input\.amount/)
+  assert.match(service, /if \(existing\?\.perDiemRateId != null\) throw new BadRequestException\(PER_DIEM_LOCKED\)/)
+  const core = read('expenses/expense-reports.ts')
+  assert.match(core, /const policy = await gradePolicy\(em, report\.employeeId\)/)
+  assert.match(core, /block \?\?= perDiemIssue\(policy\.rates, line, policy\.gradeId\)/)
+  assert.match(core, /lineIssue\(category, line, true, policy\.limits\.get\(line\.categoryId\) \?\? null\)/)
+  // الواجهة
+  const mine = web('app/my/expenses/page.tsx'), admin = web('app/expenses/page.tsx')
+  assert.match(mine, /await addPerDiemLine\(report\.id, \{ destination: entry\.destination, days: Number\(entry\.days\), expenseDate: entry\.expenseDate \}\)/)
+  assert.match(mine, /\{report\.editable && data!\.perDiem\.length > 0 && \(/)
+  assert.match(admin, /data-per-diem-rate-form/); assert.match(admin, /data-expense-grade-limits/)
+  assert.match(web('lib/request-payload.ts'), /\n  perDiem: 'بدل يومي',/)
 })
