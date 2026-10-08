@@ -575,3 +575,31 @@ test('EX-12: البدل اليومي — السعر بالوجهة والدرج�
   const audit = await pool.request().query(`SELECT [action], COUNT(*) AS n FROM dbo.audit_log WHERE [entityType] = N'per_diem_rate' GROUP BY [action]`)
   assert.deepEqual(Object.fromEntries(audit.recordset.map(item => [item.action, Number(item.n)])), { PER_DIEM_RATE_CREATED: 3, PER_DIEM_RATE_UPDATED: 3 })
 })
+
+test('EX-13 (Codex P5A-B01): سلسلة فاضية بـ«تنفيذ فوري» مش مراجعة للمبلغ — تقرير المصروفات وسلفة المأمورية مابيتنفذوش من غير اعتماد بشري، والتقديم كله بيرجع', async () => {
+  ok(await request(U.admin, 'PUT', `/modules/features/${rules.EXPENSE_REPORTS_FEATURE}`, { enabled: true })); modules.invalidate()
+  const chain = await repo('ApprovalChain').findOneByOrFail({ code: 'EX_HR' })
+  const steps = await repo('ApprovalStep').find({ where: { chainId: chain.id } })
+  const id = ok(await request(U.two, 'POST', `${M}/reports`, { title: 'مصروفات من غير مراجعة' }), 201).id
+  ok(await line(U.two, id, { categoryId: C.meals, expenseDate: day(-1), amount: 123, note: 'وجبة' }), 201)
+  const before = { requests: await repo('Request').count(), obligations: await repo('EmployeeObligation').count(), advances: await repo('TravelAdvance').count() }
+  // السلسلة بقت فاضية وعليها «تنفيذ فوري»
+  await repo('ApprovalStep').delete({ chainId: chain.id })
+  await repo('ApprovalChain').update({ id: chain.id }, { autoApprove: true })
+  try {
+    refused(await send(U.two, id), 400, rules.HUMAN_APPROVAL_REQUIRED)
+    refused(await askAdvance(U.two, 500), 400, rules.HUMAN_APPROVAL_REQUIRED)
+    // مفيش قيد ولا سلفة ولا طلب اتسجّل، والتقرير لسه مسودة بيتعدّل
+    const report = await reportOf(U.two, id)
+    assert.deepEqual([await repo('Request').count(), await repo('EmployeeObligation').count(), await repo('TravelAdvance').count(), report.phase, report.editable],
+      [before.requests, before.obligations, before.advances, 'DRAFT', true])
+  } finally {
+    await repo('ApprovalChain').update({ id: chain.id }, { autoApprove: false })
+    for (const step of steps) await repo('ApprovalStep').save({ chainId: chain.id, stepOrder: step.stepOrder, approverRole: step.approverRole })
+  }
+  // بالسلسلة الحقيقية: اعتماد صاحب الدور بيكتب القيد زي الأول
+  const sent = ok(await send(U.two, id), 201)
+  assert.equal((await entries(sent.id)).length, 0)
+  ok(await act(U.approver, sent.id, 'APPROVE'), 201)
+  assert.deepEqual((await entries(sent.id)).map(row => Number(row.amount)), [123])
+})

@@ -190,3 +190,38 @@ test('SW-03: الطرف التاني اتغيّر عند إعادة التقدي
   ok(await act(U.approver, plain.id, 'APPROVE'), 201)
   assert.equal(await statusOf(plain.id), 'COMPLETED')
 })
+
+test('SW-04 (Codex P5A-B07): حالة الميزة جوه معاملة تقديم التبديل بتتقري بمدير المعاملة — قارئ المخزن مابيتناداش، والذاكرة المؤقتة مش شرط، والميزة مقفولة أو مفتوحة', async () => {
+  // أسبوع جديد بجدوله: أيام أسبوع الاختبارات اللي فاتت كلها عليها طلبات تبديل قايمة
+  for (const [person, shift] of [[E.a, S.early], [E.b, S.late], [E.c, S.mid]]) await repo('ScheduleEntry').save({ weekStart: day(7), employeeId: person.id, shiftId: shift.id, shiftName: shift.name, startTime: shift.startTime, endTime: shift.endTime })
+  const poolReader = modules.isFeatureEnabled.bind(modules), loader = modules.state.bind(modules)
+  const submitWith = async (user, partner) => {
+    let inside = 0
+    // أي قراءة بالمخزن وقت التقديم بتتعد: الحارس بيقرا قبل المعاملة (مسموح)، فالعد بيبدأ بعده بحجب القارئين جوه مسار التقديم نفسه
+    modules.isFeatureEnabled = async feature => { if (feature === rules.SWAP_CONSENT_FEATURE) { inside++; throw new Error('pool reader used for the swap consent feature') } return poolReader(feature) }
+    try {
+      // أول يوم في أسبوع الاختبار التبديل فيه مقبول (أيام اتستخدمت في الاختبارات اللي فاتت بتترفض برسالة عمل)
+      for (const offset of [7, 8, 9, 10, 11, 12, 13]) {
+        modules.invalidate()
+        const response = await ask(user, day(offset), partner)
+        assert.ok(response.status < 500, JSON.stringify(response.body))
+        if (response.status === 201) return { response, inside }
+      }
+      throw new Error('no day in the test week accepted a swap')
+    } finally { modules.isFeatureEnabled = poolReader; modules.state = loader }
+  }
+  // الميزة مقفولة (آخر حالة في SW-03): التقديم زي الأول ومن غير صف موافقة
+  const closed = await submitWith(U.b, E.c)
+  assert.deepEqual([closed.response.status, closed.inside, await consentOf(closed.response.body.id)], [201, 0, null])
+  // الميزة مفتوحة: صف «مستني» بيتسجّل — وبرضه من غير قارئ المخزن
+  ok(await request(U.admin, 'PUT', `/modules/features/${rules.SWAP_CONSENT_FEATURE}`, { enabled: true })); modules.invalidate()
+  const open = await submitWith(U.c, E.b)
+  assert.deepEqual([open.response.status, open.inside, (await consentOf(open.response.body.id))?.status], [201, 0, 'PENDING'])
+  // عشر تقديمات مع بعض بعد إبطال الذاكرة المؤقتة: كلهم بيعدّوا أو بيترفضوا برسالة عمل — مفيش 500
+  modules.invalidate()
+  const burst = await Promise.all(Array.from({ length: 10 }, (_, index) => ask(index % 2 ? U.b : U.c, day(7 + (index % 7)), index % 2 ? E.c : E.b)))
+  assert.deepEqual(burst.filter(response => response.status >= 500).map(response => response.body), [])
+  const source = fs.readFileSync(path.join(apiRoot, 'src', 'requests', 'requests.service.ts'), 'utf8')
+  assert.match(source, /stageSwapConsent\(em, req, !!this\.modules && await this\.modules\.isFeatureEnabledIn\(em, SWAP_CONSENT_FEATURE\)\)/)
+  assert.doesNotMatch(source, /isFeatureEnabled\(SWAP_CONSENT_FEATURE\)/)
+})

@@ -9,7 +9,7 @@ import { readBranchCurrencyOf } from '../org/branch-currency-db'
 import { applyEmployeeSalaryChange, type EmployeeSalaryValue } from '../payroll/payroll-salary-change'
 import { readSalaryHistory, readSalaryHistoryCurrent } from '../payroll/payroll-salary-history'
 import { REVIEW_BANDS, reviewBand, reviewsReady } from '../performance/review-rules'
-import { ADJUST_STATUSES, approverIssue, BUDGET_STATUSES, budgetUsage, CompensationBudget, CompensationCycle, CompensationProposal, compensationCyclesReady, coveringUnits, CYCLE_STATUS_LABELS,
+import { ADJUST_STATUSES, approverIssue, cycleWriterIds, recordCycleWriter, BUDGET_STATUSES, budgetUsage, CompensationBudget, CompensationCycle, CompensationProposal, compensationCyclesReady, coveringUnits, CYCLE_STATUS_LABELS,
   CYCLE_STEPS, cycleEvidenceReference, cycleFields, cycleStepOf, PROPOSE_STATUSES, RAISE_AMOUNT_ERROR, raiseAmount, raisedBasic, raiseNote, sameBasic } from './compensation-cycles'
 
 // B5.1 (ب، ج): دورة الزيادات — الدورة وميزانياتها وسطور الاقتراح، واعتمادها وتطبيقها. الراتب بيتكتب في مكان واحد بس: `apply`، ومن خدمة تاريخ
@@ -18,7 +18,7 @@ import { ADJUST_STATUSES, approverIssue, BUDGET_STATUSES, budgetUsage, Compensat
 //  - المدير المباشر بيقترح لمرؤوسيه المباشرين بس، وبيكتب المبلغ ومابيشوفش الراتب.
 //  - كل كتابة تحت قفل صف الدورة ثم صف الموظف، والحكم بعد القفل.
 
-export const CYCLES_MIGRATION_MISSING = 'جداول دورات الزيادات ناقصة — طبّق ترحيلات 140 و141 و142 الأول'
+export const CYCLES_MIGRATION_MISSING = 'جداول دورات الزيادات ناقصة — طبّق ترحيلات 140 و141 و142 و181 الأول'
 const CYCLE_NOT_FOUND = 'دورة الزيادات مش موجودة'
 const EMPLOYEE_NOT_FOUND = 'الموظف مش موجود'
 const NOT_IN_TEAM = 'الموظف ده مش من مرؤوسيك المباشرين'
@@ -131,6 +131,11 @@ export class CompensationCyclesService {
       'SELECT [id], [name], [parentId], [branchId], [unitType], [isActive] FROM [departments] ORDER BY [id]')
     const parentOf = new Map(units.map(unit => [Number(unit.id), unit.parentId == null ? null : Number(unit.parentId)]))
     const unitName = new Map(units.map(unit => [Number(unit.id), unit.name]))
+    // Codex P5A-B03: قسم اتنقل لفرع برّه نطاق القارئ مايتعرضش برقمه ولا باسمه — الحكم بفرع القسم الحالي (الموظف نفسه لسه في نطاقه)
+    const unitBranch = new Map(units.map(unit => [Number(unit.id), unit.branchId == null ? null : Number(unit.branchId)]))
+    const unitShown = (unitId: number | null) => unitId != null && unitBranch.has(unitId) && (unitBranch.get(unitId) == null || inBranchScope(scope, unitBranch.get(unitId) ?? null))
+    // القسم الحقيقي للسطر (لحساب استهلاك ميزانيات وحدات نطاق القارئ) — مابيطلعش في الرد
+    const ownUnit = new Map<number, number | null>()
     const people: Array<Record<string, unknown>> = await em.query(
       `SELECT e.[id], e.[fullName], e.[employeeCode], e.[branchId], e.[departmentId], e.[basicSalary], CASE WHEN ${ACTIVE} THEN 1 ELSE 0 END AS [active] FROM [employees] e ORDER BY e.[fullName], e.[id]`)
     const visible = new Map(people.filter(row => inBranchScope(scope, row.branchId == null ? null : Number(row.branchId))).map(row => [Number(row.id), row]))
@@ -141,10 +146,11 @@ export class CompensationCyclesService {
     const lines = proposals.map(row => {
       const person = visible.get(row.employeeId)!, departmentId = person.departmentId == null ? null : Number(person.departmentId)
       const basic = Number(person.basicSalary ?? 0), final = Number(row.finalAmount), score = scores?.get(row.employeeId) ?? null
+      ownUnit.set(row.employeeId, departmentId)
       return {
         performanceScore: score, performanceLabel: score === null ? null : REVIEW_BANDS.find(band => band.key === reviewBand(score))?.label ?? null,
         employeeId: row.employeeId, fullName: String(person.fullName), employeeCode: (person.employeeCode as string | null) ?? null, active: Number(person.active) === 1,
-        departmentId, departmentName: departmentId == null ? null : unitName.get(departmentId) ?? null, currency: currencyOf(person.branchId == null ? null : Number(person.branchId)),
+        departmentId: unitShown(departmentId) ? departmentId : null, departmentName: unitShown(departmentId) ? unitName.get(departmentId as number) ?? null : null, currency: currencyOf(person.branchId == null ? null : Number(person.branchId)),
         proposedAmount: Number(row.proposedAmount), proposedBy: names.get(row.proposedByUserId) ?? null, proposedAt: row.proposedAt, note: row.note,
         finalAmount: final, adjusted: row.adjustedByUserId != null, adjustedBy: row.adjustedByUserId == null ? null : names.get(row.adjustedByUserId) ?? null, adjustedAt: row.adjustedAt, adjustNote: row.adjustNote,
         appliedAt: row.appliedAt,
@@ -156,7 +162,7 @@ export class CompensationCyclesService {
     const budgetRows = await em.getRepository(CompensationBudget).find({ where: { cycleId: id } })
     const budgetOf = new Map(budgetRows.map(row => [row.departmentId, Number(row.amount)]))
     const usedOf = new Map<number, number>()
-    for (const line of lines) for (const unit of coveringUnits(line.departmentId, parentOf)) usedOf.set(unit, (usedOf.get(unit) ?? 0) + line.finalAmount)
+    for (const line of lines) for (const unit of coveringUnits(ownUnit.get(line.employeeId) ?? null, parentOf)) usedOf.set(unit, (usedOf.get(unit) ?? 0) + line.finalAmount)
     const budgets = units.filter(unit => inBranchScope(scope, unit.branchId == null ? null : Number(unit.branchId)))
       .filter(unit => unit.isActive === true || unit.isActive === 1 || budgetOf.has(Number(unit.id)))
       .map(unit => {
@@ -217,6 +223,8 @@ export class CompensationCyclesService {
     } else {
       await repo.update({ id: existing.id }, { finalAmount: amount, currentBasic: basic, adjustedByUserId: user.sub, adjustedAt: now, adjustNote: note })
     }
+    // سجل الكاتبين مابيتمسحش: تعديل لاحق من حد تاني مابيرجّعش للكاتب الأول حق الاعتماد (Codex P5A-B02)
+    await recordCycleWriter(em, cycle.id, user.sub)
     await recordAudit(em, { category: 'PAYROLL', action: mode === 'propose' || !existing ? 'RAISE_PROPOSED' : 'RAISE_ADJUSTED', entityType: 'compensation_proposal', entityId: `${cycle.id}:${employee.id}`,
       actorUserId: user.sub, branchId: employee.branchId, summary: `${mode === 'propose' || !existing ? 'اقتراح زيادة' : 'تعديل زيادة'} لـ${employee.fullName} في دورة ${cycle.name}`,
       before: existing ? { proposedAmount: Number(existing.proposedAmount), finalAmount: Number(existing.finalAmount) } : undefined,
@@ -265,7 +273,7 @@ export class CompensationCyclesService {
       await this.assertReady(em)
       const cycle = await this.lockCycle(em, id)
       if (cycle.status !== 'REVIEW') throw new BadRequestException(`الاعتماد للدورة اللي تحت المراجعة بس — الدورة «${CYCLE_STATUS_LABELS[cycle.status]}»`)
-      const issue = approverIssue(cycle, await em.getRepository(CompensationProposal).find({ where: { cycleId: id } }), user.sub)
+      const issue = approverIssue(cycle, await em.getRepository(CompensationProposal).find({ where: { cycleId: id } }), user.sub, await cycleWriterIds(em, id))
       if (issue) throw new (issue.includes('مافيهاش') ? BadRequestException : ForbiddenException)(issue)
       const now = new Date()
       await em.getRepository(CompensationCycle).update({ id }, { status: 'APPROVED', approvedByUserId: user.sub, approvedAt: now, updatedByUserId: user.sub, updatedAt: now })

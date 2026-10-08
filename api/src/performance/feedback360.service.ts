@@ -10,7 +10,7 @@ import {
 
 // B5.10 (أ): تقييم 360 — الترشيح وقراره تحت قفل صف ملف الموظف المتقيَّم (ثم صف الدعوة)، والحكم بعد القفل: المدير المباشر دلوقتي، أو صاحب
 // `performance.manage` والموظف في نطاقه بفرعه الحالي (غير كده «مش موجود»). الرد تحت قفل صف الدعوة: بيتكتب من غير مقيّم ولا وقت، والدعوة
-// بتتعلّم «رد» بس — ومن غير سطر تدقيق (سطر التدقيق بيربط الحساب بالرد). النتيجة بعد قفل الدورة وبحد أدنى للردود.
+// بتتعلّم «رد» بس — ومن غير سطر تدقيق (سطر التدقيق بيربط الحساب بالرد). النتيجة بعد قفل الدورة وبحد أدنى للردود. ترتيب قفل الرد: صف الدورة ← صف الدعوة.
 
 const NOT_EMPLOYEE = 'حسابك مش مربوط بملف موظف'
 const NOT_ACTIVE = 'ملفك مش على رأس العمل'
@@ -185,11 +185,15 @@ export class Feedback360Service {
     return this.ds.transaction(async em => {
       await this.assertReady(em)
       const repo = em.getRepository(Feedback360Invite)
-      const invite = await repo.findOne({ where: { id: inviteId }, lock: { mode: 'pessimistic_write' } })
+      const peek = await repo.findOne({ where: { id: inviteId } })
+      if (!peek || peek.reviewerEmployeeId !== me) throw new NotFoundException(INVITE_NOT_FOUND)
+      // Codex P5A-B05: صف الدورة بيتقفل الأول (نفس الصف اللي إغلاق الدورة بيقفله) وبعده صف الدعوة — الرد يا إما بيثبت قبل الإغلاق، يا إما بيشوف
+      // الدورة مقفولة ويترفض. من غيره رد اتفحص قبل الإغلاق كان بيثبت بعده، وقراءتين للنتيجة بيكشفوه.
+      const [cycle]: Array<{ status: string }> = await em.query('SELECT [status] FROM dbo.review_cycles WITH (UPDLOCK, ROWLOCK) WHERE [id] = @0', [peek.cycleId])
+      const invite = await repo.findOne({ where: { id: inviteId, cycleId: peek.cycleId }, lock: { mode: 'pessimistic_write' } })
       if (!invite || invite.reviewerEmployeeId !== me) throw new NotFoundException(INVITE_NOT_FOUND)
       if (invite.status !== 'APPROVED') throw new ConflictException('الدعوة مش معتمدة')
       if (flag(invite.responded)) throw new ConflictException('رديت على الدعوة دي قبل كده')
-      const [cycle]: Array<{ status: string }> = await em.query('SELECT [status] FROM dbo.review_cycles WHERE [id] = @0', [invite.cycleId])
       if (cycle?.status !== 'ACTIVE') throw new ConflictException('دورة التقييم اتقفلت')
       const responses = em.getRepository(Feedback360Response)
       await responses.save(responses.create({ cycleId: invite.cycleId, subjectEmployeeId: invite.subjectEmployeeId, relation: invite.relation, ...fields }))

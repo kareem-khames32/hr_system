@@ -25,7 +25,7 @@ test('SWU-02: مصدر الكود — ميزة مقفولة بمسارها؛ ص�
   const controller = read('attendance/swap-consents.controller.ts')
   assert.match(controller, /@RequireModule\('shifts'\)\n@RequireFeature\('shifts\.swap_consent'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)/)
   const requests = read('requests/requests.service.ts')
-  assert.match(requests, /if \(type\.destinationHandler === 'shift_schedule'\) await stageSwapConsent\(em, req, !!this\.modules && await this\.modules\.isFeatureEnabled\(SWAP_CONSENT_FEATURE\)\)/)
+  assert.match(requests, /if \(type\.destinationHandler === 'shift_schedule'\) await stageSwapConsent\(em, req, !!this\.modules && await this\.modules\.isFeatureEnabledIn\(em, SWAP_CONSENT_FEATURE\)\)/)
   assert.ok(requests.indexOf('await validateEmploymentRequest(em, req, type)\n    // B5.5 (ج)') > 0, 'بعد فحص التبديل نفسه')
   const core = read('attendance/swap-consents.ts')
   assert.match(core, /if \(!featureOn \|\| !\(await swapConsentsReady\(em\)\)\) return/)

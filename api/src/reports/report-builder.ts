@@ -1,5 +1,6 @@
 import { Column, Entity, PrimaryGeneratedColumn, type EntityManager } from 'typeorm'
 import { payrollLineNotReversedSql } from '../payroll/payroll-reversal-sql'
+import { LOAN_DEFERRAL_TYPE } from '../requests/loan-installment-requests'
 
 // B5.9: بانِي التقارير — قاموس مصادر ثابت في الكود (كل مصدر بجداوله وأعمدته المسموحة وتعبير SQL لكل عمود)، وتعريف التقرير اختيار من القاموس بس:
 // أعمدة، فلاتر، وتجميع بعمود. مفيش نص SQL من المستخدم: الأسماء مفاتيح في القاموس والقيم معاملات. كل مصدر بصلاحيته وموديولاته، وعمود الراتب
@@ -76,10 +77,12 @@ export const BUILDER_SOURCES: readonly BuilderSource[] = [
       { key: 'toDate', label: 'إلى', type: 'date', sql: 'l.[toDate]' },
       { key: 'days', label: 'الأيام', type: 'number', sql: 'l.[days]', sum: true },
       { key: 'status', label: 'الحالة', type: 'text', sql: 'l.[status]', group: true }] },
-  // الطلبات: الأنواع السرّية برّه المصدر كله (مش بتتعد ولا بتتعرض)
+  // الطلبات: السرّي برّه المصدر كله (مش بيتعد ولا بيتعرض) — بنفس حكم محرك الطلبات (Codex P5A-B04): نوع الطلب الفعلي هو تعريفه (definitionCode)
+  // وإلا نوعه العام؛ وسري لو تعريفه سري، أو نوعه العام سري، أو تأجيل قسط سلفة ونوع السلفة سري (سرية موروثة). طلب تعريفه مالوش صف نوع مابيتعرضش.
   { key: 'requests', label: 'الطلبات', perm: 'requests.view_all', modules: ['requests'],
-    from: 'dbo.requests r INNER JOIN dbo.request_types t ON t.[code] = r.[typeCode] INNER JOIN dbo.employees e ON e.[id] = r.[requesterId]',
-    where: 'ISNULL(t.[isConfidential], 0) = 0', orderBy: 'r.[id]',
+    from: `dbo.requests r INNER JOIN dbo.request_types t ON t.[code] = COALESCE(NULLIF(r.[definitionCode], N''), r.[typeCode]) INNER JOIN dbo.employees e ON e.[id] = r.[requesterId]`,
+    where: `ISNULL(t.[isConfidential], 0) = 0 AND NOT EXISTS (SELECT 1 FROM dbo.request_types bt WHERE bt.[code] = r.[typeCode] AND bt.[isConfidential] = 1)` +
+      ` AND NOT (t.[code] = N'${LOAN_DEFERRAL_TYPE}' AND EXISTS (SELECT 1 FROM dbo.request_types lt WHERE lt.[code] = N'LOAN' AND lt.[isConfidential] = 1))`, orderBy: 'r.[id]',
     columns: [...WHO,
       { key: 'typeName', label: 'نوع الطلب', type: 'text', sql: 't.[nameAr]', group: true },
       { key: 'category', label: 'تصنيف الطلب', type: 'text', sql: 't.[category]', group: true },

@@ -180,8 +180,9 @@ export class PortalController {
     }
     const weekendDays = await this.attendance.calendarWeekendDays(user.employeeId, user.branchId)
     // B5.10: اجتماعات 1:1 اللي صاحب الحساب طرف فيها (لو ميزتها مفتوحة)
-    const meetings = (await this.modules.isFeatureEnabled(ONE_ON_ONE_FEATURE)) ? await oneOnOneCalendar(this.holidays.manager, user, from, to) : []
-    return { month: m, from, to, holidays: monthHolidays, leaves, weekendDays, meetings }
+    // والميزة مقفولة: الرد بشكله اللي قبلها بالحرف (من غير المفتاح — Codex P5A-N02)
+    const meetings = (await this.modules.isFeatureEnabled(ONE_ON_ONE_FEATURE)) ? await oneOnOneCalendar(this.holidays.manager, user, from, to) : null
+    return { month: m, from, to, holidays: monthHolidays, leaves, weekendDays, ...(meetings ? { meetings } : {}) }
   }
 
   // ===== الإشعارات المشتقة للمستخدم الحالي =====

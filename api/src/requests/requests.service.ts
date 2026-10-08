@@ -599,7 +599,7 @@ export class RequestsService {
     await this.assertAttachmentOwnership(req, user)
     await validateEmploymentRequest(em, req, type)
     // B5.5 (ج): «تبديل وردية» والميزة مفتوحة — موافقة الطرف التاني بتتطلب من جديد عند كل تقديم وإعادة تقديم
-    if (type.destinationHandler === 'shift_schedule') await stageSwapConsent(em, req, !!this.modules && await this.modules.isFeatureEnabled(SWAP_CONSENT_FEATURE))
+    if (type.destinationHandler === 'shift_schedule') await stageSwapConsent(em, req, !!this.modules && await this.modules.isFeatureEnabledIn(em, SWAP_CONSENT_FEATURE))
     // «تحديث بيانات شخصية»: نفس فحوص الاعتماد النهائي بدري (الشكل والإلزام والتفرد) — ولا حاجة بتتطبق قبل الاعتماد
     if (type.destinationHandler === PERSONAL_DATA_HANDLER) await validatePersonalDataRequest(em, req)
     // B2.11-ب: «وظيفة جديدة / زيادة عدد»: المسمى من الكتالوج والعدد (نفس فحوص الاعتماد النهائي بدري)، وقسم الوظيفة بيتثبّت على الطلب
