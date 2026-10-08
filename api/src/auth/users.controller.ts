@@ -199,6 +199,8 @@ export const SCOPE_ALL_BRANCHES_ACCOUNT_LOCKED = 'الحساب ده نطاقه �
 // ونفس المنطق للفروع المختارة بعلامات صح: حساب فروع يدّي فروع جوه نطاقه بس، ومايديرش حساب نطاقه فيه فرع برّه نطاقه
 // (وإلا مدير الفرع 2 يعيّن كلمة مرور لحساب على الفرع 2 و3 ويدخل بيه على الفرع 3)
 export const SCOPE_BRANCHES_OUTSIDE_ACTOR = 'تقدر تدّي فروع جوه نطاقك بس'
+/** الحساب اتغيّر (دوره أو صلاحياته أو نطاقه أو حالته) بعد ما التعديل اتحكم عليه — CRP3F */
+export const ACCOUNT_CHANGED_MEANWHILE = 'بيانات الحساب اتغيّرت — حدّث الصفحة وحاول تاني'
 export const SCOPE_WIDER_ACCOUNT_LOCKED = 'الحساب ده نطاقه فيه فروع برّه نطاقك — تعديله لحساب نطاقه يغطي كل فروعه'
 
 /**
@@ -657,6 +659,8 @@ export class UsersController {
     if (!user || !inBranchScope(scope, user.branchId)) {
       throw new NotFoundException('المستخدم غير موجود')
     }
+    // CRP3F: الصف زي ما اتقري (قبل أي تعديل في الذاكرة) — الخانات اللي هتتغيّر بتتحسب منه، وإصداره بيتقارن تحت القفل وقت الحفظ
+    const seen = { ...user }
     if (
       actor.role !== 'super_admin' &&
       (user.role === 'super_admin' || dto.role === 'super_admin')
@@ -759,9 +763,7 @@ export class UsersController {
     // B2.8 (Codex CRP2P-B03): حساب مربوط بموظف وربطه بيتغيّر: الربط القديم بيتسجّل على الموظف قبل الحفظ (مفيش لحظة الحساب فيها اتغيّر
     // ربطه من غير سجل). حوار الطلبات بيقراه عشان الحساب يفضل على جانب الموظف في طلبات الموظف ده. والمسار كله تحت قفل الحساب
     // (AccountEditLock): الربط اللي اتقري فوق هو اللي في القاعدة دلوقتي
-    if (employeeChanged && user.employeeId != null) {
-      await recordLoginAccountUnlinked(this.users.manager, { employeeId: user.employeeId, userId: user.id, changedByUserId: actor.sub })
-    }
+    const unlinkedEmployeeId = employeeChanged && user.employeeId != null ? user.employeeId : null
     if (dto.role !== undefined) user.role = dto.role as UserRole
     if (dto.isActive !== undefined) user.isActive = dto.isActive
     if (dto.branchId !== undefined) user.branchId = dto.branchId
@@ -782,7 +784,21 @@ export class UsersController {
     ) {
       user.tokenVersion = (user.tokenVersion ?? 0) + 1
     }
-    const saved = await this.users.save(user)
+    // CRP3F: الحكم فوق اتعمل على صف اتقري من غير قفل، وحفظ الكيان كله كان بيكتب قيمه القديمة (ومنها إصدار الحساب) فوق تغيير حصل بعد
+    // القراية (ترقية من حزمة الدور أو من المنح الفردية بتزوّد الإصدار). الحفظ بقى في معاملة: صف الحساب بيتقفل ويتقري من جديد، ولو إصداره
+    // اتحرك بعد الحكم = 409 (الحكم بيتعاد على الصف الجديد)، والخانات اللي التعديل ده غيّرها بس بتتحط على الصف الحالي ويتحفظ — فإصدار
+    // الحساب مابيرجعش، وسطر التدقيق (من مستمع الحفظ) زي ما هو. وسجل فك الربط القديم في نفس المعاملة
+    const seenVersion = seen.tokenVersion ?? 0
+    const changed = (Object.keys(user) as Array<keyof User>).filter((key) => user[key] !== seen[key])
+    const saved = await this.users.manager.transaction(async (em) => {
+      const fresh = await em.getRepository(User).findOne({ where: { id }, lock: { mode: 'pessimistic_write' } })
+      if (!fresh || (fresh.tokenVersion ?? 0) !== seenVersion) throw new ConflictException(ACCOUNT_CHANGED_MEANWHILE)
+      if (unlinkedEmployeeId != null) {
+        await recordLoginAccountUnlinked(em, { employeeId: unlinkedEmployeeId, userId: fresh.id, changedByUserId: actor.sub })
+      }
+      for (const key of changed) Object.assign(fresh, { [key]: user[key] })
+      return changed.length ? em.getRepository(User).save(fresh) : fresh
+    })
     const { passwordHash: _ph, ...rest } = saved
     return { ...rest, ...scopeView(saved) }
   }

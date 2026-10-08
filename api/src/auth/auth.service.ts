@@ -58,8 +58,9 @@ export interface JwtPayload {
 }
 
 /** B2.17: شكل الجلسة المطلوب من العميل. cookie = التوكن في cookie httpOnly (ومعاه رمز CSRF) بدل جسم الرد */
-// mailFactor (CRP3E): الجلسة دي جاية من تحقق برمز بريد — بتتحكم بعامل الحساب بعد ما صفها يتفتح
-export interface SessionMode { cookie?: boolean; mailFactor?: boolean }
+// factorProven (CRP3F): الدخول ده أثبت عامل الحساب الحالي — رمز تطبيق المصادقة اتقبل، أو الجلسة طالعة لصاحب جلسة قايمة (تغيير كلمة
+// المرور، وبعد تأكيد التفعيل). من غيرها (كلمة السر لوحدها، أو رمز بريد) الجلسة مابتطلعش لحساب مفعّل تطبيق المصادقة
+export interface SessionMode { cookie?: boolean; factorProven?: boolean }
 
 /** الجلسة المفتوحة — نفس شكل رد الدخول الحالي بالحرف (الواجهة بتقرأه كما هو). */
 export interface SessionResponse {
@@ -351,9 +352,16 @@ export class AuthService {
       )
     }
     if (gate === 'DISABLED') {
+      // CRP3F: الجلسة بتتفتح الأول (وبتتحكم بعامل الحساب بعد فتح صفها: تفعيل ثبت بعد الفحص اللي فوق = مفيش جلسة)، وسطر «نجح» بعدها
+      const opened = await this.issueSession(user, session, context).catch(async (error) => {
+        if (error instanceof UnauthorizedException && error.message === TOTP_FACTOR_CHANGED) {
+          await this.security.record({ userId: user.id, identifier, method, outcome: 'FACTOR_CHANGED', context })
+        }
+        throw error
+      })
       await this.users.update({ id: user.id }, { lastLoginAt: new Date() })
       await this.security.record({ userId: user.id, identifier, method, outcome: 'SUCCESS', context })
-      return this.issueSession(user, session, context)
+      return opened
     }
     try {
       const challenge = await this.twoFactor.open(user, method, address)
@@ -398,7 +406,7 @@ export class AuthService {
     if (challenge.codeHash !== TOTP_CHALLENGE_MARK && (await this.totp.enrolled(user.id))) throw new UnauthorizedException(TOTP_FACTOR_CHANGED)
     await this.users.update({ id: user.id }, { lastLoginAt: new Date() })
     // CRP3E: الجلسة بتتفتح الأول (وبتتحكم بعامل الحساب بعد فتح صفها)، وسطر «نجح» بيتسجّل بعدها؛ رفضها بيتسجّل باسمه
-    const opened = await this.issueSession(user, { ...session, mailFactor: challenge.codeHash !== TOTP_CHALLENGE_MARK }, context).catch(async (error) => {
+    const opened = await this.issueSession(user, { ...session, factorProven: challenge.codeHash === TOTP_CHALLENGE_MARK }, context).catch(async (error) => {
       if (error instanceof UnauthorizedException && error.message === TOTP_FACTOR_CHANGED) {
         await this.security.record({ userId: user.id, identifier: user.email, method: 'CODE', outcome: 'CODE_SUPERSEDED', context })
       }
@@ -442,7 +450,6 @@ export class AuthService {
           : 'كلمة المرور الجديدة لازم تختلف عن الحالية'
       )
     }
-    const tokenVersion = (user.tokenVersion ?? 0) + 1
     const passwordChangedAt = new Date()
     await this.users.update(
       { id: user.id },
@@ -450,13 +457,16 @@ export class AuthService {
         passwordHash: await AuthService.hashPassword(newPassword),
         mustChangePassword: false,
         passwordChangedAt,
-        // أي جلسة تانية مفتوحة بالكلمة القديمة (أو بتوكن «لازم يغيّر») تبطل فورًا
-        tokenVersion,
+        // أي جلسة تانية مفتوحة بالكلمة القديمة (أو بتوكن «لازم يغيّر») تبطل فورًا.
+        // CRP3F: الزيادة في القاعدة نفسها — رقم محسوب من الصف المقري فوق كان بيتكتب فوق زيادة حصلت بعد قرايته (ترقية أو سحب صلاحية)
+        tokenVersion: () => 'tokenVersion + 1',
       }
     )
+    // الجلسة الجديدة بإصدار الحساب دلوقتي
+    const tokenVersion = (await this.users.findOne({ where: { id: user.id }, select: ['id', 'tokenVersion'] }))?.tokenVersion ?? 0
     // B2.17-ب: الإصدار زاد فكل جلسات الحساب ماتت — صفوفها بتتقفل، والجلسة الجديدة بصف جديد
     await this.sessions.revokeAll(user.id, 'PASSWORD')
-    return this.issueSession({ ...user, mustChangePassword: false, passwordChangedAt, tokenVersion }, session, context)
+    return this.issueSession({ ...user, mustChangePassword: false, passwordChangedAt, tokenVersion }, { ...session, factorProven: true }, context)
   }
 
   // توكن + بيانات الحساب للواجهة (نفس رد الدخول)
@@ -474,8 +484,10 @@ export class AuthService {
     // B2.17-ج: تطبيق المصادقة إلزامي لدوره ولسه مافعّلش = الجلسة مابتفتحش غير التفعيل
     const totp = await this.totp.loginState(user)
     // CRP3E-B17-02: دخول برمز بريد والحساب بقى مفعّل تطبيق المصادقة — القراءة دي بعد ما صف الجلسة اتفتح، فتفعيل ثبت قبل فتح الصف بيتشاف
-    // هنا: الصف بيتنهي ومفيش توكن بيطلع (تفعيل بيثبت بعد فتح الصف = جلسة اتفتحت قبله، الحد المعلن)
-    if (session.mailFactor && totp.enrolled) {
+    // هنا: الصف بيتنهي ومفيش توكن بيطلع (تفعيل بيثبت بعد فتح الصف = جلسة اتفتحت قبله، الحد المعلن).
+    // CRP3F: والحكم على كل مسار بيفتح جلسة دخول جديدة (كلمة السر لوحدها لما رمز البريد مقفول، وحساب الشركة، ورمز البريد): حساب مفعّل
+    // مابياخدش جلسة غير من دخول أثبت رمز التطبيق، أو من جلسة قايمة
+    if (totp.enrolled && !session.factorProven) {
       if (sid) await this.sessions.revoke(sid, user.id, 'LOGOUT')
       throw new UnauthorizedException(TOTP_FACTOR_CHANGED)
     }
@@ -525,7 +537,7 @@ export class AuthService {
     const user = await this.withPasswordState().where('u.id = :id', { id: current.sub }).getOne()
     if (!user || !user.isActive) throw new UnauthorizedException('الحساب معطّل')
     if (current.sid) await this.sessions.revoke(current.sid, current.sub, 'LOGOUT')
-    return this.issueSession(user, session, context)
+    return this.issueSession(user, { ...session, factorProven: true }, context)
   }
 
   /**

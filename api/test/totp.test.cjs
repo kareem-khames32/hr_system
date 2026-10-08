@@ -75,7 +75,7 @@ test('TT-03: an enrolled account is asked for the app code before the mail gate;
   const finish = auth.slice(auth.indexOf('private async finishLogin'), auth.indexOf('private httpFor'))
   // الترتيب: الحساب المفعّل → حالة رمز التطبيق (قبل قراءة بوابة البريد، ومن غير جلسة)
   const order = ['if (await this.totp.enrolled(user.id)) {', 'const challenge = await this.twoFactor.openTotp(user, method)', 'const gate = await this.twoFactor.gate(user)',
-    'return this.issueSession(user, session, context)'].map(part => finish.indexOf(part))
+    'const opened = await this.issueSession(user, session, context)'].map(part => finish.indexOf(part))
   assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), JSON.stringify(order))
   assert.match(auth, /this\.twoFactor\.verify\(challengeToken, code, \(userId, value\) => this\.totp\.verifyLogin\(userId, value\),\n\s+\(userId\) => this\.totp\.enrolled\(userId\)\)/)
   // CRP3D-B17-02: حالة رمزها بريد لحساب فعّل التطبيق بعدها — بتبطل مع التفعيل، وبتتحكم وقت التحقق وقبل فتح الجلسة
@@ -91,8 +91,21 @@ test('TT-03: an enrolled account is asked for the app code before the mail gate;
   // CRP3E: المقارنة بإصدار الحساب كمان (حزمة الدور والمنح الفردية بيحرّكوه)، وجلسة رمز البريد بتتحكم بعد فتح صفها
   assert.match(totpService, /\[branchId\], \[tokenVersion\] FROM \[users\] WITH \(UPDLOCK, ROWLOCK\)/)
   assert.match(totpService, /row\.branchId \?\? null, Number\(row\.tokenVersion \?\? 0\)\]\)/)
-  assert.match(auth, /const opened = await this\.issueSession\(user, \{ \.\.\.session, mailFactor: challenge\.codeHash !== TOTP_CHALLENGE_MARK \}, context\)/)
-  assert.match(auth, /const sid = await this\.sessions\.open\(user, context\)[\s\S]{0,400}const totp = await this\.totp\.loginState\(user\)[\s\S]{0,420}if \(session\.mailFactor && totp\.enrolled\) \{\n\s+if \(sid\) await this\.sessions\.revoke\(sid, user\.id, 'LOGOUT'\)\n\s+throw new UnauthorizedException\(TOTP_FACTOR_CHANGED\)/)
+  assert.match(auth, /const opened = await this\.issueSession\(user, \{ \.\.\.session, factorProven: challenge\.codeHash === TOTP_CHALLENGE_MARK \}, context\)/)
+  // CRP3F: كل جلسة جديدة لحساب مفعّل محتاجة إثبات العامل — كلمة السر لوحدها من غيره، وتغيير كلمة المرور وإعادة الإصدار من جلسة قايمة بيه
+  assert.equal(auth.split('factorProven: true').length - 1, 2, 'تغيير كلمة المرور وإعادة الإصدار بعد التفعيل بس')
+  assert.match(auth, /return this\.issueSession\(\{ \.\.\.user, mustChangePassword: false, passwordChangedAt, tokenVersion \}, \{ \.\.\.session, factorProven: true \}, context\)/)
+  assert.match(auth, /if \(current\.sid\) await this\.sessions\.revoke\(current\.sid, current\.sub, 'LOGOUT'\)\n\s+return this\.issueSession\(user, \{ \.\.\.session, factorProven: true \}, context\)/)
+  assert.match(auth, /tokenVersion: \(\) => 'tokenVersion \+ 1',\n\s+\}\n\s+\)\n\s+\/\/ الجلسة الجديدة بإصدار الحساب دلوقتي/, 'تغيير كلمة المرور بيزوّد الإصدار في القاعدة')
+  // CRP3F: تعديل الحساب وتعديل الدور بيقفلوا الصف ويقروه من جديد جوه معاملة الحفظ ويرفضوا لو اتغيّر بعد الحكم
+  const accountEdit = read('api/src/auth/users.controller.ts')
+  assert.match(accountEdit, /const fresh = await em\.getRepository\(User\)\.findOne\(\{ where: \{ id \}, lock: \{ mode: 'pessimistic_write' \} \}\)\n\s+if \(!fresh \|\| \(fresh\.tokenVersion \?\? 0\) !== seenVersion\) throw new ConflictException\(ACCOUNT_CHANGED_MEANWHILE\)/)
+  assert.match(accountEdit, /for \(const key of changed\) Object\.assign\(fresh, \{ \[key\]: user\[key\] \}\)\n\s+return changed\.length \? em\.getRepository\(User\)\.save\(fresh\) : fresh/)
+  assert.doesNotMatch(accountEdit, /await this\.users\.save\(user\)/, 'مفيش حفظ لكيان مقري من غير قفل')
+  const roleEdit = read('api/src/auth/roles.controller.ts')
+  assert.match(roleEdit, /const fresh = await em\.getRepository\(Role\)\.findOne\(\{ where: \{ id: role\.id \}, lock: \{ mode: 'pessimistic_write' \} \}\)\n\s+if \(!fresh \|\| fresh\.permissions !== seenPermissions \|\| fresh\.isActive !== wasActive\) throw new ConflictException\(ROLE_CHANGED_MEANWHILE\)/)
+  assert.doesNotMatch(roleEdit, /em\.getRepository\(Role\)\.save\(role\)/, 'مفيش حفظ لدور مقري من غير قفل')
+  assert.match(auth, /const sid = await this\.sessions\.open\(user, context\)[\s\S]{0,400}const totp = await this\.totp\.loginState\(user\)[\s\S]{0,900}if \(totp\.enrolled && !session\.factorProven\) \{\n\s+if \(sid\) await this\.sessions\.revoke\(sid, user\.id, 'LOGOUT'\)\n\s+throw new UnauthorizedException\(TOTP_FACTOR_CHANGED\)/)
   // علامة «فعّل الأول» من مكان واحد: كل جلسة بتتفتح بتتحكم بحالة الحساب وقتها
   const issue = auth.slice(auth.indexOf('private async issueSession('), auth.indexOf('async reissueSession('))
   assert.match(issue, /const totp = await this\.totp\.loginState\(user\)\n[\s\S]{0,700}\n\s+const totpSetupRequired = totp\.required && !totp\.enrolled/)
