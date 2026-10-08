@@ -55,6 +55,7 @@ import {
   RECORD_UPDATE_FIELDS,
 } from './destinations.service'
 import { LeaveBalancesService } from './leave-balances.service'
+import { readLeaveTypeExtras } from './leave-type-extras'
 import { Leave, LeaveType } from './entities/leave.entities'
 import { assertLeaveTypeDateRules, assertLeaveTypeDaysRules, leaveCountsAllDays, leaveTypeBackdateLimit } from './leave-type-rules'
 import { assertLeaveOutsideSuspension } from '../employees/employee-suspension-overlap'
@@ -1019,6 +1020,14 @@ export class RequestsService {
               `«${this.leaveTypeShown(leaveTypeDef, branchScopeOf(user)).nameAr}» تُمنح مرة واحدة طوال الخدمة — للموظف طلب/إجازة سابقة من هذا النوع`
             )
           }
+        } else if (p.leaveId == null) {
+          // B4.5 (ج): أقصى مرات طول الخدمة (مصر: الوضع والأبوة 3 مرات) — نفس عدّ مرات السنة من غير حد السنة
+          const maxTimes = (await readLeaveTypeExtras(em, [leaveTypeDef.id])).get(leaveTypeDef.id)?.maxTimesInService ?? null
+          if (maxTimes !== null && maxTimes > 0 && (await this.leaveTimesInYear(em, req, leaveTypeDef.code, null)) >= maxTimes) {
+            throw new BadRequestException(
+              `«${this.leaveTypeShown(leaveTypeDef, branchScopeOf(user)).nameAr}» بحد أقصى ${maxTimes} مرات طوال الخدمة — الموظف استنفد مراته`
+            )
+          }
         }
       }
     }
@@ -1116,13 +1125,14 @@ export class RequestsService {
 
   // مرات نوع الإجازة للموظف في سنة (بتاريخ البداية): الإجازات المعتمدة + طلبات النوع
   // اللي لسه في المسار أو اتعتمدت ولسه ماتنفذتش — من غير عدّ الطلب مرتين لو له إجازة
-  private async leaveTimesInYear(em: EntityManager, req: Request, code: string, year: string): Promise<number> {
+  // year = null (B4.5-ج): مرات النوع طول الخدمة
+  private async leaveTimesInYear(em: EntityManager, req: Request, code: string, year: string | null): Promise<number> {
     const approved = await em.getRepository(Leave).find({
       where: {
         employeeId: req.requesterId,
         leaveTypeCode: code,
         status: 'APPROVED',
-        fromDate: Between(`${year}-01-01`, `${year}-12-31`),
+        ...(year === null ? {} : { fromDate: Between(`${year}-01-01`, `${year}-12-31`) }),
       },
       select: { id: true, requestId: true },
     })
@@ -1139,7 +1149,7 @@ export class RequestsService {
       try {
         const rp = JSON.parse(r.payload ?? '{}')
         return rp.leaveId == null &&
-          String(rp.fromDate ?? '').slice(0, 4) === year &&
+          (year === null || String(rp.fromDate ?? '').slice(0, 4) === year) &&
           leaveCodeOf(rp, definitionCodeOf(r)) === code
       } catch {
         return false

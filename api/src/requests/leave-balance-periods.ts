@@ -252,22 +252,26 @@ export function carryOverExpiry(periodStart: string, months: number): string {
 
 const CATEGORY: Record<'annual' | 'sick', string> = { annual: 'ANNUAL', sick: 'SICK' }
 
-// إعداد رصيد النوع: نوع الإجازة ANNUAL/SICK (الكود أولًا ثم الفئة)؛ غيابه = الإعدادات العامة القديمة
-export function balanceTypeSettings(
-  types: LeaveTypeBalanceFields[],
-  balanceType: 'annual' | 'sick',
-  globals: BalanceGlobals
-): BalanceTypeSettings {
+// النوع اللي بيحكم رصيد ANNUAL/SICK: الكود أولًا ثم الفئة، والمفعّل قبل المعطّل، والأقدم
+export function balanceTypeRow<T extends LeaveTypeBalanceFields>(types: T[], balanceType: 'annual' | 'sick'): T | undefined {
   const cat = CATEGORY[balanceType]
-  const candidates = types
+  return types
     .filter((t) => t.code === cat || (t.category === cat && (t.balanceType ?? balanceType) === balanceType))
     .sort(
       (a, b) =>
         Number(b.code === cat) - Number(a.code === cat) ||
         Number(b.isActive !== false) - Number(a.isActive !== false) ||
         Number(a.id ?? 0) - Number(b.id ?? 0)
-    )
-  const t = candidates[0]
+    )[0]
+}
+
+// إعداد رصيد النوع: نوع الإجازة ANNUAL/SICK (الكود أولًا ثم الفئة)؛ غيابه = الإعدادات العامة القديمة
+export function balanceTypeSettings(
+  types: LeaveTypeBalanceFields[],
+  balanceType: 'annual' | 'sick',
+  globals: BalanceGlobals
+): BalanceTypeSettings {
+  const t = balanceTypeRow(types, balanceType)
   const fallbackDays = globals[balanceType]
   if (!t) {
     return {

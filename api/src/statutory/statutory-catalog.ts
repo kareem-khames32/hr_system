@@ -23,6 +23,9 @@ const TAX_PREVIEW = 'ضريبة كسب العمل: المعاينة، والمس
 const MARTYRS_FUND = 'صندوق الشهداء في المسير لو إعداده مفتوح (مقفول افتراضيًا)'
 // B4.5 (ب)
 const OVERTIME_MINIMUM = 'الحد القانوني لمعامل الإضافي لو إعداده مفتوح (مقفول افتراضيًا)'
+// B4.5 (ج)
+const LEAVE_TIERS = 'اقتراح شرائح الإجازة السنوية في شاشة أنواع الإجازات (للعرض بس — المالك بيراجع ويحفظ)'
+const LEAVE_TYPES = 'أنواع إجازات الفرع غير المفعّلة في شاشة أنواع الإجازات (للعرض بس — المالك بيراجع ويفعّل)'
 // B4.4 (د)
 const HEALTH_INSURANCE = 'التأمين الصحي الشامل في المسير لو إعداده مفتوح (مقفول افتراضيًا)'
 const TRAINING_FUND = 'تقرير صندوق التدريب السنوي (للعرض بس)'
@@ -44,10 +47,10 @@ export const STATUTORY_CATALOG: readonly StatutoryKeyInfo[] = [
     codes: { employee_pct: pct('حصة الموظف'), employer_pct: pct('حصة صاحب العمل'), spouse_pct: pct('الزوجة غير العاملة'), dependent_pct: pct('لكل معال') } },
   { country: 'EG', key: 'eg.training_fund', label: 'صندوق التدريب', card: 'C-EG-04', usedBy: TRAINING_FUND,
     codes: { pct_of_min_insurance_wage: pct('من الحد الأدنى لأجر التأمين'), min_amount: 'حد أدنى للموظف', max_amount: 'حد أقصى للموظف', min_headcount: 'المنشأة من كام موظف' } },
-  { country: 'EG', key: 'eg.leave.annual', label: 'الإجازة السنوية', card: 'C-EG-05', usedBy: null,
+  { country: 'EG', key: 'eg.leave.annual', label: 'الإجازة السنوية', card: 'C-EG-05', usedBy: LEAVE_TIERS,
     codes: { first_year_days: 'أيام أول سنة', standard_days: 'أيام من السنة التانية', senior_days: 'أيام الشريحة الأعلى', senior_service_years: 'الشريحة الأعلى بعد كام سنة خدمة', senior_age: 'أو من سن',
       disability_days: 'أيام ذوي الإعاقة' } },
-  { country: 'EG', key: 'eg.leave.other', label: 'إجازات تانية (عارضة، وضع، أبوة، حج)', card: 'C-EG-05', usedBy: null,
+  { country: 'EG', key: 'eg.leave.other', label: 'إجازات تانية (عارضة، وضع، أبوة، حج)', card: 'C-EG-05', usedBy: LEAVE_TYPES,
     codes: { casual_days: 'العارضة في السنة', casual_max_per_occasion: 'العارضة: أيام في المرة', maternity_days: 'الوضع بالأيام', maternity_times: 'الوضع: مرات في الخدمة', paternity_days: 'الأبوة بالأيام',
       paternity_times: 'الأبوة: مرات', hajj_months: 'الحج بالشهور', hajj_min_service_years: 'الحج بعد كام سنة خدمة' } },
   { country: 'EG', key: 'eg.overtime', label: 'الإضافي وساعات العمل', card: 'C-EG-06', usedBy: OVERTIME_MINIMUM,
@@ -64,8 +67,8 @@ export const STATUTORY_CATALOG: readonly StatutoryKeyInfo[] = [
   { country: 'SA', key: 'sa.gosi.old_track', label: 'التأمينات — المسار القديم وغير السعودي', card: 'C-SA-01', usedBy: null,
     codes: { saudi_employee_pct: pct('سعودي: حصة الموظف'), saudi_employer_pct: pct('سعودي: حصة صاحب العمل'), non_saudi_employee_pct: pct('غير سعودي: حصة الموظف'), non_saudi_employer_pct: pct('غير سعودي: حصة صاحب العمل'),
       min_salary: 'الحد الأدنى للأجر', max_salary: 'الحد الأقصى للأجر' } },
-  { country: 'SA', key: 'sa.leave.annual', label: 'الإجازة السنوية', card: 'C-SA-06', usedBy: null, codes: { standard_days: 'الأيام', senior_days: 'أيام الشريحة الأعلى', senior_service_years: 'الشريحة الأعلى بعد كام سنة' } },
-  { country: 'SA', key: 'sa.leave.other', label: 'إجازات تانية (وضع، أبوة، زواج، وفاة، حج، مرضية)', card: 'C-SA-06', usedBy: null,
+  { country: 'SA', key: 'sa.leave.annual', label: 'الإجازة السنوية', card: 'C-SA-06', usedBy: LEAVE_TIERS, codes: { standard_days: 'الأيام', senior_days: 'أيام الشريحة الأعلى', senior_service_years: 'الشريحة الأعلى بعد كام سنة' } },
+  { country: 'SA', key: 'sa.leave.other', label: 'إجازات تانية (وضع، أبوة، زواج، وفاة، حج، مرضية)', card: 'C-SA-06', usedBy: LEAVE_TYPES,
     codes: { maternity_weeks: 'الوضع بالأسابيع', paternity_days: 'الأبوة بالأيام', marriage_days: 'الزواج بالأيام', bereavement_days: 'الوفاة بالأيام', sibling_bereavement_days: 'وفاة الأخ أو الأخت بالأيام',
       hajj_min_days: 'الحج: أقل أيام', hajj_max_days: 'الحج: أكتر أيام', hajj_min_service_years: 'الحج بعد كام سنة خدمة', sick_full_days: 'المرضية: أيام بأجر كامل', sick_reduced_days: 'المرضية: أيام بأجر مخفّض',
       sick_reduced_pct: pct('المرضية: نسبة الأجر المخفّض'), sick_unpaid_days: 'المرضية: أيام بدون أجر' } },

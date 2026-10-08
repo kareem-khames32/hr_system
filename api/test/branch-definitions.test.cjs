@@ -162,7 +162,7 @@ test('wiring: every door asks the same helpers (settings, request catalog + subm
   for (const text of ['definitionBranchWhere<LeaveType>(user)', 'definitionBranchWhere<RequestType>(user)',
     'await definitionBranchForCreate(this.leaveTypes.manager, user, dto.branchId)', 'await definitionBranchForCreate(this.requestTypes.manager, user, dto.branchId)',
     'const AUDIENCE_MODES: readonly string[] = AUDIENCE_WHO_MODES', 'await this.validateAudience(dto.visibleTo, branchId)',
-    "const { balanceSource, sickPayTiers, branchId: _branchId, ...rest } = dto"]) {
+    "const { balanceSource, sickPayTiers, branchId: _branchId, entitlementTiers: _entitlementTiers, maxTimesInService: _maxTimesInService, ...rest } = dto"]) {
     assert.ok(settings.includes(text), text)
   }
   assert.equal(settings.split('assertDefinitionWritable(user, ').length - 1, 2, 'leave types + request types edits are guarded')

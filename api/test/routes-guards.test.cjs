@@ -69,7 +69,7 @@ const HANDLER_TAGS = {
   PortalController: { dismissNotification: ['notifications'], markNotificationsRead: ['notifications'], notifications: ['notifications'] },
   ReportsController: { attendance: ['attendance'], leaves: ['leave'], overtime: ['overtime'], payroll: ['payroll'], payrollLoans: ['loans'], payrollOvertime: ['payroll','overtime'], payrollUnassigned: ['payroll'], payrollVariance: ['payroll'] },
   RequestsController: { acknowledge: ['custody'], activeLeaveTypes: ['leave'], adjustBalance: ['leave'], balanceAdjustments: ['leave'], bulkBalances: ['leave'], employeeBalances: ['leave'], handover: ['custody'], managerConfirm: ['custody'], myBalances: ['leave'], myLeaves: ['leave'], reconcileOvertime: ['overtime'], rejectCustody: ['custody'], rollover: ['leave'], transfer: ['custody'] },
-  SettingsController: { createChain: ['requests'], createLeaveType: ['leave'], createRequestType: ['requests'], destinationHandlers: ['requests'], listChains: ['requests'], listLeaveTypes: ['leave'], listRequestTypes: ['requests'], replaceChainSteps: ['requests'], updateChain: ['requests'], updateLeaveType: ['leave'], updateRequestType: ['requests'], updateStep: ['requests'] },
+  SettingsController: { addStatutoryLeaveTypes: ['leave'], createChain: ['requests'], createLeaveType: ['leave'], createRequestType: ['requests'], destinationHandlers: ['requests'], leaveStatutoryPack: ['leave'], listChains: ['requests'], listLeaveTypes: ['leave'], listRequestTypes: ['requests'], replaceChainSteps: ['requests'], updateChain: ['requests'], updateLeaveType: ['leave'], updateRequestType: ['requests'], updateStep: ['requests'] },
 }
 const guarded = (handler, guard) => handler.guards.includes(guard)
 
@@ -223,8 +223,8 @@ test('RG-04: المسارات اللي بتخدم أكتر من موديول م�
   const tagged = {}
   for (const handler of handlers.filter(item => item.ownModules)) (tagged[handler.controller] ??= {})[handler.name] = handler.ownModules
   assert.deepEqual(tagged, HANDLER_TAGS)
-  // B2.8: +4 (حوار الطلب بموديول الطلبات، وحوار المهمة بموديول المهام)
-  assert.equal(Object.values(tagged).reduce((sum, own) => sum + Object.keys(own).length, 0), 71)
+  // B2.8: +4 (حوار الطلب بموديول الطلبات، وحوار المهمة بموديول المهام)؛ B4.5 (ج): +2 (اقتراح شرائح الحزمة، وأنواع إجازات الحزمة لفرع)
+  assert.equal(Object.values(tagged).reduce((sum, own) => sum + Object.keys(own).length, 0), 73)
   // ووسم الـhandler دايمًا غير وسم الكنترولر (وسم مكرر مالوش معنى وبيخبّي غلطة)
   for (const handler of handlers.filter(item => item.ownModules)) assert.notDeepEqual(handler.ownModules, handler.classModules, handler.id)
 

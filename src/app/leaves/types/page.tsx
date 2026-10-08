@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import { Plus, Edit2, Trash2, CheckCircle2, XCircle, CalendarDays, Gift, HeartPulse, Ban } from 'lucide-react'
-import { can, createLeaveType, fetchLeaveTypes, updateLeaveType } from '@/lib/api'
+import { addStatutoryLeaveTypes, can, createLeaveType, fetchLeaveStatutoryPack, fetchLeaveTypes, updateLeaveType } from '@/lib/api'
 import { DefinitionBranchField, useDefinitionBranches } from '@/components/DefinitionBranchField'
 
 // ===== شاشة أنواع الإجازات (قرار المالك 16 سبتمبر) =====
@@ -13,6 +13,8 @@ import { DefinitionBranchField, useDefinitionBranches } from '@/components/Defin
 type Category = 'ANNUAL' | 'OCCASION' | 'SICK' | 'UNPAID'
 type TabKey = 'basic' | 'balance' | 'days' | 'pay' | 'conditions' | 'attachment'
 type Tier = { fromDay: string; toDay: string; payPercent: string }
+// B4.5 (ج): شريحة السنوية — الدولة ('' = الكل)، من كام سنة خدمة، من سن كام، الأيام
+type AgeTier = { country: string; minServiceYears: string; minAge: string; days: string }
 
 interface LeaveTypeRow {
   id: number
@@ -34,6 +36,8 @@ interface LeaveTypeRow {
   maxTimesPerYear: number | null
   oncePerService: boolean
   sickPayTiers: string | null
+  entitlementTiers?: string | null
+  maxTimesInService?: number | null
   minDaysPerRequest: number | string | null
   maxDays: number | null
   noticeDays: number
@@ -74,14 +78,16 @@ const defaultTiers: Tier[] = [
 ]
 
 const str = (v: unknown) => (v === null || v === undefined ? '' : String(Number(v)))
+const ageTierOf = (r: any): AgeTier => ({ country: r?.country ?? '', minServiceYears: str(r?.minServiceYears), minAge: str(r?.minAge), days: str(r?.days) })
 
 type Form = {
   category: Category
   code: string; nameAr: string; nameEn: string; description: string; isActive: boolean
   annualDays: string; renewalBasis: string; carryOverEnabled: boolean; carryOverMaxDays: string
   entitlementStartMonths: string; firstYearProrated: boolean
-  fixedDays: string; oncePerService: boolean; maxTimesPerYear: string
+  fixedDays: string; oncePerService: boolean; maxTimesPerYear: string; maxTimesInService: string
   tiers: Tier[]
+  ageTiers: AgeTier[]
   minDays: string; maxDays: string; noticeDays: string; backdateAllowed: boolean; backdateMaxDays: string
   countingMode: string; halfDayAllowed: boolean
   attachmentRule: string; attachmentAboveDays: string; attachmentName: string; attachmentTiming: string; attachmentDeadlineDays: string
@@ -93,8 +99,9 @@ const newForm = (category: Category): Form => ({
   annualDays: category === 'ANNUAL' ? '21' : category === 'SICK' ? '120' : '',
   renewalBasis: 'YEAR_START', carryOverEnabled: false, carryOverMaxDays: '',
   entitlementStartMonths: category === 'ANNUAL' ? '0' : '', firstYearProrated: true,
-  fixedDays: '', oncePerService: false, maxTimesPerYear: '',
+  fixedDays: '', oncePerService: false, maxTimesPerYear: '', maxTimesInService: '',
   tiers: defaultTiers.map(t => ({ ...t })),
+  ageTiers: [],
   minDays: '', maxDays: '', noticeDays: '0', backdateAllowed: true, backdateMaxDays: '',
   countingMode: category === 'UNPAID' ? 'ALL_DAYS' : 'WORKING_DAYS', halfDayAllowed: true,
   attachmentRule: category === 'SICK' ? 'REQUIRED' : 'NONE', attachmentAboveDays: '',
@@ -109,13 +116,19 @@ const formOf = (t: LeaveTypeRow): Form => {
     const parsed = t.sickPayTiers ? JSON.parse(t.sickPayTiers) : null
     if (Array.isArray(parsed) && parsed.length) tiers = parsed.map((r: any) => ({ fromDay: str(r.fromDay), toDay: str(r.toDay), payPercent: str(r.payPercent) }))
   } catch { /* جدول تالف: يبدأ بالافتراضي */ }
+  let ageTiers: AgeTier[] = []
+  try {
+    const parsed = t.entitlementTiers ? JSON.parse(t.entitlementTiers) : null
+    if (Array.isArray(parsed)) ageTiers = parsed.map(ageTierOf)
+  } catch { /* شرائح تالفة: من غير شرائح */ }
   return {
     category: (t.category ?? 'OCCASION') as Category,
     code: t.code, nameAr: t.nameAr, nameEn: t.nameEn ?? '', description: t.description ?? '', isActive: t.isActive,
     annualDays: str(t.annualDays), renewalBasis: t.renewalBasis ?? 'YEAR_START', carryOverEnabled: !!t.carryOverEnabled, carryOverMaxDays: str(t.carryOverMaxDays),
     entitlementStartMonths: str(t.entitlementStartMonths), firstYearProrated: t.firstYearProrated !== false,
-    fixedDays: str(t.fixedDays), oncePerService: !!t.oncePerService, maxTimesPerYear: str(t.maxTimesPerYear),
+    fixedDays: str(t.fixedDays), oncePerService: !!t.oncePerService, maxTimesPerYear: str(t.maxTimesPerYear), maxTimesInService: str(t.maxTimesInService),
     tiers,
+    ageTiers,
     minDays: str(t.minDaysPerRequest), maxDays: str(t.maxDays), noticeDays: str(t.noticeDays ?? 0), backdateAllowed: t.backdateAllowed !== false, backdateMaxDays: str(t.backdateMaxDays),
     countingMode: t.countingMode ?? 'WORKING_DAYS', halfDayAllowed: t.halfDayAllowed !== false,
     attachmentRule: t.attachmentRule ?? 'NONE', attachmentAboveDays: str(t.attachmentAboveDays), attachmentName: t.requiredAttachment ?? '',
@@ -198,6 +211,13 @@ export default function LeaveTypesPage() {
       (!Number.isInteger(Number(form.entitlementStartMonths)) || Number(form.entitlementStartMonths) < 0 || Number(form.entitlementStartMonths) > 60)) {
       return 'الرصيد يبدأ بعد كام شهر: رقم صحيح من 0 لـ 60'
     }
+    if (form.category === 'ANNUAL') {
+      for (let i = 0; i < form.ageTiers.length; i++) {
+        const t = form.ageTiers[i]
+        if (t.days === '' || !Number.isFinite(Number(t.days)) || Number(t.days) < 0) return `الشريحة ${i + 1}: اكتب عدد الأيام`
+        if (!t.country && t.minServiceYears === '' && t.minAge === '') return `الشريحة ${i + 1}: اختار دولة أو سنين خدمة أو سن`
+      }
+    }
     if (form.attachmentRule === 'REQUIRED_ABOVE_DAYS' && form.attachmentAboveDays === '') return 'حدد عدد الأيام اللي فوقها المرفق مطلوب'
     if (form.attachmentRule !== 'NONE' && !form.attachmentName.trim()) return 'اكتب اسم المرفق، مثلًا: تقرير طبي'
     return null
@@ -219,6 +239,10 @@ export default function LeaveTypesPage() {
       fixedDays: c === 'OCCASION' ? n(form.fixedDays) : null,
       oncePerService: c === 'OCCASION' ? form.oncePerService : false,
       maxTimesPerYear: c === 'OCCASION' ? n(form.maxTimesPerYear) : null,
+      maxTimesInService: c === 'OCCASION' && !form.oncePerService ? n(form.maxTimesInService) : null,
+      entitlementTiers: c === 'ANNUAL'
+        ? form.ageTiers.map(t => ({ country: t.country || null, minServiceYears: n(t.minServiceYears), minAge: n(t.minAge), days: Number(t.days) }))
+        : null,
       sickPayTiers: c === 'SICK' ? form.tiers.map(t => ({ fromDay: Number(t.fromDay), toDay: t.toDay === '' ? null : Number(t.toDay), payPercent: Number(t.payPercent) })) : null,
       minDaysPerRequest: n(form.minDays), maxDays: n(form.maxDays),
       noticeDays: Number(form.noticeDays || 0), backdateAllowed: form.backdateAllowed,
@@ -243,6 +267,36 @@ export default function LeaveTypesPage() {
       setFormError(err.message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  // B4.5 (ج): الحزمة بتقترح والمالك بيراجع ويحفظ
+  const [tiersNote, setTiersNote] = useState<string | null>(null)
+  const loadPackTiers = async () => {
+    try {
+      const pack = await fetchLeaveStatutoryPack()
+      if (!pack.ready) { setTiersNote('الشرائح محتاجة ترحيل 136 على قاعدة البيانات الأول'); return }
+      set('ageTiers', pack.annual.tiers.map(ageTierOf))
+      setTiersNote(pack.annual.unverified ? 'أرقام من حزمة الدولة «محتاج تحقق» — راجعها قبل الحفظ' : 'أرقام حزمة الدولة — راجعها قبل الحفظ')
+    } catch (err: any) {
+      setTiersNote(err.message)
+    }
+  }
+  const setAgeTier = (index: number, key: keyof AgeTier, value: string) =>
+    setForm(f => (f ? { ...f, ageTiers: f.ageTiers.map((t, i) => (i === index ? { ...t, [key]: value } : t)) } : f))
+  const [packBranch, setPackBranch] = useState('')
+  const [packNote, setPackNote] = useState<string | null>(null)
+  const packBranches = branchInfo.branches.filter(b => ['EG', 'SA'].includes(String(b.country ?? '').toUpperCase()) && branchInfo.canEdit(b.id))
+  const addPackTypes = async () => {
+    if (!packBranch) return
+    try {
+      const result = await addStatutoryLeaveTypes(Number(packBranch))
+      setPackNote(result.created.length
+        ? `اتضاف ${result.created.length} نوع غير مفعّل${result.unverified ? ' (أرقام «محتاج تحقق»)' : ''} — راجعهم وفعّل اللي يناسبك`
+        : 'أنواع الحزمة موجودة للفرع ده قبل كده')
+      await load()
+    } catch (err: any) {
+      setPackNote(err.message)
     }
   }
 
@@ -278,6 +332,18 @@ export default function LeaveTypesPage() {
         </div>
 
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+
+        {canManage && !form && packBranches.length > 0 && (
+          <div className="bg-white rounded-xl border border-gray-100 p-4 flex flex-wrap items-center gap-3">
+            <span className="text-sm text-gray-700">أنواع إجازات حزمة الدولة (وضع، أبوة، حج…) لفرع:</span>
+            <select className="input" value={packBranch} onChange={e => { setPackBranch(e.target.value); setPackNote(null) }}>
+              <option value="">اختار الفرع</option>
+              {packBranches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+            <button onClick={addPackTypes} disabled={!packBranch} className="btn-secondary disabled:opacity-50">أضفها غير مفعّلة</button>
+            {packNote && <span className="text-sm text-gray-600">{packNote}</span>}
+          </div>
+        )}
 
         {form && (
           <div className="card space-y-5">
@@ -385,6 +451,44 @@ export default function LeaveTypesPage() {
                       قبل يوم الاستحقاق رصيده السنوي صفر ومايقدرش يطلب سنوية. مثال: اتعيّن 1 مارس والرصيد بعد 6 شهور ⇐ يستحق من 1 سبتمبر؛
                       بالنسبة = 21 × (من 1 سبتمبر لآخر السنة) ÷ السنة، وكاملة = 21 يوم.
                     </p>
+                    <div className="md:col-span-2 border-t border-gray-100 pt-4 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-gray-800">شرائح بمدة الخدمة والسن (اختياري)</p>
+                        <div className="flex gap-2">
+                          <button type="button" onClick={loadPackTiers} className="btn-secondary text-sm">حمّل شرائح حزمة الدولة</button>
+                          <button type="button" onClick={() => set('ageTiers', [...form.ageTiers, { country: '', minServiceYears: '', minAge: '', days: '' }])} className="btn-secondary text-sm">إضافة شريحة</button>
+                        </div>
+                      </div>
+                      <p className="text-sm text-gray-500">
+                        الموظف بياخد أعلى شريحة منطبقة عليه (دولة فرعه، وسنين خدمته، وسنّه)، ولو مفيش شريحة منطبقة بياخد «عدد الأيام في السنة». من غير شرائح = نفس الأيام لكل الموظفين.
+                      </p>
+                      {tiersNote && <p className="text-sm text-amber-700">{tiersNote}</p>}
+                      {form.ageTiers.map((t, i) => (
+                        <div key={i} className="grid grid-cols-2 md:grid-cols-5 gap-2 items-end">
+                          <div>
+                            <label className={field}>الدولة</label>
+                            <select className="input w-full" value={t.country} onChange={e => setAgeTier(i, 'country', e.target.value)}>
+                              <option value="">الكل</option>
+                              <option value="EG">مصر</option>
+                              <option value="SA">السعودية</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className={field}>من كام سنة خدمة</label>
+                            <input type="number" min={0} max={60} step={1} className="input w-full" value={t.minServiceYears} onChange={e => setAgeTier(i, 'minServiceYears', e.target.value)} />
+                          </div>
+                          <div>
+                            <label className={field}>من سن كام</label>
+                            <input type="number" min={15} max={80} step={1} className="input w-full" value={t.minAge} onChange={e => setAgeTier(i, 'minAge', e.target.value)} />
+                          </div>
+                          <div>
+                            <label className={field}>الأيام في السنة</label>
+                            <input type="number" min={0} className="input w-full" value={t.days} onChange={e => setAgeTier(i, 'days', e.target.value)} />
+                          </div>
+                          <button type="button" onClick={() => set('ageTiers', form.ageTiers.filter((_, x) => x !== i))} className="btn-secondary text-sm text-red-600">حذف</button>
+                        </div>
+                      ))}
+                    </div>
                   </>
                 )}
                 {form.category === 'SICK' && (
@@ -407,6 +511,11 @@ export default function LeaveTypesPage() {
                   <input type="checkbox" className={check} checked={form.oncePerService} onChange={e => set('oncePerService', e.target.checked)} />
                   <span className="text-sm text-gray-700">مرة واحدة طول مدة الخدمة</span>
                 </label>
+                <div>
+                  <label className={field}>أقصى عدد مرات طول مدة الخدمة (فاضي = بدون حد)</label>
+                  <input type="number" min={1} max={50} step={1} className="input w-full" disabled={form.oncePerService} value={form.oncePerService ? '' : form.maxTimesInService}
+                    onChange={e => set('maxTimesInService', e.target.value)} placeholder="مثال: 3" />
+                </div>
               </div>
             )}
 

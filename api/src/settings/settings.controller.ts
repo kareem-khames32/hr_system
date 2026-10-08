@@ -42,6 +42,10 @@ import {
   ENGINE_RECORD_HANDLERS,
 } from '../requests/destinations.service'
 import { LeaveType } from '../requests/entities/leave.entities'
+import { checkEntitlementTiers, statutoryAnnualTiers, statutoryLeaveTypeCode, statutoryLeaveTypes } from '../requests/leave-entitlement-tiers'
+import { LEAVE_TYPE_EXTRAS_MIGRATION, leaveTypeExtrasReady, readLeaveTypeExtras, writeLeaveTypeExtras, type LeaveTypeExtras } from '../requests/leave-type-extras'
+import { readStatutoryEntries } from '../statutory/statutory.service'
+import { branchCountryOf } from '../org/branch-currency'
 import { RequestType } from '../requests/entities/request-type.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { FUNCTIONAL_APPROVER_ROLES } from '../requests/approver-resolver.service'
@@ -135,6 +139,13 @@ class LeaveTypeRulesDto {
 
   @IsOptional() @IsArray({ message: 'جدول أجر المرضية قائمة صفوف' })
   sickPayTiers?: Array<{ fromDay: number; toDay: number | null; payPercent: number }> | null
+
+  // B4.5 (ج): شرائح السنوية بالخدمة والسن (فاضية = أيام النوع)، وأقصى مرات للمناسبة طول الخدمة (فاضي = من غير حد)
+  @IsOptional() @IsArray({ message: 'شرائح الإجازة السنوية قايمة صفوف' })
+  entitlementTiers?: Array<{ country?: string | null; minServiceYears?: number | null; minAge?: number | null; days: number }> | null
+
+  @IsOptional() @Type(() => Number) @IsInt({ message: 'أقصى مرات طول الخدمة رقم صحيح' }) @Min(1) @Max(50)
+  maxTimesInService?: number | null
 
   @IsOptional() @Type(() => Number) @IsNumber({}, { message: 'أقل أيام في الطلب رقم' }) @Min(0)
   minDaysPerRequest?: number | null
@@ -254,6 +265,11 @@ class UpdateLeaveTypeDto extends LeaveTypeRulesDto {
   @IsOptional()
   @IsInt({ message: 'الفرع غير صحيح' })
   branchId?: number | null
+}
+
+class StatutoryLeaveTypesDto {
+  @Type(() => Number) @IsInt({ message: 'اختار الفرع' }) @Min(1)
+  branchId: number
 }
 
 class UpdateStepDto {
@@ -1010,8 +1026,48 @@ export class SettingsController {
   // حساب الفرع يرى أنواع الشركة كلها + أنواع فرعه؛ الحساب العام يرى الكل (قرار المالك 16 سبتمبر)
   @RequireModule('leave')
   @Get('leave-types')
-  listLeaveTypes(@CurrentUser() user: JwtPayload) {
-    return this.leaveTypes.find({ where: definitionBranchWhere<LeaveType>(user), order: { id: 'ASC' } })
+  async listLeaveTypes(@CurrentUser() user: JwtPayload) {
+    const rows = await this.leaveTypes.find({ where: definitionBranchWhere<LeaveType>(user), order: { id: 'ASC' } })
+    const extras = await readLeaveTypeExtras(this.leaveTypes.manager)
+    // على نفس الكائن (مش نسخة): رد النوع بيتبني من toJSON بتاع الكيان (خانة التوافق balanceSource)
+    return rows.map(row => Object.assign(row, extras.get(row.id) ?? { entitlementTiers: null, maxTimesInService: null }))
+  }
+
+  // B4.5 (ج): اقتراح شرائح السنوية من حزمة الدولة (للمراجعة قبل الحفظ) — مابيكتبش حاجة
+  @RequireModule('leave')
+  @Get('leave-types/statutory-pack')
+  async leaveStatutoryPack() {
+    const em = this.leaveTypes.manager
+    return { annual: statutoryAnnualTiers(await readStatutoryEntries(em), attendanceRuleToday()), ready: await leaveTypeExtrasReady(em) }
+  }
+
+  // B4.5 (ج): أنواع إجازات دولة الفرع من الحزمة — بتتعمل للفرع **غير مفعّلة** وبأرقام الحزمة؛ الموجود بنفس الكود مابيتكررش
+  @RequireModule('leave')
+  @Post('leave-types/statutory-pack')
+  async addStatutoryLeaveTypes(@Body() dto: StatutoryLeaveTypesDto, @CurrentUser() user: JwtPayload) {
+    const manager = this.leaveTypes.manager
+    const branchId = await definitionBranchForCreate(manager, user, dto.branchId)
+    if (branchId === null) throw new BadRequestException('اختار الفرع')
+    const [branch]: Array<{ country: string | null }> = await manager.query('SELECT [country] FROM [branches] WHERE [id] = @0', [branchId])
+    const country = branchCountryOf(branch?.country)
+    const pack = statutoryLeaveTypes(await readStatutoryEntries(manager), country, attendanceRuleToday())
+    if (!country || !pack.types.length) throw new BadRequestException('حزمة الدولة مافيهاش أنواع إجازات لدولة الفرع ده')
+    return manager.transaction(async em => {
+      // إضافتين في نفس اللحظة لنفس الفرع: التانية تستنى وتلاقي الأنواع موجودة
+      await em.query('SELECT TOP (0) 1 AS [x] FROM dbo.leave_types WITH (TABLOCKX, HOLDLOCK)')
+      const repo = em.getRepository(LeaveType), created: string[] = [], existing: string[] = []
+      for (const type of pack.types) {
+        const code = statutoryLeaveTypeCode(type.baseCode, country, branchId)
+        if (await repo.existsBy({ code })) { existing.push(code); continue }
+        const notes = [`من حزمة الدولة${pack.unverified ? ' (محتاج تحقق)' : ''}`,
+          ...(type.maxTimesInService !== null ? [`بحد أقصى ${type.maxTimesInService} مرات طول الخدمة`] : []), ...(type.note ? [type.note] : [])]
+        const saved = await repo.save(repo.create({ code, branchId, nameAr: type.nameAr, category: 'OCCASION', isPaid: true, balanceType: 'none',
+          maxDays: type.maxDays, oncePerService: type.oncePerService, countingMode: type.countingMode, isActive: false, description: notes.join(' — ') } as Partial<LeaveType>))
+        if (type.maxTimesInService !== null) await writeLeaveTypeExtras(em, saved.id, { maxTimesInService: type.maxTimesInService })
+        created.push(code)
+      }
+      return { created, existing, unverified: pack.unverified }
+    })
   }
 
   @RequireModule('leave')
@@ -1029,7 +1085,7 @@ export class SettingsController {
     const dup = await this.leaveTypes.findOne({ where: { code: dto.code } })
     if (dup) throw new BadRequestException(`الكود ${dto.code} مستخدم بالفعل`)
     const row = this.leaveTypes.create({ code: dto.code, branchId } as Partial<LeaveType>)
-    return this.leaveTypes.save(Object.assign(row, this.leaveTypeInput(dto, row)))
+    return this.saveLeaveType(Object.assign(row, this.leaveTypeInput(dto, row)), dto)
   }
 
   @RequireModule('leave')
@@ -1044,7 +1100,38 @@ export class SettingsController {
     assertDefinitionWritable(user, row)
     assertDefinitionBranchUnchanged(row, dto.branchId)
     Object.assign(row, this.leaveTypeInput(dto, row))
-    return this.leaveTypes.save(row)
+    return this.saveLeaveType(row, dto)
+  }
+
+  // النوع وعمودي B4.5 (ج) في معاملة واحدة. قبل ترحيل 136: الحفظ من غيرهم شغال، وبقيمة ليهم بيترفض
+  private async saveLeaveType(row: LeaveType, dto: CreateLeaveTypeDto | UpdateLeaveTypeDto) {
+    const extras = this.leaveTypeExtrasInput(dto, row)
+    return this.leaveTypes.manager.transaction(async em => {
+      const saved = await em.getRepository(LeaveType).save(row)
+      if (!(await writeLeaveTypeExtras(em, saved.id, extras)) && Object.values(extras).some(value => value !== null)) {
+        throw new BadRequestException(LEAVE_TYPE_EXTRAS_MIGRATION)
+      }
+      return Object.assign(saved, (await readLeaveTypeExtras(em, [saved.id])).get(saved.id) ?? { entitlementTiers: null, maxTimesInService: null })
+    })
+  }
+
+  // الشرائح للسنوية بس والمرات للمناسبة بس: تغيير الفئة بيفضّي اللي مش بتاعها
+  private leaveTypeExtrasInput(dto: CreateLeaveTypeDto | UpdateLeaveTypeDto, merged: LeaveType): Partial<LeaveTypeExtras> {
+    const extras: Partial<LeaveTypeExtras> = {}
+    if (dto.entitlementTiers !== undefined || (dto.category !== undefined && merged.category !== 'ANNUAL')) {
+      const rows = merged.category === 'ANNUAL' ? dto.entitlementTiers ?? [] : []
+      if (merged.category !== 'ANNUAL' && dto.entitlementTiers?.length) throw new BadRequestException('شرائح الخدمة والسن للإجازة برصيد سنوي بس')
+      const checked = checkEntitlementTiers(rows)
+      if (checked.error !== null) throw new BadRequestException(checked.error)
+      extras.entitlementTiers = checked.tiers.length ? JSON.stringify(checked.tiers) : null
+    }
+    if (dto.maxTimesInService !== undefined || (dto.category !== undefined && merged.category !== 'OCCASION')) {
+      const times = merged.category === 'OCCASION' ? dto.maxTimesInService ?? null : null
+      if (merged.category !== 'OCCASION' && dto.maxTimesInService != null) throw new BadRequestException('أقصى مرات طول الخدمة لإجازة المناسبة بس')
+      if (times !== null && merged.oncePerService) throw new BadRequestException('اختار «مرة واحدة طول الخدمة» أو عدد مرات — مش الاتنين')
+      extras.maxTimesInService = times
+    }
+    return extras
   }
 
   // الفئة تحدد المدفوعية ومصدر الرصيد، وقواعد كل تبويب تُفحص على الحالة بعد الحفظ (الموجود + المُرسل)
@@ -1053,7 +1140,7 @@ export class SettingsController {
       throw new BadRequestException('balanceType وbalanceSource يشيران إلى قيمتين مختلفتين')
     }
     // الفرع لا يمر من هنا: يتحدد عند الإضافة فقط (definitionBranchForCreate)
-    const { balanceSource, sickPayTiers, branchId: _branchId, ...rest } = dto
+    const { balanceSource, sickPayTiers, branchId: _branchId, entitlementTiers: _entitlementTiers, maxTimesInService: _maxTimesInService, ...rest } = dto
     const input: Record<string, unknown> = { ...rest }
     if (dto.balanceType !== undefined || balanceSource !== undefined) {
       input.balanceType = dto.balanceType !== undefined ? dto.balanceType : balanceSource

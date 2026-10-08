@@ -1476,6 +1476,11 @@ export const fetchActiveLeaveTypes = (branchId?: number | null) =>
   get<ApiLeaveTypeOption[]>(`/leaves/types${branchId ? `?branchId=${branchId}` : ''}`)
 export const createLeaveType = (lt: Record<string, unknown>) => post('/settings/leave-types', lt)
 export const updateLeaveType = (id: number, lt: Record<string, unknown>) => patch(`/settings/leave-types/${id}`, lt)
+// B4.5 (ج): اقتراح شرائح السنوية من حزمة الدولة، وإضافة أنواع إجازات دولة الفرع (غير مفعّلة)
+export interface ApiLeaveEntitlementTier { country: 'EG' | 'SA' | null; minServiceYears: number | null; minAge: number | null; days: number }
+export const fetchLeaveStatutoryPack = () => get<{ annual: { tiers: ApiLeaveEntitlementTier[]; unverified: boolean }; ready: boolean }>('/settings/leave-types/statutory-pack')
+export const addStatutoryLeaveTypes = (branchId: number) =>
+  post<{ created: string[]; existing: string[]; unverified: boolean }>('/settings/leave-types/statutory-pack', { branchId })
 export const fetchApprovalChains = () => get<any[]>('/settings/approval-chains')
 
 // بانِي السلاسل — إنشاء/تعديل/استبدال خطوات

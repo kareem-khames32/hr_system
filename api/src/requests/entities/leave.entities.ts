@@ -132,6 +132,14 @@ export class LeaveType {
   // فرع النوع: null = كل الشركة؛ نوع الفرع لا يظهر ولا يُطلب خارج فرعه (ترحيل 043)
   @Column({ type: 'int', nullable: true })
   branchId: number | null
+
+  // B4.5 (ترحيل 136): شرائح السنوية بالخدمة والسن (JSON)، وأقصى مرات للمناسبة طول الخدمة.
+  // برّه الكيان للقراءة والكتابة (الكود بيشتغل قبل الترحيل): requests/leave-type-extras.ts
+  @Column({ type: 'nvarchar', length: 'MAX', nullable: true, select: false, insert: false, update: false })
+  entitlementTiers?: string | null
+
+  @Column({ type: 'int', nullable: true, select: false, insert: false, update: false })
+  maxTimesInService?: number | null
 }
 
 @Entity('leaves')

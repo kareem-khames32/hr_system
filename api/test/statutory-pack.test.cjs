@@ -22,7 +22,10 @@ const READ_BY_PREVIEW = { 'eg.salary_tax.brackets': 'payroll/eg-salary-tax.ts', 
   // B4.4 (د): التأمين الصحي الشامل (ورا إعداده)، وتقرير صندوق التدريب (قراءة بس)
   'eg.health_insurance': 'payroll/payroll-statutory-run.ts', 'eg.training_fund': 'payroll/eg-training-fund.ts',
   // B4.5 (ب): الحد القانوني لمعامل الإضافي (ورا إعداده)
-  'eg.overtime': 'attendance/overtime-legal-minimum.ts', 'sa.overtime': 'attendance/overtime-legal-minimum.ts' }
+  'eg.overtime': 'attendance/overtime-legal-minimum.ts', 'sa.overtime': 'attendance/overtime-legal-minimum.ts',
+  // B4.5 (ج): اقتراح شرائح السنوية وأنواع إجازات الفرع (للعرض بس)
+  'eg.leave.annual': 'requests/leave-entitlement-tiers.ts', 'eg.leave.other': 'requests/leave-entitlement-tiers.ts',
+  'sa.leave.annual': 'requests/leave-entitlement-tiers.ts', 'sa.leave.other': 'requests/leave-entitlement-tiers.ts' }
 
 test('SP-01: every seed row belongs to a catalog key with exactly its codes, the new keys are reference data no calculator reads, and the worked examples of the C cards hold', () => {
   assert.equal(STATUTORY_SEED.length, 27)

@@ -14,6 +14,7 @@ import {
   accruedDays,
   addDays,
   balanceTimeline,
+  balanceTypeRow,
   balanceTypeSettings,
   carryOverDays,
   carryOverExpiry,
@@ -28,6 +29,8 @@ import {
   previousEntry,
   prorate,
 } from './leave-balance-periods'
+import { parseEntitlementTiers, tieredAnnualDays, type EntitlementTier } from './leave-entitlement-tiers'
+import { readLeaveTypeExtras } from './leave-type-extras'
 import { yearEndSplit } from './leave-year-end.math'
 import { branchIdIn, branchScopeQb, inBranchScope } from '../auth/guards'
 import type { BranchScope } from '../auth/guards'
@@ -129,6 +132,8 @@ interface AccrualSettings {
   probationMonths: number
   expiryMonths: number
   types: Record<TypedBalance, BalanceTypeSettings>
+  // B4.5 (ج): شرائح السنوية بالخدمة والسن — موجودة بس لو نوع السنوية ليه شرائح (غير كده أيام النوع زي الأول)
+  annualTiers?: { tiers: EntitlementTier[]; facts: Map<number, { country: string | null; birthDate: string | null }> }
 }
 
 const num = (v: unknown) => Number(v ?? 0)
@@ -247,10 +252,11 @@ export class LeaveBalancesService {
   // settings: الحساب الجماعي (الترحيل) بيقرأ الإعدادات مرة ويمررها بدل استعلامين لكل صف
   private async accrualContext(employeeId: number, manager?: EntityManager, settings?: AccrualSettings): Promise<AccrualContext> {
     const emp = await (manager ? manager.getRepository(Employee) : this.employees).findOne({ where: { id: employeeId } })
-    return this.contextOf(emp, settings ?? (await this.accrualSettings(manager)))
+    return this.contextOf(emp, settings ?? (await this.accrualSettings(manager, employeeId)))
   }
 
-  private async accrualSettings(manager?: EntityManager): Promise<AccrualSettings> {
+  // onlyEmployeeId: سياق موظف واحد — بيانات الشرائح (السن ودولة الفرع) بتتقري ليه بس بدل كل الموظفين
+  private async accrualSettings(manager?: EntityManager, onlyEmployeeId?: number): Promise<AccrualSettings> {
     const m = manager ?? this.balances.manager
     const rows = await (manager ? manager.getRepository(RequestsConfig) : this.config).find({
       where: { key: In(LEAVE_CONFIG_KEYS) },
@@ -284,20 +290,37 @@ export class LeaveBalancesService {
         annual: balanceTypeSettings(types, 'annual', globals),
         sick: balanceTypeSettings(types, 'sick', globals),
       },
+      annualTiers: await this.annualTiersOf(m, balanceTypeRow(types, 'annual')?.id, onlyEmployeeId),
     }
   }
 
+  // B4.5 (ج): شرائح نوع السنوية (لو ليه شرائح) ومعاها سن الموظفين ودولة فروعهم. من غير شرائح = undefined ومفيش أي قراءة زيادة
+  private async annualTiersOf(m: EntityManager, typeId: number | undefined, onlyEmployeeId?: number): Promise<AccrualSettings['annualTiers']> {
+    if (typeId == null) return undefined
+    const tiers = parseEntitlementTiers((await readLeaveTypeExtras(m, [typeId])).get(typeId)?.entitlementTiers)
+    if (!tiers.length) return undefined
+    const rows: Array<{ id: number; birthDate: string | null; country: string | null }> = await m.query(
+      `SELECT e.[id], CONVERT(char(10), e.[birthDate], 23) AS [birthDate], b.[country] FROM [employees] e LEFT JOIN [branches] b ON b.[id] = e.[branchId]${onlyEmployeeId == null ? '' : ' WHERE e.[id] = @0'}`,
+      onlyEmployeeId == null ? [] : [onlyEmployeeId])
+    return { tiers, facts: new Map(rows.map(row => [Number(row.id), { country: row.country ?? null, birthDate: row.birthDate ?? null }])) }
+  }
+
   private contextOf(
-    emp: Pick<Employee, 'joinDate' | 'annualLeaveEntitled'> | null,
+    emp: (Pick<Employee, 'joinDate' | 'annualLeaveEntitled'> & { id?: number }) | null,
     s: AccrualSettings
   ): AccrualContext {
+    // B4.5 (ج): أعلى شريحة منطبقة على الموظف النهارده (دولة فرعه، خدمته، سنّه)، وإلا أيام النوع
+    const facts = s.annualTiers && emp?.id != null ? s.annualTiers.facts.get(Number(emp.id)) : undefined
+    const annualDays = s.annualTiers
+      ? tieredAnnualDays(s.types.annual.annualDays, s.annualTiers.tiers, { country: facts?.country, joinDate: emp?.joinDate, birthDate: facts?.birthDate }, localDateOf(new Date()))
+      : s.types.annual.annualDays
     return {
       joinDate: emp?.joinDate ?? null,
       mode: s.mode,
       probationMonths: s.types.annual.entitlementStartMonths ?? s.probationMonths,
       prorateFirstYear: s.types.annual.firstYearProrated,
       policy: {
-        annual: emp?.annualLeaveEntitled === false ? 0 : s.types.annual.annualDays,
+        annual: emp?.annualLeaveEntitled === false ? 0 : annualDays,
         sick: s.types.sick.annualDays,
       },
       settings: s.types,
@@ -575,7 +598,7 @@ export class LeaveBalancesService {
       // Employee first serializes first-row creation and freezes branch scope.
       const employee = await em.findOne(Employee, { where: { id: employeeId }, lock: { mode: 'pessimistic_write' } })
       if (!employee || !inBranchScope(asBranchScope(branchScope), employee.branchId)) throw new NotFoundException('الموظف غير موجود')
-      const ctx = this.contextOf(employee, await this.accrualSettings(em))
+      const ctx = this.contextOf(employee, await this.accrualSettings(em, employee.id))
       const repo = em.getRepository(LeaveBalance)
       const current = await this.resolveAt(repo, employeeId, dto.balanceType, onDate, ctx)
       if (dto.period !== (current.entry?.key ?? current.key)) throw new BadRequestException(notCurrent)
@@ -1127,7 +1150,7 @@ export class LeaveBalancesService {
   // الشاشة — لو اتغير (إجازة اتعتمدت في النص) = تعارض بدل ما نسوّي رقم ماشافهوش
   async settleYearEnd(em: EntityManager, employee: Employee, year: string, expectedDays?: number, today = localDateOf(new Date())) {
     if (!isYearKey(year)) throw new BadRequestException('السنة غير صالحة')
-    const ctx = this.contextOf(employee, await this.accrualSettings(em))
+    const ctx = this.contextOf(employee, await this.accrualSettings(em, employee.id))
     const repo = em.getRepository(LeaveBalance)
     let rows = await repo.find({ where: { employeeId: employee.id, balanceType: 'annual' } })
     let state = this.closingState(employee.id, rows, ctx, year, today)
