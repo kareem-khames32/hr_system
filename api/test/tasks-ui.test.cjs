@@ -104,7 +104,7 @@ test('TU-04: قايمة المهام والقايمة الجانبية والع�
   assert.equal((read('src/app/tasks/page.tsx').match(/notifyTasksChanged\(\); void load\(\)/g) ?? []).length, 2)
   // العدّاد داخل في اعتماديات القايمة (من غيره الرقم بيتحمّل ومابيظهرش)
   // (B2.6-ب زوّد delegationEntry على نفس السطر: بند «بانتظار موافقتي» للمعتمد الهيكلي)
-  assert.match(sidebar, /\}, \[currentUser, inboxCount, inboxError, delegationEntry, payrollApprovals, tasksCount, teamManager, enabledModules\]\)/)
+  assert.match(sidebar, /\}, \[currentUser, inboxCount, inboxError, delegationEntry, payrollApprovals, tasksCount, teamManager, raisesOpen, enabledModules\]\)/)
   assert.match(read('src/components/layout/MainLayout.tsx'), /\['\/tasks', 'tasks\.view_all'\],/)
   const { pageTitleFor } = require('../../src/components/layout/pageTitles')
   assert.deepEqual([pageTitleFor('/my/tasks'), pageTitleFor('/tasks')], ['مهامي', 'المهام'])

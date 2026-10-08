@@ -33,7 +33,7 @@ test('SBU-03: أساس المقارنة — الأساسي (الافتراضي) 
 test('SBU-04: الموديول مقفول افتراضيًا وفي الباقة الكاملة، بصلاحيته، وتقرير السلّم قراءة بصلاحية عرض الرواتب وبنطاق الفروع', () => {
   const module = registry.MODULES.compensation
   assert.deepEqual([module.defaultEnabled, module.preset, module.group, module.dependsOn, module.softUses, module.permissions, module.routes, module.core],
-    [false, 'full', 'money', ['payroll'], ['performance', 'positions'], ['compensation.manage'], ['/compensation'], false])
+    [false, 'full', 'money', ['payroll'], ['performance', 'positions'], ['compensation.manage'], ['/compensation', '/compensation/*', '/my/raises'], false])
   const read = rel => fs.readFileSync(path.join(apiRoot, 'src', rel), 'utf8').replace(/\r\n/g, '\n')
   const controller = read('compensation/compensation.controller.ts')
   assert.match(controller, /@RequireModule\('compensation'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)/)

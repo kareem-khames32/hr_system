@@ -15,6 +15,7 @@ import { fetchMyTasksCount, TASKS_CHANGED_EVENT } from '@/lib/tasks-api'
 import { preboardingPathAllowed, preboardingUntil } from '@/lib/preboarding'
 import { fetchDelegations } from '@/lib/delegations-api'
 import { fetchTeamManager } from '@/lib/manager-api'
+import { fetchMyRaises } from '@/lib/compensation-api'
 import { DEFAULT_MODULES, routeAvailable, useModules } from '@/lib/modules'
 import { useBranding } from '@/lib/branding'
 import { BrandLogo } from '@/components/branding/BrandLogo'
@@ -184,6 +185,7 @@ const adminMenuDefs: MenuItem[] = [
       { label: 'التأمينات', href: '/payroll/gosi' },
       // B5.1: سلّم الرواتب ودورة الزيادات (بتظهر لما موديول تخطيط الزيادات مفتوح)
       { label: 'سلّم الرواتب والزيادات', href: '/compensation' },
+      { label: 'دورات الزيادات', href: '/compensation/cycles', perm: 'compensation.manage' },
       { label: 'تقرير الرواتب', href: '/payroll/reports' },
       { label: 'كشف البنوك', href: '/payroll/bank-sheet' },
       // قرار المالك (22 سبتمبر): المالك بيرتب سلسلة اعتماد المسير بنفسه (سلسلة الشركة + سلسلة خاصة بمسير دائم)
@@ -377,6 +379,15 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
     fetchTeamManager().then((manager) => { if (live) setTeamManager(manager) }).catch(() => { if (live) setTeamManager(false) })
     return () => { live = false }
   }, [managerOn])
+  // B5.1-ب: بند «زيادات فريقي» للمدير اللي ليه مرؤوسين وفيه دورة زيادات مفتوحة (والموديول مفعّل). فشل النداء = البند مايظهرش
+  const [raisesOpen, setRaisesOpen] = useState(false)
+  const compensationOn = enabledModules.modules.includes('compensation')
+  useEffect(() => {
+    if (!compensationOn || !getCurrentUser()) return setRaisesOpen(false)
+    let live = true
+    fetchMyRaises().then((sheet) => { if (live) setRaisesOpen(sheet.cycles.length > 0) }).catch(() => { if (live) setRaisesOpen(false) })
+    return () => { live = false }
+  }, [compensationOn])
   // B2.6-ب: المعتمد الهيكلي وطرف التفويض بيلاقوا «بانتظار موافقتي» حتى والصندوق فاضي — منها بيسجّل تفويضه قبل إجازته وبيلغيه
   const [delegationEntry, setDelegationEntry] = useState(false)
   useEffect(() => {
@@ -476,6 +487,7 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
         : []),
       { id: 'my-tasks', label: 'مهامي', icon: <ListChecks size={20} />, href: '/my/tasks', badge: tasksCount },
       ...(teamManager ? [{ id: 'my-team', label: 'فريقي', icon: <Users size={20} />, href: '/my/team' } satisfies MenuItem] : []),
+      ...(raisesOpen ? [{ id: 'my-raises', label: 'زيادات فريقي', icon: <Wallet size={20} />, href: '/my/raises' } satisfies MenuItem] : []),
       // B3.1-ج: قرار فترة التجربة — للمدير (مرؤوسيه) وللموارد البشرية (عرض الموظفين)
       ...(teamManager || can('employees.view')
         ? [{ id: 'my-probation', label: 'فترات التجربة', icon: <Hourglass size={20} />, href: '/my/probation' } satisfies MenuItem]
@@ -518,7 +530,7 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
     // B3.1-ب: حساب في بوابة التهيئة: شاشات التهيئة بس (مهامي، مستنداتي، سياساتي، الإشعارات)
     if (preboardingUntil(currentUser)) return portalItems.filter((item) => !!item.href && preboardingPathAllowed(item.href) && available(item.href))
     return [...portalItems.filter((item) => available(item.href)), ...adminItems]
-  }, [currentUser, inboxCount, inboxError, delegationEntry, payrollApprovals, tasksCount, teamManager, enabledModules])
+  }, [currentUser, inboxCount, inboxError, delegationEntry, payrollApprovals, tasksCount, teamManager, raisesOpen, enabledModules])
 
   const activeHref = activeHrefFor(pathname, menuItems)
   const activeGroup = menuItems.find((item) => item.children?.some((child) => child.href === activeHref))?.id

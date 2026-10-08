@@ -368,7 +368,7 @@ export const MODULES = {
     nameAr: 'تخطيط الزيادات وسلّم الرواتب', group: 'money', dependsOn: ['payroll'], softUses: ['performance', 'positions'], preset: 'full', defaultEnabled: false,
     description: 'نطاق راتب لكل درجة ونسبة المقارنة، ودورة زيادات سنوية بميزانية لكل إدارة واقتراحات المديرين، والتطبيق على شهر المسير من تاريخ الراتب',
     permissions: ['compensation.manage'],
-    routes: ['/compensation'],
+    routes: ['/compensation', '/compensation/*', '/my/raises'],
   }),
   // B2.11: الوظائف المعتمدة — وظيفة في وحدة بعدد معتمد، وتقرير «معتمد / مشغول / شاغر». موديول جديد = مقفول لحد ما الشركة تفعّله
   // (أول موديول defaultEnabled: false: مفيش حاجة كانت شغالة قبله)

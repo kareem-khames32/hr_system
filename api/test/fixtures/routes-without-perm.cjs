@@ -87,6 +87,9 @@ const EXCEPTIONS = {
   'CommentsController.requestComment': 'SERVICE_CHECK', // POST /requests/:id/comments
   'CommentsController.taskThread': 'SERVICE_CHECK', // GET /tasks/:id/comments
   'CommentsController.taskComment': 'SERVICE_CHECK', // POST /tasks/:id/comments
+  // B5.1-ب: ورقة المدير في دورة الزيادات — «المدير المباشر» موقع في الهيكل (مرؤوسيه المباشرين بس، تحت قفل صف الموظف)
+  'CompensationController.myTeam': 'SERVICE_CHECK', // GET /compensation/my-team
+  'CompensationController.propose': 'SERVICE_CHECK', // PUT /compensation/cycles/:id/my-team/:employeeId
   // B2.7: قراءة نسخة سياسة وملفها — لصاحب صلاحية السياسات، أو للموظف اللي السياسة في جمهوره (الحكم في الخدمة)
   'PoliciesController.version': 'SERVICE_CHECK', // GET /policies/versions/:versionId
   'PoliciesController.versionFile': 'SERVICE_CHECK', // GET /policies/versions/:versionId/file

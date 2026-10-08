@@ -86,7 +86,7 @@ test('DGU-03: قسم «تفويض اعتماداتي» وشارة الصندوق
   const sidebar = read('src/components/layout/Sidebar.tsx')
   assert.match(sidebar, /if \(getCurrentUser\(\)\?\.role !== 'employee'\) return\s+fetchDelegations\(\)\s+\.then\(\(data\) => setDelegationEntry\(data\.available && \(data\.approver \|\| data\.toMe\.length > 0 \|\| data\.mine\.some\(\(row\) => row\.canRevoke\)\)\)\)\s+\.catch\(\(\) => setDelegationEntry\(false\)\)/)
   assert.match(sidebar, /const showInbox = currentUser\.role !== 'employee' \|\| inboxCount > 0 \|\| inboxError \|\| delegationEntry\n/)
-  assert.match(sidebar, /\[currentUser, inboxCount, inboxError, delegationEntry, payrollApprovals, tasksCount, teamManager, enabledModules\]/)
+  assert.match(sidebar, /\[currentUser, inboxCount, inboxError, delegationEntry, payrollApprovals, tasksCount, teamManager, raisesOpen, enabledModules\]/)
   // سطر «بالنيابة عن» في الشاشتين اللي بيعرضوا سجل الطلب
   assert.match(read('src/app/requests-console/page.tsx'), /\{onBehalfText\(a\) && <p className="text-xs text-amber-800 mt-1" data-on-behalf>\{onBehalfText\(a\)\}<\/p>\}/)
   assert.match(read('src/app/requests/page.tsx'), /\{onBehalfText\(a\) && <p className="text-xs text-amber-800" data-on-behalf>\{onBehalfText\(a\)\}<\/p>\}/)

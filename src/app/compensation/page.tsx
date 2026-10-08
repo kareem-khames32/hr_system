@@ -7,6 +7,7 @@ import Link from 'next/link'
 import { Scale } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import { formatMoney } from '@/lib/money'
+import { can } from '@/lib/api'
 import { fetchSalaryBands, type ApiBandEmployee, type ApiSalaryBands, type BandPosition } from '@/lib/compensation-api'
 
 const POSITION_CLASS: Record<BandPosition, string> = { BELOW: 'text-amber-700', WITHIN: 'text-gray-700', ABOVE: 'text-red-700' }
@@ -41,6 +42,9 @@ export default function CompensationPage() {
             نطاق راتب كل درجة ونسبة المقارنة لكل موظف (راتبه ÷ منتصف نطاق درجته){data ? ` — على ${data.basisLabel}` : ''}. النطاقات بتتعدّل من{' '}
             <Link href="/settings/grades" className="text-primary-600 hover:underline">الدرجات الوظيفية</Link>.
           </p>
+          {can('compensation.manage') && (
+            <Link href="/compensation/cycles" className="inline-block mt-2 text-sm text-primary-600 hover:underline">دورات الزيادات ←</Link>
+          )}
         </div>
 
         {error && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
