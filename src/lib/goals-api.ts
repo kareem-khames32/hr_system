@@ -2,9 +2,9 @@
 import { apiFetch } from './api'
 
 export type GoalOwnerType = 'EMPLOYEE' | 'DEPARTMENT' | 'COMPANY'
-export type GoalKind = 'KPI' | 'GOAL'
+export type GoalKind = 'KPI' | 'GOAL' | 'PIP'
 export type GoalStatus = 'PROPOSED' | 'ACTIVE' | 'DONE' | 'CANCELLED' | 'REJECTED'
-export const GOAL_KIND_LABELS: Record<GoalKind, string> = { KPI: 'مؤشر', GOAL: 'هدف' }
+export const GOAL_KIND_LABELS: Record<GoalKind, string> = { KPI: 'مؤشر', GOAL: 'هدف', PIP: 'خطة تحسين' }
 
 export interface ApiGoal {
   id: number; ownerType: GoalOwnerType; employeeId: number | null; employeeName: string | null; departmentId: number | null; departmentName: string | null

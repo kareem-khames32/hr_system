@@ -25,7 +25,7 @@ const FILES = [
   ['20261009_109_candidate_offers.sql', 'candidate_offers', 109], ['20261009_110_performance_goals.sql', 'performance_goals', 110],
   ['20261009_111_performance_goal_updates.sql', 'performance_goal_updates', 111], ['20261009_112_review_templates.sql', 'review_templates', 112],
   ['20261009_113_review_cycles.sql', 'review_cycles', 113], ['20261009_114_review_assignments.sql', 'review_assignments', 114],
-  ['20261009_115_review_responses.sql', 'review_responses', 115],
+  ['20261009_115_review_responses.sql', 'review_responses', 115], ['20261009_116_review_reward_suggestions.sql', 'review_reward_suggestions', 116],
 ]
 let app, master, pool, created = false
 

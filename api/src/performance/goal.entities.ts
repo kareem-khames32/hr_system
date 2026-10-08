@@ -3,7 +3,8 @@ import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm'
 // B3.6 (ترحيلين 110 و111): هدف الأداء وسجله. نفس الشكل في الترحيلين بالحرف (من غير افتراضي).
 export const GOAL_OWNER_TYPES = ['EMPLOYEE', 'DEPARTMENT', 'COMPANY'] as const
 export type GoalOwnerType = (typeof GOAL_OWNER_TYPES)[number]
-export const GOAL_KINDS = ['KPI', 'GOAL'] as const
+// B3.8-ب: PIP = خطة تحسين (هدف بنوع خاص: المدير أو إدارة الأداء بيعملوه لموظف، من غير وزن، ومش من بنود التقييم)
+export const GOAL_KINDS = ['KPI', 'GOAL', 'PIP'] as const
 export type GoalKind = (typeof GOAL_KINDS)[number]
 export const GOAL_STATUSES = ['PROPOSED', 'ACTIVE', 'DONE', 'CANCELLED', 'REJECTED'] as const
 export type GoalStatus = (typeof GOAL_STATUSES)[number]

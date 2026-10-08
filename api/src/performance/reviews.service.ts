@@ -40,6 +40,14 @@ function optionalText(raw: unknown, max: number, label: string): string | null {
   return value || null
 }
 
+/** الدورة في نطاق فروع الحساب: حساب من غير قيد فروع شايف الكل؛ وحساب الفروع شايف الدورة اللي كل فروعها من فروعه (دورة «كل الشركة» مش له) */
+export function reviewCycleInScope(user: JwtPayload, cycle: Pick<ReviewCycle, 'branchIds'>): boolean {
+  const scope = branchScopeOf(user)
+  if (scope === null) return true
+  const branches = cycle.branchIds ? ids(cycle.branchIds) : null
+  return !!branches && branches.length > 0 && branches.every((id) => inBranchScope(scope, id))
+}
+
 // B3.7: دورات التقييم. النماذج والدورات بصلاحية إدارة الأداء (والدورة بنطاق فروعها)؛ والتقييم نفسه حق من التكليف: الموظف لتقييمه الذاتي، والمدير
 // اللي اتثبّت وقت الإطلاق لتقييم مرؤوسه. نموذج الدورة بيتجمّد وقت الإطلاق، ولوحة الأدلة بتتجمّد وقت التسليم.
 @Injectable()
@@ -55,12 +63,8 @@ export class ReviewsService {
   private assertCalibrator(user: JwtPayload) {
     if (!userHasPerm(user, REVIEW_CALIBRATE_PERMISSION)) throw new ForbiddenException('الإجراء ده لصاحب صلاحية معايرة التقييمات')
   }
-  /** الدورة في نطاق فروع الحساب: حساب من غير قيد فروع شايف الكل؛ وحساب الفروع شايف الدورة اللي كل فروعها من فروعه (دورة «كل الشركة» مش له) */
   private cycleInScope(user: JwtPayload, cycle: ReviewCycle): boolean {
-    const scope = branchScopeOf(user)
-    if (scope === null) return true
-    const branches = cycle.branchIds ? ids(cycle.branchIds) : null
-    return !!branches && branches.length > 0 && branches.every((id) => inBranchScope(scope, id))
+    return reviewCycleInScope(user, cycle)
   }
 
   // ===== النماذج =====
@@ -411,7 +415,7 @@ export class ReviewsService {
   private async goalsOf(em: EntityManager, employeeId: number, cycle: ReviewCycle): Promise<Array<ReviewGoalRef & { targetValue: string | null; actualValue: string | null; unit: string | null }>> {
     if (!(await goalsReady(em))) return []
     const goals = await em.getRepository(PerformanceGoal).find({ where: { ownerType: 'EMPLOYEE', employeeId, status: In(['ACTIVE', 'DONE']) }, order: { id: 'ASC' } })
-    return goals.filter((goal) => day(goal.periodStart) <= day(cycle.periodEnd) && day(goal.periodEnd) >= day(cycle.periodStart))
+    return goals.filter((goal) => goal.kind !== 'PIP' && day(goal.periodStart) <= day(cycle.periodEnd) && day(goal.periodEnd) >= day(cycle.periodStart))
       .map((goal) => ({ id: goal.id, title: goal.title, weight: goal.weight, targetValue: goal.targetValue == null ? null : Number(goal.targetValue).toFixed(2),
         actualValue: goal.actualValue == null ? null : Number(goal.actualValue).toFixed(2), unit: goal.unit ?? null }))
   }

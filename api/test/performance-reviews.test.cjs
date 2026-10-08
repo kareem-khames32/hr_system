@@ -136,3 +136,32 @@ test('RU-04: calibration bands, guide distribution and cleaners; the adjustment 
   assert.deepEqual(['performance.calibrate' in PERMISSIONS, PERMISSION_MODULES.find(unit => unit.key === 'performance').permissions, ROLE_PRESETS.find(role => role.code === 'hr_manager').permissions.includes('performance.calibrate'),
     ROLE_PRESETS.find(role => role.code === 'employee').permissions.includes('performance.calibrate')], [true, ['performance.manage', 'performance.calibrate'], true, false])
 })
+
+test('RU-05: reward suggestions — the rule values, no bonus written by the suggestion, the manager submits through the bonuses service outside any transaction after claiming the row, and the improvement plan kind', () => {
+  const rewards = require('../src/performance/review-rewards.service')
+  assert.deepEqual(rewards.cleanRewardValues({ A: '500', B: 250.5, C: '', D: null }), { A: '500', B: '250.5' })
+  for (const bad of [{}, { A: '' }, { Z: '5' }, { A: '-5' }, { A: '0' }, { A: 'x' }, { A: {} }, 'نص', null, [1]]) refuses(() => rewards.cleanRewardValues(bad), JSON.stringify(bad))
+  const service = read('api/src/performance/review-rewards.service.ts')
+  const suggest = service.slice(service.indexOf('async suggest('), service.indexOf('/** الاقتراحات الموجّهة للحساب'))
+  assert.doesNotMatch(suggest, /bonuses\.create|BonusRequest|EmployeeObligation/, 'الاقتراح مابيعملش طلب مكافأة ولا قيد')
+  const suggestOrder = ['this.assertManager(user)', 'userHasPerm(user, BONUS_MANAGE)', 'cleanRewardValues(input.values)', "this.modules.allowedFor('payroll', user)", 'this.ds.transaction(',
+    "lock: { mode: 'pessimistic_write' }", 'reviewCycleInScope(user, cycle)', 'live.has(row.id)', 'employee.managerEmployeeId === employee.id', "action: 'REVIEW_REWARDS_SUGGESTED'"].map(part => suggest.indexOf(part))
+  assert.ok(suggestOrder.every((at, index) => at > 0 && (index === 0 || at > suggestOrder[index - 1])), JSON.stringify(suggestOrder))
+  assert.doesNotMatch(suggest.slice(suggest.indexOf('this.ds.transaction(')), /this\.bonuses\.|this\.modules\./, 'جوه المعاملة من غير خدمة تانية')
+  const submit = service.slice(service.indexOf('async submit('), service.indexOf('/** صرف النظر عن اقتراح'))
+  const claim = submit.slice(submit.indexOf('this.ds.transaction('), submit.indexOf('const bandLabel'))
+  assert.match(claim, /await this\.owned\(em, user, id, true\)\n\s+if \(row\.status !== 'SUGGESTED'\) throw new ConflictException\(REWARD_TAKEN\)\n\s+await em\.getRepository\(ReviewRewardSuggestion\)\.update\(\{ id: row\.id \}, \{ status: 'CLAIMED'/)
+  assert.doesNotMatch(claim, /this\.bonuses\./, 'طلب المكافأة برّه معاملة الحجز')
+  const submitOrder = ["seen.status !== 'SUGGESTED'", 'this.ds.transaction(', 'made = await this.bonuses.create(user,', "{ id: claimed.id, status: 'CLAIMED' }, { status: 'SUGGESTED'", 'throw error',
+    "{ id: claimed.id, status: 'CLAIMED' }, { status: 'SUBMITTED', bonusRequestId: made.id }"].map(part => submit.indexOf(part))
+  assert.ok(submitOrder.every((at, index) => at > 0 && (index === 0 || at > submitOrder[index - 1])), JSON.stringify(submitOrder))
+  const controller = read('api/src/performance/review-rewards.controller.ts')
+  assert.match(controller, /@RequireModule\('performance'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)\n@Controller\('performance\/rewards'\)/)
+  assert.equal(controller.split("@Perm('performance.manage')").length - 1, 2, 'نتايج الدورة واقتراحها بالصلاحية')
+  assert.doesNotMatch(read('api/src/performance/review-reward.entity.ts'), /default:|CreateDateColumn/, 'من غير افتراضي (زي الترحيل)')
+  // خطة التحسين: نوع هدف، ومش من بنود التقييم
+  const goals = require('../src/performance/goal-rules')
+  assert.deepEqual([goals.cleanGoalKind('PIP'), goals.GOAL_KIND_LABELS.PIP], ['PIP', 'خطة تحسين'])
+  assert.match(read('api/src/performance/reviews.service.ts'), /goals\.filter\(\(goal\) => goal\.kind !== 'PIP' &&/)
+  assert.match(read('api/src/performance/goals.service.ts'), /if \(kind === 'PIP' && \(ownerType !== 'EMPLOYEE' \|\| weight !== 0\)\) throw new BadRequestException\(GOAL_PIP\)/)
+})

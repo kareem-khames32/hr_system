@@ -105,3 +105,24 @@ export const fetchCalibration = (cycleId: number, group: { departmentId?: number
 export const calibrateReview = (id: number, score: string, reason: string) => apiFetch<ApiCalibration>(`${R}/${id}/calibrate`, json('POST', { score, reason }))
 /** نوع الطلب الموجود «اعتراض على تقييم أداء» — من شاشة التقييم بيتربط بيه (reviewId) */
 export const REVIEW_OBJECTION_TYPE = 'APPRAISAL_OBJECTION'
+
+// B3.8: مكافآت نتيجة التقييم — إدارة الأداء بتقترح، والمدير المباشر بيقدّم (بموديول المكافآت)
+export type RewardStatus = 'SUGGESTED' | 'CLAIMED' | 'SUBMITTED' | 'DISMISSED'
+export interface ApiRewardSuggestion {
+  id: number; status: RewardStatus; statusLabel: string; typeName: string; calcMethodLabel: string | null; inputValue: string; targetPeriod: string
+  band: string; bandLabel: string; finalScore: number | null; bonusRequestId: number | null; bonusStatus: string | null; bonusStatusLabel: string | null
+}
+export interface ApiCycleRewards {
+  available: boolean; message?: string; cycle?: { id: number; name: string }; bands: ReviewBand[]; canSuggest: boolean
+  types: Array<{ id: number; nameAr: string; calcMethod: string; calcMethodLabel: string }>
+  rows: Array<{ assignmentId: number; employeeName: string; managerName: string | null; status: ReviewStatus; statusLabel: string; finalScore: number | null; band: string | null; bandLabel: string | null
+    suggestion: ApiRewardSuggestion | null }>
+}
+export interface ApiMyReward extends ApiRewardSuggestion { employeeName: string; cycleName: string; canSubmit: boolean }
+const W = '/performance/rewards'
+export const fetchCycleRewards = (cycleId: number) => apiFetch<ApiCycleRewards>(`${W}/cycles/${cycleId}`)
+export const suggestCycleRewards = (cycleId: number, body: { bonusTypeId: number; targetPeriod: string; values: Record<string, string> }) =>
+  apiFetch<ApiCycleRewards & { created: number; skipped: { exists: number; noValue: number; noManager: number } }>(`${W}/cycles/${cycleId}`, json('POST', body))
+export const fetchMyRewards = () => apiFetch<{ suggestions: ApiMyReward[] }>(`${W}/mine`)
+export const submitReward = (id: number) => apiFetch<{ bonusRequestId: number; suggestions: ApiMyReward[] }>(`${W}/${id}/submit`, json('POST', {}))
+export const dismissReward = (id: number) => apiFetch<{ dismissed: boolean }>(`${W}/${id}/dismiss`, json('POST', {}))

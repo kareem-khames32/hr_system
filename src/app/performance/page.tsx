@@ -8,7 +8,7 @@ import { ClipboardCheck } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import EmptyState from '@/components/EmptyState'
 import { formatDate } from '@/lib/dates'
-import { fetchMyReviews, fetchTeamReviews, type ApiReviewRow, type ReviewStatus } from '@/lib/reviews-api'
+import { dismissReward, fetchMyReviews, fetchMyRewards, fetchTeamReviews, submitReward, type ApiMyReward, type ApiReviewRow, type ReviewStatus } from '@/lib/reviews-api'
 
 type Tab = 'mine' | 'team'
 const statusStyle: Record<ReviewStatus, string> = {
@@ -19,6 +19,10 @@ export default function ReviewsPage() {
   const [tab, setTab] = useState<Tab>('mine')
   const [rows, setRows] = useState<ApiReviewRow[] | null>(null)
   const [error, setError] = useState('')
+  // B3.8: مكافآت مقترحة من نتيجة التقييم موجّهة للمدير — هو اللي بيقدّمها
+  const [rewards, setRewards] = useState<ApiMyReward[]>([])
+  const [info, setInfo] = useState('')
+  const [busy, setBusy] = useState(0)
 
   const load = useCallback(() => {
     setError('')
@@ -26,8 +30,23 @@ export default function ReviewsPage() {
     ;(tab === 'mine' ? fetchMyReviews() : fetchTeamReviews())
       .then((data) => setRows(data.reviews))
       .catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل التقييمات'))
+    if (tab === 'team') fetchMyRewards().then((data) => setRewards(data.suggestions)).catch(() => setRewards([]))
   }, [tab])
   useEffect(load, [load])
+
+  const reward = async (row: ApiMyReward, work: () => Promise<string>) => {
+    setBusy(row.id)
+    setError('')
+    setInfo('')
+    try {
+      setInfo(await work())
+      setRewards((await fetchMyRewards()).suggestions)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'تعذر تنفيذ الإجراء')
+    } finally {
+      setBusy(0)
+    }
+  }
 
   // اللي مطلوب من القارئ دلوقتي في كل تقييم
   const todo = (row: ApiReviewRow) =>
@@ -59,6 +78,39 @@ export default function ReviewsPage() {
         {error && (
           <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-4">
             {error}
+          </div>
+        )}
+        {info && (
+          <div role="status" className="bg-green-50 text-green-800 rounded-xl p-4">
+            {info}
+          </div>
+        )}
+        {tab === 'team' && rewards.length > 0 && (
+          <div className="card space-y-3" data-my-rewards>
+            <h2 className="font-bold text-gray-800">مكافآت مقترحة لفريقك من نتيجة التقييم</h2>
+            <p className="text-xs text-gray-500">إنت اللي بتقدّم المكافأة — وبعدها بتمشي في سلسلة اعتمادها العادية.</p>
+            {rewards.map((row) => (
+              <div key={row.id} className="flex items-center justify-between gap-3 flex-wrap border-t border-gray-100 pt-3">
+                <p className="text-sm text-gray-700">
+                  {row.employeeName} — {row.cycleName} · {row.bandLabel} · {row.typeName} ({row.calcMethodLabel}: {row.inputValue}) · مسير {row.targetPeriod}
+                </p>
+                {row.canSubmit ? (
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => reward(row, async () => { await submitReward(row.id); return `اتقدّمت مكافأة ${row.employeeName} ودخلت سلسلة الاعتماد.` })} disabled={busy === row.id} className="btn-primary text-sm disabled:opacity-50">
+                      قدّم المكافأة
+                    </button>
+                    <button onClick={() => reward(row, async () => { await dismissReward(row.id); return 'اتصرف النظر عن الاقتراح.' })} disabled={busy === row.id} className="btn-secondary text-sm disabled:opacity-50">
+                      صرف النظر
+                    </button>
+                  </div>
+                ) : (
+                  <span className="text-xs text-gray-500">
+                    {row.statusLabel}
+                    {row.bonusStatusLabel ? ` — ${row.bonusStatusLabel}` : ''}
+                  </span>
+                )}
+              </div>
+            ))}
           </div>
         )}
         {rows && rows.length === 0 && <EmptyState title={tab === 'mine' ? 'مفيش تقييمات ليك دلوقتي' : 'مفيش تقييمات مطلوبة منك لفريقك'} icon={ClipboardCheck} />}

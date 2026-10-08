@@ -16,7 +16,8 @@ export const GOAL_REASON = 'السبب مطلوب (3 حروف على الأقل)
 export const GOAL_FORBIDDEN = 'الإجراء ده لمدير صاحب الهدف المباشر أو للموارد البشرية'
 export const GOAL_CHANGED = 'بيانات الهدف أو صاحبه اتغيّرت — حدّث الصفحة وحاول تاني'
 export const GOAL_STATUS_LABELS: Record<GoalStatus, string> = { PROPOSED: 'مقترح', ACTIVE: 'ساري', DONE: 'اتحقق', CANCELLED: 'ملغي', REJECTED: 'مرفوض' }
-export const GOAL_KIND_LABELS: Record<GoalKind, string> = { KPI: 'مؤشر', GOAL: 'هدف' }
+export const GOAL_KIND_LABELS: Record<GoalKind, string> = { KPI: 'مؤشر', GOAL: 'هدف', PIP: 'خطة تحسين' }
+export const GOAL_PIP = 'خطة التحسين بيعملها المدير المباشر أو إدارة الأداء لموظف (مش الموظف لنفسه)، ومن غير وزن'
 export const GOAL_VALUE_MAX = 999_999_999_999.99
 
 let ready: boolean | null = null

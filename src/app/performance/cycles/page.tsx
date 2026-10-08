@@ -13,6 +13,7 @@ import {
   REVIEW_CYCLE_KIND_LABELS, advanceReviewCycle, closeReviewCycle, createReviewCycle, fetchCycleAssignments, fetchReviewCycles, fetchReviewTemplates, launchReviewCycle,
   type ApiCycleAssignment, type ApiReviewCycle, type ApiReviewTemplate, type ReviewAudienceMode, type ReviewCycleKind, type ReviewCycleStatus,
 } from '@/lib/reviews-api'
+import RewardsPanel from './RewardsPanel'
 
 const statusStyle: Record<ReviewCycleStatus, string> = { DRAFT: 'bg-gray-100 text-gray-700', ACTIVE: 'bg-green-50 text-green-700', CLOSED: 'bg-gray-100 text-gray-500' }
 
@@ -25,6 +26,7 @@ export default function ReviewCyclesPage() {
   const [adding, setAdding] = useState(false)
   const [busy, setBusy] = useState(0)
   const [open, setOpen] = useState<{ cycle: ApiReviewCycle; assignments: ApiCycleAssignment[] } | null>(null)
+  const [rewards, setRewards] = useState<ApiReviewCycle | null>(null)
 
   const load = useCallback(() => {
     setError('')
@@ -133,6 +135,9 @@ export default function ReviewCyclesPage() {
                       <button onClick={() => run(cycle, async () => `اتعلن ${(await advanceReviewCycle(cycle.id, 'ANNOUNCED')).moved} تقييم للموظفين.`)} disabled={busy === cycle.id} className="btn-secondary text-sm disabled:opacity-50">
                         إعلان المعتمد
                       </button>
+                      <button onClick={() => setRewards(cycle)} className="btn-secondary text-sm">
+                        المكافآت
+                      </button>
                     </>
                   )}
                   {cycle.status === 'ACTIVE' && (
@@ -146,6 +151,7 @@ export default function ReviewCyclesPage() {
           </div>
         )}
       </div>
+      {rewards && <RewardsPanel cycleId={rewards.id} cycleName={rewards.name} onClose={() => setRewards(null)} />}
       {adding && <CycleModal canCompany={canCompany} onClose={() => setAdding(false)} onDone={() => { setAdding(false); load() }} />}
       {open && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-label="تكليفات الدورة">

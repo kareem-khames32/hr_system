@@ -10,7 +10,7 @@ import { ApproverResolver } from '../requests/approver-resolver.service'
 import { Task } from '../tasks/task.entity'
 import { PerformanceGoal, PerformanceGoalUpdate, type GoalStatus, type GoalUpdateKind } from './goal.entities'
 import {
-  GOALS_MIGRATION_MISSING, GOAL_CHANGED, GOAL_FORBIDDEN, GOAL_KIND_LABELS, GOAL_NOT_FOUND, GOAL_STATUS_LABELS, cleanGoalKind, cleanGoalOwner, cleanGoalPeriod, cleanGoalReason,
+  GOALS_MIGRATION_MISSING, GOAL_CHANGED, GOAL_FORBIDDEN, GOAL_KIND_LABELS, GOAL_PIP, GOAL_NOT_FOUND, GOAL_STATUS_LABELS, cleanGoalKind, cleanGoalOwner, cleanGoalPeriod, cleanGoalReason,
   cleanGoalText, cleanGoalTitle, cleanGoalValue, cleanGoalWeight, goalEmployeeStamp, goalsReady,
 } from './goal-rules'
 
@@ -181,6 +181,8 @@ export class GoalsService {
     const ownerType = cleanGoalOwner(input.ownerType ?? 'EMPLOYEE'), kind = cleanGoalKind(input.kind ?? 'GOAL'), title = cleanGoalTitle(input.title)
     const description = cleanGoalText(input.description, 1000, 'وصف الهدف'), weight = cleanGoalWeight(input.weight ?? 0)
     const targetValue = cleanGoalValue(input.targetValue), unit = cleanGoalText(input.unit, 30, 'الوحدة'), period = cleanGoalPeriod(input.periodStart, input.periodEnd)
+    // B3.8-ب: خطة التحسين لموظف بس ومن غير وزن
+    if (kind === 'PIP' && (ownerType !== 'EMPLOYEE' || weight !== 0)) throw new BadRequestException(GOAL_PIP)
     const em0 = this.ds.manager
     await this.assertReady(em0)
     let employee: Employee | null = null, department: Department | null = null, status: GoalStatus = 'ACTIVE', branchId: number | null = null
@@ -192,6 +194,7 @@ export class GoalsService {
       // موظف مش في حق القارئ زي اللي مش موجود
       if (!employee || (!own && !lead)) throw new NotFoundException('الموظف غير موجود')
       if (employee.isActive === false || ENDED.includes(employee.status)) throw new BadRequestException('ملف الموظف مش شغال — مفيش أهداف تتعمل له')
+      if (kind === 'PIP' && own) throw new BadRequestException(GOAL_PIP)
       status = own ? 'PROPOSED' : 'ACTIVE'; branchId = employee.branchId ?? null
     } else if (ownerType === 'DEPARTMENT') {
       const departmentId = Number(input.departmentId)
@@ -269,6 +272,7 @@ export class GoalsService {
       if (input.title !== undefined) patch.title = cleanGoalTitle(input.title)
       if (input.description !== undefined) patch.description = cleanGoalText(input.description, 1000, 'وصف الهدف')
       if (input.weight !== undefined) patch.weight = cleanGoalWeight(input.weight)
+      if (goal.kind === 'PIP' && patch.weight !== undefined && patch.weight !== 0) throw new BadRequestException(GOAL_PIP)
       if (input.targetValue !== undefined) patch.targetValue = cleanGoalValue(input.targetValue)
       if (input.unit !== undefined) patch.unit = cleanGoalText(input.unit, 30, 'الوحدة')
       if (input.periodEnd !== undefined) patch.periodEnd = cleanGoalPeriod(day(goal.periodStart), input.periodEnd).periodEnd

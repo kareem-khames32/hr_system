@@ -264,6 +264,13 @@ test('PG-03: الموارد البشرية بالصلاحية وبنطاق ال�
     assert.equal(expectStatus(await request(users.hrA, 'GET', '/performance/goals/all'), 200).goals.some(goal => goal.id === goals.first), false)
     assert.deepEqual([(await request(users.hrA, 'GET', '/performance/goals/' + goals.first)).status, expectStatus(await request(users.hrB, 'GET', '/performance/goals/' + goals.first), 200).role], [404, 'hr'])
   } finally { await repo('Employee').update({ id: emps.rep.id }, { branchId: org.branchA.id }) }
+  // B3.8-ب: خطة التحسين هدف بنوع خاص — المدير أو إدارة الأداء لموظف، من غير وزن، ومش الموظف لنفسه ولا لقسم
+  const pipRule = require('../src/performance/goal-rules').GOAL_PIP
+  assert.deepEqual([answer(await make(users.rep, good({ kind: 'PIP', weight: 0 }))), answer(await make(users.boss, good({ employeeId: emps.rep.id, kind: 'PIP', weight: 20 }))),
+    answer(await make(users.hrA, good({ ownerType: 'DEPARTMENT', departmentId: org.sales.id, kind: 'PIP', weight: 0 })))], [[400, pipRule], [400, pipRule], [400, pipRule]])
+  const pip = expectStatus(await make(users.boss, good({ employeeId: emps.rep.id, kind: 'PIP', weight: 0, title: 'خطة تحسين التزام المواعيد' })), 201)
+  assert.deepEqual([pip.kind, pip.kindLabel, pip.status, pip.weight], ['PIP', 'خطة تحسين', 'ACTIVE', 0])
+  assert.deepEqual(answer(await request(users.boss, 'PATCH', '/performance/goals/' + pip.id, { weight: 10, reason: 'تجربة وزن' })), [400, pipRule])
   // والموديول لما يتقفل المسارات بتتقفل
   expectStatus(await request(users.admin, 'PUT', '/modules/performance', { enabled: false }), 200); modules.invalidate()
   try { assert.equal((await request(users.rep, 'GET', '/performance/goals/mine')).status, 404) } finally { expectStatus(await request(users.admin, 'PUT', '/modules/performance', { enabled: true }), 200); modules.invalidate() }

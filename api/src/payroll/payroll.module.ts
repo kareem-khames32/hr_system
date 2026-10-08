@@ -150,5 +150,7 @@ import { HiddenRunPeriodsInterceptor } from './hidden-run-periods.interceptor'
     PayrollDailyAccrualService, PayrollDailyAccrualScheduler, PayrollApprovalChainService, PayrollDisbursementService, PayrollLiveService,
     // CR40: شبكة أمان على كل رد JSON لحساب فرع — فترة مسير مخفي له في أي نص بتتحجب (hidden-run-periods.interceptor.ts)
     { provide: APP_INTERCEPTOR, useClass: HiddenRunPeriodsInterceptor }],
+  // B3.8-ب: مكافآت نتيجة التقييم بتتقدّم بخدمة المكافآت نفسها
+  exports: [BonusesService],
 })
 export class PayrollModule {}
