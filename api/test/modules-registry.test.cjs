@@ -340,6 +340,8 @@ test('MR-09: أنواع الطلبات المزروعة — كل نوع في م�
     positions: ['POSITION_REQUEST'],
     // B3.2-أ: طلب «احتياج توظيف» تبع موديول التوظيف
     recruitment: ['RECRUITMENT_REQUISITION'],
+    // B3.10: استفسارات مركز الخدمات تبع موديوله (المقفول افتراضيًا)
+    helpdesk: ['INQUIRY_PAYROLL', 'INQUIRY_LEAVES', 'INQUIRY_DATA', 'INQUIRY_GENERAL'],
     // «تسجيل بس» من غير معالج: تبع محرك الطلبات نفسه (أساسي)
     requests: ['SECONDMENT', 'DEPENDENTS_UPDATE', 'DOCUMENT_RENEWAL', 'IT_EQUIPMENT', 'ACCESS_REQUEST', 'FACILITY_CARD', 'TRAINING_REQUEST', 'CERT_REIMBURSEMENT',
       'CONFERENCE', 'EDUCATION_ASSISTANCE', 'GRIEVANCE', 'WHISTLEBLOWING', 'PENALTY_OBJECTION', 'APPRAISAL_OBJECTION', 'SUGGESTION', 'HR_MEETING'],

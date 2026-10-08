@@ -54,6 +54,8 @@ export type RequestCategory =
   | 'custody_assets'
   | 'training'
   | 'employee_relations'
+  // B3.10: استفسارات مركز الخدمات
+  | 'inquiries'
 
 export const categoryLabels: Record<RequestCategory, string> = {
   leaves: 'الإجازات',
@@ -65,6 +67,7 @@ export const categoryLabels: Record<RequestCategory, string> = {
   custody_assets: 'العهدة والأصول',
   training: 'التدريب والتطوير',
   employee_relations: 'علاقات الموظفين',
+  inquiries: 'استفسارات',
 }
 
 // ===== 3) تعريف نوع الطلب (RequestType) =====

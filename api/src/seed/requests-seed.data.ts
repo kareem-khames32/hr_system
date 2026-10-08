@@ -141,6 +141,8 @@ export interface TypeSeed {
   confidential?: boolean
   autoGeneratesPdf?: boolean
   phase?: 'P1' | 'P2' | 'P3'
+  // B3.10: نوع «خدمة» — من غير اعتمادات (سلسلته بتتعمل «تنفيذ فوري») وبمهمة تنفيذ على دور بمهلة أيام
+  service?: { role: string; days: number }
 }
 
 const LEAVE_FIELDS = ['fromDate', 'toDate', 'days']
@@ -237,6 +239,12 @@ export const typesSeed: TypeSeed[] = [
   { code: 'CERT_REIMBURSEMENT', nameAr: 'استرداد تكلفة شهادة', category: 'training', chain: 'CHAIN_MANAGER_FINANCE', handler: 'none', requiredFields: ['amount'], phase: 'P3' },
   { code: 'CONFERENCE', nameAr: 'حضور مؤتمر', category: 'training', chain: 'CHAIN_MANAGER_HR', handler: 'none', phase: 'P3' },
   { code: 'EDUCATION_ASSISTANCE', nameAr: 'مساعدة دراسية', category: 'training', chain: 'CHAIN_MANAGER_HR', handler: 'none', phase: 'P3' },
+
+  // ===== B3.10) استفسارات مركز الخدمات — من غير اعتمادات، ومهمة على الموارد البشرية بمهلة 3 أيام (المالك يعدّل الدور والمهلة من «أنواع الطلبات») =====
+  { code: 'INQUIRY_PAYROLL', nameAr: 'استفسار عن الراتب', category: 'inquiries', chain: 'CHAIN_AUTO', handler: 'none', requiredFields: ['reason'], service: { role: 'hr', days: 3 }, phase: 'P3' },
+  { code: 'INQUIRY_LEAVES', nameAr: 'استفسار عن الإجازات', category: 'inquiries', chain: 'CHAIN_AUTO', handler: 'none', requiredFields: ['reason'], service: { role: 'hr', days: 3 }, phase: 'P3' },
+  { code: 'INQUIRY_DATA', nameAr: 'استفسار عن بياناتي', category: 'inquiries', chain: 'CHAIN_AUTO', handler: 'none', requiredFields: ['reason'], service: { role: 'hr', days: 3 }, phase: 'P3' },
+  { code: 'INQUIRY_GENERAL', nameAr: 'استفسار عام', category: 'inquiries', chain: 'CHAIN_AUTO', handler: 'none', requiredFields: ['reason'], service: { role: 'hr', days: 3 }, phase: 'P3' },
 
   // ===== 9) علاقات الموظفين (سرّي — يتخطى المدير؛ D12: تسجيل فقط) =====
   { code: 'GRIEVANCE', nameAr: 'تظلم/شكوى', category: 'employee_relations', chain: 'CHAIN_HR', handler: 'none', requiredFields: ['description'], confidential: true, phase: 'P2' },

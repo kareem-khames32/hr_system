@@ -42,7 +42,7 @@ export const OVERTIME_STATUS_LABELS: Record<string, string> = {
 export const REQUEST_CATEGORY_LABELS: Record<string, string> = {
   leaves: 'الإجازات', time_attendance: 'الحضور والوقت', financial: 'المالية', employment_status: 'الحالة الوظيفية',
   personal_data: 'البيانات الشخصية', letters: 'الخطابات والشهادات', custody_assets: 'العهدة والأصول', training: 'التدريب والتطوير',
-  employee_relations: 'علاقات الموظفين',
+  employee_relations: 'علاقات الموظفين', inquiries: 'استفسارات',
 }
 
 export type ReportCell = string | number | null

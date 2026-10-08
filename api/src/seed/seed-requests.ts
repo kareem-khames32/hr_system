@@ -6,6 +6,7 @@ import { ApprovalChain } from '../requests/entities/approval-chain.entity'
 import { ApprovalStep } from '../requests/entities/approval-step.entity'
 import { RequestType } from '../requests/entities/request-type.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
+import { executionSchemaReady, writeExecutionSetting } from '../requests/execution-tasks'
 import { LeaveBalance, LeaveType } from '../requests/entities/leave.entities'
 import {
   chainsSeed,
@@ -115,7 +116,8 @@ export async function seedRequests(ds: DataSource) {
           nameAr: `سلسلة اعتماد ${t.nameAr}`,
           branchId: undefined,
           requestTypeCode: t.code,
-          autoApprove: false,
+          // B3.10: نوع «خدمة» سلسلته الجديدة «تنفيذ فوري» (من غير اعتمادات)؛ سلسلة قايمة مابتتلمسش
+          autoApprove: !!t.service,
         })
       )
       createdChains++
@@ -145,6 +147,11 @@ export async function seedRequests(ds: DataSource) {
         })
       )
       createdTypes++
+      // B3.10: مهمة تنفيذ نوع «خدمة» (دوره ومهلته) — للنوع الجديد بس، ولو أعمدة مهمة التنفيذ موجودة
+      if (t.service && ds.manager && (await executionSchemaReady(ds.manager))) {
+        const made = await types.findOne({ where: { code: t.code } })
+        if (made) await writeExecutionSetting(ds.manager, made.id, { setting: { role: t.service.role, days: t.service.days, proof: false } })
+      }
     } else if (type.approvalChainId !== chain.id) {
       // ترحيل: اربط الأنواع الحالية بسلاسلها المخصّصة الجديدة
       type.approvalChainId = chain.id

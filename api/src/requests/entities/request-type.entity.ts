@@ -11,6 +11,8 @@ export type RequestCategory =
   | 'custody_assets'
   | 'training'
   | 'employee_relations'
+  // B3.10: استفسارات مركز الخدمات
+  | 'inquiries'
 
 @Entity('request_types')
 export class RequestType {

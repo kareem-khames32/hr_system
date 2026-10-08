@@ -327,6 +327,15 @@ export const MODULES = {
     // B3.9-ب: وجهة «طلب تدريب» (أي نوع طلب وجهته دي بيتبع الموديول)
     requestHandlers: ['training_enrollment'],
   }),
+  // B3.10: مركز خدمات الموارد البشرية — على محرك الطلبات (فئة «استفسارات»: اعتماد فوري ومهمة على دور بمهلة وردود في التعليقات)، مش نظام تذاكر.
+  // موديول جديد = مقفول لحد ما الشركة تفتحه (وأنواع الاستفسارات تبعه: مقفول = مابتظهرش في التقديم)
+  helpdesk: moduleDef({
+    nameAr: 'مركز الخدمات', group: 'people', dependsOn: ['employees', 'tasks'], preset: 'standard', defaultEnabled: false,
+    description: 'استفسارات الموظفين للموارد البشرية على محرك الطلبات: مسؤول بمهلة، وردود في تعليقات الطلب، وتقييم الموظف للخدمة، وتقرير الأوقات والرضا',
+    permissions: ['helpdesk.manage'],
+    routes: ['/helpdesk'],
+    requestTypes: ['INQUIRY_PAYROLL', 'INQUIRY_LEAVES', 'INQUIRY_DATA', 'INQUIRY_GENERAL'],
+  }),
   // B2.11: الوظائف المعتمدة — وظيفة في وحدة بعدد معتمد، وتقرير «معتمد / مشغول / شاغر». موديول جديد = مقفول لحد ما الشركة تفعّله
   // (أول موديول defaultEnabled: false: مفيش حاجة كانت شغالة قبله)
   positions: moduleDef({

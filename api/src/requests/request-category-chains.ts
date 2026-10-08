@@ -9,6 +9,8 @@ import { LOAN_DEFERRAL_TYPE } from './loan-installment-requests'
 export const REQUEST_CATEGORIES: readonly RequestCategory[] = [
   'leaves', 'time_attendance', 'financial', 'employment_status', 'personal_data',
   'letters', 'custody_assets', 'training', 'employee_relations',
+  // B3.10: استفسارات مركز الخدمات
+  'inquiries',
 ]
 
 // مرآة categoryLabels في src/data/requestsCatalog.ts — للرسائل واسم السلسلة الجديدة
@@ -22,6 +24,7 @@ export const REQUEST_CATEGORY_LABELS: Record<RequestCategory, string> = {
   custody_assets: 'العهدة والأصول',
   training: 'التدريب والتطوير',
   employee_relations: 'علاقات الموظفين',
+  inquiries: 'استفسارات',
 }
 
 export const isRequestCategory = (value: unknown): value is RequestCategory =>
