@@ -113,6 +113,9 @@ import {
 import {
   DEPENDENTS_REQUEST_CLIENT_KEYS, DEPENDENTS_REQUEST_HANDLER, DEPENDENTS_REQUEST_STAGED_KEYS, dependentRequestFields, dependentRequestOptions, stageDependentsRequest,
 } from '../dependents/dependent-requests'
+import {
+  EXPENSE_REPORT_CLIENT_KEYS, EXPENSE_REPORT_HANDLER, EXPENSE_REPORT_STAGED_KEYS, EXPENSE_REPORTS_FEATURE, expenseReportFields, stageExpenseReport,
+} from '../expenses/expense-reports'
 import { POSITION_REQUEST_HANDLER, POSITION_REQUEST_STAGED_KEYS, positionRequestFields, positionRequestTitles, stagePositionRequest } from '../positions/position-requests'
 import { REVIEW_OBJECTION_CLIENT_KEYS, REVIEW_OBJECTION_STAGED_KEYS, stageReviewObjection } from '../performance/review-objections'
 import { REVIEW_OBJECTION_TYPE } from '../performance/review-rules'
@@ -188,6 +191,8 @@ const HANDLER_PAYLOAD_KEYS: Record<string, string[]> = {
   [TRAINING_REQUEST_HANDLER]: [...TRAINING_REQUEST_CLIENT_KEYS, ...TRAINING_REQUEST_STAGED_KEYS],
   // B3.14: «تحديث المعالين». رقم المعال مش من العميل: الخادم بيثبّته عند كل تقديم
   [DEPENDENTS_REQUEST_HANDLER]: [...DEPENDENTS_REQUEST_CLIENT_KEYS, ...DEPENDENTS_REQUEST_STAGED_KEYS],
+  // B5.3: «تقرير مصروفات». الإجمالي والعنوان والبنود مش من العميل: الخادم بيثبّتهم عند كل تقديم
+  [EXPENSE_REPORT_HANDLER]: [...EXPENSE_REPORT_CLIENT_KEYS, ...EXPENSE_REPORT_STAGED_KEYS],
 }
 
 // C4 / الخطوة 27: المكافأة لا تُقترح عبر محرك الطلبات (كانت تُقيد لمقدم الطلب لا للمستفيد، وتسمح بمكافأة للنفس، وبلا فترة).
@@ -292,13 +297,14 @@ export class RequestsService {
       ...(t.destinationHandler === DOCUMENT_RENEWAL_HANDLER ? documentRenewalFields(renewalTypes, t) : {}),
       ...(t.destinationHandler === TRAINING_REQUEST_HANDLER ? trainingRequestFields(trainingSessions, t) : {}),
       ...(t.destinationHandler === DEPENDENTS_REQUEST_HANDLER ? dependentRequestFields(ownDependents, t) : {}),
+      ...(t.destinationHandler === EXPENSE_REPORT_HANDLER ? expenseReportFields(t) : {}),
       ...(t.code === 'RETIREMENT' ? {
         requiredFields: JSON.stringify([...new Set([...JSON.parse(t.requiredFields || '[]'), 'effectiveDate'])]),
       } : {}),
     }))
     // نوع الطلب التابع لموديول مقفول (أو مش مفعّل للمستخدم ده) مايظهرش في التقديم؛ الطلبات المفتوحة منه بتكمّل سلسلتها
     const all: typeof every = []
-    for (const type of every) if (await this.moduleGate.allowedFor(moduleOfRequestType(type), user)) all.push(type)
+    for (const type of every) if (await this.moduleGate.allowedFor(moduleOfRequestType(type), user) && await this.typeFeatureOpen(type)) all.push(type)
     if (!user) return groupLeaveProfiles(all)
     const emp = user.employeeId
       ? await this.employees.findOne({ where: { id: user.employeeId } })
@@ -320,7 +326,12 @@ export class RequestsService {
 
   // نوع طلب موديوله مقفول (أو مش مفعّل للمستخدم): نفس رد «النوع غير موجود» — مانكشفش إن الموديول موجود
   private async assertTypeModuleEnabled(type: Pick<RequestType, 'code' | 'destinationHandler'>, user: JwtPayload) {
-    if (!(await this.moduleGate.allowedFor(moduleOfRequestType(type), user))) throw new NotFoundException('نوع الطلب غير موجود')
+    if (!(await this.moduleGate.allowedFor(moduleOfRequestType(type), user)) || !(await this.typeFeatureOpen(type))) throw new NotFoundException('نوع الطلب غير موجود')
+  }
+
+  // B5.3: نوع وجهته «تقرير مصروفات» تبع ميزة فرعية مقفولة افتراضيًا — وهي مقفولة، النوع زي اللي موديوله مقفول (الطلبات المفتوحة بتكمّل سلسلتها)
+  private async typeFeatureOpen(type: Pick<RequestType, 'destinationHandler'>): Promise<boolean> {
+    return type.destinationHandler !== EXPENSE_REPORT_HANDLER || !this.modules || await this.modules.isFeatureEnabled(EXPENSE_REPORTS_FEATURE)
   }
 
   // هل النوع متاح للمستخدم ده؟ (ب4)
@@ -598,6 +609,8 @@ export class RequestsService {
     if (type.destinationHandler === TRAINING_REQUEST_HANDLER) req.payload = JSON.stringify(await stageTrainingRequest(em, req))
     // B3.14: «تحديث المعالين» — الإجراء وقيمه، والمعال من معالين مقدّم الطلب الساريين وتثبيت رقمه، عند كل تقديم وإعادة تقديم
     if (type.destinationHandler === DEPENDENTS_REQUEST_HANDLER) req.payload = JSON.stringify(await stageDependentsRequest(em, req))
+    // B5.3: «تقرير مصروفات» — التقرير بتاع مقدّم الطلب تحت قفل صفه، بنوده بحكم السياسة دلوقتي، وتثبيت إجماليه وبنوده، عند كل تقديم وإعادة تقديم
+    if (type.destinationHandler === EXPENSE_REPORT_HANDLER) req.payload = JSON.stringify(await stageExpenseReport(em, req))
     if (type.destinationHandler === 'custody_transfer') {
       const payload = JSON.parse(req.payload || '{}')
       await custodyTransferTarget(em, Number(payload.assignmentId), Number(payload.toEmployeeId), req, user)
@@ -3633,6 +3646,10 @@ export class RequestsService {
     // B3.14: «تحديث المعالين» بوجهة السجل — الإجراء هو الإلزامي (والباقي حسب الإجراء، بيتحكم عليه عند التقديم)
     if (type.destinationHandler === DEPENDENTS_REQUEST_HANDLER) {
       return [...new Set(['dependentAction', ...required.filter(key => !(DEPENDENTS_REQUEST_STAGED_KEYS as readonly string[]).includes(key))])]
+    }
+    // B5.3: «تقرير مصروفات» — رقم التقرير هو الإلزامي؛ الإجمالي والبنود الخادم بيثبّتهم
+    if (type.destinationHandler === EXPENSE_REPORT_HANDLER) {
+      return [...new Set([...EXPENSE_REPORT_CLIENT_KEYS, ...required.filter(key => !(EXPENSE_REPORT_STAGED_KEYS as readonly string[]).includes(key) && key !== 'description')])]
     }
     // الساعات الاختيارية القديمة للعادي تأتي من البصمة؛ إلزام المستثنى يُفحص من دليل يومه عند التقديم.
     // حقول العميل المخصصة المطلوبة تُضاف بعد هذه القائمة ولا تتغير إعداداتها المحفوظة.

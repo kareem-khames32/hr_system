@@ -30,6 +30,8 @@ export interface ModuleFeatureDef {
   description: string
   /** القيمة لما مفيش صف في القاعدة */
   default: boolean
+  /** مسارات واجهة تابعة للميزة نفسها: بتتقفل مع الميزة حتى لو موديولها مفعّل (B5.3) */
+  routes?: string[]
 }
 
 export interface ModuleDef {
@@ -226,7 +228,17 @@ export const MODULES = {
   expenses: moduleDef({
     nameAr: 'المصروفات', group: 'money', dependsOn: ['requests'], softUses: ['payroll'],
     description: 'طلبات صرف المصروفات وبدل السفر (الشكل البسيط الموجود)',
-    requestHandlers: ['expense_register'],
+    permissions: ['expenses.manage'],
+    requestHandlers: ['expense_register', 'expense_report'],
+    features: {
+      // B5.3 (أ): تقرير ببنود وإيصالات وحدود للفئات، بيتقدّم كطلب — مقفولة لحد ما الشركة تقرر
+      'expenses.reports': {
+        nameAr: 'تقارير المصروفات',
+        description: 'تقرير مصروفات بأكتر من بند وإيصال لكل بند وحد لكل فئة (تحذير أو منع)، بيتقدّم كطلب في سلسلته وبيتصرف قيد واحد في الدفتر عند الاعتماد النهائي',
+        default: false,
+        routes: ['/expenses', '/my/expenses'],
+      },
+    },
   }),
 
   // ===== دورة الموظف =====
@@ -445,7 +457,7 @@ const score = (pattern: string, path: string): number => {
 export interface RouteOwner {
   /** الموديول صاحب المسار، أو null لو المسار مش مسجّل (بيتعامل كأساسي) */
   module: ModuleKey | null
-  /** ميزة فرعية لازم تبقى مفعّلة (الشاشات الوهمية) */
+  /** ميزة فرعية لازم تبقى مفعّلة (الشاشات الوهمية، أو ميزة ليها مساراتها) */
   feature: string | null
 }
 
@@ -461,7 +473,16 @@ export function routeOwner(pathname: string): RouteOwner {
       if (value > moduleScore) { moduleScore = value; module = key }
     }
   }
+  // مسار ميزة فرعية (B5.3): لو نمطه مش أضعف من أدق مسار موديول، الشاشة تبع الميزة وموديولها
+  let feature: string | null = null, featureScore = -1
+  for (const [key, def] of Object.entries(MODULE_FEATURES)) {
+    for (const pattern of def.routes ?? []) {
+      const value = score(pattern, pathname)
+      if (value > featureScore) { featureScore = value; feature = key }
+    }
+  }
   const demoScore = DEMO_ROUTES.reduce((best, pattern) => Math.max(best, score(pattern, pathname)), -1)
+  if (feature !== null && featureScore >= moduleScore && featureScore >= demoScore) return { module: MODULE_FEATURES[feature].module, feature }
   return { module, feature: demoScore > moduleScore ? DEMO_SCREENS_FEATURE : null }
 }
 

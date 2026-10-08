@@ -98,6 +98,8 @@ const adminMenuDefs: MenuItem[] = [
       { label: 'سجل العهد', href: '/employees/custody', perm: 'custody.assign' },
       // B5.2: وثائق التأمين الطبي وفئاتها (بتظهر لما موديول المزايا مفتوح)
       { label: 'المزايا والتأمين الطبي', href: '/benefits', perm: 'benefits.manage' },
+      // B5.3: فئات المصروف وتقارير الموظفين (بتظهر لما ميزة «تقارير المصروفات» مفتوحة)
+      { label: 'المصروفات', href: '/expenses', perm: 'expenses.manage' },
       { label: 'سجل النقل', href: '/employees/transfers', perm: 'transfers.view' },
       // B3.12: لائحة الجزاءات وتوقيعها (بتظهر لما موديول الشكاوى والتحقيقات مفتوح)
       { label: 'لائحة الجزاءات', href: '/cases/penalties', perm: 'cases.penalties' },
@@ -494,6 +496,8 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
       ...(teamManager || can('employees.view')
         ? [{ id: 'my-probation', label: 'فترات التجربة', icon: <Hourglass size={20} />, href: '/my/probation' } satisfies MenuItem]
         : []),
+      // B5.3: تقارير مصروفات الموظف (بتظهر لما ميزة «تقارير المصروفات» مفتوحة)
+      { id: 'my-expenses', label: 'مصروفاتي', icon: <Wallet size={20} />, href: '/my/expenses' },
       // B3.3-أ: الوظائف المنشورة داخليًا في فرع الموظف (بتظهر لما موديول التوظيف مفتوح)
       { id: 'my-jobs', label: 'وظائف داخلية', icon: <Briefcase size={20} />, href: '/my/jobs' },
       // B3.4-ب: المقابلات اللي الموظف محاور فيها وبطاقته

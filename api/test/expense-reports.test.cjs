@@ -1,0 +1,126 @@
+// B5.3 (أ) — تقارير المصروفات: قواعد الفئة والتقرير والبند، حكم السياسة، حالة التقرير الفعلية، ومسارات الميزة الفرعية، ومصدر الكود.
+// حساب نقي بلا قاعدة بيانات.
+const { test } = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
+const apiRoot = path.resolve(__dirname, '..')
+require('../node_modules/ts-node').register({ project: path.join(apiRoot, 'tsconfig.json'), transpileOnly: true })
+require('../node_modules/reflect-metadata')
+const rules = require('../src/expenses/expense-reports')
+const registry = require('../src/modules-registry/registry')
+const read = rel => fs.readFileSync(path.join(apiRoot, 'src', rel), 'utf8').replace(/\r\n/g, '\n')
+const web = rel => fs.readFileSync(path.join(apiRoot, '..', 'src', rel), 'utf8').replace(/\r\n/g, '\n')
+
+test('EXU-01: المبلغ والفئة — موجب بمنزلتين بالكتير ومن غير تقريب صامت؛ والحد اختياري ووضعه تحذير أو منع', () => {
+  assert.deepEqual([10, '10.5', '10.55', ' 7 ', 0, -1, '10.555', '1e3', 'abc', null, 9999999.99, 10000000].map(value => rules.expenseAmount(value)), [10, 10.5, 10.55, 7, null, null, null, null, null, null, 9999999.99, null])
+  assert.deepEqual(rules.categoryFields({ name: '  انتقالات   داخلية ' }).fields, { name: 'انتقالات داخلية', limitPerLine: null, limitMode: 'WARN', receiptRequired: false, isActive: true })
+  assert.deepEqual(rules.categoryFields({ name: 'إقامة', limitPerLine: '500', limitMode: 'BLOCK', receiptRequired: true, isActive: false }).fields,
+    { name: 'إقامة', limitPerLine: 500, limitMode: 'BLOCK', receiptRequired: true, isActive: false })
+  assert.deepEqual([{ name: 'ا' }, { name: 'x'.repeat(121) }, { name: 'إقامة', limitPerLine: 0 }, { name: 'إقامة', limitMode: 'block' }, { name: 'إقامة', isActive: 1 }].map(body => rules.categoryFields(body).fields), [null, null, null, null, null])
+})
+
+test('EXU-02: التقرير والبند — العنوان، وفترة المأمورية الاتنين أو ولا واحد، وتاريخ البند مش في المستقبل، والإيصال رقم ملف', () => {
+  assert.deepEqual(rules.reportFields({ title: ' مأمورية  جدة ' }).fields, { title: 'مأمورية جدة', tripFrom: null, tripTo: null })
+  assert.deepEqual(rules.reportFields({ title: 'مأمورية', tripFrom: '2026-10-01', tripTo: '2026-10-01' }).fields, { title: 'مأمورية', tripFrom: '2026-10-01', tripTo: '2026-10-01' })
+  assert.deepEqual([{ title: 'م' }, { title: 'مأمورية', tripFrom: '2026-10-01' }, { title: 'مأمورية', tripFrom: '2026-10-05', tripTo: '2026-10-01' }, { title: 'مأمورية', tripFrom: '2026-02-30', tripTo: '2026-03-01' }]
+    .map(body => rules.reportFields(body).fields), [null, null, null, null])
+  const today = '2026-10-08'
+  assert.deepEqual(rules.lineFields({ categoryId: 3, expenseDate: today, amount: '12.5', note: ' غدا ', receiptFileId: 9 }, today).fields, { categoryId: 3, expenseDate: today, amount: 12.5, note: 'غدا', receiptFileId: 9 })
+  assert.deepEqual(rules.lineFields({ categoryId: 3, expenseDate: '2026-10-01', amount: 5 }, today).fields, { categoryId: 3, expenseDate: '2026-10-01', amount: 5, note: null, receiptFileId: null })
+  assert.deepEqual([{ categoryId: '3', expenseDate: today, amount: 5 }, { categoryId: 3, expenseDate: '2026-10-09', amount: 5 }, { categoryId: 3, expenseDate: today, amount: 0 }, { categoryId: 3, expenseDate: today, amount: 5, note: 'x'.repeat(301) },
+    { categoryId: 3, expenseDate: today, amount: 5, receiptFileId: '9' }, { categoryId: 3, expenseDate: '08/10/2026', amount: 5 }].map(body => rules.lineFields(body, today).fields), [null, null, null, null, null, null])
+})
+
+test('EXU-03: حكم السياسة على البند — فئة مقفولة أو فوق حد «منع» بيمنع، فوق حد «تحذير» بيتعلّم، والإيصال الإجباري بيتحكم عند التقديم بس', () => {
+  const category = (extra = {}) => ({ name: 'إقامة', limitPerLine: 500, limitMode: 'BLOCK', receiptRequired: true, isActive: true, ...extra })
+  const issue = (cat, amount, receiptFileId, atSubmit) => rules.lineIssue(cat, { amount, receiptFileId }, atSubmit)
+  assert.deepEqual(issue(null, 10, null, true), { block: 'فئة البند مش موجودة', warn: null })
+  assert.deepEqual(issue(category({ isActive: false }), 10, 1, true), { block: 'فئة «إقامة» مقفولة — غيّر فئة البند', warn: null })
+  assert.deepEqual([issue(category(), 500, 1, true), issue(category(), 500.01, 1, true), issue(category(), '500.00', 1, true)],
+    [{ block: null, warn: null }, { block: 'بند «إقامة» بمبلغ 500.01 فوق حد الفئة 500.00', warn: null }, { block: null, warn: null }])
+  assert.deepEqual([issue(category(), 100, null, false), issue(category(), 100, null, true)], [{ block: null, warn: null }, { block: 'بند «إقامة» محتاج إيصال', warn: null }])
+  const soft = category({ limitMode: 'WARN', receiptRequired: false })
+  assert.deepEqual([issue(soft, 600, null, true), issue(soft, 500, null, true), issue(category({ limitPerLine: null }), 99999, 1, true)],
+    [{ block: null, warn: 'فوق حد الفئة (500.00)' }, { block: null, warn: null }, { block: null, warn: null }])
+  // قيم bit من القاعدة (1/0) زي true/false
+  assert.deepEqual(issue(category({ isActive: 1, receiptRequired: 0 }), 10, null, true), { block: null, warn: null })
+})
+
+test('EXU-04: حالة التقرير الفعلية = حالته + حالة طلبه، والتعديل في المسودة والراجع والمرفوض بس', () => {
+  const phase = rules.reportPhase
+  assert.deepEqual([phase('DRAFT', null), phase('DRAFT', 'SUBMITTED'), phase('APPROVED', 'CANCELLED'), phase('SUBMITTED', 'SUBMITTED'), phase('SUBMITTED', 'UNDER_REVIEW'), phase('SUBMITTED', 'APPROVED'),
+    phase('SUBMITTED', 'COMPLETED'), phase('SUBMITTED', 'RETURNED_FOR_INFO'), phase('SUBMITTED', 'REJECTED'), phase('SUBMITTED', 'CANCELLED'), phase('SUBMITTED', 'DRAFT'), phase('SUBMITTED', null)],
+    ['DRAFT', 'DRAFT', 'APPROVED', 'PENDING', 'PENDING', 'PENDING', 'PENDING', 'RETURNED', 'REJECTED', 'REJECTED', 'REJECTED', 'REJECTED'])
+  assert.deepEqual(['DRAFT', 'PENDING', 'RETURNED', 'REJECTED', 'APPROVED'].map(rules.phaseEditable), [true, false, true, true, false])
+  assert.deepEqual(Object.keys(rules.REPORT_PHASE_LABELS).sort(), ['APPROVED', 'DRAFT', 'PENDING', 'REJECTED', 'RETURNED'])
+  assert.equal(rules.reportCode(7), 'EXP-00007')
+  // حقول نموذج الطلب: رقم التقرير بس، والمفاتيح اللي الخادم بيثبّتها مش حقول
+  assert.deepEqual(rules.expenseReportFields({ requiredFields: JSON.stringify(['amount', 'description', 'costCenter']), customFields: JSON.stringify([{ key: 'amount' }, { key: 'costCenter', label: 'مركز التكلفة' }]) }),
+    { requiredFields: JSON.stringify(['reportId', 'costCenter']), customFields: JSON.stringify([{ key: 'reportId', label: 'رقم تقرير المصروفات (من شاشة «مصروفاتي»)', type: 'number', required: true }, { key: 'costCenter', label: 'مركز التكلفة' }]) })
+})
+
+test('EXU-05: الميزة الفرعية بتملك مساراتها — الشاشة بتتقفل مع الميزة حتى وموديولها مفعّل، وباقي المسارات زي ما هي', () => {
+  const module = registry.MODULES.expenses
+  assert.deepEqual([module.defaultEnabled, module.permissions, module.routes, module.requestHandlers, Object.keys(module.features)], [true, ['expenses.manage'], [], ['expense_register', 'expense_report'], ['expenses.reports']])
+  assert.deepEqual([module.features['expenses.reports'].default, module.features['expenses.reports'].routes], [false, ['/expenses', '/my/expenses']])
+  assert.deepEqual(['/expenses', '/my/expenses', '/my/expenses/5'].map(route => registry.routeOwner(route)), Array(3).fill({ module: 'expenses', feature: 'expenses.reports' }))
+  const on = { modules: ['expenses', 'requests', 'recruitment', 'benefits'], features: ['expenses.reports'] }, off = { ...on, features: [] }
+  assert.deepEqual(['/expenses', '/my/expenses'].map(route => [registry.routeAvailable(route, on), registry.routeAvailable(route, off), registry.routeAvailable(route, { modules: ['requests'], features: ['expenses.reports'] })]),
+    [[true, false, false], [true, false, false]])
+  // مسارات مالهاش ميزة ماتغيّرتش: موديولها بس، وشاشات العرض بميزتها
+  assert.deepEqual([registry.routeOwner('/benefits'), registry.routeOwner('/recruitment/add'), registry.routeOwner('/my/raises'), registry.routeOwner('/requests')],
+    [{ module: 'benefits', feature: null }, { module: 'recruitment', feature: registry.DEMO_SCREENS_FEATURE }, { module: 'compensation', feature: null }, registry.routeOwner('/requests')])
+  assert.equal(registry.moduleOfRequestType({ code: 'ANY', destinationHandler: 'expense_report' }), 'expenses')
+})
+
+test('EXU-06: مصدر الكود — المسارات ورا الموديول والميزة، الفئات لحساب بكل الفروع، التعديل تحت قفل الطلب ثم التقرير، والقيد بيتكتب في مكان واحد', () => {
+  const controller = read('expenses/expenses.controller.ts')
+  assert.match(controller, /@RequireModule\('expenses'\)\n@RequireFeature\('expenses\.reports'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)/)
+  assert.deepEqual([(controller.match(/@Perm\('expenses\.manage'\)/g) ?? []).length, (controller.match(/@(Get|Post|Put|Patch|Delete)\(/g) ?? []).length], [3, 10])
+  const service = read('expenses/expense-reports.service.ts')
+  assert.equal((service.match(/assertCompanyWideWrite\(user\)/g) ?? []).length, 2, 'إضافة الفئة وتعديلها لحساب بكل الفروع')
+  assert.equal((service.match(/await this\.lockOwnEditable\(em, user, /g) ?? []).length, 4, 'تعديل التقرير ومسحه وحفظ البند ومسحه تحت قفل التقرير')
+  assert.match(service, /locked\.report\.employeeId !== employeeId\) throw new NotFoundException\(REPORT_NOT_FOUND\)/)
+  assert.match(service, /file\.entityType !== 'request' \|\| Number\(file\.uploadedBy\) !== Number\(user\.sub\) \|\| Number\(file\.employeeId\) !== report\.employeeId/)
+  assert.match(service, /visible = filed\.filter\(row => \{ const person = people\.get\(row\.employeeId\); return !!person && inBranchScope\(scope, person\.branchId\) \}\)/)
+  // الخدمة مابتكتبش قيد ولا بتنادي خدمة تانية؛ القيد في وجهة الطلب بس
+  assert.doesNotMatch(service, /EmployeeObligation|employee_obligations|RequestsService|DestinationsService/)
+  const core = read('expenses/expense-reports.ts')
+  assert.equal((core.match(/getRepository\(EmployeeObligation\)\.save\(/g) ?? []).length, 1)
+  // ترتيب الأقفال: صف الطلب المربوط قبل صف التقرير، وبعد القفل الربط لازم يكون زي ما اتشاف
+  const lock = core.slice(core.indexOf('export async function lockReport'), core.indexOf('export interface StagedLine'))
+  assert.ok(lock.indexOf('FROM dbo.requests WITH (UPDLOCK, ROWLOCK)') < lock.indexOf(`lock: { mode: 'pessimistic_write' }`))
+  assert.match(lock, /!== linkedId\) throw new ConflictException\(REPORT_CHANGED\)/)
+  // التقديم والتنفيذ بيحكموا تحت القفل: صاحب التقرير، وربطه بالطلب، والإجمالي محسوب تاني
+  const execute = core.slice(core.indexOf('export async function executeExpenseReport'), core.indexOf('export function expenseReportFields'))
+  assert.match(execute, /locked\.report\.employeeId !== req\.requesterId \|\| locked\.report\.requestId == null \|\| Number\(locked\.report\.requestId\) !== req\.id/)
+  assert.match(execute, /cents\(staged\) !== judged\.totalCents \|\| cents\(report\.totalAmount\) !== judged\.totalCents/)
+  assert.ok(execute.indexOf('await lockReport(') < execute.indexOf('getRepository(EmployeeObligation).save('))
+  const requests = read('requests/requests.service.ts')
+  assert.match(requests, /if \(type\.destinationHandler === EXPENSE_REPORT_HANDLER\) req\.payload = JSON\.stringify\(await stageExpenseReport\(em, req\)\)/)
+  assert.match(requests, /allowedFor\(moduleOfRequestType\(type\), user\) && await this\.typeFeatureOpen\(type\)\) all\.push\(type\)/)
+  assert.match(requests, /\|\| !\(await this\.typeFeatureOpen\(type\)\)\) throw new NotFoundException\('نوع الطلب غير موجود'\)/)
+  assert.match(read('requests/destinations.service.ts'), /\[EXPENSE_REPORT_HANDLER\]: executeExpenseReport,/)
+  assert.ok(JSON.stringify(require('../src/auth/permissions')).includes('expenses.manage'))
+})
+
+test('EXU-07: الواجهة — «مصروفاتي» بتقدّم الطلب برقم التقرير بس والإيصال بيترفع بنوع «طلب»، و«المصروفات» للفئات والتقارير، والقايمة والعناوين', () => {
+  const mine = web('app/my/expenses/page.tsx'), admin = web('app/expenses/page.tsx'), api = web('lib/expenses-api.ts')
+  assert.match(mine, /await createRequest\(data!\.requestTypeCode!, \{ reportId: report\.id \}, true\)/)
+  assert.match(mine, /report\.phase === 'RETURNED' && report\.requestId\) await resubmitRequest\(report\.requestId\)/)
+  assert.match(mine, /uploadFile\(line\.file, \{ entityType: 'request' \}\)/)
+  assert.match(mine, /disabled=\{busy \|\| report\.lines\.length === 0 \|\| !!blocked\}/)
+  assert.match(mine, /\{report\.editable && \(\n\s+<div className="flex flex-wrap items-end gap-3 bg-gray-50 rounded-xl p-3" data-expense-line-form>/)
+  assert.match(mine, />\s*مصروفاتي\s*<\/h1>/)
+  assert.match(admin, />\s*المصروفات\s*<\/h1>/)
+  assert.match(admin, /\{data\.canEdit && \(\n\s+<div className="flex flex-wrap items-end gap-3 bg-gray-50 rounded-xl p-3" data-expense-category-form>/)
+  assert.doesNotMatch(admin, /createRequest|\/act`/, 'شاشة الإدارة قراءة: الاعتماد في سلسلة الطلب')
+  for (const route of ['/expenses/my', '/expenses/overview', '/expenses/categories']) assert.ok(api.includes(route), route)
+  const sidebar = web('components/layout/Sidebar.tsx'), titles = web('components/layout/pageTitles.ts')
+  assert.match(sidebar, /\{ label: 'المصروفات', href: '\/expenses', perm: 'expenses\.manage' \}/)
+  assert.match(sidebar, /\{ id: 'my-expenses', label: 'مصروفاتي', icon: <Wallet size=\{20\} \/>, href: '\/my\/expenses' \}/)
+  assert.match(titles, /\['\/my\/expenses', 'مصروفاتي'\]/); assert.match(titles, /\['\/expenses', 'المصروفات'\]/)
+  const labels = web('lib/request-payload.ts')
+  for (const key of ['reportId', 'reportTitle', 'tripFrom', 'tripTo', 'lines', 'category', 'receipt', 'warning']) assert.match(labels, new RegExp(`\\n  ${key}: '`), key)
+})

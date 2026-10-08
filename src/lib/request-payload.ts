@@ -5,6 +5,15 @@ import { personalDataField, personalDataOptionLabel } from '../../api/src/employ
 
 const fieldLabels: Record<string, string> = {
   date: 'التاريخ',
+  // B5.3: «تقرير مصروفات» — الخادم بيثبّت العنوان والفترة والبنود (فئة، تاريخ، مبلغ، ملاحظة، إيصال، مخالفة) عند كل تقديم
+  reportId: 'رقم تقرير المصروفات',
+  reportTitle: 'عنوان التقرير',
+  tripFrom: 'بداية المأمورية',
+  tripTo: 'نهاية المأمورية',
+  lines: 'بنود التقرير',
+  category: 'الفئة',
+  receipt: 'الإيصال',
+  warning: 'مخالفة السياسة',
   // طلب «دوام يوم عطلة»: الأيام مفصولة بفاصلة (YYYY-MM-DD) — النموذج يختارها من مدى، لا يكتبها المستخدم
   dates: 'أيام العطلة',
   fromDate: 'من تاريخ',

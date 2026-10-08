@@ -90,6 +90,14 @@ const EXCEPTIONS = {
   // B5.1-ب: ورقة المدير في دورة الزيادات — «المدير المباشر» موقع في الهيكل (مرؤوسيه المباشرين بس، تحت قفل صف الموظف)
   'CompensationController.myTeam': 'SERVICE_CHECK', // GET /compensation/my-team
   'CompensationController.propose': 'SERVICE_CHECK', // PUT /compensation/cycles/:id/my-team/:employeeId
+  // B5.3-أ: «مصروفاتي» — تقارير الموظف صاحب الحساب وبنودها (الخدمة بتحكم بـuser.employeeId؛ تقرير غيره «مش موجود»)
+  'ExpensesController.mine': 'SELF', // GET /expenses/my
+  'ExpensesController.createReport': 'SELF', // POST /expenses/my/reports
+  'ExpensesController.updateReport': 'SELF', // PATCH /expenses/my/reports/:id
+  'ExpensesController.removeReport': 'SELF', // DELETE /expenses/my/reports/:id
+  'ExpensesController.addLine': 'SELF', // POST /expenses/my/reports/:id/lines
+  'ExpensesController.updateLine': 'SELF', // PATCH /expenses/my/reports/:id/lines/:lineId
+  'ExpensesController.removeLine': 'SELF', // DELETE /expenses/my/reports/:id/lines/:lineId
   // B2.7: قراءة نسخة سياسة وملفها — لصاحب صلاحية السياسات، أو للموظف اللي السياسة في جمهوره (الحكم في الخدمة)
   'PoliciesController.version': 'SERVICE_CHECK', // GET /policies/versions/:versionId
   'PoliciesController.versionFile': 'SERVICE_CHECK', // GET /policies/versions/:versionId/file

@@ -76,6 +76,7 @@ import { DOCUMENT_RENEWAL_HANDLER, executeDocumentRenewal } from '../assets/docu
 import { TRAINING_REQUEST_HANDLER, executeTrainingRequest } from '../training/training-requests'
 import { CASE_REQUEST_HANDLER, executeCaseRequest } from '../cases/case-requests'
 import { DEPENDENTS_REQUEST_HANDLER, executeDependentsRequest } from '../dependents/dependent-requests'
+import { EXPENSE_REPORT_HANDLER, executeExpenseReport } from '../expenses/expense-reports'
 
 // ناتج تنفيذ الوجهة: المرجع الدائم + هل اكتمل فوراً أم ينتظر (سريان/تأكيد استلام)
 export interface DestinationResult {
@@ -1078,6 +1079,8 @@ export class DestinationsService {
     [CASE_REQUEST_HANDLER]: executeCaseRequest,
     // B3.14: «تحديث المعالين» — الاعتماد النهائي بيعدّل سجل معالين صاحب الطلب (تحت قفل صفه)
     [DEPENDENTS_REQUEST_HANDLER]: executeDependentsRequest,
+    // B5.3: «تقرير مصروفات» — الاعتماد النهائي بيكتب قيد دائن واحد في الدفتر بإجمالي بنود التقرير (محسوب تاني تحت قفل التقرير)
+    [EXPENSE_REPORT_HANDLER]: executeExpenseReport,
     shift_schedule: executeShiftSwap,
     // بيانات شخصية
     employee_record: this.personalDataHandler,

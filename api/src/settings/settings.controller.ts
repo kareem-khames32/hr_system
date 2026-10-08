@@ -458,6 +458,7 @@ const AVAILABLE_HANDLERS: Array<{ key: string; labelAr: string }> = [
   { key: 'payroll_bonus', labelAr: 'مكافأة (دفتر المديونيات)' },
   { key: 'payroll_allowance', labelAr: 'بدل لمرة واحدة (دفتر المديونيات)' },
   { key: 'expense_register', labelAr: 'صرف مصروفات (دفتر المديونيات)' },
+  { key: 'expense_report', labelAr: 'تقرير مصروفات ببنود (دفتر المديونيات)' },
   { key: 'payroll_adjustment', labelAr: 'تسوية مالية (دفتر المديونيات)' },
 ]
 

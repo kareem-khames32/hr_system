@@ -334,7 +334,7 @@ test('MR-09: أنواع الطلبات المزروعة — كل نوع في م�
     shifts: ['SHIFT_SWAP'],
     loans: ['LOAN', 'LOAN_INSTALLMENT_DEFER', 'EARLY_LOAN_SETTLEMENT'],
     payroll: ['SALARY_INCREASE', 'BONUS', 'PER_DIEM', 'DEDUCTION_OBJECTION', 'PAYROLL_DEDUCTION', 'PAYROLL_BONUS', 'BANK_ACCOUNT_CHANGE'],
-    expenses: ['EXPENSE_CLAIM'],
+    expenses: ['EXPENSE_CLAIM', 'EXPENSE_REPORT'],
     employees: ['PROMOTION', 'TEAM_TRANSFER', 'TITLE_CHANGE', 'CONTRACT_RENEWAL', 'CONTRACT_TYPE_CHANGE', 'PERSONAL_DATA_UPDATE', 'EMERGENCY_CONTACT'],
     // B2.11-ب: طلب «وظيفة جديدة / زيادة عدد» تبع موديول الوظائف المعتمدة (المقفول افتراضيًا)
     positions: ['POSITION_REQUEST'],

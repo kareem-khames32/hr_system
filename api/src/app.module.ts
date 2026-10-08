@@ -51,6 +51,7 @@ import { SurveysModule } from './surveys/surveys.module'
 import { DependentsModule } from './dependents/dependents.module'
 import { CompensationModule } from './compensation/compensation.module'
 import { BenefitsModule } from './benefits/benefits.module'
+import { ExpensesModule } from './expenses/expenses.module'
 import { StatutoryModule } from './statutory/statutory.module'
 import { validateEnv } from './auth/jwt-secret'
 import { dbPacketSize } from './common/sql-packet-size'
@@ -153,6 +154,8 @@ import { dbPacketSize } from './common/sql-packet-size'
     CompensationModule,
     // B5.2: المزايا والتأمين الطبي (موديول benefits، مقفول افتراضيًا)
     BenefitsModule,
+    // B5.3: تقارير المصروفات (ميزة expenses.reports، مقفولة افتراضيًا)
+    ExpensesModule,
     // B2.13-ب: التقارير المحفوظة والمجدولة
     SavedReportsModule,
     // B2.16: الإعلانات (موديول اختياري مقفول افتراضيًا)
