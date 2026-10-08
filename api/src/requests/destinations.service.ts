@@ -75,6 +75,7 @@ import { executeRequisition, REQUISITION_HANDLER } from '../recruitment/requisit
 import { DOCUMENT_RENEWAL_HANDLER, executeDocumentRenewal } from '../assets/document-renewal'
 import { TRAINING_REQUEST_HANDLER, executeTrainingRequest } from '../training/training-requests'
 import { CASE_REQUEST_HANDLER, executeCaseRequest } from '../cases/case-requests'
+import { DEPENDENTS_REQUEST_HANDLER, executeDependentsRequest } from '../dependents/dependent-requests'
 
 // ناتج تنفيذ الوجهة: المرجع الدائم + هل اكتمل فوراً أم ينتظر (سريان/تأكيد استلام)
 export interface DestinationResult {
@@ -1075,6 +1076,8 @@ export class DestinationsService {
     [TRAINING_REQUEST_HANDLER]: executeTrainingRequest,
     // B3.11: «شكوى / تظلم / إبلاغ عن مخالفة» — الاعتماد النهائي بيفتح ملف قضية (مقدّم الطلب شاكي، والمعتمدين أول المطّلعين)
     [CASE_REQUEST_HANDLER]: executeCaseRequest,
+    // B3.14: «تحديث المعالين» — الاعتماد النهائي بيعدّل سجل معالين صاحب الطلب (تحت قفل صفه)
+    [DEPENDENTS_REQUEST_HANDLER]: executeDependentsRequest,
     shift_schedule: executeShiftSwap,
     // بيانات شخصية
     employee_record: this.personalDataHandler,

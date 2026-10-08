@@ -354,6 +354,14 @@ export const MODULES = {
     permissions: ['surveys.manage'],
     routes: ['/surveys', '/surveys/*'],
   }),
+  // B3.14: سجل المعالين — معالين الموظف بمستند هويتهم. موديول جديد = مقفول لحد ما الشركة تفتحه، وفي الباقة الأساسية
+  dependents: moduleDef({
+    nameAr: 'سجل المعالين', group: 'people', dependsOn: ['employees'], softUses: ['documents'], defaultEnabled: false,
+    description: 'معالين الموظف (القرابة والهوية بتاريخ انتهائها): الموارد البشرية بتعدّل مباشرة، والموظف بطلب «تحديث المعالين»',
+    permissions: ['dependents.manage'],
+    // B3.14: وجهة «تحديث المعالين» (أي نوع طلب وجهته دي بيتبع الموديول)
+    requestHandlers: ['dependents_update'],
+  }),
   // B2.11: الوظائف المعتمدة — وظيفة في وحدة بعدد معتمد، وتقرير «معتمد / مشغول / شاغر». موديول جديد = مقفول لحد ما الشركة تفعّله
   // (أول موديول defaultEnabled: false: مفيش حاجة كانت شغالة قبله)
   positions: moduleDef({

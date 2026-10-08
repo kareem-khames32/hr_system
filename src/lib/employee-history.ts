@@ -49,6 +49,7 @@ export const EMPLOYEE_FIELD_LABELS: Record<string, string> = {
   phone: 'رقم الجوال', phoneAlt: 'رقم جوال بديل', address: 'العنوان', maritalStatus: 'الحالة الاجتماعية',
   emergencyContactName: 'اسم جهة اتصال الطوارئ', emergencyContactPhone: 'جوال جهة اتصال الطوارئ',
   emergencyRelation: 'صلة القرابة', emergencyPhoneAlt: 'هاتف طوارئ بديل', shift: 'الوردية', status: 'الحالة',
+  dependents: 'المعالين',
 }
 
 const WORK_TYPE: Record<string, string> = { full_time: 'دوام كامل', fulltime: 'دوام كامل', part_time: 'دوام جزئي', parttime: 'دوام جزئي', contract: 'عقد مؤقت', consultant: 'استشاري', intern: 'متدرب' }

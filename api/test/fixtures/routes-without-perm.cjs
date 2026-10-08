@@ -121,6 +121,7 @@ const EXCEPTIONS = {
   'CasesController.detail': 'SERVICE_CHECK', // GET /cases/:id
   'CasesController.investigator': 'SERVICE_CHECK', // POST /cases/:id/investigator
   'CasesController.list': 'SERVICE_CHECK', // GET /cases — القضايا اللي الحساب مطّلع عليها بس
+  'DependentsController.mine': 'SELF', // GET /dependents/mine — B3.14: معالين صاحب الحساب نفسه
   'SurveysController.form': 'SERVICE_CHECK', // GET /surveys/:id — B3.13: نموذج استبيان للموظف المدعو له بس
   'SurveysController.mine': 'SELF', // GET /surveys/mine — B3.13: الاستبيانات المفتوحة اللي الموظف نفسه مدعو لها ولسه ماردّش
   'SurveysController.respond': 'SELF', // POST /surveys/:id/respond — B3.13: رد الموظف المدعو نفسه (مرة واحدة)

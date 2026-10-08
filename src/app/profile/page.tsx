@@ -67,6 +67,7 @@ import {
 } from '@/lib/profile-api'
 
 import { DISPLAY_LOCALE, localToday } from '@/lib/dates'
+import DependentsCard from '@/components/DependentsCard'
 
 const balanceTypeLabels: Record<string, string> = {
   annual: 'إجازة سنوية',
@@ -751,6 +752,9 @@ export default function ProfilePage() {
                 </div>}
               </div>
             )}
+
+            {/* B3.14: معالين صاحب الحساب (قراءة — والتغيير بطلب «تحديث المعالين») */}
+            {activeTab === 'info' && <DependentsCard />}
 
             {activeTab === 'leaves' && leaveOn && (
               <div className="card">

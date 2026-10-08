@@ -428,6 +428,8 @@ const AVAILABLE_HANDLERS: Array<{ key: string; labelAr: string }> = [
   { key: 'training_enrollment', labelAr: 'تسجيل في جلسة تدريب' },
   // B3.11 (تبع موديول الشكاوى والتحقيقات)
   { key: 'case_open', labelAr: 'فتح ملف قضية (شكوى أو تظلم أو بلاغ)' },
+  // B3.14 (تبع موديول سجل المعالين)
+  { key: 'dependents_update', labelAr: 'تحديث سجل المعالين (إضافة، تعديل، حذف)' },
   { key: 'leave_calendar', labelAr: 'إجازة تُخصم من الرصيد (وجهة قديمة)' },
   { key: 'leave_calendar_once', labelAr: 'إجازة لمرة واحدة بلا خصم رصيد (حج)' },
   { key: 'leave_balance_restore', labelAr: 'إلغاء/تعديل إجازة واسترداد الرصيد' },

@@ -76,6 +76,7 @@ import { loadCurrencyContext, currencyCodeFor, currencyLabel, useCurrency } from
 import { useModuleEnabled } from '@/lib/modules'
 import EmployeeSuspensionDialog from '@/components/EmployeeSuspensionDialog'
 import EmployeeCustomFieldsCard from '@/components/EmployeeCustomFieldsCard'
+import DependentsCard from '@/components/DependentsCard'
 import EmploymentPeriodsCard from '@/components/EmploymentPeriodsCard'
 import { EmployeePayrollRunsCard } from '@/components/payroll/PayrollRunMoveMemberModal'
 import { SUSPENSION_STATE_LABELS, suspensionHistoryNote, suspensionPeriodText, type EmployeeSuspension } from '@/lib/employee-suspensions-api'
@@ -1305,6 +1306,8 @@ export default function EmployeeProfilePage() {
               </div>
               {/* B2.9-ب: الحقول المخصصة اللي الشركة عرّفتها من الإعدادات */}
               <EmployeeCustomFieldsCard employeeId={employee.id} />
+              {/* B3.14: معالين الموظف — لصاحب صلاحية سجل المعالين، ولما الموديول مفتوح */}
+              <DependentsCard employeeId={employee.id} />
             </div>
           )}
 

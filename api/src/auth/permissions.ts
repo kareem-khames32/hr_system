@@ -124,6 +124,8 @@ export const PERMISSIONS: Record<string, string> = {
   'cases.penalties': 'لائحة الجزاءات وتوقيعها',
   // B3.13: الاستبيانات — الموظف المدعو بيرد من غير صلاحية
   'surveys.manage': 'إدارة الاستبيانات',
+  // B3.14: سجل المعالين — الموظف بيشوف معالينه من غير صلاحية
+  'dependents.manage': 'إدارة سجل المعالين',
   // B2.11: الوظائف المعتمدة
   'positions.view': 'عرض الوظائف المعتمدة',
   'positions.manage': 'إدارة الوظائف المعتمدة',
@@ -147,6 +149,7 @@ export const PERMISSION_MODULES: Array<{ key: string; labelAr: string; permissio
   { key: 'helpdesk', labelAr: 'مركز الخدمات', permissions: ['helpdesk.manage'] },
   { key: 'cases', labelAr: 'الشكاوى والتحقيقات', permissions: ['cases.investigate', 'cases.penalties'] },
   { key: 'surveys', labelAr: 'الاستبيانات', permissions: ['surveys.manage'] },
+  { key: 'dependents', labelAr: 'سجل المعالين', permissions: ['dependents.manage'] },
   { key: 'positions', labelAr: 'الوظائف المعتمدة', permissions: ['positions.view', 'positions.manage'] },
   { key: 'announcements', labelAr: 'الإعلانات', permissions: ['announcements.manage'] },
   { key: 'org', labelAr: 'الهيكل التنظيمي', permissions: ['org.manage'] },
@@ -200,6 +203,7 @@ export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   'candidates.approve_offers': 'يعتمد عرض العمل (الراتب وتاريخ البدء) أو يرجّعه قبل ما يتبعت للمرشح — واللي عمل العرض مايعتمدوش',
   'positions.view': 'يفتح شاشة «الوظائف المعتمدة»: الوظائف وأعدادها وتقرير «معتمد / مشغول / شاغر» لكل قسم وشاغلي كل وظيفة — في نطاق فروعه',
   'announcements.manage': 'يكتب الإعلانات وينشرها ويسحبها ويشوف مين قراها — حساب الفروع لإعلانات فروعه بس',
+  'dependents.manage': 'يشوف معالين موظف في نطاق فروعه ويضيف ويعدّل ويحذف (بسبب) مباشرة — من غير طلب',
   'surveys.manage': 'يعمل استبيان لجمهور في نطاق فروعه ويفتحه ويقفله ويشوف نتايجه المجمّعة — من غير أسماء، ومن غير نتايج لمجموعة أقل من الحد الأدنى',
   'cases.penalties': 'يدير لائحة الجزاءات (المخالفات ودرجات تكرارها)، ويوقّع الجزاء على موظفين نطاق فروعه بحسب اللائحة ورقم التكرار — وجزاء الخصم بيتعمل خصم مصنّف بسلسلته',
   'cases.investigate': 'يفتح ملف قضية (شكوى، تظلم، مخالفة) لموظفين نطاق فروعه ويبقى أول مطّلع عليه — وأي ملف تاني مابيشوفوش غير لما يتضاف له (المشكو في حقه أو مديره المباشر مايتضافوش)',
@@ -409,6 +413,8 @@ export const ROLE_PRESETS: Array<{
       'cases.penalties',
       // B3.13: زي المهام — في حزمة الكود بس (والموديول نفسه مقفول افتراضيًا)
       'surveys.manage',
+      // B3.14: زي المهام — في حزمة الكود بس (والموديول نفسه مقفول افتراضيًا)
+      'dependents.manage',
       // خطة المراجعة 24: طلب استثناء الحضور واعتماده وإنهاؤه — لا يعتمد أحد ما أنشأه (فصل مهام في الخدمة).
       // الاعتماد التنفيذي approve_executive يبقى لمدير النظام (ترحيل 20260914_*_c1_attendance_exemption_roles)
       'attendance_exemption.view', 'attendance_exemption.manage', 'attendance_exemption.approve',

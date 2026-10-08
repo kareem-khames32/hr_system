@@ -231,6 +231,7 @@ const handlerLabels: Record<string, string> = {
   document_renewal: 'تجديد مستند',
   training_enrollment: 'تسجيل في جلسة تدريب',
   case_open: 'فتح ملف قضية',
+  dependents_update: 'تحديث سجل المعالين',
   document_vault: 'خزنة الوثائق',
   expense_register: 'سجل المصروفات',
   training_register: 'سجل التدريب',
