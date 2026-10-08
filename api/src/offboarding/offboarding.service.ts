@@ -37,13 +37,17 @@ import { readSettlementPayment, readSettlementPaymentInput, recordSettlementPaym
 import { applySettlementObligations, readSettlementPendingObligations, settlementObligationTotals,
   SETTLEMENT_COLLECT_OBLIGATIONS_KEY, SETTLEMENT_OBLIGATION_CREDIT_PREFIX, SETTLEMENT_OBLIGATION_DEBIT_PREFIX } from './settlement-obligations'
 import { PayrollDecimal } from '../payroll/payroll-decimal'
+import { branchCountryOf } from '../org/branch-currency'
 import { assertUniqueOvertimeDays, legacyExemptOvertimeSource, overtimeFinancialValue, projectOvertimeFinancialValue, type LegacyExplicitOvertimeRequest, type OvertimeFinancialValue } from '../payroll/overtime-financial'
 import { loadAttendanceExemptions, exemptionPolicyOnDate } from '../attendance/attendance-exemption-resolver'
 import {
   buildEosPolicy,
   caseReason,
   computeEos,
+  EOS_APPLIES_KEYS,
   EOS_DEFAULTS,
+  EOS_NOT_APPLIED_NOTE,
+  eosAppliesFor,
   eosLineLabel,
   eosReasonKnown,
   isValidYmd,
@@ -362,6 +366,8 @@ export class OffboardingService implements OnApplicationBootstrap {
         fullMonths: round2(eos.fullMonths),
         factor: eos.factor,
         factorLabel: eos.factorLabel,
+        // B4.5 (أ): بيظهر لما المكافأة مش مطبّقة على دولة فرع الموظف بس
+        ...((await this.eosApplies(emp)) ? {} : { applies: false, note: EOS_NOT_APPLIED_NOTE }),
       },
       openCustody: open.map((c) => ({
         id: c.id,
@@ -742,6 +748,16 @@ export class OffboardingService implements OnApplicationBootstrap {
     return row?.value ?? fallback
   }
 
+  /** B4.5 (أ): مكافأة نهاية الخدمة مطبّقة على موظف؟ بدولة فرعه الحالي ومفتاح دولته في سياسات النظام (الافتراضي مطبّقة) */
+  private async eosApplies(emp: Pick<Employee, 'branchId'>): Promise<boolean> {
+    const values = new Map<string, string>()
+    for (const key of Object.values(EOS_APPLIES_KEYS)) values.set(key, await this.cfg(key, 'true'))
+    // الافتراضي (مفيش دولة مقفولة): مطبّقة من غير قراءة فرع — نفس مسار النظام قبل المفتاح
+    if (emp.branchId == null || ![...values.values()].includes('false')) return true
+    const [branch]: Array<{ country: string | null }> = await this.config.manager.query('SELECT [country] FROM [branches] WHERE [id] = @0', [emp.branchId])
+    return eosAppliesFor(branchCountryOf(branch?.country), values)
+  }
+
   // إعادة توليد البنود التلقائية (قبل الاعتماد): تحذف الآلية وتبنيها
   // من الأرقام الحالية — البنود اليدوية لا تُمس
   async recalcLines(user: JwtPayload, caseId: number) {
@@ -801,7 +817,8 @@ export class OffboardingService implements OnApplicationBootstrap {
       )
     }
     const eos = computeEos(gross, serviceYears(this.joinDateOf(emp), kase.lastWorkingDay), reason, policy)
-    if (eos.amount > 0) {
+    // B4.5 (أ): دولة فرع الموظف مقفول لها المكافأة = من غير بند مكافأة تلقائي (والاعتماد بيقارن بنفس الحكم)
+    if (eos.amount > 0 && (await this.eosApplies(emp))) {
       rows.push({
         caseId: kase.id,
         label: eosLineLabel(eos, policy),

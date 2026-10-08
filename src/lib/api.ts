@@ -1922,7 +1922,8 @@ export interface CreateOffboardingInput {
 export interface ApiOffboardingPreview {
   employeeId: number; reason: string; lastWorkingDay: string; blockReason: string | null
   serviceYears: number; canViewSettlement: boolean
-  eos: { firstYears: number; laterYears: number; firstTierMonths: number; laterMonths: number; fullMonths: number; factor: number; factorLabel: string }
+  // B4.5 (أ): applies = false ومعاها note لما المكافأة مش مطبّقة على دولة فرع الموظف (غير كده الخانتين مش موجودين)
+  eos: { applies?: false; note?: string; firstYears: number; laterYears: number; firstTierMonths: number; laterMonths: number; fullMonths: number; factor: number; factorLabel: string }
   openCustody: Array<{ id: number; status: string; assetName: string; serialNumber: string | null }>
   lines?: Array<{ label: string; type: 'CREDIT' | 'DEBIT'; amount: number }>; net?: number
 }

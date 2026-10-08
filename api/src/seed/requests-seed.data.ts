@@ -372,6 +372,9 @@ export const configSeed: Array<{ key: string; value: string }> = [
   // مكافأة نهاية الخدمة (EMP-2) بالشرائح — نظام العمل السعودي م84: الشريحة الأولى
   // eos.months_per_year شهر/سنة لأول eos.tier1_years سنة، وبعدها eos.months_per_year_after
   { key: 'eos.months_per_year', value: '0.5' },
+  // B4.5 (أ): المكافأة مطبّقة لكل دولة (الافتراضي = زي ما كانت: مطبّقة للكل)
+  { key: 'eos.applies.eg', value: 'true' },
+  { key: 'eos.applies.sa', value: 'true' },
   { key: 'eos.tier1_years', value: '5' },
   { key: 'eos.months_per_year_after', value: '1' },
   // معامل الاستقالة (م85) «سنوات:معامل» — أقل من أول حد لا مكافأة

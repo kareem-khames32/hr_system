@@ -204,3 +204,32 @@ test('service preview respects custom policy and zero payouts do not create a fi
   await beforeTwoYears.service.buildSettlement({ id: 73, employeeId: 1, terminationReason: 'resignation', lastWorkingDay: '2021-12-30' }, true)
   assert.equal(beforeTwoYears.persisted.length, 0)
 })
+
+// B4.5 (أ): «مكافأة نهاية الخدمة مطبّقة» لكل دولة — الافتراضي مطبّقة، والقفل بقيمة «false» بس، والدولة اللي مالهاش مفتاح دايمًا مطبّقة
+test('B4.5 (أ): end of service applies per country — applied by default, closed only by an explicit false, seeded, validated and shown on the policies screen', () => {
+  const fs = require('node:fs')
+  const { EOS_APPLIES_KEYS, eosAppliesFor } = require('../src/offboarding/eos')
+  const { configSeed } = require('../src/seed/requests-seed.data')
+  assert.deepEqual(EOS_APPLIES_KEYS, { EG: 'eos.applies.eg', SA: 'eos.applies.sa' })
+  const values = entries => new Map(Object.entries(entries))
+  for (const country of ['EG', 'SA', 'AE', null, undefined, '']) assert.equal(eosAppliesFor(country, values({})), true, String(country))
+  assert.deepEqual(['EG', 'SA', 'AE', null].map(country => eosAppliesFor(country, values({ 'eos.applies.eg': 'false', 'eos.applies.sa': 'true' }))), [false, true, true, true])
+  for (const value of ['', 'no', '0', 'FALSE', 'true']) assert.equal(eosAppliesFor('EG', values({ 'eos.applies.eg': value })), true, value)
+  // مبذورين «مطبّقة» (فالقاعدة القايمة بتاخدهم من ConfigDefaultsService من غير تغيير سلوك)، والقيمة نعم/لأ بس
+  assert.deepEqual(configSeed.filter(row => row.key.startsWith('eos.applies.')).map(row => [row.key, row.value]), [['eos.applies.eg', 'true'], ['eos.applies.sa', 'true']])
+  const read = rel => fs.readFileSync(path.resolve(__dirname, '..', '..', rel), 'utf8').replace(/\r\n/g, '\n')
+  const controller = read('api/src/settings/settings.controller.ts')
+  assert.match(controller, /'eos\.applies\.eg': \['true', 'false'\],\n\s+'eos\.applies\.sa': \['true', 'false'\],/)
+  // بند المكافأة التلقائي والمعاينة بنفس الحكم
+  const service = read('api/src/offboarding/offboarding.service.ts')
+  assert.match(service, /if \(eos\.amount > 0 && \(await this\.eosApplies\(emp\)\)\) \{/)
+  assert.match(service, /\.\.\.\(\(await this\.eosApplies\(emp\)\) \? \{\} : \{ applies: false, note: EOS_NOT_APPLIED_NOTE \}\),/)
+  assert.equal((service.match(/this\.eosApplies\(/g) ?? []).length, 2)
+  // الشاشة: خانة لكل مفتاح من مفاتيح المكافأة ومعاملات الإضافي
+  const page = read('src/app/settings/policies/page.tsx')
+  for (const key of ['eos.months_per_year', 'eos.tier1_years', 'eos.months_per_year_after', 'eos.resignation_factors', 'eos.reason_factors', 'eos.applies.sa', 'eos.applies.eg',
+    'overtime.multiplier_weekday', 'overtime.multiplier_weekend', 'overtime.multiplier_holiday']) {
+    assert.equal(page.split(`{ key: '${key}',`).length - 1, 1, key)
+    assert.ok(configSeed.some(row => row.key === key), key + ' مبذور')
+  }
+})

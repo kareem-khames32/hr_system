@@ -125,6 +125,16 @@ export function parseReasonFactors(value: string): {
   return { map }
 }
 
+// B4.5 (أ) / R04: «مكافأة نهاية الخدمة مطبّقة» لكل دولة — المعادلة دي نظام العمل السعودي، والقانون المصري مافيهوش مكافأة عامة.
+// الافتراضي «مطبّقة» للدولتين (سلوك النظام قبل المفتاح)؛ المالك بيقفل دولة من «سياسات النظام». دولة الموظف = دولة فرعه.
+export const EOS_APPLIES_KEYS: Readonly<Record<string, string>> = { EG: 'eos.applies.eg', SA: 'eos.applies.sa' }
+/** المكافأة مطبّقة لدولة؟ دولة مالهاش مفتاح (أو فرع من غير دولة) والقيمة الفاضية أو أي قيمة غير «false» = مطبّقة */
+export const eosAppliesFor = (country: string | null | undefined, values: ReadonlyMap<string, string>): boolean => {
+  const key = country ? EOS_APPLIES_KEYS[country] : undefined
+  return !key || values.get(key) !== 'false'
+}
+export const EOS_NOT_APPLIED_NOTE = 'مكافأة نهاية الخدمة مش مطبّقة على فروع الدولة دي (سياسات النظام)'
+
 // تحقق مفاتيح الجداول قبل الحفظ (PATCH /settings/config) — null = صالحة
 export function eosConfigError(key: string, value: string): string | null {
   if (key === 'eos.resignation_factors') {
