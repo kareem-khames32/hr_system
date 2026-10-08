@@ -111,6 +111,7 @@ export default function RecruitmentJobsPage() {
                   <th className="px-4 py-3 text-right font-medium text-gray-600">الوظيفة</th>
                   <th className="px-4 py-3 text-right font-medium text-gray-600">الفرع والقسم</th>
                   <th className="px-4 py-3 text-right font-medium text-gray-600">العدد</th>
+                  <th className="px-4 py-3 text-right font-medium text-gray-600">المتقدمين</th>
                   <th className="px-4 py-3 text-right font-medium text-gray-600">نطاق الراتب</th>
                   <th className="px-4 py-3 text-right font-medium text-gray-600">النشر</th>
                   <th className="px-4 py-3 text-right font-medium text-gray-600">الحالة</th>
@@ -133,6 +134,7 @@ export default function RecruitmentJobsPage() {
                       {job.departmentName ? ` · ${job.departmentName}` : ''}
                     </td>
                     <td className="px-4 py-3 text-gray-800 tabular-nums">{job.openings}</td>
+                    <td className="px-4 py-3 text-gray-800 tabular-nums">{job.applicants}</td>
                     <td className="px-4 py-3 text-gray-600 tabular-nums">{salaryText(job)}</td>
                     <td className="px-4 py-3 text-gray-600">{placesText(job)}</td>
                     <td className="px-4 py-3">

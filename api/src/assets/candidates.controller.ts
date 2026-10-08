@@ -21,6 +21,7 @@ import {
   IsString,
   MaxLength,
   MinLength,
+  ValidateIf,
 } from 'class-validator'
 import { Type } from 'class-transformer'
 import { branchIdIn, branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, Perm, RolesGuard, scopeWord, userHasPerm } from '../auth/guards'
@@ -29,6 +30,7 @@ import { EmployeesService } from '../employees/employees.service'
 import { CreateEmployeeDto } from '../employees/employees.dto'
 import { Candidate, CandidateStage } from './assets.entities'
 import { RequireModule } from '../modules-registry/module.guard'
+import { CandidateApplicationsService } from '../recruitment/candidate-applications.service'
 
 const STAGES: CandidateStage[] = [
   'applied',
@@ -54,6 +56,8 @@ class CreateCandidateDto {
   @MaxLength(50)
   phone?: string
 
+  // مطلوبة للمرشح من غير وظيفة شاغرة؛ مع jobId المسمى من الوظيفة
+  @ValidateIf((dto: CreateCandidateDto) => dto.jobId == null)
   @IsString({ message: 'الوظيفة المتقدم لها مطلوبة' })
   @MaxLength(200)
   positionTitle: string
@@ -67,6 +71,18 @@ class CreateCandidateDto {
   @IsString()
   @MaxLength(1000)
   notes?: string
+
+  // B3.3-أ: المرشح على وظيفة شاغرة بعينها (اختياري) — المسمى والفرع بيتاخدوا منها. المصدر ورقم الهوية بيتفحصوا في الخدمة برسايلهم
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  jobId?: number
+
+  @IsOptional()
+  source?: unknown
+
+  @IsOptional()
+  nationalId?: unknown
 }
 
 class UpdateCandidateDto {
@@ -98,22 +114,30 @@ export class CandidatesController {
   constructor(
     @InjectRepository(Candidate)
     private readonly candidates: Repository<Candidate>,
-    private readonly employeesService: EmployeesService
+    private readonly employeesService: EmployeesService,
+    private readonly applications: CandidateApplicationsService
   ) {}
 
   // فصل الفروع: المقيد بفروع يرى مرشحي فروعه (وغير المسندين لفرع — نفس قاعدة التعيين) فقط
   @Get()
-  list(@CurrentUser() user: JwtPayload) {
+  async list(@CurrentUser() user: JwtPayload) {
     const scope = branchScopeOf(user)
-    return this.candidates.find({
+    const rows = await this.candidates.find({
       where: scope === null ? {} : [{ branchId: branchIdIn(scope) }, { branchId: IsNull() }],
       order: { createdAt: 'DESC' },
     })
+    // B3.3-أ: وظيفة كل مرشح ومصدره (المرشح من غير وظيفة = null)
+    return this.applications.attach(user, rows)
   }
 
   // ما ينشئه المقيد بفرع يبقى في فرعه؛ والمقيد بأكتر من فرع يختار فرع منها (مفيش اختيار صامت)
   @Post()
   create(@Body() dto: CreateCandidateDto, @CurrentUser() user: JwtPayload) {
+    // B3.3-أ: على وظيفة شاغرة — الفرع والمسمى منها، والنطاق وفحص التكرار في الخدمة تحت قفل صف الوظيفة
+    if (dto.jobId != null) {
+      return this.applications.createOnJob(user, { jobId: dto.jobId, fullName: dto.fullName, email: dto.email, phone: dto.phone, notes: dto.notes, source: dto.source, nationalId: dto.nationalId })
+    }
+    if (dto.source !== undefined || dto.nationalId !== undefined) throw new BadRequestException('المصدر ورقم الهوية للمرشح على وظيفة شاغرة بس')
     const scope = branchScopeOf(user)
     if (scope !== null) {
       if (scope.length === 0) throw new ForbiddenException('حسابك مش مربوط بفرع')

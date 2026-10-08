@@ -266,7 +266,8 @@ export const MODULES = {
     description: 'احتياج التوظيف والوظائف الشاغرة، ومسار المرشحين والتعيين منه',
     permissions: ['candidates.manage'],
     // المتقدمين والوظائف الشاغرة (B3.2) شاشات حقيقية؛ باقي ما تحت /recruitment شاشات عرض (DEMO_ROUTES) لحد ما الموديول الكامل ينزل
-    routes: ['/recruitment', '/recruitment/applicants', '/recruitment/jobs'],
+    // B3.3-أ: «وظائف داخلية» في البوابة (/my/jobs)
+    routes: ['/recruitment', '/recruitment/applicants', '/recruitment/jobs', '/my/jobs'],
     // B3.2-أ: طلب «احتياج توظيف» ووجهته (الاعتماد بيعمل وظيفة شاغرة مسودة)
     requestTypes: ['RECRUITMENT_REQUISITION'],
     requestHandlers: ['recruitment_requisition'],

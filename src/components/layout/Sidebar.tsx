@@ -467,6 +467,8 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
       ...(teamManager || can('employees.view')
         ? [{ id: 'my-probation', label: 'فترات التجربة', icon: <Hourglass size={20} />, href: '/my/probation' } satisfies MenuItem]
         : []),
+      // B3.3-أ: الوظائف المنشورة داخليًا في فرع الموظف (بتظهر لما موديول التوظيف مفتوح)
+      { id: 'my-jobs', label: 'وظائف داخلية', icon: <Briefcase size={20} />, href: '/my/jobs' },
       { id: 'my-attendance', label: 'حضوري', icon: <Clock size={20} />, href: '/my/attendance' },
       { id: 'my-leaves', label: 'إجازاتي وأرصدتي', icon: <Calendar size={20} />, href: '/my/leaves' },
       { id: 'my-payslips', label: 'قسائم راتبي', icon: <Wallet size={20} />, href: '/my/payslips' },

@@ -28,7 +28,8 @@ test('candidates: a branch user lists only his branch (and unassigned), creates 
     create: dto => ({ ...dto }),
     save: async row => row,
   }
-  const controller = new CandidatesController(repo, {})
+  // B3.3-أ: خدمة التقديم على وظيفة (القايمة بتعدّي عليها) — هنا مرشحين من غير وظايف
+  const controller = new CandidatesController(repo, {}, { attach: async (_user, list) => list })
   const opOf = value => ({ type: value?.type ?? value?._type, value: value?.value ?? value?._value })
   await controller.list(hrBranch1)
   assert.equal(seen[0].length, 2)

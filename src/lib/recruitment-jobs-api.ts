@@ -13,6 +13,8 @@ export interface ApiRecruitmentJob {
   status: RecruitmentJobStatus; statusLabel: string; internal: boolean; external: boolean
   /** الطلب اللي اتعملت منه الوظيفة (احتياج معتمد)، أو null لو من الشاشة */
   requestId: number | null; publishedAt: string | null; closedAt: string | null; createdAt: string
+  /** B3.3-أ: عدد المتقدمين على الوظيفة */
+  applicants: number
 }
 export interface ApiRecruitmentJobsList { available: boolean; message?: string; canManage: boolean; jobs: ApiRecruitmentJob[] }
 export interface ApiRecruitmentJobForm {
@@ -35,6 +37,16 @@ export const RECRUITMENT_JOB_NEXT: Record<RecruitmentJobStatus, Array<{ status: 
 }
 
 const json = (method: string, body: unknown): RequestInit => ({ method, body: JSON.stringify(body) })
+
+// B3.3-أ: «وظائف داخلية» للموظف — المنشور داخليًا في فرعه الحالي (الخادم بيحكم)، والتقديم مرة واحدة من بيانات ملفه
+export interface ApiInternalOpening {
+  id: number; code: string; title: string; departmentName: string | null; openings: number
+  description: string | null; requirements: string | null; startDate: string | null; publishedAt: string | null; applied: boolean
+}
+export interface ApiInternalOpenings { available: boolean; canApply: boolean; jobs: ApiInternalOpening[] }
+export const fetchInternalOpenings = () => apiFetch<ApiInternalOpenings>('/recruitment/openings')
+export const applyToOpening = (id: number, note?: string) =>
+  apiFetch<{ jobId: number; applied: boolean }>(`/recruitment/openings/${id}/apply`, json('POST', note ? { note } : {}))
 
 export const fetchRecruitmentJobs = () => apiFetch<ApiRecruitmentJobsList>('/recruitment/jobs')
 export const fetchRecruitmentJobForm = () => apiFetch<ApiRecruitmentJobForm>('/recruitment/jobs/form')

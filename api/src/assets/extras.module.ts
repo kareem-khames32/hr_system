@@ -43,6 +43,7 @@ import { NotificationRead } from './notification-read.entity'
 import { Department } from '../org/entities/department.entity'
 import { HiringDocumentReminder } from './hiring-document-reminder.entity'
 import { HiringDocumentsController } from './hiring-documents.controller'
+import { RecruitmentModule } from '../recruitment/recruitment.module'
 
 // الملحقات: العهدة/المستندات/الكتالوجات/المرشحون/النقل/التقويم/الإشعارات
 @Module({
@@ -52,6 +53,7 @@ import { HiringDocumentsController } from './hiring-documents.controller'
     CommentsModule, // B2.8: قايمة الإشعارات بتحكم إشعار الإشارة بحق قراءة تعليقه
     AnnouncementsModule, // B2.16: و«إعلان جديد» بإن الإعلان لسه ساري والحساب في جمهوره
     AttendanceModule, // لإعادة حساب الأيام بعد تعديل وردية في الكتالوج
+    RecruitmentModule, // B3.3-أ: المرشح على وظيفة شاغرة (candidates.controller)
     TypeOrmModule.forFeature([
       Asset,
       CustodyAssignment,

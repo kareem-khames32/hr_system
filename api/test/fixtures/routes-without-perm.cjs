@@ -93,6 +93,8 @@ const EXCEPTIONS = {
   'PortalController.dismissNotification': 'SELF', // DELETE /notifications/:id
   'PortalController.markNotificationsRead': 'SELF', // PATCH /notifications/read
   'PortalController.notifications': 'SELF', // GET /notifications
+  'RecruitmentOpeningsController.apply': 'SELF', // POST /recruitment/openings/:id/apply — B3.3-أ: تقديم الموظف نفسه على وظيفة داخلية في فرعه الحالي
+  'RecruitmentOpeningsController.list': 'SELF', // GET /recruitment/openings — B3.3-أ: الوظائف المنشورة داخليًا في فرع الموظف الحالي
   'RequestsController.acknowledge': 'SELF', // POST /requests/custody/:assignmentId/acknowledge · POST /custody/:assignmentId/acknowledge
   'RequestsController.handover': 'SELF', // POST /requests/custody/:assignmentId/handover · POST /custody/:assignmentId/handover
   'RequestsController.mine': 'SELF', // GET /requests/mine

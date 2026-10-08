@@ -29,6 +29,7 @@ import {
 } from '@/lib/api'
 import { formatDate } from '@/lib/dates'
 import { candidateHireHref } from '@/lib/candidate-hire'
+import { fetchRecruitmentJobs, type ApiRecruitmentJob } from '@/lib/recruitment-jobs-api'
 
 const stageLabels: Record<string, string> = {
   applied: 'تقدّم',
@@ -57,6 +58,9 @@ const emptyAddForm = {
   positionTitle: '',
   branchId: '',
   notes: '',
+  // B3.3-أ: على وظيفة شاغرة (اختياري) — المسمى والفرع منها
+  jobId: '',
+  nationalId: '',
 }
 
 export default function RecruitmentPage() {
@@ -73,6 +77,8 @@ export default function RecruitmentPage() {
   const [addForm, setAddForm] = useState(emptyAddForm)
   const [addError, setAddError] = useState('')
   const [addSaving, setAddSaving] = useState(false)
+  // B3.3-أ: الوظائف المفتوحة للمرشحين (منشورة أو موقوفة)
+  const [jobs, setJobs] = useState<ApiRecruitmentJob[]>([])
 
   const load = async () => {
     try {
@@ -90,6 +96,9 @@ export default function RecruitmentPage() {
     load()
     fetchBranches()
       .then(setBranches)
+      .catch(() => {})
+    fetchRecruitmentJobs()
+      .then((list) => setJobs(list.jobs.filter((job) => job.status === 'PUBLISHED' || job.status === 'PAUSED')))
       .catch(() => {})
   }, [])
 
@@ -116,8 +125,8 @@ export default function RecruitmentPage() {
   }
 
   const submitAdd = async () => {
-    if (!addForm.fullName.trim() || !addForm.positionTitle.trim()) {
-      setAddError('الاسم الكامل والمسمى الوظيفي مطلوبان')
+    if (!addForm.fullName.trim() || (!addForm.jobId && !addForm.positionTitle.trim())) {
+      setAddError('الاسم الكامل والمسمى الوظيفي (أو الوظيفة الشاغرة) مطلوبان')
       return
     }
     setAddSaving(true)
@@ -127,8 +136,9 @@ export default function RecruitmentPage() {
         fullName: addForm.fullName.trim(),
         email: addForm.email.trim() || undefined,
         phone: addForm.phone.trim() || undefined,
-        positionTitle: addForm.positionTitle.trim(),
-        branchId: addForm.branchId ? Number(addForm.branchId) : undefined,
+        ...(addForm.jobId
+          ? { jobId: Number(addForm.jobId), nationalId: addForm.nationalId.trim() || undefined }
+          : { positionTitle: addForm.positionTitle.trim(), branchId: addForm.branchId ? Number(addForm.branchId) : undefined }),
         notes: addForm.notes.trim() || undefined,
       })
       setShowAdd(false)
@@ -303,7 +313,10 @@ export default function RecruitmentPage() {
                       <div className="flex items-center gap-6 text-sm text-gray-500 mb-4">
                         <div className="flex items-center gap-1">
                           <Briefcase size={16} />
-                          <span>{candidate.positionTitle}</span>
+                          <span>
+                            {candidate.positionTitle}
+                            {candidate.application ? ` · ${candidate.application.jobCode}${candidate.application.internal ? ' · داخلي' : ''}` : ''}
+                          </span>
                         </div>
                         <div className="flex items-center gap-1">
                           <Building2 size={16} />
@@ -447,19 +460,46 @@ export default function RecruitmentPage() {
                     onChange={(e) => setAddForm((prev) => ({ ...prev, fullName: e.target.value }))}
                   />
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    المسمى الوظيفي <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    className="input w-full"
-                    value={addForm.positionTitle}
-                    onChange={(e) =>
-                      setAddForm((prev) => ({ ...prev, positionTitle: e.target.value }))
-                    }
-                  />
-                </div>
+                {jobs.length > 0 && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">الوظيفة الشاغرة</label>
+                    <select className="input w-full" value={addForm.jobId} onChange={(e) => setAddForm((prev) => ({ ...prev, jobId: e.target.value }))}>
+                      <option value="">من غير وظيفة شاغرة</option>
+                      {jobs.map((job) => (
+                        <option key={job.id} value={String(job.id)}>
+                          {job.code} · {job.title} · {job.branchName}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {addForm.jobId ? (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">رقم الهوية أو الجواز (اختياري)</label>
+                    <input
+                      type="text"
+                      className="input w-full"
+                      maxLength={40}
+                      value={addForm.nationalId}
+                      onChange={(e) => setAddForm((prev) => ({ ...prev, nationalId: e.target.value }))}
+                    />
+                    <p className="text-xs text-gray-500 mt-1">المسمى والفرع من الوظيفة، ونفس الموبايل أو البريد أو الهوية على نفس الوظيفة مرفوض.</p>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      المسمى الوظيفي <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      className="input w-full"
+                      value={addForm.positionTitle}
+                      onChange={(e) =>
+                        setAddForm((prev) => ({ ...prev, positionTitle: e.target.value }))
+                      }
+                    />
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -482,21 +522,23 @@ export default function RecruitmentPage() {
                     />
                   </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">الفرع</label>
-                  <select
-                    className="input w-full"
-                    value={addForm.branchId}
-                    onChange={(e) => setAddForm((prev) => ({ ...prev, branchId: e.target.value }))}
-                  >
-                    <option value="">بدون فرع</option>
-                    {branches.map((branch) => (
-                      <option key={branch.id} value={String(branch.id)}>
-                        {branch.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                {!addForm.jobId && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">الفرع</label>
+                    <select
+                      className="input w-full"
+                      value={addForm.branchId}
+                      onChange={(e) => setAddForm((prev) => ({ ...prev, branchId: e.target.value }))}
+                    >
+                      <option value="">بدون فرع</option>
+                      {branches.map((branch) => (
+                        <option key={branch.id} value={String(branch.id)}>
+                          {branch.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">ملاحظات</label>
                   <textarea

@@ -7,6 +7,7 @@ import type { JwtPayload } from '../auth/auth.service'
 import { branchIdIn, branchScopeOf, inBranchScope, isEmptyBranchScope, userHasPerm } from '../auth/guards'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
+import { CandidateApplicationsService } from './candidate-applications.service'
 import { RecruitmentJob, type RecruitmentJobStatus } from './recruitment-job.entity'
 import {
   RECRUITMENT_JOBS_MIGRATION_MISSING, RECRUITMENT_JOB_CLOSED, RECRUITMENT_JOB_STATUS_LABELS, RECRUITMENT_PUBLISH_NEEDS, RECRUITMENT_REASON_MAX, RECRUITMENT_TEXT_MAX,
@@ -24,7 +25,7 @@ const amountText = (value: unknown): string | null => (value === null || value =
 
 @Injectable()
 export class RecruitmentJobsService {
-  constructor(@InjectDataSource() private readonly ds: DataSource) {}
+  constructor(@InjectDataSource() private readonly ds: DataSource, private readonly applications: CandidateApplicationsService) {}
 
   private async assertReady(em: EntityManager) {
     if (!(await recruitmentJobsReady(em))) throw new BadRequestException(RECRUITMENT_JOBS_MIGRATION_MISSING)
@@ -37,6 +38,8 @@ export class RecruitmentJobsService {
     const departmentIds = [...new Set(rows.map((row) => row.departmentId).filter((id): id is number => id != null))]
     const branches = new Map((await em.getRepository(Branch).find({ where: { id: In(branchIds) } })).map((branch) => [branch.id, branch.name]))
     const departments = new Map((departmentIds.length ? await em.getRepository(Department).find({ where: { id: In(departmentIds) } }) : []).map((department) => [department.id, department]))
+    // B3.3-أ: عدد المتقدمين على كل وظيفة
+    const applicants = await this.applications.countsByJob(em, rows.map((row) => row.id))
     return rows.map((row) => {
       const department = row.departmentId != null ? departments.get(row.departmentId) : undefined
       const unit = department && department.branchId === row.branchId ? department : null
@@ -47,6 +50,7 @@ export class RecruitmentJobsService {
         startDate: row.startDate ? String(row.startDate).slice(0, 10) : null, description: row.description ?? null, requirements: row.requirements ?? null,
         status: row.status, statusLabel: RECRUITMENT_JOB_STATUS_LABELS[row.status] ?? row.status, internal: row.internal === true, external: row.external === true,
         requestId: row.requestId ?? null, publishedAt: row.publishedAt ?? null, closedAt: row.closedAt ?? null, createdAt: row.createdAt,
+        applicants: applicants.get(row.id) ?? 0,
       }
     })
   }

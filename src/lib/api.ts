@@ -1650,9 +1650,12 @@ export interface ApiCandidate {
   id: number; fullName: string; email?: string; phone?: string
   positionTitle: string; branchId?: number; stage: string; notes?: string
   hiredEmployeeId?: number; createdAt: string
+  /** B3.3-أ: الوظيفة الشاغرة اللي المرشح عليها ومصدره (null = مرشح من غير وظيفة) */
+  application?: { jobId: number; jobCode: string; source: string | null; nationalId: string | null; internal: boolean } | null
 }
 export const fetchCandidates = () => get<ApiCandidate[]>('/candidates')
-export const createCandidate = (c: Partial<ApiCandidate>) => post<ApiCandidate>('/candidates', c)
+/** مع jobId: المسمى والفرع من الوظيفة، والخادم بيفحص التكرار (موبايل، بريد، هوية) على نفس الوظيفة */
+export const createCandidate = (c: Partial<ApiCandidate> & { jobId?: number; nationalId?: string; source?: string }) => post<ApiCandidate>('/candidates', c)
 export const updateCandidate = (id: number, c: Partial<ApiCandidate>) => patch<ApiCandidate>(`/candidates/${id}`, c)
 // التعيين = بيانات إضافة الموظف كاملة (نفس الحقول الإجبارية) من نموذج الإضافة المفتوح من المرشح
 export const hireCandidate = (id: number, employee: Clearable<ApiEmployee>) =>

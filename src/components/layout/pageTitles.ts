@@ -10,6 +10,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/announcements', 'الإعلانات'],
   ['/my/policies', 'سياساتي'],
   ['/my/probation', 'فترات التجربة'],
+  ['/my/jobs', 'وظائف داخلية'],
   ['/my/attendance', 'حضوري'],
   ['/my/leaves', 'إجازاتي وأرصدتي'],
   ['/my/payslips', 'قسائم راتبي'],
