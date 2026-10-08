@@ -21,6 +21,8 @@ const INSURANCE = 'حساب التأمينات الاجتماعية'
 // B4.4: مفتاحي الضريبة بتقراهم المعاينة عند الطلب، وحساب المسير لو إعداد الضريبة مفتوح (مقفول افتراضيًا)؛ وصندوق الشهداء بإعداده
 const TAX_PREVIEW = 'ضريبة كسب العمل: المعاينة، والمسير لو إعدادها مفتوح (مقفول افتراضيًا)'
 const MARTYRS_FUND = 'صندوق الشهداء في المسير لو إعداده مفتوح (مقفول افتراضيًا)'
+// B4.5 (ب)
+const OVERTIME_MINIMUM = 'الحد القانوني لمعامل الإضافي لو إعداده مفتوح (مقفول افتراضيًا)'
 // B4.4 (د)
 const HEALTH_INSURANCE = 'التأمين الصحي الشامل في المسير لو إعداده مفتوح (مقفول افتراضيًا)'
 const TRAINING_FUND = 'تقرير صندوق التدريب السنوي (للعرض بس)'
@@ -48,7 +50,7 @@ export const STATUTORY_CATALOG: readonly StatutoryKeyInfo[] = [
   { country: 'EG', key: 'eg.leave.other', label: 'إجازات تانية (عارضة، وضع، أبوة، حج)', card: 'C-EG-05', usedBy: null,
     codes: { casual_days: 'العارضة في السنة', casual_max_per_occasion: 'العارضة: أيام في المرة', maternity_days: 'الوضع بالأيام', maternity_times: 'الوضع: مرات في الخدمة', paternity_days: 'الأبوة بالأيام',
       paternity_times: 'الأبوة: مرات', hajj_months: 'الحج بالشهور', hajj_min_service_years: 'الحج بعد كام سنة خدمة' } },
-  { country: 'EG', key: 'eg.overtime', label: 'الإضافي وساعات العمل', card: 'C-EG-06', usedBy: null,
+  { country: 'EG', key: 'eg.overtime', label: 'الإضافي وساعات العمل', card: 'C-EG-06', usedBy: OVERTIME_MINIMUM,
     codes: { day_premium_pct: pct('علاوة إضافي النهار'), night_premium_pct: pct('علاوة إضافي الليل'), rest_day_multiplier: 'معامل يوم الراحة', daily_hours: 'ساعات اليوم', weekly_hours: 'ساعات الأسبوع' } },
   { country: 'EG', key: 'eg.minimum_wage', label: 'الحد الأدنى للأجور (القطاع الخاص)', card: 'C-EG-06', usedBy: null, codes: { monthly_amount: 'المبلغ الشهري' } },
   { country: 'EG', key: 'eg.periodic_raise', label: 'العلاوة الدورية', card: 'C-EG-06', usedBy: null, codes: { min_pct_of_insurance_wage: pct('حد أدنى من أجر التأمين'), min_amount: 'حد أدنى بالمبلغ في الشهر' } },
@@ -67,7 +69,7 @@ export const STATUTORY_CATALOG: readonly StatutoryKeyInfo[] = [
     codes: { maternity_weeks: 'الوضع بالأسابيع', paternity_days: 'الأبوة بالأيام', marriage_days: 'الزواج بالأيام', bereavement_days: 'الوفاة بالأيام', sibling_bereavement_days: 'وفاة الأخ أو الأخت بالأيام',
       hajj_min_days: 'الحج: أقل أيام', hajj_max_days: 'الحج: أكتر أيام', hajj_min_service_years: 'الحج بعد كام سنة خدمة', sick_full_days: 'المرضية: أيام بأجر كامل', sick_reduced_days: 'المرضية: أيام بأجر مخفّض',
       sick_reduced_pct: pct('المرضية: نسبة الأجر المخفّض'), sick_unpaid_days: 'المرضية: أيام بدون أجر' } },
-  { country: 'SA', key: 'sa.overtime', label: 'الإضافي وساعات العمل', card: 'C-SA-06', usedBy: null,
+  { country: 'SA', key: 'sa.overtime', label: 'الإضافي وساعات العمل', card: 'C-SA-06', usedBy: OVERTIME_MINIMUM,
     codes: { premium_pct_of_basic: pct('علاوة الإضافي من الأساسي'), daily_hours: 'ساعات اليوم', weekly_hours: 'ساعات الأسبوع', ramadan_daily_hours: 'ساعات اليوم في رمضان', ramadan_weekly_hours: 'ساعات الأسبوع في رمضان' } },
   { country: 'SA', key: 'sa.end_of_service', label: 'مكافأة نهاية الخدمة', card: 'C-SA-07', usedBy: null,
     codes: { first_tier_months: 'شهور عن كل سنة في الشريحة الأولى', first_tier_years: 'سنين الشريحة الأولى', later_months: 'شهور عن كل سنة بعدها', resignation_min_years: 'الاستقالة: من غير مكافأة تحت كام سنة',

@@ -2,6 +2,8 @@ import { createHash } from 'crypto'
 import { attendanceIntervalMinutes } from './attendance-flex-calculator'
 
 export type OvertimeDayKind = 'WEEKDAY' | 'WEEKEND' | 'HOLIDAY'
+import type { AppliedLegalOvertimeMinimum } from './overtime-legal-minimum'
+
 export interface OvertimeEvidencePolicy {
   thresholdMinutes: number
   roundingMinutes: number
@@ -12,6 +14,8 @@ export interface OvertimeEvidencePolicy {
   backdateDays: number
   maxClosedPeriods: number
   multiplier: number
+  /** B4.5 (ب): موجود لما الحد القانوني لدولة الفرع هو اللي اتطبق (أعلى من معامل الشركة) — وإلا مش موجود */
+  legalMinimum?: AppliedLegalOvertimeMinimum
   earlyOvertime: boolean
   missingPunch: 'BLOCK'
   leaveConflict: 'BLOCK'

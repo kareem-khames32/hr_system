@@ -5,6 +5,7 @@ import { localDateOf } from '../attendance/attendance.service'
 import { recordAudit } from '../audit/audit'
 import type { JwtPayload } from '../auth/auth.service'
 import { EG_TAX_BRACKETS_KEY, EG_TAX_COUNTRY, EG_TAX_HIGH_INCOME_KEY } from '../payroll/eg-salary-tax'
+import { EG_OVERTIME_KEY, OVERTIME_LEGAL_MINIMUM_KEY, SA_OVERTIME_KEY } from '../attendance/overtime-legal-minimum'
 import { Branch } from '../org/entities/branch.entity'
 import { branchCountryOf } from '../org/branch-currency'
 import { EG_HEALTH_BRANCHES_KEY, EG_HEALTH_ENABLED_KEY, EG_HEALTH_KEY, EG_MARTYRS_ENABLED_KEY, EG_MARTYRS_FUND_KEY, EG_TAX_ENABLED_KEY, EG_TAX_START_PERIOD_KEY,
@@ -42,6 +43,9 @@ export const STATUTORY_CALCULATORS: readonly StatutoryCalculator[] = [
     enabledKey: EG_MARTYRS_ENABLED_KEY, keys: [{ country: EG_TAX_COUNTRY, key: EG_MARTYRS_FUND_KEY, required: true }] },
   { code: 'EG_HEALTH_INSURANCE', label: 'التأمين الصحي الشامل (مصر)', note: 'حصة الموظف ومعاليه المؤمَّن عليهم من أجر التأمين، لموظفي الفروع المختارة (المحافظات اللي اتطبق فيها) في المسير الأساسي',
     enabledKey: EG_HEALTH_ENABLED_KEY, branchesKey: EG_HEALTH_BRANCHES_KEY, country: EG_TAX_COUNTRY, keys: [{ country: EG_TAX_COUNTRY, key: EG_HEALTH_KEY, required: true }] },
+  // B4.5 (ب): الحد القانوني لمعامل الإضافي — للدولتين، وكل دولة بصفها لو موجود
+  { code: 'OVERTIME_LEGAL_MINIMUM', label: 'الحد القانوني لمعامل الإضافي', note: 'تسعير الإضافي الجديد ياخد الأعلى من معامل الشركة والحد القانوني لدولة فرع الموظف (مصر: نهار العمل ويوم الراحة؛ السعودية: أجر الساعة + نسبة من الأساسي). المعتمد والمصروف مابيتغيّرش',
+    enabledKey: OVERTIME_LEGAL_MINIMUM_KEY, keys: [{ country: 'EG', key: EG_OVERTIME_KEY, required: false }, { country: 'SA', key: SA_OVERTIME_KEY, required: false }] },
 ]
 /** مفاتيح إعدادات التفعيل — ليها مسارها ده بس (شاشة الإعدادات العامة مابتكتبهاش) */
 export const STATUTORY_CALCULATOR_CONFIG_KEYS: readonly string[] = STATUTORY_CALCULATORS.flatMap((entry) => [entry.enabledKey, ...(entry.startPeriodKey ? [entry.startPeriodKey] : []),

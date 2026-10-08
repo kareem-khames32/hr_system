@@ -70,6 +70,10 @@ import type { AttendanceFlexResult, AttendanceRuleSnapshot, FlexOverrideMode } f
 import { overtimeEvidenceFingerprint, overtimeMinutes, overtimeSubmissionBlockers, selectOvertimePunches, workedOvertime } from './overtime-evidence'
 import { overtimeWindowRedactor } from './overtime-window-view'
 import type { OvertimeEvidence, OvertimeEvidencePolicy, OvertimeBlocker } from './overtime-evidence'
+import { OVERTIME_LEGAL_MINIMUM_KEY, legalOvertimeMinimum, overtimeMultiplierWithLegalMinimum } from './overtime-legal-minimum'
+import { grossMonthlySalary } from '../employees/compensation'
+import { branchCountryOf } from '../org/branch-currency'
+import { readStatutoryEntries } from '../statutory/statutory.service'
 import { appendOvertimeEvent, assertOvertimeDayAvailable, claimOvertimeDay, describeOvertimeSubmission, findActiveOvertimeEntries, releaseOvertimeDayClaim } from '../requests/overtime-day-claims'
 import { queueOvertimeDispatch } from '../requests/overtime-dispatch'
 import { holidayWorkCoversDay } from './holiday-work'
@@ -3194,7 +3198,8 @@ export class AttendanceService {
     const calendar = await this.calendarDay(employeeId, date)
     const kind = calendar.dayKind
     const dayKind = kind === 'WORKING' ? 'WEEKDAY' : kind
-    const policy = await this.overtimeEvidencePolicy(shift, dayKind)
+    // B4.5 (ب): الإعداد مقفول (الافتراضي) = معامل الشركة بالحرف؛ مفتوح = الأعلى من معامل الشركة والحد القانوني لدولة فرع الموظف
+    const policy = await this.withLegalOvertimeMinimum(await this.overtimeEvidencePolicy(shift, dayKind), emp, calendar.branchId ?? emp.branchId, date, dayKind)
     const window = await this.overtimeWindow(date, calendar.branchId!)
     const windows = await this.exemptionsOf(employeeId, date, date)
     const exemptDefault = await this.configValue('payroll.exempt_overtime_eligible', 'false')
@@ -3278,6 +3283,20 @@ export class AttendanceService {
     base.schedule.overtimeStartMinute = kind === 'WORKING' && shift.source !== 'none' ? overtimeStart : null
     if (blockers.length) base.detectedMinutes = 0
     return { ...base, fingerprint: overtimeEvidenceFingerprint(base) }
+  }
+
+  /** B4.5 (ب): الحد القانوني لمعامل الإضافي من حزمة الدولة بتاريخ يوم الشغل — بس والإعداد مفتوح، ولما يبقى أعلى من معامل الشركة */
+  private async withLegalOvertimeMinimum(policy: OvertimeEvidencePolicy, emp: Employee, branchId: number | null | undefined, date: string,
+    kind: OvertimeEvidence['dayKind']): Promise<OvertimeEvidencePolicy> {
+    if ((await this.configValue(OVERTIME_LEGAL_MINIMUM_KEY, 'false')) !== 'true' || branchId == null) return policy
+    const country = await this.batched(`BRANCH_COUNTRY:${branchId}`, async () => {
+      const [branch]: Array<{ country: string | null }> = await this.days.manager.query('SELECT [country] FROM [branches] WHERE [id] = @0', [branchId])
+      return branchCountryOf(branch?.country)
+    })
+    const entries = await this.batched('STATUTORY_ENTRIES', () => readStatutoryEntries(this.days.manager))
+    const legal = legalOvertimeMinimum({ country, dayKind: kind, basicSalary: Number(emp.basicSalary ?? 0), grossSalary: grossMonthlySalary(emp) }, entries, date)
+    const { multiplier, applied } = overtimeMultiplierWithLegalMinimum(policy.multiplier, legal)
+    return applied ? { ...policy, multiplier, legalMinimum: applied } : policy
   }
 
   private async overtimeEvidencePolicy(shift: DayAttendanceShift, kind: OvertimeEvidence['dayKind']): Promise<OvertimeEvidencePolicy> {
