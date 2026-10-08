@@ -12,7 +12,7 @@ import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { localDateOf } from '../attendance/attendance.service'
 import { readGosiFirstRegistered } from '../employees/employee-gosi-registration'
 import { readStatutoryEntries } from '../statutory/statutory.service'
-import { SA_GOSI_NEW_TRACK_FROM } from '../statutory/statutory-data'
+import { EG_INSURANCE_WAGE_LIMITS, SA_GOSI_NEW_TRACK, SA_GOSI_NEW_TRACK_FROM } from '../statutory/statutory-data'
 import { PayrollItem, PayrollRun } from './payroll.entities'
 import {
   computeSocialInsurance, INSURANCE_SYSTEM_LABELS, InsuranceSystem, normalizeInsuranceSystem, parseSocialInsuranceSettings, SAUDI_BASE_INCLUDES_HOUSING_KEY,
@@ -72,7 +72,8 @@ export class SocialInsuranceService {
       egyptianLimitsFrom: today.egyptianLimits ? { effectiveFrom: today.egyptianLimits.effectiveFrom, verified: today.egyptianLimits.verified } : null,
       saudiNewTrackFrom: SA_GOSI_NEW_TRACK_FROM,
       saudiNewTrackToday: today.saudiNewTrack,
-      statutory: context.statutory,
+      // B4.2: حزمة الدولة فيها مفاتيح مرجعية تانية — الشاشة دي بتعرض المفتاحين اللي حساب التأمينات بيقراهم بس
+      statutory: context.statutory.filter(entry => entry.key === SA_GOSI_NEW_TRACK || entry.key === EG_INSURANCE_WAGE_LIMITS),
     }
   }
 

@@ -22,7 +22,8 @@ test('المسار: أول تسجيل من 3 يوليو 2024 = الجديد، و
 })
 
 test('الجدول المؤرخ: القيمة السارية في آخر يوم في الفترة، والبيانات الأولية 5 نسب للمسار الجديد وحدّين لمصر', () => {
-  assert.deepEqual(STATUTORY_SEED.map(seed => [seed.country, seed.effectiveFrom]), [['SA', '2024-07-03'], ['SA', '2025-07-03'], ['SA', '2026-07-03'],
+  // B4.2 زوّد مفاتيح مرجعية تانية في البذرة — المفتاحين اللي الحساب بيقراهم زي ما هم
+  assert.deepEqual(STATUTORY_SEED.filter(seed => ['sa.gosi.new_track', 'eg.insurance.wage_limits'].includes(seed.key)).map(seed => [seed.country, seed.effectiveFrom]), [['SA', '2024-07-03'], ['SA', '2025-07-03'], ['SA', '2026-07-03'],
     ['SA', '2027-07-03'], ['SA', '2028-07-03'], ['EG', '2026-01-01'], ['EG', '2027-01-01']])
   const pct = date => statutoryNumber(statutoryAt(entries, 'SA', 'sa.gosi.new_track', date), 'employee_pct')
   assert.deepEqual(['2024-07-02', '2024-07-31', '2025-06-30', '2025-07-31', '2026-06-30', '2026-07-31', '2027-07-31', '2030-01-31'].map(pct),

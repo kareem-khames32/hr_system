@@ -24,6 +24,8 @@ const MIGRATIONS = path.join(apiRoot, '..', 'docs/migrations/payroll')
 const FILE = '20261003_080_statutory_gosi_tracks.sql'
 let app, ds, master, pool, employees, seeder, created = false
 const { readStatutoryEntries } = require('../src/statutory/statutory.service')
+const { STATUTORY_SEED } = require('../src/statutory/statutory-data')
+const READ_KEYS = ['sa.gosi.new_track', 'eg.insurance.wage_limits']
 const { readGosiFirstRegistered } = require('../src/employees/employee-gosi-registration')
 const { readSocialInsuranceContext } = require('../src/payroll/social-insurance.service')
 const { computeSocialInsurance } = require('../src/payroll/social-insurance')
@@ -186,9 +188,11 @@ test('SM-2: المخطط القديم بموظفين قائمين — الكود
   assert.equal(plan.readOnly, true); assert.equal(plan.pendingCount, 0); assert.deepEqual(plan.problems, [])
   assert.equal(plan.schemaDiffCount, 0, JSON.stringify(plan.schemaDiff))
   // بعد الترحيل: البيانات الأولية بتتضاف (مرة واحدة)، والتاريخ بيتحفظ، والمسار الجديد بيشتغل
-  assert.equal(await seeder.seed(), 7)
+  // B4.2 زوّد مفاتيح مرجعية تانية في البذرة — المفتاحين اللي الحساب بيقراهم 7 صفوف زي ما هم
+  assert.equal(await seeder.seed(), STATUTORY_SEED.length)
   assert.equal(await seeder.seed(), 0)
-  assert.equal((await readStatutoryEntries(ds.manager)).length, 7)
+  assert.equal((await readStatutoryEntries(ds.manager)).length, STATUTORY_SEED.length)
+  assert.equal((await readStatutoryEntries(ds.manager)).filter(entry => READ_KEYS.includes(entry.key)).length, 7)
   assert.equal((await employees.update(emp.id, { gosiFirstRegisteredAt: '2024-07-03' }, null, 1)).gosiFirstRegisteredAt, '2024-07-03')
   const after = await readSocialInsuranceContext(ds.manager)
   const now = computeSocialInsurance({ system: 'SAUDI', registered: true, declaredSalary: 10000, nationality: 'سعودي',
@@ -203,6 +207,9 @@ test('SM-3: آمن للتكرار', async () => {
   for (let round = 0; round < 2; round++) await runFile(FILE)
   assert.deepEqual(await shape(), EXPECTED_SHAPE)
   assert.deepEqual(await ds.query('SELECT [id], CONVERT(nvarchar(10), [gosiFirstRegisteredAt], 23) AS [date] FROM dbo.employees ORDER BY [id]'), rows)
-  assert.equal((await ds.query('SELECT COUNT(*) AS n FROM dbo.statutory_definitions'))[0].n, 7)
-  assert.equal((await ds.query('SELECT COUNT(*) AS n FROM dbo.statutory_values'))[0].n, 24, '5 تعريفات للمسار الجديد × 4 + 2 لمصر × 2')
+  assert.equal((await ds.query('SELECT COUNT(*) AS n FROM dbo.statutory_definitions'))[0].n, STATUTORY_SEED.length)
+  assert.equal((await ds.query('SELECT COUNT(*) AS n FROM dbo.statutory_values'))[0].n, STATUTORY_SEED.reduce((sum, seed) => sum + Object.keys(seed.values).length, 0))
+  const read = `('sa.gosi.new_track', 'eg.insurance.wage_limits')`
+  assert.equal((await ds.query(`SELECT COUNT(*) AS n FROM dbo.statutory_definitions WHERE [key] IN ${read}`))[0].n, 7)
+  assert.equal((await ds.query(`SELECT COUNT(*) AS n FROM dbo.statutory_values v JOIN dbo.statutory_definitions d ON d.[id] = v.[definitionId] WHERE d.[key] IN ${read}`))[0].n, 24, '5 تعريفات للمسار الجديد × 4 + 2 لمصر × 2')
 })

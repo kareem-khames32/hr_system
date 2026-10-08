@@ -103,7 +103,9 @@ after(async t => {
 
 test('GT-1: المسير بالمسارين وبالقيمة السارية في آخر يوم في الفترة، وحدود مصر المؤرخة، والمسير المعتمد مابيتغيرش لما يتفتح', async () => {
   // البيانات الأولية اتضافت وقت الإقلاع (محتاجة تحقق)
-  assert.equal(await repo('StatutoryDefinition').count(), 7)
+  // B4.2 زوّد مفاتيح مرجعية تانية في البذرة — المفتاحين اللي الحساب بيقراهم 7 صفوف زي ما هم
+  assert.equal(await repo('StatutoryDefinition').count(), require('../src/statutory/statutory-data').STATUTORY_SEED.length)
+  assert.equal(await repo('StatutoryDefinition').count({ where: [{ key: 'sa.gosi.new_track' }, { key: 'eg.insurance.wage_limits' }] }), 7)
   assert.equal(await repo('StatutoryDefinition').countBy({ verified: true }), 0)
   const fresh = await employee(saudiBranch, { gosiBaseSalary: 10000 })
   const old = await employee(saudiBranch, { gosiBaseSalary: 10000 })
