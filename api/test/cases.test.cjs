@@ -109,7 +109,7 @@ test('CU-14: the penalties catalog steps, the step for a repetition, the countin
   assert.deepEqual(penalties.parsePenaltySteps('تالف'), [])
   const service = read('api/src/cases/penalties.service.ts')
   const apply = service.slice(service.indexOf('async apply('), service.indexOf('// ===== السجل ====='))
-  const order = ['this.assertManager(user)', 'this.ds.transaction(', 'await this.target(em, user, input)', "getRepository(Employee).findOne({ where: { id: employee.id }, lock: { mode: 'pessimistic_write' } })", 'await this.judge(em, employee.id, violation, incidentDate)',
+  const order = ['this.assertManager(user)', 'this.ds.transaction(', "getRepository(Employee).findOne({ where: { id: input.employeeId }, lock: { mode: 'pessimistic_write' } })", 'await this.target(em, user, input)', 'await this.judge(em, employee.id, violation, incidentDate)',
     'input.expectedOccurrence !== occurrence', 'await this.caseOf(em, user, input.caseId, employee.id)', 'getRepository(EmployeePenalty).insert(', 'await this.deductions.create(user,', "where('id = :id AND deductionRequestId IS NULL'", 'throw error',
     'update({ id: made.id }, { deductionRequestId: deduction.id })', 'getRepository(HrCaseEvent).insert('].map(part => apply.indexOf(part))
   assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), JSON.stringify(order))

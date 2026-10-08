@@ -296,8 +296,9 @@ export class PenaltiesService {
     const note = input.note === undefined || input.note === null ? null : line(input.note).slice(0, 1000) || null
     const made = await this.ds.transaction(async (em) => {
       await this.assertReady(em)
+      // قفل صف الموظف الأول: الحكم كله (النطاق بفرعه الحالي، والمخالفة، والتكرار) بيتاخد بعده — نقل في النص مايعدّيش بحكم قديم
+      if (typeof input.employeeId === 'number' && Number.isSafeInteger(input.employeeId)) await em.getRepository(Employee).findOne({ where: { id: input.employeeId }, lock: { mode: 'pessimistic_write' } })
       const { employee, violation, incidentDate } = await this.target(em, user, input)
-      await em.getRepository(Employee).findOne({ where: { id: employee.id }, lock: { mode: 'pessimistic_write' } })
       const { occurrence, step } = await this.judge(em, employee.id, violation, incidentDate)
       if (input.expectedOccurrence !== occurrence) throw new ConflictException(PENALTY_CHANGED)
       const targetPeriod = typeof input.targetPeriod === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(input.targetPeriod) ? input.targetPeriod : null
