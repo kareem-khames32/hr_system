@@ -107,3 +107,10 @@ test('I18N-05: (ب) البوابة والقسيمة — كل نص متلفّ ف�
   // بنود القسيمة الثابتة اللي الخادم بيسميها ليها ترجمة
   for (const name of ['الأساسي', 'بدل السكن', 'بدل الانتقال', 'الإضافي', 'التأخير', 'الغياب', 'السلف', 'التأمينات (حصة الموظف)', 'خصومات أخرى', 'ر.س', 'ج.م']) assert.ok(has(name), name)
 })
+
+test('I18N-06: (ج) الحقول الثنائية — الاسم الإنجليزي لو اللغة إنجليزي وهو مكتوب، وإلا العربي؛ والقسيمة بتعرض اسم الموظف والفرع بيها', () => {
+  const lib = web('lib/i18n.ts'), slip = web('app/payroll/payslip/[id]/page.tsx')
+  assert.match(lib, /export function localName\(lang: Lang, arabic: string \| null \| undefined, english: string \| null \| undefined\): string \{\n  const en = typeof english === 'string' \? english\.trim\(\) : ''\n  return lang === 'en' && en \? en : arabic \?\? ''\n\}/)
+  assert.ok(slip.includes('{localName(lang, employee.fullName, employee.fullNameEn)}'))
+  assert.ok(slip.includes('{branch ? localName(lang, branch.name, branch.nameEn) : brand.companyName}'))
+})

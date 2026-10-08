@@ -1,5 +1,5 @@
 'use client'
-import { useLang, useT } from '@/lib/i18n'
+import { localName, useLang, useT } from '@/lib/i18n'
 import { useParams } from 'next/navigation'
 
 import { useEffect, useState } from 'react'
@@ -230,7 +230,7 @@ export default function PayslipPage() {
             {/* تبسيط الرواتب (2026-09-15): مربع الشعار بحرفي «HR» اللاتينيين أُخفي؛ اسم الفرع يبقى عنوانًا للقسيمة */}
             <div className="flex items-center gap-4">
               <div>
-                <h1 className="text-xl font-bold text-gray-800">{branch?.name ?? brand.companyName}</h1>
+                <h1 className="text-xl font-bold text-gray-800">{branch ? localName(lang, branch.name, branch.nameEn) : brand.companyName}</h1>
                 <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
                   {branch?.city && (
                     <span className="flex items-center gap-1">
@@ -255,7 +255,7 @@ export default function PayslipPage() {
               <h3 className="font-bold text-gray-700 border-b border-gray-200 pb-2">{t('بيانات الموظف')}</h3>
               <div className="grid grid-cols-2 gap-y-3 text-sm">
                 <span className="text-gray-500">{t('الاسم:')}</span>
-                <span className="font-medium text-gray-800">{employee.fullName}</span>
+                <span className="font-medium text-gray-800">{localName(lang, employee.fullName, employee.fullNameEn)}</span>
 
                 <span className="text-gray-500">{t('الرقم الوظيفي:')}</span>
                 <span className="font-medium text-gray-800 font-mono">{employee.employeeCode}</span>

@@ -52,3 +52,12 @@ export function useT(): (text: string) => string {
   const lang = useLang()
   return (text: string) => translate(text, lang)
 }
+
+/**
+ * B6.2 (ج): حقل ثنائي اللغة (اسم الموظف، الفرع، القسم، نوع الإجازة…) — الاسم الإنجليزي لو اللغة إنجليزي وهو مكتوب، وغير كده الاسم العربي.
+ * مفيش ترجمة آلية للأسماء: الفاضي بيرجع للعربي.
+ */
+export function localName(lang: Lang, arabic: string | null | undefined, english: string | null | undefined): string {
+  const en = typeof english === 'string' ? english.trim() : ''
+  return lang === 'en' && en ? en : arabic ?? ''
+}
