@@ -610,3 +610,64 @@ test('H3 — قائمة المستخدمين بتعلّم حساب الدومي�
     if (row.isDomainAccount) assert.notEqual(row.legacyNeedsPassword, true, row.email)
   }
 })
+
+test('I1 (CRP3H) — الربط مابيتكتبش على حساب اتنقل لموظف تاني بعد المطابقة (مزامنة ودخول حيّ)، وصاحب الهوية مابيدخلش بهوية غيره', async () => {
+  const { DomainLoginService, DOMAIN_LINK_ACCOUNT_CHANGED } = require('../src/auth/domain-login.service')
+  const domainLogin = app.get(DomainLoginService), realLink = domainLogin.linkExistingUser
+  const department = await repo('Department').findOneByOrFail({ name: 'قسم أ' })
+  const person = (code, fullName) => repo('Employee').save({ employeeCode: code, fingerprintCode: null, fullName, branchId: branchA.id, departmentId: department.id, jobTitle: 'محاسب',
+    joinDate: '2020-01-01', basicSalary: 6000, housingAllowance: 0, transportAllowance: 0, phoneAllowance: 0, workNatureAllowance: 0, otherAllowance: 0, currency: 'SAR',
+    status: 'active', isActive: true, payMethod: 'transfer' })
+  const local = async (email, employeeId) => repo('User').save({ email, displayName: 'حساب هيتنقل', role: 'employee', permissions: '[]', passwordHash: await bcrypt.hash(pass(), 10),
+    branchId: branchA.id, employeeId, passwordChangedAt: new Date() })
+  const directory = (sam, employeeCode, mail) => AD.set(sam, { objectGuid: 'guid-' + sam, sAMAccountName: sam, userPrincipalName: sam + '@maharah.local', mail, displayName: null,
+    employeeId: employeeCode, disabled: false, objectClasses: ['top', 'person', 'organizationalPerson', 'user'], password: pass() })
+  // بعد ما المسار قرا الحساب وقبل كتابة الربط: مدير النظام بينقل الحساب لموظف تاني (طلب فعلي)
+  const moveBeforeWrite = (userId, toEmployeeId, state) => async function (account, ...rest) {
+    if (!state.moved && account.id === userId) { state.moved = true; expect(await http(adminToken, 'PATCH', '/users/' + userId, { employeeId: toEmployeeId }), 200, 'relink:') }
+    return realLink.call(this, account, ...rest)
+  }
+
+  // ===== المزامنة =====
+  const first = await person('DSI01', 'صاحب هوية المجال'), second = await person('DSI02', 'صاحب الحساب بعد النقل')
+  const user = await local('moved@maharah.local', first.id)
+  directory('z-moved', first.employeeCode, 'moved.owner@maharah.pro')
+  const sync = { moved: false }
+  domainLogin.linkExistingUser = moveBeforeWrite(user.id, second.id, sync)
+  let summary
+  try { summary = expect(await runSync(adminToken, { apply: true }), 200, 'apply:') } finally { domainLogin.linkExistingUser = realLink }
+  assert.equal(sync.moved, true)
+  const entry = at(summary, 'z-moved')
+  assert.deepEqual([entry.action, entry.reason, entry.applied, entry.error], ['skip', 'failed', false, DOMAIN_LINK_ACCOUNT_CHANGED])
+  let stored = await repo('User').findOneByOrFail({ id: user.id })
+  assert.deepEqual([stored.domainObjectGuid ?? null, stored.employeeId], [null, second.id], 'الحساب اللي بقى لموظف تاني ماخدش هوية الأول')
+  // المعاينة دلوقتي بتقول حساب مستقل لصاحب الهوية، ودخوله بيعمله (مش حساب التاني)
+  assert.equal(at(expect(await runSync(adminToken, { apply: false }), 200), 'z-moved').action, 'create')
+  const users = await countUsers()
+  const entered = expect(await loginDomain('z-moved', AD.get('z-moved').password), 201, 'domain login:')
+  assert.deepEqual([entered.user.employeeId, entered.user.id !== user.id, await countUsers()], [first.id, true, users + 1])
+  assert.equal(expect(await http(entered.accessToken, 'GET', '/auth/me'), 200).employeeId, first.id)
+
+  // ===== الدخول الحيّ: نفس الكتابة =====
+  const third = await person('DSI03', 'صاحب هوية الدخول الحيّ'), fourth = await person('DSI04', 'صاحب الحساب بعد النقل 2')
+  const live = await local('live-moved@maharah.local', third.id)
+  directory('z-live', third.employeeCode, 'live.owner@maharah.pro')
+  const liveState = { moved: false }
+  domainLogin.linkExistingUser = moveBeforeWrite(live.id, fourth.id, liveState)
+  let refused
+  try { refused = await loginDomain('z-live', AD.get('z-live').password) } finally { domainLogin.linkExistingUser = realLink }
+  assert.equal(liveState.moved, true)
+  assert.deepEqual([refused.status, msg(refused)], [409, DOMAIN_LINK_ACCOUNT_CHANGED])
+  stored = await repo('User').findOneByOrFail({ id: live.id })
+  assert.deepEqual([stored.domainObjectGuid ?? null, stored.employeeId], [null, fourth.id])
+  // المحاولة التانية بتتحكم على الوضع الحالي: حساب مستقل لصاحب الهوية
+  const again = expect(await loginDomain('z-live', AD.get('z-live').password), 201, 'second domain login:')
+  assert.deepEqual([again.user.employeeId, again.user.id !== live.id], [third.id, true])
+
+  // ومن غير نقل: الربط العادي شغال (حساب قايم لنفس الموظف بيتربط ومايتكررش)
+  const fifth = await person('DSI05', 'ربط عادي')
+  const plain = await local('plain-link@maharah.local', fifth.id)
+  directory('z-plain', fifth.employeeCode, 'plain.owner@maharah.pro')
+  const linked = expect(await loginDomain('z-plain', AD.get('z-plain').password), 201, 'plain link:')
+  assert.deepEqual([linked.user.id, (await repo('User').findOneByOrFail({ id: plain.id })).domainObjectGuid], [plain.id, 'guid-z-plain'])
+})

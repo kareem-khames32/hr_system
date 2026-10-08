@@ -399,6 +399,12 @@ export class DomainSyncService {
             entry.reasonText = DOMAIN_SYNC_REASONS.guidConflict
             continue
           }
+          // CRP3H (P3H-B02): المعاينة طابقت الهوية على موظف — الحساب اللي اتقري دلوقتي لازم يكون لسه لنفس الموظف ده ومفعّل،
+          // والكتابة نفسها مشروطة بكده (linkExistingUser)
+          if ((existing.employeeId ?? null) !== (entry.employeeId ?? null) || existing.isActive === false) {
+            fail(entry, 'الحساب مابقاش لنفس الموظف (أو اتعطّل) — أعد المعاينة')
+            continue
+          }
           entry.applied = await this.domainLogin.linkExistingUser(existing, directory)
           if (!entry.applied) {
             entry.action = 'skip'

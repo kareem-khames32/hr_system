@@ -668,3 +668,107 @@ test('TP-08 (CRP3G): a password change issues its session from the account as it
   assert.equal((await stored('reset')).passwordHash, before, 'كلمة السر زي ما هي')
   assert.equal((await http('POST', '/users/temporary-password', { userIds: [U.reset.id], password: passwordOf() }, manager)).status, 403, 'والحكم الجديد بيرفض: الحساب بقى أقوى من المنفّذ')
 })
+
+test('TP-09 (CRP3H): a role without a row is pinned for an assignment, and an override replacement is refused when its basis moved', async () => {
+  const account = async (key, extra = {}) => {
+    P[key] = passwordOf()
+    U[key] = await repo('User').save({ email: key + '@totp.invalid', displayName: 'حساب ' + key, role: 'employee', permissions: '[]', isActive: true, branchId: B.a.id,
+      passwordHash: await bcrypt.hash(P[key], 10), ...extra })
+  }
+  const done = response => { assert.ok([200, 201].includes(response.status), JSON.stringify(response.body)); return response.body }
+  const root = bearer(await signIn('admin'))
+  const manager = bearer(expect(await login('adminA'), 201).accessToken)
+  const usersController = app.get(require('../src/auth/users.controller').UsersController)
+  const rolesController = app.get(require('../src/auth/roles.controller').RolesController)
+  const stored = async key => repo('User').findOneByOrFail({ id: U[key].id })
+  const CHANGED = 'بيانات الحساب أو صلاحيات دوره اتغيّرت — حدّث الصفحة وحاول تاني'
+  const ASSIGNED = 'الدور المختار اتغيّرت صلاحياته — حدّث الصفحة وحاول تاني'
+  const realResolve = usersController.auth.resolvePermissions
+
+  // ===== استمرار P3G-B02 (أ): دور أساسي من غير صف، وصفه اتعمل بحزمة إدارية بعد الحكم وقبل معاملة الحفظ =====
+  const freeCode = async code => { assert.equal(await repo('Role').count({ where: { code } }), 0, 'الدور ' + code + ' لازم يبقى من غير صف'); return code }
+  const early = await freeCode('data_entry')
+  await account('preset1')
+  let made = false
+  usersController.auth.resolvePermissions = async function (user, ...rest) {
+    const permissions = await realResolve.call(this, user, ...rest)
+    if (!made && user?.role === early) { made = true; done(await http('POST', '/roles', { code: early, nameAr: 'إدخال بيانات بصف', permissions: ['settings.manage'] }, root)) }
+    return permissions
+  }
+  let assigned
+  try { assigned = await http('PATCH', '/users/' + U.preset1.id, { role: early }, manager) } finally { usersController.auth.resolvePermissions = realResolve }
+  assert.equal(made, true)
+  assert.deepEqual(answer(assigned), [409, ASSIGNED])
+  assert.deepEqual([(await stored('preset1')).role, (await stored('preset1')).tokenVersion], ['employee', 0])
+  assert.equal((await http('PATCH', '/users/' + U.preset1.id, { role: early }, manager)).status, 403, 'الطلب الجديد بيتحكم على الصف الجديد')
+
+  // ===== استمرار P3G-B02 (ب): الإسناد قرا «من غير صف» تحت القفل — إنشاء الصف بيستنى الحفظ، ومابيعدّيش في النص =====
+  const late = await freeCode('asset_officer')
+  await account('preset2')
+  const realStamp = usersController.roleStamp
+  let creation = null, settledInside = null
+  usersController.roleStamp = async function (code, em) {
+    const stamp = await realStamp.call(this, code, em)
+    if (em && code === late && !creation) {
+      assert.equal(stamp, 'PRESET')
+      let settled = false
+      creation = http('POST', '/roles', { code: late, nameAr: 'مسؤول عهد بصف', permissions: ['settings.manage'] }, root).then(response => { settled = true; return response })
+      await new Promise(resolve => setTimeout(resolve, 1200))
+      settledInside = settled
+    }
+    return stamp
+  }
+  let pinned
+  try { pinned = await http('PATCH', '/users/' + U.preset2.id, { role: late }, manager) } finally { usersController.roleStamp = realStamp }
+  assert.equal(settledInside, false, 'إنشاء صف الدور واقف مستني معاملة الإسناد')
+  // الإسناد اتحكم واتحفظ على الحزمة الأساسية (ولسه هي اللي سارية لحظة حفظه)، وبعده الإنشاء كمّل وأبطل جلسات اللي على الدور
+  assert.equal(done(pinned).role, late)
+  const afterAssign = Number(done(pinned).tokenVersion ?? (await stored('preset2')).tokenVersion)
+  done(await creation)
+  const holder = await stored('preset2')
+  assert.equal(holder.role, late)
+  assert.ok(holder.tokenVersion >= 2 && holder.tokenVersion >= afterAssign, 'إنشاء الصف زوّد إصدار الحسابات اللي على الدور: ' + holder.tokenVersion)
+  // واللي بعد كده بيتحكم على الصف: إسناده لحساب تاني من غير مدير النظام مرفوض
+  await account('preset3')
+  assert.equal((await http('PATCH', '/users/' + U.preset3.id, { role: late }, manager)).status, 403)
+  // ومحدش بيعمل صف لدوره هو
+  await account('selfRole', { role: 'hr_officer', permissions: JSON.stringify(['roles.manage']) })
+  if ((await repo('Role').count({ where: { code: 'hr_officer' } })) === 0) {
+    assert.deepEqual(answer(await http('POST', '/roles', { code: 'hr_officer', nameAr: 'دوري أنا', permissions: ['employees.view'] }, bearer(expect(await login('selfRole'), 201).accessToken))),
+      [400, 'لا يمكنك تعديل صلاحيات دورك أنت'])
+  }
+
+  // ===== P3H-B01: استبدال المنح والسحب بحكم قديم — حزمة الدور، والتجاوزات، والنطاق =====
+  const realRolesResolve = rolesController.auth.resolvePermissions
+  let n = 0
+  for (const mode of ['bundle', 'overrides', 'scope']) {
+    const role = done(await http('POST', '/roles', { code: 'tp09_' + mode, nameAr: 'دور ' + mode, permissions: mode === 'overrides' ? ['settings.manage'] : [] }, root))
+    const key = 'target' + (++n)
+    await account(key, { role: role.code })
+    if (mode === 'bundle') done(await http('PUT', '/users/' + U[key].id + '/permissions', { grants: [], revokes: ['settings.manage'] }, root))
+    const body = mode === 'scope' ? { grants: ['employees.view'], revokes: [] } : { grants: [], revokes: [] }
+    let changed = false
+    // الحكم بيحسب الأثر الفعلي قبل وبعد؛ بعد الحساب التاني (الوضع الحالي) مدير النظام بيغيّر أساس الحكم بطلب فعلي
+    rolesController.auth.resolvePermissions = async function (user, proposed) {
+      const result = await realRolesResolve.call(this, user, proposed)
+      if (!changed && user?.id === U[key].id && proposed === undefined) {
+        changed = true
+        if (mode === 'bundle') done(await http('PATCH', '/roles/' + role.id, { permissions: ['settings.manage'] }, root))
+        else if (mode === 'overrides') done(await http('PUT', '/users/' + U[key].id + '/permissions', { grants: [], revokes: ['settings.manage'] }, root))
+        else done(await http('PATCH', '/users/' + U[key].id, { scopeAllBranches: true }, root))
+      }
+      return result
+    }
+    let replaced
+    try { replaced = await http('PUT', '/users/' + U[key].id + '/permissions', body, manager) } finally { rolesController.auth.resolvePermissions = realRolesResolve }
+    assert.equal(changed, true, mode)
+    assert.deepEqual(answer(replaced), [409, CHANGED], mode)
+    const row = await stored(key), effective = await realRolesResolve.call(rolesController.auth, row)
+    assert.equal(effective.includes(mode === 'scope' ? 'employees.view' : 'settings.manage'), false, mode + ': الحكم القديم ماكتبش')
+    assert.equal((await http('PUT', '/users/' + U[key].id + '/permissions', body, manager)).status, 403, mode + ': الطلب الجديد مرفوض')
+  }
+  // ومن غير تغيير: الاستبدال العادي شغال
+  await account('plainTarget')
+  const plain = done(await http('PUT', '/users/' + U.plainTarget.id + '/permissions', { grants: ['employees.view'], revokes: [] }, manager))
+  assert.deepEqual([plain.grants, (await stored('plainTarget')).tokenVersion], [['employees.view'], 1])
+})
