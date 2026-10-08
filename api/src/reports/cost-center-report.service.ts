@@ -6,7 +6,8 @@ import type { BranchScope } from '../auth/guards'
 import { readBranchCurrencyOf } from '../org/branch-currency-db'
 import { singleCurrency, totalsByCurrency } from '../org/currency-totals'
 import { payrollLineNotReversedSql } from '../payroll/payroll-reversal-sql'
-import { aggregateCostCenterReport, COST_CENTER_DEDUCTION_FIELDS, COST_CENTER_EARNING_FIELDS, type CostCenterReportRow } from './cost-center-report'
+import { aggregateCostCenterReport, COST_CENTER_DEDUCTION_FIELDS, COST_CENTER_EARNING_FIELDS, COST_CENTER_STATUTORY_FIELD, type CostCenterReportRow } from './cost-center-report'
+import { payrollStatutorySql } from '../payroll/payroll-statutory'
 
 // خصم التأمينات (حصة الموظف) عمود من ترحيل 049 — لو مش موجود لسه نتخطاه، وحصة صاحب العمل تظهر «—»
 const INSURANCE_DEDUCTION_COLUMN = 'socialInsuranceDeduction'
@@ -63,7 +64,7 @@ export class CostCenterReportService {
            CASE WHEN s.[snap] IS NOT NULL THEN TRY_CONVERT(int, JSON_VALUE(s.[snap], '$.teamId')) ELSE e.[teamId] END AS [teamId],
            CASE WHEN s.[snap] IS NOT NULL THEN TRY_CONVERT(int, JSON_VALUE(s.[snap], '$.costCenterId')) ELSE e.[costCenterId] END AS [costCenterId],
            JSON_VALUE(s.[snap], '$.costCenterName') AS [snapCostCenterName],
-           ${moneyColumns.map(column => `CONVERT(varchar(40), i.[${column}]) AS [${column}]`).join(', ')},
+           ${moneyColumns.map(column => `CONVERT(varchar(40), ${column === COST_CENTER_STATUTORY_FIELD ? payrollStatutorySql('i') : `i.[${column}]`}) AS [${column}]`).join(', ')},
            ${insurance ? `CASE WHEN ISJSON(i.[breakdown]) = 1 AND JSON_VALUE(i.[breakdown], '$.socialInsurance.applies') = 'true'
              THEN JSON_VALUE(i.[breakdown], '$.socialInsurance.employerShare') END` : 'NULL'} AS [employerInsurance]
          FROM [payroll_items] i

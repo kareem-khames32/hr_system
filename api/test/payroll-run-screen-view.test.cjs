@@ -15,7 +15,7 @@ const stored = {
   coverFrom: '2026-06-23', coverTo: '2026-07-22', coverDays: 30, prorataFactor: 1, monthlyDays: 30, missingPunchDates: ['2026-07-02'],
   leaveDeductionLines: [{ code: 'UNPAID_LEAVE', days: 2, amount: 400 }], obligationLines: [{ key: 'DEDUCTION:جزاء', label: 'جزاء', amount: 50 }],
   installmentPlan: { allocation: { lines: [{ installmentRef: '9', eligible: true }] } }, overtime: [{ entryId: 4, amount: 75 }],
-  settlementPayout: { caseId: 3, lastWorkingDay: '2026-07-10' },
+  settlementPayout: { caseId: 3, lastWorkingDay: '2026-07-10' }, statutory: { total: 1490, lines: [{ code: 'INCOME_TAX', amount: 1482.5 }, { code: 'MARTYRS_FUND', amount: 7.5 }] },
   attendanceDeductions: { policy: { graceMinutes: 10 }, days: [{ date: '2026-07-01', lateMinutes: 20 }],
     totals: { lateMinutes: 20, permissionMinutes: 15, shortfallMinutes: 0, latenessDeduction: 12.5 }, latenessTierSet: { setId: 1 } },
   attendanceRules: Array.from({ length: 30 }, (_, index) => ({ date: `2026-07-${String(index + 1).padStart(2, '0')}`, rule: { graceMinutes: 10 } })),
@@ -82,7 +82,7 @@ test('SV-03: شاشة المسير بتطلب العرض الخفيف، وبتق
   // كل قراءة للتفصيل في الشاشة ومساعداتها، بالمفتاح اللي بتقراه
   const reads = [
     ['src/app/payroll/page.tsx', 1, ["JSON.parse(item.breakdown || '{}').leaveDeductionLines"]],
-    ['src/lib/payroll-item-totals.ts', 3, ["JSON.parse(item.breakdown || '{}').settlementPayout", 'detail.coverFrom', 'detail.coverTo', 'detail.coverDays', 'detail.prorataFactor',
+    ['src/lib/payroll-item-totals.ts', 4, ["JSON.parse(item.breakdown || '{}').settlementPayout", "JSON.parse(item.breakdown || '{}').statutory?.total", 'detail.coverFrom', 'detail.coverTo', 'detail.coverDays', 'detail.prorataFactor',
       'detail.monthlyDays', 'detail.missingPunchDates']],
     ['src/components/PayrollOvertimeBreakdown.tsx', 1, ["JSON.parse(item.breakdown || '{}').overtime"]],
     ['src/components/PayrollInstallmentBreakdown.tsx', 1, ["JSON.parse(item.breakdown || '{}').installmentPlan"]],

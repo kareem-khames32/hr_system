@@ -74,6 +74,7 @@ import { AUDIENCE_CONTRACT_TYPES, AUDIENCE_JOIN_DATE_OPS, AUDIENCE_NATIONALITY_K
 import { Grade } from '../assets/assets.entities'
 import { audienceCustomFieldsOf } from '../employees/employee-custom-fields'
 import { CATEGORY_CHAIN_KEY_PREFIX, REQUEST_CATEGORY_LABELS, categoryChainMap, isCategoryChainKey } from '../requests/request-category-chains'
+import { STATUTORY_CALCULATOR_CONFIG_KEYS, STATUTORY_CALCULATOR_CONFIG_REFUSAL } from '../statutory/statutory-calculators.service'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
 import { RequireModule } from '../modules-registry/module.guard'
@@ -781,6 +782,8 @@ export class SettingsController {
     dto.key = row.key
     // سلسلة الفئة ليها مسارها: تغييرها بينقل الأنواع الماشية عليها في نفس المعاملة — كتابة القيمة هنا كانت هتسيبهم على القديمة
     if (isCategoryChainKey(dto.key)) throw new BadRequestException('سلسلة الفئة بتتغيّر من «بانِي الطلبات» — مش من هنا')
+    // B4.4 (ج): تفعيل الحسابات القانونية (ضريبة، صناديق) له مساره: لمدير النظام وبس لو صفوف الحزمة «اتأكد» — كتابة القيمة هنا كانت هتعدّي من الاتنين
+    if (STATUTORY_CALCULATOR_CONFIG_KEYS.includes(dto.key)) throw new BadRequestException(STATUTORY_CALCULATOR_CONFIG_REFUSAL)
     // أسباب إنهاء الخدمة المخصصة ليها مسارها (PUT /offboarding/termination-reasons): تحقق المسمى والنسبة، وثبات
     // الكود، ومنع شيل سبب عليه ملفات — كتابة القيمة الخام هنا كانت هتعدّي من ده كله
     if (isCustomTerminationReasonsKey(dto.key)) {

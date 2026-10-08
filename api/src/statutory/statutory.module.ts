@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
+import { StatutoryCalculatorsService } from './statutory-calculators.service'
 import { StatutoryPackController } from './statutory-pack.controller'
 import { StatutoryPackService } from './statutory-pack.service'
 import { StatutoryDefinition, StatutoryValue } from './statutory.entities'
@@ -11,6 +12,6 @@ import { StatutorySeedService } from './statutory.service'
 @Module({
   imports: [TypeOrmModule.forFeature([StatutoryDefinition, StatutoryValue])],
   controllers: [StatutoryPackController],
-  providers: [StatutorySeedService, StatutoryPackService],
+  providers: [StatutorySeedService, StatutoryPackService, StatutoryCalculatorsService],
 })
 export class StatutoryModule {}

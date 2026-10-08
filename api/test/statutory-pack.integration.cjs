@@ -162,3 +162,70 @@ test('SK-02: التعديل لمدير النظام بس — صف بتاريخ �
   const after = await readStatutoryEntries(ds.manager)
   assert.deepEqual([statutoryNumber(statutoryAt(after, 'EG', 'eg.insurance.wage_limits', '2026-12-31'), 'max_salary'), statutoryNumber(statutoryAt(after, 'EG', 'eg.insurance.wage_limits', '2027-01-31'), 'max_salary')], [16700, 19500])
 })
+
+test('SK-03: تفعيل الحسابات القانونية — لمدير النظام بس، ومرفوض وصفوفه «محتاج تحقق»، وفترة البداية، وشاشة الإعدادات العامة مابتكتبش مفاتيحه، والصف اللي بيتحسب بيه بيفضل «اتأكد»', async () => {
+  const calc = require('../src/statutory/statutory-calculators.service')
+  const C = S + '/calculators'
+  const put = (user, code, body) => request(user, 'PUT', `${C}/${code}`, body)
+  const config = async () => Object.fromEntries((await ds.query(`SELECT [key], [value] FROM [requests_config] WHERE [key] LIKE N'eg.%' ORDER BY [key]`)).map(row => [row.key, row.value]))
+  const rowsOf = async key => keyOf(expectStatus(await request(users.admin, 'GET', S), 200), key).rows
+  const patchRow = (id, body) => request(users.admin, 'PATCH', `${S}/${id}`, body)
+
+  // العرض بصلاحية الإعدادات، والتعديل لمدير النظام؛ كله مقفول ومتعلّم ليه
+  assert.equal((await request(users.plain, 'GET', C)).status, 403)
+  const seen = expectStatus(await request(users.settings, 'GET', C), 200)
+  assert.deepEqual([seen.canEdit, seen.calculators.map(row => [row.code, row.enabled, row.needsStartPeriod, row.startPeriod, row.blockers])],
+    [false, [['EG_SALARY_TAX', false, true, null, [calc.CALCULATOR_UNVERIFIED]], ['EG_MARTYRS_FUND', false, false, null, [calc.CALCULATOR_UNVERIFIED]]]])
+  assert.deepEqual(seen.calculators[0].rows.map(row => [row.key, row.verified, row.current]), [['eg.salary_tax.brackets', false, true], ['eg.salary_tax.high_income', false, true]])
+  assert.equal(expectStatus(await request(users.admin, 'GET', C), 200).canEdit, true)
+  assert.deepEqual(answer(await put(users.settings, 'EG_SALARY_TAX', { enabled: true, startPeriod: '2026-11' })), [403, calc.CALCULATOR_ADMIN_ONLY])
+  assert.deepEqual([answer(await put(users.admin, 'EG_NOTHING', { enabled: true })), answer(await put(users.admin, 'EG_SALARY_TAX', { enabled: 'yes' })), answer(await put(users.admin, 'EG_SALARY_TAX', { startPeriod: '2026-13' })),
+    answer(await put(users.admin, 'EG_MARTYRS_FUND', { startPeriod: '2026-11' })), answer(await put(users.admin, 'EG_SALARY_TAX', {}))],
+  [[404, calc.CALCULATOR_UNKNOWN], [400, calc.CALCULATOR_ENABLED_VALUE], [400, calc.CALCULATOR_START_PERIOD], [400, calc.CALCULATOR_START_PERIOD], [400, calc.CALCULATOR_NOTHING]])
+
+  // الصفوف «محتاج تحقق»: التفعيل مرفوض ومفيش مفتاح اتكتب
+  assert.deepEqual(answer(await put(users.admin, 'EG_SALARY_TAX', { enabled: true, startPeriod: '2026-11' })), [400, calc.CALCULATOR_UNVERIFIED])
+  assert.deepEqual([await config(), await audits('STATUTORY_CALCULATOR_CHANGED')], [{}, 0])
+  // صف واحد من الاتنين اتأكد: لسه مرفوض (جدول الدخول العالية داخل في الحساب)
+  const [brackets] = await rowsOf('eg.salary_tax.brackets'), [high] = await rowsOf('eg.salary_tax.high_income')
+  expectStatus(await patchRow(brackets.id, { verified: true }), 200)
+  assert.deepEqual(answer(await put(users.admin, 'EG_SALARY_TAX', { enabled: true, startPeriod: '2026-11' })), [400, calc.CALCULATOR_UNVERIFIED])
+  expectStatus(await patchRow(high.id, { verified: true }), 200)
+  // من غير فترة بداية: مرفوض؛ وبيها: اتفعّل، وصندوق الشهداء لسه مقفول (حسابه لوحده)
+  assert.deepEqual(answer(await put(users.admin, 'EG_SALARY_TAX', { enabled: true })), [400, calc.CALCULATOR_START_PERIOD])
+  const enabled = expectStatus(await put(users.admin, 'EG_SALARY_TAX', { enabled: true, startPeriod: '2026-11' }), 200)
+  assert.deepEqual(enabled.calculators.map(row => [row.code, row.enabled, row.startPeriod, row.blockers.length]), [['EG_SALARY_TAX', true, '2026-11', 0], ['EG_MARTYRS_FUND', false, null, 1]])
+  assert.deepEqual([await config(), await audits('STATUTORY_CALCULATOR_CHANGED')], [{ 'eg.salary_tax.enabled': 'true', 'eg.salary_tax.start_period': '2026-11' }, 1])
+  assert.deepEqual(answer(await put(users.admin, 'EG_SALARY_TAX', { enabled: true, startPeriod: '2026-11' })), [400, calc.CALCULATOR_NOTHING])
+  // حساب المسير بيقرا نفس المفاتيح
+  const context = await require('../src/payroll/payroll-statutory-run').readPayrollStatutoryContext(ds.manager, { period: '2026-11', endDate: '2026-11-30' })
+  assert.deepEqual([context.tax.startPeriod, context.tax.table.verified, context.martyrs], ['2026-11', true, null])
+  assert.equal(await require('../src/payroll/payroll-statutory-run').readPayrollStatutoryContext(ds.manager, { period: '2026-10', endDate: '2026-10-31' }), null, 'قبل فترة البداية')
+
+  // شاشة الإعدادات العامة مابتكتبش مفاتيح التفعيل (حتى بحروف كبيرة)، ولا مدير النظام منها
+  for (const key of ['eg.salary_tax.enabled', 'EG.SALARY_TAX.ENABLED', 'eg.salary_tax.start_period']) {
+    for (const user of [users.settings, users.admin]) {
+      assert.deepEqual(answer(await request(user, 'PATCH', '/settings/config', { key, value: 'false' })), [400, calc.STATUTORY_CALCULATOR_CONFIG_REFUSAL], `${key} ${user.displayName}`)
+    }
+  }
+  assert.equal((await config())['eg.salary_tax.enabled'], 'true')
+
+  // والحساب مفعّل: صفه مايتعلّمش «محتاج تحقق»، وصف جديد له لازم «اتأكد»؛ وتعديل قيمه مسموح (بسطر تدقيقه)
+  assert.deepEqual(answer(await patchRow(brackets.id, { verified: false })), [400, calc.CALCULATOR_ROW_IN_USE])
+  const fresh = { country: 'EG', key: 'eg.salary_tax.brackets', effectiveFrom: '2028-01-01', values: brackets.values }
+  assert.deepEqual(answer(await request(users.admin, 'POST', S, fresh)), [400, calc.CALCULATOR_ROW_IN_USE])
+  expectStatus(await request(users.admin, 'POST', S, { ...fresh, verified: true }), 201)
+  expectStatus(await patchRow(brackets.id, { values: { personal_exemption: '21000' } }), 200)
+  expectStatus(await patchRow(brackets.id, { values: { personal_exemption: '20000' } }), 200)
+  // مفتاح مالوش حساب مفعّل زي ما هو: صندوق الشهداء «محتاج تحقق» بيتعدّل ويتضاف له
+  const [fund] = await rowsOf('eg.martyrs_fund')
+  expectStatus(await patchRow(fund.id, { source: 'مصدر اتراجع' }), 200)
+  assert.deepEqual(answer(await put(users.admin, 'EG_MARTYRS_FUND', { enabled: true })), [400, calc.CALCULATOR_UNVERIFIED])
+
+  // القفل: دايمًا مسموح، وبعده الصف يتعلّم «محتاج تحقق» عادي، والتفعيل بيترفض تاني
+  const closed = expectStatus(await put(users.admin, 'EG_SALARY_TAX', { enabled: false }), 200)
+  assert.deepEqual([closed.calculators[0].enabled, closed.calculators[0].startPeriod, (await config())['eg.salary_tax.enabled'], await audits('STATUTORY_CALCULATOR_CHANGED')], [false, '2026-11', 'false', 2])
+  expectStatus(await patchRow(brackets.id, { verified: false }), 200)
+  assert.deepEqual(answer(await put(users.admin, 'EG_SALARY_TAX', { enabled: true })), [400, calc.CALCULATOR_UNVERIFIED])
+  assert.equal(await require('../src/payroll/payroll-statutory-run').readPayrollStatutoryContext(ds.manager, { period: '2026-11', endDate: '2026-11-30' }), null)
+})

@@ -13,6 +13,7 @@ import { readBranchCurrencyOf } from '../org/branch-currency-db'
 import { totalsByCurrency } from '../org/currency-totals'
 // CR37-B02: مرجع المسير لموظف معيّن بقاعدة رؤية المسير
 import { payrollRunRefVisibility } from './payroll-run-visibility'
+import { payrollStatutorySql } from './payroll-statutory'
 
 // تقارير الرواتب (الخطوة 30 / RP-07, RP-08, RP-10, RP-12, PR-07): قراءة فقط، بلا أي كتابة.
 // النطاق: null = كل الشركة، مصفوفة = فروع المستخدم (فرع أو أكتر — branchScopeOf)، والمصفوفة الفاضية = نطاق فارغ.
@@ -233,10 +234,12 @@ function effectivePlacement(run: RunRow, member: MemberRow | undefined) {
 }
 
 const ITEM_MONEY_COLUMNS = ['basicSalary', 'allowances', 'overtimeAmount', 'otherAdditions', 'latenessDeduction', 'shortfallDeduction',
-  'absenceDeduction', 'unpaidLeaveDeduction', 'loanInstallments', 'otherDeductions', 'socialInsuranceDeduction', 'netPay'] as const
+  'absenceDeduction', 'unpaidLeaveDeduction', 'loanInstallments', 'otherDeductions', 'socialInsuranceDeduction', 'statutoryDeductions', 'netPay'] as const
 type ItemMoneyColumn = typeof ITEM_MONEY_COLUMNS[number]
+// B4.4 (ج): «statutoryDeductions» مش عمود في الجدول — المجموع القانوني المحفوظ في تفصيل البند (ضريبة، صناديق)؛ صفر لبند من غيره
+const itemMoneySql = (column: ItemMoneyColumn) => column === 'statutoryDeductions' ? payrollStatutorySql('i') : `i.[${column}]`
 type ItemRow = { runId: number; employeeId: number; payMethod: string } & Record<ItemMoneyColumn, string>
-const ITEM_SELECT = `SELECT i.[runId], i.[employeeId], i.[payMethod], ${ITEM_MONEY_COLUMNS.map(column => `CONVERT(varchar(40), i.[${column}]) AS [${column}]`).join(', ')}
+const ITEM_SELECT = `SELECT i.[runId], i.[employeeId], i.[payMethod], ${ITEM_MONEY_COLUMNS.map(column => `CONVERT(varchar(40), ${itemMoneySql(column)}) AS [${column}]`).join(', ')}
   FROM [payroll_items] i`
 
 const groupBy = <T, K>(rows: T[], key: (row: T) => K) => {
@@ -356,6 +359,8 @@ export async function payrollRunsReport(em: EntityManager, scope: PayrollReportS
       otherAdditions: reportMoney(row.otherAdditions), lateness: reportMoney(row.latenessDeduction), shortfall: reportMoney(row.shortfallDeduction),
       absence: reportMoney(row.absenceDeduction), unpaidLeave: reportMoney(row.unpaidLeaveDeduction), loans: reportMoney(row.loanInstallments),
       otherDeductions: reportMoney(row.otherDeductions), net: reportMoney(row.netPay),
+      // B4.4 (ج): الخصومات القانونية للفترة — الخانة بتظهر لو فيها مبلغ بس
+      ...(row.statutoryDeductions !== 0n ? { statutory: reportMoney(row.statutoryDeductions) } : {}),
     })),
   }
 }
@@ -956,12 +961,14 @@ export const VARIANCE_COMPONENTS = [
   { key: 'loanInstallments', label: 'أقساط السلف', sign: -1n, cause: 'LOAN_INSTALLMENT' },
   { key: 'otherDeductions', label: 'خصومات أخرى', sign: -1n, cause: 'OTHER_DEDUCTIONS' },
   { key: 'socialInsuranceDeduction', label: 'التأمينات الاجتماعية (حصة الموظف)', sign: -1n, cause: 'SOCIAL_INSURANCE' },
+  // B4.4 (ج): الخصومات القانونية المحفوظة في تفصيل البند — من غيرها في الفترتين المكوّن مابيظهرش في أي مخرج
+  { key: 'statutoryDeductions', label: 'الخصومات القانونية (ضريبة وصناديق)', sign: -1n, cause: 'STATUTORY' },
 ] as const
 
 export const VARIANCE_CAUSE_LABELS: Record<string, string> = {
   NEW_IN_PERIOD: 'انضمام أو دخول مسير جديد', LEFT_PERIOD: 'غير موجود في الفترة الحالية', WAGE_CHANGE: 'تغيير الأجر أو التناسب',
   OVERTIME: 'إضافي', OTHER_ADDITIONS: 'إضافة/مكافأة', ATTENDANCE_DEDUCTIONS: 'خصومات الحضور والإجازات',
-  LOAN_INSTALLMENT: 'قسط سلفة', OTHER_DEDUCTIONS: 'خصم آخر', SOCIAL_INSURANCE: 'التأمينات الاجتماعية', UNEXPLAINED: 'غير مفسَّر',
+  LOAN_INSTALLMENT: 'قسط سلفة', OTHER_DEDUCTIONS: 'خصم آخر', SOCIAL_INSURANCE: 'التأمينات الاجتماعية', STATUTORY: 'ضريبة وصناديق', UNEXPLAINED: 'غير مفسَّر',
 }
 
 export function previousPayrollPeriod(period: string) {
@@ -1049,6 +1056,7 @@ export async function payrollVarianceReport(em: EntityManager, scope: PayrollRep
   return {
     includeDraft, period, comparePeriod, rows, unexplained: rows.filter(row => row.unexplained),
     totals: [...VARIANCE_COMPONENTS.map(component => ({ key: component.key, label: component.label })), { key: 'netPay', label: 'الصافي' }]
+      .filter(component => component.key !== 'statutoryDeductions' || periodTotals.current.statutoryDeductions !== 0n || periodTotals.previous.statutoryDeductions !== 0n)
       .map(component => ({ ...component, current: reportMoney(periodTotals.current[component.key]), previous: reportMoney(periodTotals.previous[component.key]),
         delta: reportMoney(periodTotals.current[component.key] - periodTotals.previous[component.key]) })),
     summary: { employees: all.length, shown: rows.length, increased: all.filter(row => row.direction === 'INCREASE').length,

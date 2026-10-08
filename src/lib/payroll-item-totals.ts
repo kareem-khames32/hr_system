@@ -11,10 +11,19 @@ export const PAYROLL_DEDUCTION_LABELS: Record<PayrollDeductionField, string> = {
   socialInsuranceDeduction: 'التأمينات الاجتماعية (حصة الموظف)',
 }
 
-type ItemAmounts = Partial<Pick<ApiPayrollItem, typeof PAYROLL_EARNING_FIELDS[number] | PayrollDeductionField | 'netPay'>>
+type ItemAmounts = Partial<Pick<ApiPayrollItem, typeof PAYROLL_EARNING_FIELDS[number] | PayrollDeductionField | 'netPay' | 'breakdown'>>
+
+/** B4.4: الخصومات القانونية (ضريبة كسب العمل، صناديق) المحفوظة في تفصيل البند — جوه الصافي المحفوظ ومش عمود. بند من غيرها = صفر */
+export const PAYROLL_STATUTORY_LABEL = 'ضريبة وصناديق (قانوني)'
+export function payrollItemStatutory(item: { breakdown?: string | null }): number {
+  try {
+    const total = JSON.parse(item.breakdown || '{}').statutory?.total
+    return typeof total === 'number' && Number.isFinite(total) && total > 0 ? total : 0
+  } catch { return 0 }
+}
 
 export const payrollItemEarnings = (item: ItemAmounts) => sumMoney(PAYROLL_EARNING_FIELDS.map(field => item[field]))
-export const payrollItemDeductions = (item: ItemAmounts) => sumMoney(PAYROLL_DEDUCTION_FIELDS.map(field => item[field]))
+export const payrollItemDeductions = (item: ItemAmounts) => sumMoney([...PAYROLL_DEDUCTION_FIELDS.map(field => item[field]), payrollItemStatutory(item)])
 
 /**
  * قرار المالك (20 سبتمبر): راتب شهر آخر يوم عمل بيتصرف مع التصفية بنفس رقم المسير.
@@ -38,7 +47,11 @@ export function payrollRunPayable(items: ReadonlyArray<ItemAmounts & Pick<ApiPay
 
 /** ملخص خصومات المسير: سطر لكل عمود (ومنها النقص والخصومات الأخرى) والإجمالي الكبير من الصفوف نفسها. */
 export function payrollDeductionSummary(items: readonly ItemAmounts[]) {
-  const lines = PAYROLL_DEDUCTION_FIELDS.map(field => ({ field, label: PAYROLL_DEDUCTION_LABELS[field], total: sumMoney(items.map(item => item[field])) }))
+  const statutory = sumMoney(items.map(payrollItemStatutory))
+  const lines: Array<{ field: PayrollDeductionField | 'statutory'; label: string; total: number }> = [
+    ...PAYROLL_DEDUCTION_FIELDS.map(field => ({ field, label: PAYROLL_DEDUCTION_LABELS[field], total: sumMoney(items.map(item => item[field])) })),
+    // سطر القانوني بيظهر لو فيه مبلغ بس
+    ...(statutory > 0 ? [{ field: 'statutory' as const, label: PAYROLL_STATUTORY_LABEL, total: statutory }] : [])]
   return { lines, grandTotal: sumMoney(items.map(payrollItemDeductions)), affected: items.filter(item => payrollItemDeductions(item) > 0).length }
 }
 

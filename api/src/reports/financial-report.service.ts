@@ -8,6 +8,7 @@ import { localDateOf } from '../attendance/attendance.service'
 import { readBranchCurrencyOf } from '../org/branch-currency-db'
 import { singleCurrency, splitByCurrency, totalsByCurrency } from '../org/currency-totals'
 import { payrollLineNotReversedSql } from '../payroll/payroll-reversal-sql'
+import { payrollStatutorySql } from '../payroll/payroll-statutory'
 import { PayrollService } from '../payroll/payroll.service'
 import {
   buildDeductionsReport, buildLoansReport, buildOvertimeReport, buildPayrollCostSummary, buildPayrollRegister, computeFinancialRow,
@@ -33,6 +34,7 @@ export interface FinancialReportQuery {
 
 // خصم التأمينات (حصة الموظف) عمود من ترحيل 049 — لو مش موجود لسه يتخطى، وحصة صاحب العمل تظهر «—»
 const INSURANCE_COLUMN = 'socialInsuranceDeduction'
+// B4.4 (ج): المجموع القانوني (ضريبة، صناديق) بيتقري من تفصيل البند — مش عمود
 const MONEY_COLUMNS = ['basicSalary', 'allowances', 'overtimeAmount', 'overtimeHours', 'otherAdditions', 'latenessDeduction', 'shortfallDeduction',
   'absenceDeduction', 'unpaidLeaveDeduction', 'loanInstallments', 'otherDeductions', 'netPay'] as const
 const BREAKDOWN_ARRAYS = ['salaryComponents', 'earnedComponents', 'obligationLines', 'leaveDeductionLines', 'overtimeEntryIds'] as const
@@ -102,6 +104,7 @@ export class FinancialReportService {
            pd.[status] AS [disbursementStatus], pd.[payMethod] AS [disbursedPayMethod],
            CONVERT(varchar(40), pd.[bankAmount]) AS [disbursedBankAmount], CONVERT(varchar(40), pd.[cashAmount]) AS [disbursedCashAmount],
            ${money.map(column => `CONVERT(varchar(40), i.[${column}]) AS [${column}]`).join(', ')},
+           CONVERT(varchar(40), ${payrollStatutorySql('i')}) AS [statutoryDeductions],
            ${BREAKDOWN_ARRAYS.map(key => `CASE WHEN bd.[ok] = 1 THEN JSON_QUERY(i.[breakdown], '$.${key}') END AS [${key}]`).join(', ')},
            CASE WHEN bd.[ok] = 1 THEN JSON_QUERY(i.[breakdown], '$.settlementPayout') END AS [settlementPayout],
            ${insurance ? `CASE WHEN bd.[ok] = 1 AND JSON_VALUE(i.[breakdown], '$.socialInsurance.applies') = 'true'

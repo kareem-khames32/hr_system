@@ -40,6 +40,8 @@ export const FR_DEDUCTION_KINDS = [
   { key: 'TYPED', label: 'الخصومات والجزاءات' },
   { key: 'OTHER_DEBITS', label: 'خصومات أخرى (عهدة/غرامة/تسوية)' },
   { key: 'SOCIAL_INSURANCE', label: 'التأمينات (حصة الموظف)' },
+  // B4.4 (ج): الخصومات القانونية المحفوظة في تفصيل البند (ضريبة كسب العمل، صناديق) — النوع بيظهر في المخرجات لو فيه مبلغ بس
+  { key: 'STATUTORY', label: 'ضريبة وصناديق (قانوني)' },
 ] as const
 export type FrDeductionKind = typeof FR_DEDUCTION_KINDS[number]['key']
 const DEDUCTION_KEYS = FR_DEDUCTION_KINDS.map(kind => kind.key) as FrDeductionKind[]
@@ -68,6 +70,8 @@ export interface FinancialItemSource {
   basicSalary: MoneyInput; allowances: MoneyInput; overtimeAmount: MoneyInput; overtimeHours?: MoneyInput; otherAdditions: MoneyInput
   latenessDeduction: MoneyInput; shortfallDeduction: MoneyInput; absenceDeduction: MoneyInput; unpaidLeaveDeduction: MoneyInput
   loanInstallments: MoneyInput; otherDeductions: MoneyInput; socialInsuranceDeduction?: MoneyInput; netPay: MoneyInput
+  /** المجموع القانوني المحفوظ في تفصيل البند (breakdown.statutory.total) */
+  statutoryDeductions?: MoneyInput
   salaryComponents?: string | null; earnedComponents?: string | null; obligationLines?: string | null
   leaveDeductionLines?: string | null; overtimeEntryIds?: string | null
   /** حصة صاحب العمل في التأمينات من تفصيل البند؛ null = لا تنطبق أو غير متاحة */
@@ -207,6 +211,7 @@ export function computeFinancialRow(source: FinancialItemSource, obligations: Re
   deductions.ABSENCE = cents(source.absenceDeduction)
   deductions.LOANS = cents(source.loanInstallments)
   deductions.SOCIAL_INSURANCE = cents(source.socialInsuranceDeduction)
+  deductions.STATUTORY = cents(source.statutoryDeductions)
 
   // الإضافات (ومنها بدل دوام أيام العطلات) كلها جوه عمود otherAdditions في البند
   const gross = basic + allowances + overtime + otherAdditions
@@ -262,7 +267,10 @@ const sumMap = (rows: Iterable<Map<string, bigint>>) => {
   return total
 }
 const mapToRecord = (keys: string[], map: Map<string, bigint>) => Object.fromEntries(keys.map(key => [key, money(map.get(key) ?? 0n)]))
-const kindsToRecord = (kinds: Record<FrDeductionKind, bigint>) => Object.fromEntries(DEDUCTION_KEYS.map(key => [key, money(kinds[key])])) as Record<FrDeductionKind, string>
+/** الأنواع المعروضة: كلها، و«القانوني» لو إجماليه مش صفر بس (من غيره المخرجات زي ما كانت بالحرف) */
+const shownKinds = (totals: Record<FrDeductionKind, bigint>) => FR_DEDUCTION_KINDS.filter(kind => kind.key !== 'STATUTORY' || totals.STATUTORY !== 0n)
+const kindsToRecord = (kinds: Record<FrDeductionKind, bigint>, shown: ReadonlyArray<{ key: FrDeductionKind }>) =>
+  Object.fromEntries(shown.map(kind => [kind.key, money(kinds[kind.key])])) as Record<FrDeductionKind, string>
 
 // ===== ١) كشف الرواتب =====
 export function buildPayrollRegister(rows: readonly FinancialRow[], insuranceAvailable: boolean) {
@@ -274,11 +282,12 @@ export function buildPayrollRegister(rows: readonly FinancialRow[], insuranceAva
   const totalKinds = zeroKinds()
   for (const row of rows) for (const key of DEDUCTION_KEYS) totalKinds[key] += row.deductions[key]
   const bucketTotals = sumMap(rows.map(row => row.buckets)), additionTotals = sumMap(rows.map(row => row.additions))
+  const shown = shownKinds(totalKinds)
   return {
     columns: {
       allowanceBuckets: bucketKeys.map(key => ({ key, label: bucketLabel(key), total: money(bucketTotals.get(key) ?? 0n) })),
       additions: additionKeys.map(key => ({ key, label: additionLabel(key), total: money(additionTotals.get(key) ?? 0n) })),
-      deductions: FR_DEDUCTION_KINDS.map(kind => ({ key: kind.key, label: kind.label, total: money(totalKinds[kind.key]) })),
+      deductions: shown.map(kind => ({ key: kind.key, label: kind.label, total: money(totalKinds[kind.key]) })),
     },
     rows: sorted.map(row => ({
       runId: row.runId, runName: row.runName, runStatus: row.runStatus,
@@ -287,7 +296,7 @@ export function buildPayrollRegister(rows: readonly FinancialRow[], insuranceAva
       basic: money(row.basic), allowances: money(row.allowances), allowanceBuckets: mapToRecord(bucketKeys, row.buckets),
       additions: mapToRecord(additionKeys, row.additions), otherAdditions: money(row.otherAdditions),
       overtime: money(row.overtime), overtimeMinutes: row.overtimeMinutes, holidayWork: money(row.holidayWork), gross: money(row.gross),
-      deductions: kindsToRecord(row.deductions), totalDeductions: money(row.totalDeductions), net: money(row.net),
+      deductions: kindsToRecord(row.deductions, shown), totalDeductions: money(row.totalDeductions), net: money(row.net),
       bank: money(row.bank), cash: money(row.cash), settlement: money(row.settlement),
       employerInsurance: insuranceAvailable && row.employerInsurance !== null ? money(row.employerInsurance) : null,
       lines: row.lines.map(line => ({ type: line.type, key: line.key, category: line.category, label: line.label, typeName: line.typeName, amount: money(line.amount) })),
@@ -297,7 +306,7 @@ export function buildPayrollRegister(rows: readonly FinancialRow[], insuranceAva
       basic: total(row => row.basic), allowances: total(row => row.allowances),
       allowanceBuckets: mapToRecord(bucketKeys, bucketTotals), additions: mapToRecord(additionKeys, additionTotals), otherAdditions: total(row => row.otherAdditions),
       overtime: total(row => row.overtime), overtimeMinutes: rows.reduce((sum, row) => sum + row.overtimeMinutes, 0), holidayWork: total(row => row.holidayWork),
-      gross: total(row => row.gross), deductions: kindsToRecord(totalKinds), totalDeductions: total(row => row.totalDeductions),
+      gross: total(row => row.gross), deductions: kindsToRecord(totalKinds, shown), totalDeductions: total(row => row.totalDeductions),
       net: total(row => row.net), bank: total(row => row.bank), cash: total(row => row.cash), settlement: total(row => row.settlement),
       employerInsurance: insuranceAvailable ? total(row => row.employerInsurance ?? 0n) : null,
     },
@@ -369,7 +378,10 @@ export function buildDeductionsReport(rows: readonly FinancialRow[]) {
     for (const key of DEDUCTION_KEYS) acc.kinds[key] += row.deductions[key]
     acc.total += row.totalDeductions
   }).filter(row => row.total !== 0n || DEDUCTION_KEYS.some(key => row.kinds[key] !== 0n))
-  const kinds = FR_DEDUCTION_KINDS.map(kind => {
+  const totalKinds = zeroKinds()
+  for (const row of employees) for (const key of DEDUCTION_KEYS) totalKinds[key] += row.kinds[key]
+  const shown = shownKinds(totalKinds)
+  const kinds = shown.map(kind => {
     const affected = employees.filter(row => row.kinds[kind.key] !== 0n)
     return { key: kind.key, label: kind.label, amount: money(affected.reduce((sum, row) => sum + row.kinds[kind.key], 0n)), employees: affected.length }
   })
@@ -391,7 +403,7 @@ export function buildDeductionsReport(rows: readonly FinancialRow[]) {
     typedByType: detail('TYPED', line => line.typeName || line.label || FR_UNNAMED_TYPED),
     otherByCategory: detail('OTHER_DEBITS', line => FR_OTHER_DEBIT_LABELS[line.category ?? 'OTHER'] ?? line.label ?? FR_OTHER_DEBIT_LABELS.OTHER),
     employees: employees.map(row => ({ employeeId: row.employeeId, employeeCode: row.employeeCode, fullName: row.fullName, branchName: row.branchName,
-      departmentName: row.departmentName, amounts: kindsToRecord(row.kinds), total: money(row.total) })),
+      departmentName: row.departmentName, amounts: kindsToRecord(row.kinds, shown), total: money(row.total) })),
     totals: { amount: money(employees.reduce((sum, row) => sum + row.total, 0n)), employees: employees.length },
   }
 }

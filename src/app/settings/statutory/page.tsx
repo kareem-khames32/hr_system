@@ -7,6 +7,7 @@ import Link from 'next/link'
 import { AlertTriangle, BookOpen, X } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import { formatDate } from '@/lib/dates'
+import StatutoryCalculatorsCard from '@/components/settings/StatutoryCalculatorsCard'
 import { addStatutoryRow, fetchStatutoryPack, updateStatutoryRow, type ApiStatutoryKey, type ApiStatutoryPack, type ApiStatutoryRow } from '@/lib/statutory-api'
 
 export default function StatutoryPackPage() {
@@ -61,6 +62,7 @@ export default function StatutoryPackPage() {
             </span>
           </div>
         )}
+        {data?.available && <StatutoryCalculatorsCard refreshKey={data} />}
         {data?.available && (
           <div className="flex gap-2" role="tablist">
             {data.countries.map((entry) => (

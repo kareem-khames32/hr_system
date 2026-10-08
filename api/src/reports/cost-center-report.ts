@@ -18,7 +18,9 @@ export function costCenterMoney(cents: bigint): string {
 }
 
 export const COST_CENTER_EARNING_FIELDS = ['basicSalary', 'allowances', 'overtimeAmount', 'otherAdditions'] as const
-export const COST_CENTER_DEDUCTION_FIELDS = ['latenessDeduction', 'shortfallDeduction', 'absenceDeduction', 'unpaidLeaveDeduction', 'loanInstallments', 'otherDeductions', 'socialInsuranceDeduction'] as const
+// B4.4 (ج): «statutoryDeductions» = المجموع القانوني المحفوظ في تفصيل البند (مش عمود في الجدول؛ الخدمة بتقراه من التفصيل)
+export const COST_CENTER_DEDUCTION_FIELDS = ['latenessDeduction', 'shortfallDeduction', 'absenceDeduction', 'unpaidLeaveDeduction', 'loanInstallments', 'otherDeductions', 'socialInsuranceDeduction', 'statutoryDeductions'] as const
+export const COST_CENTER_STATUTORY_FIELD = 'statutoryDeductions'
 type MoneyField = typeof COST_CENTER_EARNING_FIELDS[number] | typeof COST_CENTER_DEDUCTION_FIELDS[number] | 'netPay'
 
 export type CostCenterReportRow = {

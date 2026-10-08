@@ -222,3 +222,68 @@ test('PS-04: قارئ الرصيد التراكمي — من فترة البدا
   try { assert.deepEqual(await read(state.full, { id: null, period: '2026-10' }), { netIncome: 13350, days: 30, tax: 1482.5, periodCounted: false }) }
   finally { await repo('PayrollRun').update({ id: state.september }, { status: 'CALCULATED' }) }
 })
+
+test('PS-05: التقارير بتتصالح بالخصم القانوني — كشف الرواتب والخصومات ومراكز التكلفة والفروق وملخص الفترات؛ وفترة من غيره مخرجاتها زي ما هي', async () => {
+  const get = async route => expectStatus(await request(users.admin, 'GET', route), 200)
+  const number = value => Number(value)
+  // أغسطس (معتمد): موظفين بخصم قانوني 1,490 لكل واحد، وموظف الفرع السعودي من غيره
+  const register = await get('/reports/financial/payroll-register?period=2026-08')
+  assert.deepEqual(register.columns.deductions.filter(kind => kind.key === 'STATUTORY').map(kind => [kind.label, number(kind.total)]), [['ضريبة وصناديق (قانوني)', 2980]])
+  const row = register.rows.find(entry => entry.employeeId === state.full.id)
+  assert.deepEqual([number(row.deductions.STATUTORY), number(row.deductions.SOCIAL_INSURANCE), number(row.totalDeductions), number(row.net)], [1490, 1650, 3140, 11860])
+  for (const entry of register.rows) assert.equal(Math.round((number(entry.gross) - number(entry.totalDeductions)) * 100), Math.round(number(entry.net) * 100), `صف ${entry.employeeId}: الإجمالي − الخصومات = الصافي`)
+  assert.deepEqual([number(register.totals.deductions.STATUTORY), Math.round((number(register.totals.gross) - number(register.totals.totalDeductions)) * 100)], [2980, Math.round(number(register.totals.net) * 100)])
+  const deductions = await get('/reports/financial/deductions?period=2026-08')
+  assert.deepEqual(deductions.kinds.filter(kind => kind.key === 'STATUTORY').map(kind => [number(kind.amount), kind.employees]), [[2980, 2]])
+  assert.equal(number(deductions.employees.find(entry => entry.employeeId === state.full.id).amounts.STATUTORY), 1490)
+  const centers = await get('/reports/cost-centers?period=2026-08')
+  assert.equal(Math.round((number(centers.totals.gross) - number(centers.totals.deductions)) * 100), Math.round(number(centers.totals.net) * 100), 'مراكز التكلفة: الإجمالي − الخصومات = الصافي')
+  assert.equal(number(centers.totals.deductions), 1650 * 2 + 1490 * 2)
+
+  // يوليو (محسوب والإعداد كان مقفول): مفيش نوع ولا خانة «قانوني» في أي مخرج
+  const plain = await get('/reports/financial/payroll-register?period=2026-07&includeDraft=true')
+  assert.deepEqual([plain.columns.deductions.some(kind => kind.key === 'STATUTORY'), plain.rows.some(entry => 'STATUTORY' in entry.deductions), 'STATUTORY' in plain.totals.deductions], [false, false, false])
+  assert.equal((await get('/reports/financial/deductions?period=2026-07&includeDraft=true')).kinds.some(kind => kind.key === 'STATUTORY'), false)
+
+  // الفروق: أغسطس قدام يوليو — الخصم القانوني مكوّن مفسِّر (مش «غير مفسَّر»)
+  const variance = await get('/reports/payroll/variance?period=2026-08&comparePeriod=2026-07&includeDraft=true')
+  const changed = variance.rows.find(entry => entry.employeeId === state.full.id)
+  assert.deepEqual(changed.components.map(component => [component.key, number(component.delta), number(component.effect)]), [['statutoryDeductions', 1490, -1490]])
+  assert.deepEqual([number(changed.difference), changed.unexplained, changed.causes.map(cause => cause.code)], [-1490, false, ['STATUTORY']])
+  assert.deepEqual(variance.totals.filter(total => total.key === 'statutoryDeductions').map(total => [number(total.current), number(total.previous)]), [[2980, 0]])
+  assert.equal(variance.unexplained.length, 0)
+  // فترتين من غيره: المكوّن مش في المجاميع
+  const before = await get('/reports/payroll/variance?period=2026-07&comparePeriod=2026-06&includeDraft=true')
+  assert.equal(before.totals.some(total => total.key === 'statutoryDeductions'), false)
+  // ملخص الفترات: خانة القانوني للفترة اللي فيها مبلغ بس
+  const summary = await get('/reports/payroll?includeDraft=true')
+  const periodRow = period => summary.deductions.find(entry => entry.period === period)
+  assert.deepEqual([number(periodRow('2026-08').statutory), 'statutory' in periodRow('2026-07')], [2980, false])
+})
+
+test('PS-06: سلفة وضريبة في نفس البند — القسط بيتحسب زي الأول والضريبة بعده، والاعتماد بيتحقق من الصافي بالخصم القانوني وبيرفض اللقطة التالفة', async () => {
+  const loaned = await employee(org.cairo)
+  const loan = await repo('Loan').save({ employeeId: loaned.id, amount: 1000, status: 'DISBURSED', disbursedAt: new Date('2026-07-01T08:00:00Z') })
+  await repo('LoanInstallment').save({ loanId: loan.id, dueDate: '2026-08-10', amount: 1000, paid: false })
+  const result = await runFor('2026-08', [loaned])
+  const item = itemOf(result, loaned), breakdown = JSON.parse(item.breakdown)
+  // القسط 1,000 على الصافي قبل الضريبة (خطة الأقساط زي ما هي)، والضريبة والصندوق بعده
+  assert.deepEqual([Number(item.loanInstallments), breakdown.installmentPlan.context.netBeforeLoans, breakdown.statutory.total, Number(item.netPay)], [1000, '13350.00', 1490, 15000 - 1650 - 1000 - 1490])
+  const unassigned = expectStatus(await request(users.approver, 'GET', `/payroll/runs/${result.id}/unassigned`), 200)
+  expectStatus(await request(users.approver, 'POST', `/payroll/runs/${result.id}/unassigned-ack`, { reportHash: unassigned.reportHash }), 201)
+  const tryApprove = () => request(users.approver, 'POST', `/payroll/runs/${result.id}/approve`)
+  const write = patch => repo('PayrollItem').update({ id: item.id }, patch)
+  // لقطة قانونية تالفة (المجموع مش مجموع سطوره): الاعتماد بيرفض بدل ما يعدّيها صفر
+  await write({ breakdown: JSON.stringify({ ...breakdown, statutory: { ...breakdown.statutory, total: 1 } }) })
+  const corrupt = await tryApprove()
+  assert.deepEqual([corrupt.status, /الخصومات القانونية/.test(JSON.stringify(corrupt.body))], [409, true], JSON.stringify(corrupt.body))
+  // صافي مش مطابق (الخصم القانوني اتشال من التفصيل والصافي زي ما هو): مرفوض
+  const { statutory: _removed, ...without } = breakdown
+  await write({ breakdown: JSON.stringify(without) })
+  assert.equal((await tryApprove()).status, 409)
+  // البند زي ما اتحسب: بيتعتمد
+  await write({ breakdown: item.breakdown })
+  expectStatus(await tryApprove(), 201)
+  const approved = await repo('PayrollItem').findOneByOrFail({ id: item.id })
+  assert.deepEqual([Number(approved.netPay), Number(approved.loanInstallments), statutoryOf(approved).total], [10860, 1000, 1490])
+})

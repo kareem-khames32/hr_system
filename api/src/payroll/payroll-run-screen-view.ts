@@ -11,7 +11,9 @@ import type { PayrollItem } from './payroll.entities'
  * (`payroll-run-screen-view.test.cjs` بيثبّت اللي الشاشة بتقراه).
  */
 export const PAYROLL_RUN_SCREEN_BREAKDOWN_KEYS = ['coverFrom', 'coverTo', 'coverDays', 'prorataFactor', 'monthlyDays', 'missingPunchDates',
-  'leaveDeductionLines', 'obligationLines', 'installmentPlan', 'overtime', 'settlementPayout'] as const
+  'leaveDeductionLines', 'obligationLines', 'installmentPlan', 'overtime', 'settlementPayout',
+  // B4.4 (ج): الخصومات القانونية (ضريبة، صناديق) — مجاميع جدول المسير بتقرا مجموعها من هنا (مش عمود في البند)
+  'statutory'] as const
 
 /** تفصيل البند لشاشة المسير: مفاتيح الشاشة ومجاميع خصم الحضور (دقايق الإذن) بس. التفصيل اللي مش JSON بيرجع زي ما هو */
 export function payrollRunScreenBreakdown(breakdown: string | null | undefined): string | null {

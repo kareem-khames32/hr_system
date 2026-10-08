@@ -5,6 +5,7 @@ import { localDateOf } from '../attendance/attendance.service'
 import { recordAudit } from '../audit/audit'
 import type { JwtPayload } from '../auth/auth.service'
 import { STATUTORY_CATALOG, STATUTORY_COUNTRY_LABELS, statutoryKeyInfo, type StatutoryKeyInfo } from './statutory-catalog'
+import { CALCULATOR_ROW_IN_USE, enabledCalculatorsOf } from './statutory-calculators.service'
 import { StatutoryDefinition, StatutoryValue } from './statutory.entities'
 
 // B4.2: «حزمة الدولة» — عرض القيم القانونية المؤرخة لكل مفتاح، وتعديلها لمدير النظام بس: صف جديد بتاريخ سريان، تعديل قيم صف، وتعليم
@@ -103,6 +104,9 @@ export class StatutoryPackService {
     try {
       await this.ds.transaction(async (em) => {
         if (!(await this.ready(em))) throw new BadRequestException(STATUTORY_MIGRATION_MISSING)
+        // B4.4 (ج): مفتاح حسابه مفعّل مايقبلش صف «محتاج تحقق» — الصف هيبقى ساري ويتحسب بيه. القفل على صفوف المفتاح بيرتّبه مع التفعيل
+        await em.getRepository(StatutoryDefinition).find({ where: { country: info.country, key: info.key }, lock: { mode: 'pessimistic_write' } })
+        if (!verified && (await enabledCalculatorsOf(em, info.country, info.key)).length) throw new BadRequestException(CALCULATOR_ROW_IN_USE)
         const made = await em.getRepository(StatutoryDefinition).insert({ country: info.country, key: info.key, effectiveFrom, verified, source })
         const id = made.identifiers[0].id as number
         await em.getRepository(StatutoryValue).insert(Object.entries(values).map(([code, value]) => ({ definitionId: id, code, value })))
@@ -132,6 +136,8 @@ export class StatutoryPackService {
       if (input.verified !== undefined && input.verified !== (row.verified === true)) patch.verified = input.verified
       if (input.source !== undefined) { const source = cleanStatutorySource(input.source); if (source !== (row.source ?? null)) patch.source = source }
       if (!Object.keys(changed).length && !Object.keys(patch).length) throw new BadRequestException(STATUTORY_NOTHING)
+      // B4.4 (ج): صف حسابه مفعّل مايتعلّمش «محتاج تحقق» (تحت قفل الصف — التفعيل بياخد نفس القفل)
+      if (patch.verified === false && (await enabledCalculatorsOf(em, row.country, row.key)).length) throw new BadRequestException(CALCULATOR_ROW_IN_USE)
       for (const [code, value] of Object.entries(changed)) {
         const updated = await em.getRepository(StatutoryValue).update({ definitionId: row.id, code }, { value })
         if (!updated.affected) await em.getRepository(StatutoryValue).insert({ definitionId: row.id, code, value })

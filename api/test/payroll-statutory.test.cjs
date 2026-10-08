@@ -81,7 +81,7 @@ test('PSU-04: تفسير الصافي السالب وتنبيه تغيّر ال�
   assert.deepEqual(payrollNetChange(before, { netPay: 9000, breakdown: '{}', loanInstallments: 4350 }, 5).lines.map(line => line.label), ['السلف'], 'من غير خصم قانوني مفيش سطر له')
 })
 
-test('PSU-05: مصدر الكود — الحساب ورا سياقه (null والإعدادين مقفولين)، والتحقق بيطرح المجموع القانوني، ومفيش مسار في المنتج بيفتح الإعدادين في الدفعة دي', () => {
+test('PSU-05: مصدر الكود — الحساب ورا سياقه (null والإعدادين مقفولين)، والتحقق بيطرح المجموع القانوني، ومفاتيح التفعيل ليها مسار واحد لمدير النظام', () => {
   const service = read('payroll.service.ts'), run = read('payroll-statutory-run.ts')
   assert.match(service, /const statutoryContext = await readPayrollStatutoryContext\(em, \{ period: run\.period, endDate, runType: run\.runType \}\)/)
   assert.match(service, /if \(statutoryContext\) \{\n\s+totalNet = round2\(totalNet - await applyPayrollStatutory\(em, statutoryContext, run, preparedItem, emp\.id, /)
@@ -92,13 +92,19 @@ test('PSU-05: مصدر الكود — الحساب ورا سياقه (null وا�
   assert.match(run, /values\.get\(EG_TAX_ENABLED_KEY\) === 'true', martyrsOn = values\.get\(EG_MARTYRS_ENABLED_KEY\) === 'true'/)
   assert.match(run, /r\.\[status\] IN \(N'CALCULATED', N'APPROVED', N'PAID'\)/)
   assert.match(run, /NOT EXISTS \(SELECT 1 FROM \[payroll_run_reversal_lines\] l WHERE l\.\[originalItemId\] = i\.\[id\] AND l\.\[status\] = N'POSTED'\)/)
-  // مفاتيح الإعدادين مذكورة في ملف الحساب بس: ولا متحكم ولا خدمة بتكتبهم (فتحهم بييجي مع التقارير في الجزء ج)
+  // B4.4 (ج): مفاتيح الإعدادين مذكورة في ملف الحساب (قراءة) وخدمة التفعيل (المسار الوحيد اللي بيكتبهم) بس؛ وشاشة الإعدادات العامة بترفضهم
+  const calculators = fs.readFileSync(path.join(apiRoot, 'src', 'statutory', 'statutory-calculators.service.ts'), 'utf8').replace(/\r\n/g, '\n')
+  assert.match(calculators, /async update\(user: JwtPayload, code: string, input: CalculatorInput\) \{\n\s+if \(user\.role !== 'super_admin'\) throw new ForbiddenException\(CALCULATOR_ADMIN_ONLY\)/)
+  assert.match(calculators, /const rows = await this\.rowsOf\(em, calculator, true\)/, 'الحكم على صفوف الحزمة تحت قفلها')
+  assert.match(calculators, /if \(after\.enabled\) \{\n\s+const blockers = this\.blockersOf\(calculator, rows\)\n\s+if \(blockers\.length\) throw new BadRequestException\(blockers\[0\]\)/)
+  assert.match(fs.readFileSync(path.join(apiRoot, 'src', 'settings', 'settings.controller.ts'), 'utf8'), /if \(STATUTORY_CALCULATOR_CONFIG_KEYS\.includes\(dto\.key\)\) throw new BadRequestException\(STATUTORY_CALCULATOR_CONFIG_REFUSAL\)/)
   const walk = dir => fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? walk(path.join(dir, entry.name)) : entry.name.endsWith('.ts') ? [path.join(dir, entry.name)] : [])
   const source = path.join(apiRoot, 'src')
   for (const file of walk(source)) {
     const relative = path.relative(source, file).split(path.sep).join('/'), text = fs.readFileSync(file, 'utf8')
     for (const key of ['eg.salary_tax.enabled', 'eg.salary_tax.start_period', 'eg.martyrs_fund.enabled', 'EG_TAX_ENABLED_KEY', 'EG_MARTYRS_ENABLED_KEY', 'EG_TAX_START_PERIOD_KEY']) {
-      assert.equal(text.includes(key), relative === 'payroll/payroll-statutory-run.ts', `${relative}: ${key}`)
+      const allowed = relative === 'payroll/payroll-statutory-run.ts' || (relative === 'statutory/statutory-calculators.service.ts' && /^EG_/.test(key))
+      assert.equal(text.includes(key), allowed, `${relative}: ${key}`)
     }
   }
 })
