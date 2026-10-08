@@ -90,7 +90,16 @@ test('PSU-05: مصدر الكود — الحساب ورا سياقه (null وا�
   assert.match(service, /Number\(item\.netPay\) !== round2\(netBefore - deducted \+ workPressure - statutory\)/)
   assert.match(run, /if \(!taxOn && !martyrsOn && !healthOn\) return null/)
   assert.match(run, /values\.get\(EG_TAX_ENABLED_KEY\) === 'true', martyrsOn = values\.get\(EG_MARTYRS_ENABLED_KEY\) === 'true', healthOn = values\.get\(EG_HEALTH_ENABLED_KEY\) === 'true'/)
-  assert.match(run, /r\.\[status\] IN \(N'CALCULATED', N'APPROVED', N'PAID'\)/)
+  // P4A-B02: الحساب بيقرا المحسوب والمعتمد والمصروف ومصادره بتتثبت؛ والاعتماد بيقارن بالمعتمد والمصروف بس
+  assert.match(run, /r\.\[status\] IN \(\$\{finalOnly \? '' : `N'CALCULATED', `\}N'APPROVED', N'PAID'\)/)
+  assert.match(run, /sourceItemIds: ytd\.sourceItemIds \}/)
+  assert.match(run, /const current = \(await readEgTaxYearToDate\(em, item\.employeeId, run, startPeriod, true\)\)\.sourceItemIds/)
+  // P4A-B01: الصف الساري في آخر يوم في المسير لازم «اتأكد»
+  assert.match(run, /const table = dated && dated\.verified \? dated : null/)
+  const approve =service.slice(service.indexOf('  async approveLocked('), service.indexOf('  private async freezePaidSplit('))
+  assert.ok(approve.indexOf('await lockPayrollEmployees(em, employeeIds)') > 0 && approve.indexOf('await egTaxSourcesIssue(em, run, items)') > approve.indexOf('await lockPayrollEmployees(em, employeeIds)'), 'مصادر الضريبة بتتراجع بعد قفل الموظفين')
+  const change = service.slice(service.indexOf('  private async changeRunState('), service.indexOf('  async events('))
+  assert.ok(change.indexOf('await egTaxDependentsIssue(em, run, items)') > change.indexOf('await lockPayrollEmployees(em,'), 'إعادة الفتح بتتحكم بعد قفل الموظفين')
   assert.match(run, /NOT EXISTS \(SELECT 1 FROM \[payroll_run_reversal_lines\] l WHERE l\.\[originalItemId\] = i\.\[id\] AND l\.\[status\] = N'POSTED'\)/)
   // B4.4 (ج): مفاتيح الإعدادين مذكورة في ملف الحساب (قراءة) وخدمة التفعيل (المسار الوحيد اللي بيكتبهم) بس؛ وشاشة الإعدادات العامة بترفضهم
   const calculators = fs.readFileSync(path.join(apiRoot, 'src', 'statutory', 'statutory-calculators.service.ts'), 'utf8').replace(/\r\n/g, '\n')

@@ -9,11 +9,11 @@ const apiRoot = path.resolve(__dirname, '..')
 require('../node_modules/ts-node').register({ project: path.join(apiRoot, 'tsconfig.json'), transpileOnly: true })
 const legal = require('../src/attendance/overtime-legal-minimum')
 const { STATUTORY_SEED } = require('../src/statutory/statutory-data')
-const entries = STATUTORY_SEED.map(seed => ({ ...seed, verified: false }))
+const entries = STATUTORY_SEED.map(seed => ({ ...seed, verified: true }))
 const min = (country, dayKind, basicSalary = 6000, grossSalary = 8000, date = '2026-10-08', rows = entries) => legal.legalOvertimeMinimum({ country, dayKind, basicSalary, grossSalary }, rows, date)
 
 test('OLU-01: مصر — نهار العمل 1.35 ويوم الراحة 2، والعطلة الرسمية من غير حد، وقبل سريان الصف مفيش', () => {
-  assert.deepEqual(min('EG', 'WEEKDAY'), { multiplier: 1.35, country: 'EG', key: 'eg.overtime', effectiveFrom: '2025-09-01', verified: false })
+  assert.deepEqual(min('EG', 'WEEKDAY'), { multiplier: 1.35, country: 'EG', key: 'eg.overtime', effectiveFrom: '2025-09-01', verified: true })
   assert.deepEqual([min('EG', 'WEEKEND').multiplier, min('EG', 'HOLIDAY'), min('EG', 'WEEKDAY', 6000, 8000, '2025-08-31')], [2, null, null])
   // مثال البطاقة: إجمالي 12,000 ← الساعة 50؛ النهار بالقانون 67.50 (1.35) والراحة 100 (2)
   assert.deepEqual([50 * min('EG', 'WEEKDAY').multiplier, 50 * min('EG', 'WEEKEND').multiplier], [67.5, 100])
@@ -24,7 +24,7 @@ test('OLU-01: مصر — نهار العمل 1.35 ويوم الراحة 2، وا
 
 test('OLU-02: السعودية — 1 + 50% × (الأساسي ÷ الإجمالي) لأي نوع يوم، مقرّب لفوق لمنزلتين', () => {
   // مثال البطاقة: أساسي 6,000 وبدلات 2,000 ← الساعة 33.33 + 12.50 = 45.83 = 1.375 × سعر ساعة الإجمالي ← 1.38
-  assert.deepEqual(min('SA', 'WEEKDAY'), { multiplier: 1.38, country: 'SA', key: 'sa.overtime', effectiveFrom: '2025-02-19', verified: false })
+  assert.deepEqual(min('SA', 'WEEKDAY'), { multiplier: 1.38, country: 'SA', key: 'sa.overtime', effectiveFrom: '2025-02-19', verified: true })
   assert.deepEqual(['WEEKEND', 'HOLIDAY'].map(kind => min('SA', kind).multiplier), [1.38, 1.38])
   assert.deepEqual([min('SA', 'WEEKDAY', 8000, 8000).multiplier, min('SA', 'WEEKDAY', 0, 8000).multiplier, min('SA', 'WEEKDAY', 4000, 8000).multiplier, min('SA', 'WEEKDAY', 9000, 8000).multiplier], [1.5, 1, 1.25, 1.5])
   // من غير إجمالي، أو قبل سريان الصف، أو دولة تانية: مفيش حد
@@ -53,4 +53,19 @@ test('OLU-04: مصدر الكود — ورا الإعداد المقفول في 
   const { configSeed } = require('../src/seed/requests-seed.data')
   assert.equal(configSeed.some(row => row.key === legal.OVERTIME_LEGAL_MINIMUM_KEY), false)
   assert.equal(fs.readFileSync(path.join(apiRoot, '..', 'src', 'app', 'settings', 'policies', 'page.tsx'), 'utf8').includes(legal.OVERTIME_LEGAL_MINIMUM_KEY), false)
+})
+
+test('OLU-05 (P4A-B01): صف «محتاج تحقق» في يوم الإضافي = مفيش حد قانوني — حتى لو صف أحدث منه «اتأكد»', () => {
+  const unverified = entries.map(entry => ({ ...entry, verified: false }))
+  assert.deepEqual([min('EG', 'WEEKDAY', 6000, 8000, '2026-10-08', unverified), min('SA', 'WEEKEND', 6000, 8000, '2026-10-08', unverified)], [null, null])
+  // صف أكتوبر اتأكد والقديم لأ: سبتمبر مالوش حد، وأكتوبر بحد صفه
+  const eg = entries.find(entry => entry.key === 'eg.overtime')
+  const dated = [...unverified, { ...eg, effectiveFrom: '2026-10-01', verified: true, values: { ...eg.values, rest_day_multiplier: '1.5' } }]
+  assert.deepEqual([min('EG', 'WEEKEND', 6000, 8000, '2026-09-30', dated), min('EG', 'WEEKEND', 6000, 8000, '2026-10-01', dated).multiplier], [null, 1.5])
+  const { verifiedStatutoryAt, statutoryAt } = require('../src/statutory/statutory')
+  assert.deepEqual([verifiedStatutoryAt(dated, 'EG', 'eg.overtime', '2026-09-30'), statutoryAt(dated, 'EG', 'eg.overtime', '2026-09-30').verified, verifiedStatutoryAt(dated, 'EG', 'eg.overtime', '2026-10-05').effectiveFrom],
+    [null, false, '2026-10-01'])
+  for (const file of ['attendance/overtime-legal-minimum.ts', 'cases/penalty-fine-cap.ts', 'requests/resignation-legal-terms.ts', 'payroll/payroll-statutory-run.ts']) {
+    assert.doesNotMatch(fs.readFileSync(path.join(apiRoot, 'src', file), 'utf8'), /[^d]statutoryAt\(/, file + ': الحساب مابيقراش صف من غير حكم «اتأكد»')
+  }
 })

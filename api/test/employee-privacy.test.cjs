@@ -60,7 +60,10 @@ test('EPU-04: مصدر الكود — الإعداد مبذور مقفول، و�
   assert.match(read('employees/employee-export.service.ts'), /if \(canSeeFullIdentity\(user, row\.id\)\) continue\n\s+row\.nationalId = maskIdentityPartial\(row\.nationalId\)\n\s+row\.passportNo = maskIdentityPartial\(row\.passportNo\)/)
   assert.match(controller, /@Perm\('employees\.edit'\)\n  @Get\(':id\/data-export'\)/)
   const exporter = read('employees/employee-data-export.ts')
-  assert.match(exporter, /const employee = await this\.employees\.findOne\(employeeId, branchScopeOf\(user\)\)/, 'نفس نطاق ملف الموظف')
+  // P4A-B05: حكم النطاق على صف الموظف المقفول، وكل القراءات بمدير نفس المعاملة
+  assert.match(exporter, /return this\.ds\.transaction\(async em => \{/)
+  assert.match(exporter, /FROM \[employees\] WITH \(UPDLOCK, ROWLOCK\) WHERE \[id\] = @0', \[employeeId\]\)\n\s+if \(!locked \|\| !inBranchScope\(scope, locked\.branchId == null \? null : Number\(locked\.branchId\)\)\) throw new NotFoundException\(EMPLOYEE_NOT_FOUND\)/, 'نفس نطاق ملف الموظف، على الصف المقفول')
+  assert.doesNotMatch(exporter, /this\.ds\.manager|EmployeesService/, 'مفيش قراءة برّه معاملة التصدير')
   assert.match(exporter, /action: 'EMPLOYEE_DATA_EXPORT'/)
   assert.doesNotMatch(exporter, /UPDATE |INSERT |DELETE |\.save\(|\.update\(/, 'قراءة بس')
   const { EMPLOYEE_DATA_SECTIONS } = require('../src/employees/employee-data-export')
@@ -72,7 +75,10 @@ test('EPU-04: مصدر الكود — الإعداد مبذور مقفول، و�
   assert.deepEqual(EMPLOYEE_DATA_SECTIONS.filter(section => section.access === 'penalties').map(section => section.key), ['penalties'])
   assert.match(exporter, /if \(section\.access === 'penalties' && !userHasPerm\(user, 'cases\.penalties'\)\)/)
   assert.match(exporter, /if \(section\.access === 'finance' && !canSeeEmployeesFinance\(user\)\)/)
-  assert.match(exporter, /NOT EXISTS \(SELECT 1 FROM dbo\.\[request_types\] t WHERE t\.\[code\] = r\.\[typeCode\] AND t\.\[isConfidential\] = 1\)/)
+  // P4A-B04: السرّية بتعريف الطلب الفعلي ثم نوعه، وتأجيل القسط على سرّية السلفة — وأي سجل اتعمل من طلب سري برّه
+  assert.match(exporter, /t\.\[code\] = r\.\[definitionCode\] OR t\.\[code\] = r\.\[typeCode\] OR \(t\.\[code\] = N'LOAN' AND r\.\[typeCode\] = N'\$\{LOAN_DEFERRAL_TYPE\}'\)/)
+  assert.match(exporter, /r\.\[requesterId\] = @0 AND NOT \$\{CONFIDENTIAL_REQUEST_SQL\} ORDER BY r\.\[id\]/)
+  assert.match(exporter, /AND NOT EXISTS \(SELECT 1 FROM dbo\.\[requests\] r WHERE r\.\[id\] = s\.\[requestId\] AND \$\{CONFIDENTIAL_REQUEST_SQL\}\)/)
   for (const forbidden of ['users', 'user_sessions', 'login_events', 'hr_cases', 'hr_case_parties', 'review_responses', 'audit_log']) assert.equal(tables.includes(forbidden), false, forbidden)
   for (const wanted of ['employee_documents', 'leaves', 'payroll_items', 'loans', 'deduction_requests', 'requests', 'employee_suspensions', 'dependents']) assert.ok(tables.includes(wanted), wanted)
 })

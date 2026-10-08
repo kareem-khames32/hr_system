@@ -1,4 +1,4 @@
-import { statutoryAt, statutoryNumber, type StatutoryEntry } from '../statutory/statutory'
+import { statutoryNumber, verifiedStatutoryAt, type StatutoryEntry } from '../statutory/statutory'
 
 // B4.5 (ب): الحد القانوني لمعامل الإضافي من حزمة الدولة (C-EG-06، C-SA-06) — حساب نقي من غير قاعدة بيانات.
 // معاملات الشركة (overtime.multiplier_*) سياسة الشركة وبتفضل زي ما هي؛ والإعداد ده لما يتفتح بيخلّي تسعير الإضافي الجديد ياخد الأعلى من
@@ -24,17 +24,17 @@ export interface LegalOvertimeMinimum {
 /** لفوق لمنزلتين: الحد القانوني مايتقربش لتحت */
 const ceil2 = (value: number) => Math.ceil(value * 100 - 1e-9) / 100
 
-/** الحد القانوني لمعامل الإضافي يوم date، أو null لو الدولة أو نوع اليوم مالوش حد في الحزمة */
+/** الحد القانوني لمعامل الإضافي يوم date، أو null لو الدولة أو نوع اليوم مالوش حد في الحزمة — أو صف اليوم ده «محتاج تحقق» (P4A-B01) */
 export function legalOvertimeMinimum(input: { country: string | null | undefined; dayKind: LegalOvertimeDayKind; basicSalary: number; grossSalary: number },
   entries: readonly StatutoryEntry[], date: string): LegalOvertimeMinimum | null {
   if (input.country === 'EG') {
-    const row = statutoryAt(entries, 'EG', EG_OVERTIME_KEY, date)
+    const row = verifiedStatutoryAt(entries, 'EG', EG_OVERTIME_KEY, date)
     const premium = statutoryNumber(row, 'day_premium_pct'), rest = statutoryNumber(row, 'rest_day_multiplier')
     const multiplier = input.dayKind === 'WEEKDAY' ? (premium === null ? null : 1 + premium / 100) : input.dayKind === 'WEEKEND' ? rest : null
     return row && multiplier !== null && multiplier > 0 ? { multiplier: ceil2(multiplier), country: 'EG', key: EG_OVERTIME_KEY, effectiveFrom: row.effectiveFrom, verified: row.verified } : null
   }
   if (input.country === 'SA') {
-    const row = statutoryAt(entries, 'SA', SA_OVERTIME_KEY, date)
+    const row = verifiedStatutoryAt(entries, 'SA', SA_OVERTIME_KEY, date)
     const premium = statutoryNumber(row, 'premium_pct_of_basic')
     if (!row || premium === null || !(input.grossSalary > 0) || !(input.basicSalary >= 0)) return null
     return { multiplier: ceil2(1 + premium / 100 * Math.min(1, input.basicSalary / input.grossSalary)), country: 'SA', key: SA_OVERTIME_KEY, effectiveFrom: row.effectiveFrom, verified: row.verified }

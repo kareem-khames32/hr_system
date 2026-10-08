@@ -3,7 +3,7 @@ import { Branch } from '../org/entities/branch.entity'
 import { dependentsReady } from '../dependents/dependent-rules'
 import { branchCountryOf } from '../org/branch-currency'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
-import { statutoryAt, statutoryNumber } from '../statutory/statutory'
+import { statutoryNumber, verifiedStatutoryAt } from '../statutory/statutory'
 import { readStatutoryEntries } from '../statutory/statutory.service'
 import { EG_TAX_COUNTRY, egNetIncomeOfLines, egPeriodTax, egTaxDaysOf, egTaxTableAt, type EgTaxTable } from './eg-salary-tax'
 import { loadPayrollLineFacts, projectPayrollItemLines, type PayrollLineItem } from './payroll-item-lines'
@@ -55,11 +55,13 @@ export async function readPayrollStatutoryContext(em: EntityManager, run: { peri
   if (!taxOn && !martyrsOn && !healthOn) return null
   const entries = await readStatutoryEntries(em), endDate = String(run.endDate).slice(0, 10)
   const startPeriod = values.get(EG_TAX_START_PERIOD_KEY) ?? ''
-  const table = taxOn && PERIOD.test(startPeriod) && run.period >= startPeriod ? egTaxTableAt(entries, endDate) : null
-  const fund = martyrsOn && (run.runType ?? 'REGULAR') === 'REGULAR' ? statutoryAt(entries, EG_TAX_COUNTRY, EG_MARTYRS_FUND_KEY, endDate) : null
+  // P4A-B01: الصف الساري في آخر يوم في المسير لازم «اتأكد» — صف قديم «محتاج تحقق» مابيتحسبش بيه حتى لو الحساب مفعّل بصف أحدث
+  const dated = taxOn && PERIOD.test(startPeriod) && run.period >= startPeriod ? egTaxTableAt(entries, endDate) : null
+  const table = dated && dated.verified ? dated : null
+  const fund = martyrsOn && (run.runType ?? 'REGULAR') === 'REGULAR' ? verifiedStatutoryAt(entries, EG_TAX_COUNTRY, EG_MARTYRS_FUND_KEY, endDate) : null
   const pct = statutoryNumber(fund, 'employee_pct')
   const regular = (run.runType ?? 'REGULAR') === 'REGULAR'
-  const healthRow = healthOn && regular ? statutoryAt(entries, EG_TAX_COUNTRY, EG_HEALTH_KEY, endDate) : null
+  const healthRow = healthOn && regular ? verifiedStatutoryAt(entries, EG_TAX_COUNTRY, EG_HEALTH_KEY, endDate) : null
   const healthPct = { employee: statutoryNumber(healthRow, 'employee_pct'), employer: statutoryNumber(healthRow, 'employer_pct'), spouse: statutoryNumber(healthRow, 'spouse_pct'), dependent: statutoryNumber(healthRow, 'dependent_pct') }
   const healthBranches = healthRow && healthPct.employee !== null ? parseStatutoryBranchIds(values.get(EG_HEALTH_BRANCHES_KEY)) : []
   if (!table && !(fund && pct) && !healthBranches.length) return null
@@ -78,20 +80,25 @@ export async function readPayrollStatutoryContext(em: EntityManager, run: { peri
     taxable, egyptBranchIds }
 }
 
-export interface EgTaxYearToDate { netIncome: number; days: number; tax: number; periodCounted: boolean }
+export interface EgTaxYearToDate {
+  netIncome: number; days: number; tax: number; periodCounted: boolean
+  /** P4A-B02: أرقام بنود المسيرات اللي التراكمي اتجمع منها — بتتثبت في لقطة البند والاعتماد بيراجعها */
+  sourceItemIds: number[]
+}
 
 /**
  * اللي اتسجّل للموظف في السنة الضريبية (سنة فترة المسير) من فترة البداية لحد الفترة دي، من بنود المسيرات المحسوبة والمعتمدة والمصروفة
  * غير المسير ده، ومن غير البنود اللي اتعكس صرفها: صافي الدخل، والأيام، والضريبة. periodCounted = الفترة دي نفسها ليها بند تاني (مسير
  * تكميلي): أيامها اتحسبت مرة فماتتحسبش تاني.
+ * finalOnly (P4A-B02): المعتمد والمصروف بس — ده اللي الاعتماد بيقارن بيه المصادر المثبتة (المحسوب لسه ممكن يتلغى أو يتعاد حسابه).
  */
-export async function readEgTaxYearToDate(em: EntityManager, employeeId: number, run: { id?: number | null; period: string }, startPeriod: string): Promise<EgTaxYearToDate> {
+export async function readEgTaxYearToDate(em: EntityManager, employeeId: number, run: { id?: number | null; period: string }, startPeriod: string, finalOnly = false): Promise<EgTaxYearToDate> {
   const from = [`${run.period.slice(0, 4)}-01`, startPeriod].sort()[1]
-  const rows: Array<{ period: string; netIncome: string | null; days: string | null; tax: string | null }> = await em.query(
-    `SELECT r.[period], JSON_VALUE(i.[breakdown], '$.statutory.egTax.netIncome') AS [netIncome], JSON_VALUE(i.[breakdown], '$.statutory.egTax.days') AS [days],
+  const rows: Array<{ itemId: number; period: string; netIncome: string | null; days: string | null; tax: string | null }> = await em.query(
+    `SELECT i.[id] AS [itemId], r.[period], JSON_VALUE(i.[breakdown], '$.statutory.egTax.netIncome') AS [netIncome], JSON_VALUE(i.[breakdown], '$.statutory.egTax.days') AS [days],
             JSON_VALUE(i.[breakdown], '$.statutory.egTax.tax') AS [tax]
      FROM [payroll_items] i INNER JOIN [payroll_runs] r ON r.[id] = i.[runId]
-     WHERE i.[employeeId] = @0 AND r.[id] <> @1 AND r.[status] IN (N'CALCULATED', N'APPROVED', N'PAID') AND r.[period] >= @2 AND r.[period] <= @3
+     WHERE i.[employeeId] = @0 AND r.[id] <> @1 AND r.[status] IN (${finalOnly ? '' : `N'CALCULATED', `}N'APPROVED', N'PAID') AND r.[period] >= @2 AND r.[period] <= @3
        AND ISJSON(i.[breakdown]) = 1 AND JSON_VALUE(i.[breakdown], '$.statutory.egTax.tax') IS NOT NULL
        AND NOT EXISTS (SELECT 1 FROM [payroll_run_reversal_lines] l WHERE l.[originalItemId] = i.[id] AND l.[status] = N'POSTED')`,
     [employeeId, run.id ?? 0, from, run.period])
@@ -102,7 +109,53 @@ export async function readEgTaxYearToDate(em: EntityManager, employeeId: number,
     days: rows.reduce((sum, row) => sum + Math.round(number(row.days)), 0),
     tax: rows.reduce((sum, row) => sum + cents(number(row.tax)), 0) / 100,
     periodCounted: rows.some((row) => row.period === run.period),
+    sourceItemIds: rows.map((row) => Number(row.itemId)).sort((a, b) => a - b),
   }
+}
+
+export const EG_TAX_SOURCES_CHANGED = 'الضريبة التراكمية في المسير ده محسوبة على مسيرات سابقة اتغيّرت أو لسه مااتعتمدتش — اعتمد المسيرات السابقة ثم أعد حساب المسير ده'
+export const EG_TAX_HAS_DEPENDENTS = 'فيه مسير معتمد ضريبته التراكمية محسوبة على المسير ده — أعد فتح المسير اللاحق الأول'
+const egTaxOf = (breakdown: string | null | undefined): Record<string, unknown> | null => {
+  try {
+    const parsed = breakdown ? JSON.parse(breakdown) as { statutory?: { egTax?: unknown } } : null
+    const tax = parsed?.statutory?.egTax
+    return tax && typeof tax === 'object' ? tax as Record<string, unknown> : null
+  } catch { return null }
+}
+const idsOf = (value: unknown): number[] | null => (Array.isArray(value) && value.every((id) => Number.isSafeInteger(id)) ? [...value as number[]].sort((a, b) => a - b) : null)
+
+/**
+ * P4A-B02 — قبل الاعتماد (بعد قفل موظفي المسير): كل بند عليه ضريبة، مصادر تراكميّه المثبتة لازم تبقى هي بنود المسيرات **المعتمدة والمصروفة**
+ * (غير المعكوسة) للموظف في نفس المدة دلوقتي بالظبط. مصدر لسه «محسوب»، أو اتلغى، أو اتعاد حسابه، أو اتعكس، أو مسير اتعتمد بعد الحساب ومش
+ * محسوب في التراكمي = الاعتماد بيرفض لحد ما المسير يتعاد حسابه. بيرجّع رسالة الرفض أو null. مسير مافيهوش ضريبة = ولا قراءة.
+ */
+export async function egTaxSourcesIssue(em: EntityManager, run: { id: number; period: string }, items: Array<{ employeeId: number; breakdown?: string | null }>): Promise<string | null> {
+  for (const item of items) {
+    const tax = egTaxOf(item.breakdown)
+    if (!tax) continue
+    const stored = idsOf(tax.sourceItemIds), startPeriod = typeof tax.startPeriod === 'string' ? tax.startPeriod : ''
+    if (!stored || !PERIOD.test(startPeriod)) return EG_TAX_SOURCES_CHANGED
+    const current = (await readEgTaxYearToDate(em, item.employeeId, run, startPeriod, true)).sourceItemIds
+    if (stored.length !== current.length || stored.some((id, index) => id !== current[index])) return EG_TAX_SOURCES_CHANGED
+  }
+  return null
+}
+
+/**
+ * P4A-B02 — قبل إعادة فتح مسير معتمد (بعد قفل موظفيه): لو بند من بنوده مصدر مثبت لتراكمي بند في مسير معتمد أو مصروف تاني (غير معكوس)،
+ * إعادة الفتح بترفض — وإلا المسير ده يتلغى أو يتعاد حسابه والمعتمد اللاحق يفضل شايل ضريبة محسوبة عليه. مسير مافيهوش ضريبة = ولا قراءة.
+ */
+export async function egTaxDependentsIssue(em: EntityManager, run: { id: number; period: string }, items: Array<{ id: number; breakdown?: string | null }>): Promise<string | null> {
+  const mine = new Set(items.filter((item) => egTaxOf(item.breakdown)).map((item) => Number(item.id)))
+  if (!mine.size) return null
+  const rows: Array<{ breakdown: string | null }> = await em.query(
+    `SELECT d.[breakdown] FROM [payroll_items] d INNER JOIN [payroll_runs] dr ON dr.[id] = d.[runId]
+     WHERE dr.[id] <> @0 AND dr.[status] IN (N'APPROVED', N'PAID') AND dr.[period] >= @1 AND dr.[period] <= @2
+       AND d.[employeeId] IN (SELECT [employeeId] FROM [payroll_items] WHERE [runId] = @0)
+       AND ISJSON(d.[breakdown]) = 1 AND JSON_VALUE(d.[breakdown], '$.statutory.egTax.tax') IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM [payroll_run_reversal_lines] l WHERE l.[originalItemId] = d.[id] AND l.[status] = N'POSTED')`,
+    [run.id, run.period, `${run.period.slice(0, 4)}-12`])
+  return rows.some((row) => (idsOf(egTaxOf(row.breakdown)?.sourceItemIds) ?? []).some((id) => mine.has(id))) ? EG_TAX_HAS_DEPENDENTS : null
 }
 
 const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100
@@ -134,7 +187,9 @@ export async function applyPayrollStatutory(em: EntityManager, context: PayrollS
     tax = result.tax
     egTax = { netIncome: round2(netIncome), days: result.days, ytdNetIncome: ytd.netIncome, ytdDays: ytd.days, ytdTax: ytd.tax, annualized: result.annualized,
       exemption: context.tax.table.exemption, taxable: result.taxable, annualTax: result.annualTax, cumulativeTax: result.cumulativeTax, tax,
-      tableEffectiveFrom: context.tax.table.effectiveFrom, tableVerified: context.tax.table.verified, startPeriod: context.tax.startPeriod }
+      tableEffectiveFrom: context.tax.table.effectiveFrom, tableVerified: context.tax.table.verified, startPeriod: context.tax.startPeriod,
+      // P4A-B02: مصادر التراكمي مثبتة — الاعتماد بيراجعها
+      sourceItemIds: ytd.sourceItemIds }
   }
   let fund = 0, martyrsFund: Record<string, unknown> | undefined
   if (context.martyrs) {

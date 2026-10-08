@@ -1,4 +1,4 @@
-import { statutoryAt, statutoryNumber, type StatutoryEntry } from '../statutory/statutory'
+import { statutoryNumber, verifiedStatutoryAt, type StatutoryEntry } from '../statutory/statutory'
 
 // B4.5 (د): الحد القانوني لغرامات الشهر (أيام الخصم الجزائي) من حزمة الدولة (C-SA-07) — حساب نقي من غير قاعدة بيانات.
 // ورا إعداد مقفول بيتفتح من مسار الحسابات القانونية بس (صف الحزمة لازم «اتأكد»). مقفول = لائحة الجزاءات زي ما هي بالحرف.
@@ -9,10 +9,10 @@ export const SA_DEDUCTION_CAPS_KEY = 'sa.deduction_caps'
 
 export interface LegalFineCap { maxDays: number; country: 'SA'; key: string; effectiveFrom: string }
 
-/** حد أيام الغرامة في الشهر لدولة فرع الموظف بتاريخ الواقعة، أو null لو الدولة مالهاش حد في الحزمة */
+/** حد أيام الغرامة في الشهر لدولة فرع الموظف بتاريخ الواقعة، أو null لو الدولة مالهاش حد في الحزمة — أو صف التاريخ ده «محتاج تحقق» (P4A-B01) */
 export function legalFineCap(entries: readonly StatutoryEntry[], country: string | null | undefined, date: string): LegalFineCap | null {
   if (String(country ?? '').trim().toUpperCase() !== 'SA') return null
-  const row = statutoryAt(entries, 'SA', SA_DEDUCTION_CAPS_KEY, date)
+  const row = verifiedStatutoryAt(entries, 'SA', SA_DEDUCTION_CAPS_KEY, date)
   const maxDays = statutoryNumber(row, 'fine_max_days_per_month')
   return row && maxDays !== null && maxDays > 0 ? { maxDays, country: 'SA', key: SA_DEDUCTION_CAPS_KEY, effectiveFrom: row.effectiveFrom } : null
 }

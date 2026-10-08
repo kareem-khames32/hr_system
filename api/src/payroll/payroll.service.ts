@@ -67,7 +67,7 @@ import { describePayrollObligationLines } from './payroll-obligation-trace'
 import { describePayrollItemsLines, payrollLineColumns } from './payroll-item-lines'
 import { readSalaryItemOrder } from './salary-items'
 import { payrollItemStatutoryCents } from './payroll-statutory'
-import { applyPayrollStatutory, readPayrollStatutoryContext } from './payroll-statutory-run'
+import { applyPayrollStatutory, egTaxDependentsIssue, egTaxSourcesIssue, readPayrollStatutoryContext } from './payroll-statutory-run'
 import { approvedPayrollOvertimeClaims, assertUniqueOvertimeDays, closedOvertimePeriod, legacyExemptOvertimeSource, overtimeFinancialValue, overtimeTraceMatchesStoredTotals, projectOvertimeFinancialValue } from './overtime-financial'
 import { findPayrollPeriodContinuity, payrollPeriodBounds, PayrollPeriodError, payrollPolicyPeriodBounds, shiftPayrollPeriod } from './payroll-period'
 import { PAYROLL_SALARY_EVIDENCE_MODE_KEY, parsePayrollSalaryEvidenceMode, samePayrollRunSalarySource, selectPayrollRunSalary } from './payroll-run-salary'
@@ -1599,6 +1599,9 @@ export class PayrollService {
       await this.assertAttendanceRuleSnapshot(em, run, items)
       await this.assertSalarySourceSnapshot(em, run, items)
       await this.assertSettlementBoundary(em, items, userHasPerm(user, 'payroll.view'))
+      // P4A-B02: الضريبة التراكمية لازم تبقى محسوبة على مسيرات معتمدة لسه زي ما هي — تحت قفل موظفي المسير (إعادة فتح مصدرها بتاخد نفس القفل)
+      const taxSources = await egTaxSourcesIssue(em, run, items)
+      if (taxSources) throw new ConflictException({ code: 'PAYRUN-TAX-SOURCES-CHANGED', message: taxSources })
       // الخطوة 26 (EX-01 قاعدة 4): لا إعفاء بانتظار الاعتماد، والحساب طبّق الإعفاءات النشطة الحالية نفسها، وحد المرفق على المبلغ المُسقط فعلًا
       await assertRunExemptionsForApproval(em, run, items, userHasPerm(user, 'payroll.view'))
       // DD-11: الرصيد السالب (المحمي يتجاوز الاستحقاق) يمنع القبول المالي — على صافي المؤثرات (من غير بدل ضغط العمل):
@@ -1961,6 +1964,11 @@ export class PayrollService {
       const items = await em.getRepository(PayrollItem).find({ where: { runId } })
       const members = await em.getRepository(PayrollRunMember).find({ where: { runId } })
       await lockPayrollEmployees(em, [...members, ...items].map(row => row.employeeId))
+      // P4A-B02: مسير معتمد ضريبة مسير معتمد تاني محسوبة عليه مايتفتحش — تحت قفل الموظفين (اعتماد اللاحق بياخد نفس القفل)
+      if (status === 'CALCULATED') {
+        const dependents = await egTaxDependentsIssue(em, run, items)
+        if (dependents) throw new ConflictException({ code: 'PAYRUN-TAX-HAS-DEPENDENTS', message: dependents })
+      }
       const before = { status: run.status, approvedBy: run.approvedBy, approvedAt: run.approvedAt }
       await releasePayrollClaims(em, runId)
       await releasePayrollInstallments(em, runId, user.sub, reason)

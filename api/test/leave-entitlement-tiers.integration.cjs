@@ -224,3 +224,33 @@ test('LT-04: أنواع إجازات حزمة الدولة لفرع — غير �
   // الأنواع العامة الموجودة ماتلمستش
   assert.deepEqual([(await typeOf('MATERNITY')).maxDays, (await typeOf('MATERNITY')).isActive, (await typeOf('HAJJ')).oncePerService], [90, true, true])
 })
+
+test('LT-05 (P4A-B03): صف السنة الناقص والمُرحّل منه بشريحة دولة فرع الموظف **بعد** قفل صفه — نقل الفرع اللي اتثبّت قبل القفل هو اللي بيتحسب', async () => {
+  ok(await patchType(annual.id, { entitlementTiers: [{ country: 'EG', minServiceYears: null, minAge: null, days: 30 }, { country: 'SA', minServiceYears: null, minAge: null, days: 15 }],
+    carryOverEnabled: true, carryOverMaxDays: 60 }), 200)
+  const svc = app.get(require('../src/requests/leave-balances.service').LeaveBalancesService), original = svc.lockEmployee, target = E.egMid
+  await repo('LeaveBalance').delete({ employeeId: target.id, balanceType: 'annual', period: '2025' })
+  await repo('LeaveBalance').delete({ employeeId: target.id, balanceType: 'annual', period: '2026' })
+  let reached, release, paused = false
+  const arrived = new Promise(resolve => { reached = resolve }), gate = new Promise(resolve => { release = resolve })
+  // الكاتب واقف قبل قفل صف الموظف — وحقائق الشرائح اتقرت بالجملة قبل كده (مصر)
+  svc.lockEmployee = async function (em, id, ...rest) { if (id === target.id && !paused) { paused = true; reached(); await gate } return original.call(this, em, id, ...rest) }
+  const pending = svc.ensureYearRows('2025')
+  try {
+    await Promise.race([arrived, pending.then(() => { throw new Error('year rows were created before the barrier') })])
+    await repo('Employee').update({ id: target.id }, { branchId: B.sa.id })
+    release(); await pending
+    svc.lockEmployee = original
+    const row = await repo('LeaveBalance').findOneByOrFail({ employeeId: target.id, balanceType: 'annual', period: '2025' })
+    assert.equal(Number(row.entitled), 15, 'شريحة السعودية (فرعه بعد القفل) مش 30 بتاعة مصر')
+    await svc.rollover('2025')
+    const next = await repo('LeaveBalance').findOneByOrFail({ employeeId: target.id, balanceType: 'annual', period: '2026' })
+    assert.deepEqual([Number(next.openingDays), Number(next.entitled)], [15, 15])
+    const service = fs.readFileSync(path.join(apiRoot, 'src', 'requests', 'leave-balances.service.ts'), 'utf8')
+    assert.equal((service.match(/await this\.settingsAfterLock\(em, /g) ?? []).length, 3, 'الصف الناقص والترحيل والتجديد: التلاتة بيعيدوا قراية حقائق الشريحة بعد القفل')
+  } finally {
+    release(); svc.lockEmployee = original; await pending.catch(() => {})
+    await repo('Employee').update({ id: target.id }, { branchId: B.eg.id })
+    await patchType(annual.id, { entitlementTiers: [] })
+  }
+})

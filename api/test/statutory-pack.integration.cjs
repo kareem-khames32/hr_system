@@ -271,3 +271,31 @@ test('SK-04: تفعيل التأمين الصحي الشامل — بفروعه 
   expectStatus(await put({ enabled: false }), 200)
   assert.equal((await health()).enabled, false)
 })
+
+test('SK-05 (P4A-B01): التفعيل مرفوض وصف قديم «محتاج تحقق» — حتى لو الصف الساري النهارده «اتأكد»؛ والحاسبة مابتقراش الصف القديم', async () => {
+  const calc = require('../src/statutory/statutory-calculators.service')
+  const legal = require('../src/attendance/overtime-legal-minimum')
+  const { readStatutoryEntries } = require('../src/statutory/statutory.service')
+  const put = body => request(users.admin, 'PUT', `${S}/calculators/OVERTIME_LEGAL_MINIMUM`, body)
+  const listed = async () => expectStatus(await request(users.admin, 'GET', `${S}/calculators`), 200).calculators.find(row => row.code === 'OVERTIME_LEGAL_MINIMUM')
+  const rowsOf = async key => keyOf(expectStatus(await request(users.admin, 'GET', S), 200), key).rows
+  const [egOld] = await rowsOf('eg.overtime'), [sa] = await rowsOf('sa.overtime')
+  // السعودية «اتأكد»، ومصر: صف جديد من أول أكتوبر «اتأكد» والقديم «محتاج تحقق» (سيناريو التقرير)
+  expectStatus(await request(users.admin, 'PATCH', `${S}/${sa.id}`, { verified: true }), 200)
+  expectStatus(await request(users.admin, 'POST', S, { country: 'EG', key: 'eg.overtime', effectiveFrom: '2026-10-01', verified: true, values: Object.fromEntries(Object.entries(egOld.values).map(([code, value]) => [code, String(value)])) }), 201)
+  const before = await listed()
+  assert.deepEqual([before.rows.filter(row => row.key === 'eg.overtime').map(row => [row.effectiveFrom, row.verified, row.current]), before.blockers],
+    [[[egOld.effectiveFrom, false, false], ['2026-10-01', true, true]], [calc.CALCULATOR_UNVERIFIED]], 'الصف القديم ظاهر وحاجز')
+  assert.deepEqual(answer(await put({ enabled: true })), [400, calc.CALCULATOR_UNVERIFIED])
+  assert.equal(Number((await ds.query(`SELECT COUNT(*) AS [n] FROM [requests_config] WHERE [key] = N'overtime.legal_minimum.enabled' AND [value] = N'true'`))[0].n), 0)
+  // الحاسبة نفسها: يوم في سبتمبر (على الصف القديم) مالوش حد، وأكتوبر بحد صفه
+  const min = async date => legal.legalOvertimeMinimum({ country: 'EG', dayKind: 'WEEKEND', basicSalary: 6000, grossSalary: 8000 }, await readStatutoryEntries(ds.manager), date)
+  assert.deepEqual([await min('2026-09-15'), (await min('2026-10-05')).effectiveFrom], [null, '2026-10-01'])
+  // الصف القديم اتراجع: بيتفعّل، وبعدها مايرجعش «محتاج تحقق»
+  expectStatus(await request(users.admin, 'PATCH', `${S}/${egOld.id}`, { verified: true }), 200)
+  assert.equal((await listed()).blockers.length, 0)
+  expectStatus(await put({ enabled: true }), 200)
+  assert.equal((await min('2026-09-15')).effectiveFrom, egOld.effectiveFrom)
+  assert.deepEqual(answer(await request(users.admin, 'PATCH', `${S}/${egOld.id}`, { verified: false })), [400, calc.CALCULATOR_ROW_IN_USE])
+  expectStatus(await put({ enabled: false }), 200)
+})

@@ -20,6 +20,15 @@ export function statutoryAt(entries: readonly StatutoryEntry[], country: string,
   return found
 }
 
+/**
+ * P4A-B01: للحسابات اللي ليها أثر (خصم، تسعير، رفض، مدة) — الصف الساري يوم date بشرط إنه «اتأكد». صف «محتاج تحقق» = مفيش صف:
+ * الحساب مايتطبقش على التاريخ ده (زي ما هو مقفول)، حتى لو صف أحدث منه اتأكد والحساب اتفعّل.
+ */
+export function verifiedStatutoryAt(entries: readonly StatutoryEntry[], country: string, key: string, date: string): StatutoryEntry | null {
+  const row = statutoryAt(entries, country, key, date)
+  return row && row.verified ? row : null
+}
+
 /** رقم من قيمة الصف، أو null لو مش موجود أو مش رقم موجب أو صفر */
 export function statutoryNumber(entry: StatutoryEntry | null, code: string): number | null {
   const raw = entry?.values[code]
