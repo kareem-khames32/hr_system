@@ -11,7 +11,7 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { JwtService } from '@nestjs/jwt'
 import { In, Repository } from 'typeorm'
 import * as bcrypt from 'bcryptjs'
-import { DirectoryAuthError } from './directory.types'
+import { DirectoryAuthError, type DirectoryUser } from './directory.types'
 import { DirectoryService } from './directory.service'
 import { DomainLoginService } from './domain-login.service'
 import { effectiveBranchScope } from './guards'
@@ -325,6 +325,23 @@ export class AuthService {
     const user = await this.domain.resolveUser(directoryUser)
     // صندوق البريد من AD الأول (322 موظف بريدهم عندنا @maharah.local) وإلا بريد الحساب
     return this.finishLogin(user, 'DOMAIN', directoryUser.mail ?? user.email, context, identifier, session)
+  }
+
+  /**
+   * B6.4: الدخول المؤسسي — الهوية أثبتها مزوّد المؤسسة واتحققت في SsoService (توقيع الـID token والمزوّد والتطبيق والـnonce والنطاق).
+   * من هنا نفس حساب الشركة بالظبط: نفس مطابقة الموظف والربط (resolveUser)، ونفس الخطوة التانية والجلسة (finishLogin). مفيش دور ولا صلاحية من المزوّد.
+   */
+  async ssoLogin(identity: DirectoryUser, context: LoginContext = {}, session: SessionMode = {}): Promise<LoginResult> {
+    const identifier = identity.userPrincipalName
+    let user: User
+    try {
+      user = await this.domain.resolveUser(identity)
+    } catch (error) {
+      await this.security.record({ identifier, method: 'SSO', outcome: 'SSO_REFUSED', context })
+      throw error
+    }
+    await this.security.record({ userId: user.id, identifier, method: 'SSO', outcome: 'SSO_IDENTITY', context })
+    return this.finishLogin(user, 'DOMAIN', identity.mail ?? user.email, context, identifier, session)
   }
 
   /**

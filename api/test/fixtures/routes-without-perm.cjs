@@ -18,6 +18,8 @@ const EXCEPTIONS = {
   'AuthController.logout': 'PUBLIC_OK', // POST /auth/logout — B2.17: بيمسح cookie الجلسة (حتى المنتهية)، ولما الطلب نفسه شايلها بس
   'AuthController.loginOptions': 'PUBLIC_OK', // GET /auth/login/options
   'AuthController.resend': 'PUBLIC_OK', // POST /auth/login/resend
+  'AuthController.ssoCallback': 'PUBLIC_OK', // POST /auth/login/sso/callback — B6.4: إكمال الدخول المؤسسي (المعاملة الموقّعة والـstate وتحقق الـID token)
+  'AuthController.ssoStart': 'PUBLIC_OK', // POST /auth/login/sso/start — B6.4: عنوان صفحة مزوّد الهوية (مقفول لو الـSSO مش مضبوط)
   'AuthController.verify': 'PUBLIC_OK', // POST /auth/login/verify
   'BrandingController.branding': 'PUBLIC_OK', // GET /branding
   'BrandingController.logo': 'PUBLIC_OK', // GET /branding/logo

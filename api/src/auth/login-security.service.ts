@@ -7,7 +7,8 @@ import {
 } from './login-security'
 
 export interface LoginContext { ip?: string | null; userAgent?: string | null }
-export type LoginMethod = 'PASSWORD' | 'DOMAIN' | 'CODE' | 'ADMIN'
+// B6.4: SSO = الدخول المؤسسي (OIDC) — الهوية من مزوّد المؤسسة
+export type LoginMethod = 'PASSWORD' | 'DOMAIN' | 'CODE' | 'ADMIN' | 'SSO'
 export interface LockState { failedLoginCount: number; lockedUntil: Date | null }
 
 // أرقام أخطاء SQL Server: عمود (207) أو جدول (208) مش موجود — الكود اتنشر قبل ترحيل 078

@@ -379,7 +379,12 @@ export const resendLoginCode = (challengeToken: string) =>
 
 // قبل أي مصادقة: هل زر «الدخول بحساب الشركة» يظهر؟ (بلا أي تفصيل عن خادم الدليل)
 export const fetchLoginOptions = () =>
-  apiFetch<{ domainLoginEnabled: boolean }>('/auth/login/options')
+  apiFetch<{ domainLoginEnabled: boolean; ssoEnabled?: boolean; ssoLabel?: string }>('/auth/login/options')
+
+// B6.4: الدخول المؤسسي — البداية بترجّع عنوان صفحة مزوّد الهوية، والإكمال بالكود والـstate الراجعين (نفس رد باقي مسارات الدخول)
+export const startSsoLogin = () => apiFetch<{ url: string }>('/auth/login/sso/start', { method: 'POST' })
+export const completeSsoLogin = (code: string, state: string, remember = false) =>
+  apiFetch<LoginOutcome>('/auth/login/sso/callback', { method: 'POST', body: JSON.stringify({ code, state, cookieSession: true, remember }) })
 
 // ===== هوية الشركة (عامة — صفحة الدخول بتعرضها قبل أي جلسة) =====
 // اسم المنتج ثابت، واسم الشركة وشعارها من «بيانات الشركة». null = الشركة لسه ماضبطتهوش (أو الشعار مش صالح)

@@ -22,9 +22,11 @@ import { AllowPendingPasswordChange, AllowPendingTotpSetup, CurrentUser, JwtAuth
 import { jwtLifetimeSeconds } from './jwt-secret'
 import { AllowPreboarding } from './preboarding'
 import { bearerTokenOf, sessionViaCookie } from './jwt.strategy'
-import { CSRF_HEADER, CSRF_MESSAGE, CSRF_TOKEN_INVALID, clearedSessionCookieHeader, csrfMatches, fromFrontendOrigin, sessionCookieHeader, sessionCookieOf,
+import { CSRF_HEADER, CSRF_MESSAGE, CSRF_TOKEN_INVALID, clearedSessionCookieHeader, csrfMatches, fromFrontendOrigin, readCookie, sessionCookieHeader, sessionCookieOf,
   sessionCookieOptions } from './session-cookie'
 import { UserSessionsService } from './user-sessions.service'
+import { SsoService } from './sso.service'
+import { SSO_TX_COOKIE, SSO_TX_SECONDS, ssoCookieHeader } from './sso-oidc'
 import { TotpService } from './totp.service'
 import { RequireModule } from '../modules-registry/module.guard'
 import { AllowDuringPolicyGate } from '../policies/policy-gate.decorator'
@@ -61,6 +63,19 @@ class DomainLoginDto extends SessionChoiceDto {
   @MinLength(1, { message: 'اكتب كلمة المرور' })
   @MaxLength(400)
   password: string
+}
+
+// B6.4: الكود والـstate الراجعين من مزوّد الهوية
+class SsoCallbackDto extends SessionChoiceDto {
+  @IsString({ message: 'محاولة الدخول المؤسسي ناقصة — ابدأ من شاشة الدخول تاني' })
+  @MinLength(1, { message: 'محاولة الدخول المؤسسي ناقصة — ابدأ من شاشة الدخول تاني' })
+  @MaxLength(4000)
+  code: string
+
+  @IsString({ message: 'محاولة الدخول المؤسسي ناقصة — ابدأ من شاشة الدخول تاني' })
+  @MinLength(1, { message: 'محاولة الدخول المؤسسي ناقصة — ابدأ من شاشة الدخول تاني' })
+  @MaxLength(500)
+  state: string
 }
 
 class VerifyCodeDto extends SessionChoiceDto {
@@ -115,7 +130,7 @@ class ChangePasswordDto {
   remember?: boolean
 }
 
-type CookieResponse = { setHeader(name: string, value: string): unknown }
+type CookieResponse = { setHeader(name: string, value: string | string[]): unknown }
 type SessionRequest = { headers: Record<string, unknown>; method?: string; ip?: string }
 
 @RequireModule('platform')
@@ -123,7 +138,7 @@ type SessionRequest = { headers: Record<string, unknown>; method?: string; ip?: 
 @Controller('auth')
 export class AuthController {
   constructor(private readonly auth: AuthService, private readonly config: ConfigService, private readonly sessions: UserSessionsService,
-    private readonly totp: TotpService) {}
+    private readonly totp: TotpService, private readonly sso: SsoService) {}
 
   /**
    * B2.17: تسليم الجلسة. جلسة cookie = التوكن في cookie httpOnly والرد من غير accessToken (سكربت الصفحة مايشوفوش)؛ غير كده، أو
@@ -147,7 +162,35 @@ export class AuthController {
   // ما تعرضه شاشة الدخول قبل أي مصادقة — هل زر «الدخول بحساب الشركة» يظهر. بلا أي تفصيل عن الخادم
   @Get('login/options')
   loginOptions() {
-    return this.auth.loginOptions()
+    // B6.4: + هل زر «الدخول بحساب المؤسسة» يظهر واسمه (من غير أي تفصيل عن المزوّد)
+    return { ...this.auth.loginOptions(), ...this.sso.options() }
+  }
+
+  // ===== B6.4: الدخول المؤسسي (OIDC) — البداية بترجّع عنوان صفحة المزوّد والمعاملة في cookie موقّعة، والإكمال بيبدّل الكود ويدخل =====
+  @Post('login/sso/start')
+  @HttpCode(200)
+  async ssoStart(@Headers('origin') origin: string | undefined, @Res({ passthrough: true }) res: CookieResponse) {
+    if (!fromFrontendOrigin(origin)) throw new ForbiddenException('الطلب مش من واجهة النظام')
+    const started = await this.sso.start()
+    res.setHeader('Set-Cookie', ssoCookieHeader(started.sealed, sessionCookieOptions().secure, SSO_TX_SECONDS))
+    return { url: started.url }
+  }
+
+  @Post('login/sso/callback')
+  async ssoCallback(@Body() dto: SsoCallbackDto, @Req() req: SessionRequest, @Ip() ip: string, @Res({ passthrough: true }) res: CookieResponse, @Headers('user-agent') userAgent?: string) {
+    if (!fromFrontendOrigin(req.headers.origin)) throw new ForbiddenException('الطلب مش من واجهة النظام')
+    // المعاملة لمحاولة واحدة: الـcookie بتتمسح مع أي رد (نجاح أو رفض)
+    const cleared = ssoCookieHeader('', sessionCookieOptions().secure, 0)
+    res.setHeader('Set-Cookie', cleared)
+    const identity = await this.sso.finish(dto.code, dto.state, readCookie(req.headers.cookie, SSO_TX_COOKIE))
+    const cookie = dto.cookieSession === true
+    const result = await this.auth.ssoLogin(identity, { ip, userAgent }, { cookie })
+    if (!cookie || typeof (result as { accessToken?: unknown }).accessToken !== 'string') return result
+    // جلسة cookie: نفس اللي deliver بيعمله، ومعاه مسح cookie المعاملة في نفس الرد
+    const { accessToken, ...rest } = result as typeof result & { accessToken: string }
+    const lifetime = jwtLifetimeSeconds(this.config.get<string>('JWT_EXPIRES_IN', '8h'))
+    res.setHeader('Set-Cookie', [sessionCookieHeader(accessToken, sessionCookieOptions(), dto.remember === true ? lifetime : null), cleared])
+    return rest
   }
 
   // «الدخول بحساب الشركة»: bind على Active Directory، وربط الموظف في لحظته (بلا إنشاء مسبق)

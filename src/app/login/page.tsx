@@ -24,6 +24,8 @@ import {
   verifyLoginCode,
   resendLoginCode,
   fetchLoginOptions,
+  startSsoLogin,
+  completeSsoLogin,
   isTwoFactorChallenge,
   saveSession,
   ApiError,
@@ -73,6 +75,8 @@ export default function LoginPage() {
   const brand = useBranding()
   const [mode, setMode] = useState<Mode>('password')
   const [domainLoginEnabled, setDomainLoginEnabled] = useState(false)
+  // B6.4: «الدخول بحساب المؤسسة» (OIDC) — الزرار بيظهر لو الخادم مضبوط، واسمه من الخادم
+  const [sso, setSso] = useState<{ label: string } | null>(null)
   const [email, setEmail] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -104,7 +108,10 @@ export default function LoginPage() {
   // المجال مضبوط على الخادم؟ فشل النداء مايمنعش الدخول العادي
   useEffect(() => {
     fetchLoginOptions()
-      .then((options) => setDomainLoginEnabled(!!options.domainLoginEnabled))
+      .then((options) => {
+        setDomainLoginEnabled(!!options.domainLoginEnabled)
+        setSso(options.ssoEnabled ? { label: options.ssoLabel || 'الدخول بحساب المؤسسة' } : null)
+      })
       .catch(() => setDomainLoginEnabled(false))
   }, [])
 
@@ -157,6 +164,49 @@ export default function LoginPage() {
       setIsLoading(false)
     }
   }
+
+  // B6.4: بداية الدخول المؤسسي — الخادم بيرجّع عنوان صفحة المزوّد وبنروح له
+  const handleSso = async () => {
+    setIsLoading(true)
+    setError(null)
+    setNotice(null)
+    try {
+      window.location.href = (await startSsoLogin()).url
+    } catch (err) {
+      setError(asMessage(err, 'تعذّر بدء الدخول بحساب المؤسسة'))
+      setIsLoading(false)
+    }
+  }
+
+  // B6.4: الرجوع من المزوّد (code و state في العنوان): بيتشالوا من العنوان فورًا، والخادم بيكمّل — وبعدها نفس مسار أي دخول (جلسة أو خطوة تانية)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const returnedCode = params.get('code'), returnedState = params.get('state'), refused = params.get('error')
+    if (!returnedCode && !refused) return
+    window.history.replaceState(null, '', window.location.pathname)
+    if (refused || !returnedCode || !returnedState) {
+      setError('الدخول بحساب المؤسسة ماكملش من عند مزوّد الهوية — حاول تاني')
+      return
+    }
+    setIsLoading(true)
+    completeSsoLogin(returnedCode, returnedState, false)
+      .then((outcome) => {
+        if (isTwoFactorChallenge(outcome)) {
+          setChallenge(outcome)
+          setCooldown(outcome.resendAfterSeconds)
+          setCode('')
+          setIsLoading(false)
+          return
+        }
+        enterSystem(outcome)
+      })
+      .catch((err) => {
+        setError(asMessage(err, 'تعذّر إكمال الدخول بحساب المؤسسة'))
+        setIsLoading(false)
+      })
+    // مرة واحدة عند فتح الصفحة
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -535,6 +585,15 @@ export default function LoginPage() {
                       )}
                     </button>
                   </form>
+
+                  {/* B6.4: الدخول المؤسسي (OIDC) — الزرار بيظهر لو الخادم مضبوط؛ الضغط بيودّي لصفحة مزوّد الهوية */}
+                  {sso && (
+                    <button type="button" disabled={isLoading} onClick={handleSso} data-sso-login
+                      className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl border border-gray-200 bg-white px-6 py-3.5 font-semibold text-gray-700 transition hover:bg-gray-50 disabled:opacity-60">
+                      <Network size={18} />
+                      {sso.label}
+                    </button>
+                  )}
                 </>
               )}
             </div>

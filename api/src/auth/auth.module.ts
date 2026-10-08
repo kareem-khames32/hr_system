@@ -9,6 +9,7 @@ import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { AuthController } from './auth.controller'
 import { AuthService } from './auth.service'
 import { DirectoryService } from './directory.service'
+import { SsoService } from './sso.service'
 import { DomainLoginService } from './domain-login.service'
 import { DomainSyncService } from './domain-sync.service'
 import { EmployeeLoginAccountController } from './employee-login-account.controller'
@@ -64,6 +65,8 @@ import { jwtLifetimeSeconds } from './jwt-secret'
   // DirectoryService و MailService نسختين واحدتين: الاختبارات بتستبدل authenticate/send عليهما
   // بـ app.get(...) فمفيش اتصال LDAP ولا SMTP حقيقي في أي اختبار
   providers: [AuthService, JwtStrategy, DirectoryService, MailService, TwoFactorService, DomainLoginService, LoginSecurityService, UserSessionsService, TotpService,
+    // B6.4: الدخول المؤسسي (OIDC) — بيكلّم المزوّد ويرجّع هوية؛ المطابقة والجلسة في AuthService
+    SsoService,
     // المزامنة الجماعية: نفس DomainLoginService للإنشاء والربط، فمفيش روتين إنشاء تاني
     DomainSyncService],
   // DomainSyncService مصدَّرة عشان إضافة الموظف (EmployeesModule) تزوّده بحساب دخول في لحظته

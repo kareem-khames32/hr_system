@@ -88,7 +88,9 @@ test('SK-02: the server reads Bearer first with one reader for both the token an
     'this.auth.verifyTwoFactor(dto.challengeToken, dto.code, { ip, userAgent }, { cookie })', 'this.auth.changePassword(user.sub, dto.currentPassword, dto.newPassword, { cookie }, context)']) {
     assert.ok(controller.includes(`this.deliver(res, await ${call}, cookie, dto.remember === true)`), call)
   }
-  assert.equal(controller.match(/const cookie = dto\.cookieSession === true/g).length, 3, 'بطلب صريح ومنطقي من العميل')
+  // B6.4: +1 (إكمال الدخول المؤسسي — نفس الاختيار الصريح، وبيسلّم cookie الجلسة مع مسح cookie المعاملة في نفس الرد)
+  assert.equal(controller.match(/const cookie = dto\.cookieSession === true/g).length, 4, 'بطلب صريح ومنطقي من العميل')
+  assert.match(controller, /res\.setHeader\('Set-Cookie', \[sessionCookieHeader\(accessToken, sessionCookieOptions\(\), dto\.remember === true \? lifetime : null\), cleared\]\)/)
   assert.match(controller, /const cookie = sessionViaCookie\(req\)\s+const context = [^\n]+\s+return this\.deliver\(res, await this\.auth\.changePassword/, 'تغيير كلمة المرور بشكل الجلسة اللي الطلب جه بيها')
   assert.match(controller, /@IsBoolean\(\{ message: 'cookieSession يقبل true أو false بس' \}\)\s+cookieSession\?: boolean/)
   // الخروج: من غير حارس، وبيمسح لما الطلب شايل الـcookie بس
