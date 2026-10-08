@@ -229,7 +229,7 @@ export const MODULES = {
     nameAr: 'المصروفات', group: 'money', dependsOn: ['requests'], softUses: ['payroll'],
     description: 'طلبات صرف المصروفات وبدل السفر (الشكل البسيط الموجود)',
     permissions: ['expenses.manage'],
-    requestHandlers: ['expense_register', 'expense_report'],
+    requestHandlers: ['expense_register', 'expense_report', 'travel_advance'],
     features: {
       // B5.3 (أ): تقرير ببنود وإيصالات وحدود للفئات، بيتقدّم كطلب — مقفولة لحد ما الشركة تقرر
       'expenses.reports': {

@@ -77,6 +77,7 @@ import { TRAINING_REQUEST_HANDLER, executeTrainingRequest } from '../training/tr
 import { CASE_REQUEST_HANDLER, executeCaseRequest } from '../cases/case-requests'
 import { DEPENDENTS_REQUEST_HANDLER, executeDependentsRequest } from '../dependents/dependent-requests'
 import { EXPENSE_REPORT_HANDLER, executeExpenseReport } from '../expenses/expense-reports'
+import { TRAVEL_ADVANCE_HANDLER, executeTravelAdvance } from '../expenses/travel-advances'
 
 // ناتج تنفيذ الوجهة: المرجع الدائم + هل اكتمل فوراً أم ينتظر (سريان/تأكيد استلام)
 export interface DestinationResult {
@@ -1081,6 +1082,8 @@ export class DestinationsService {
     [DEPENDENTS_REQUEST_HANDLER]: executeDependentsRequest,
     // B5.3: «تقرير مصروفات» — الاعتماد النهائي بيكتب قيد دائن واحد في الدفتر بإجمالي بنود التقرير (محسوب تاني تحت قفل التقرير)
     [EXPENSE_REPORT_HANDLER]: executeExpenseReport,
+    // B5.3 (ب): «سلفة مأمورية» — الاعتماد النهائي بيسجّل سلفة مفتوحة من غير قيد في الدفتر؛ التسوية في اعتماد تقرير المصروفات
+    [TRAVEL_ADVANCE_HANDLER]: executeTravelAdvance,
     shift_schedule: executeShiftSwap,
     // بيانات شخصية
     employee_record: this.personalDataHandler,

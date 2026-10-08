@@ -10,7 +10,7 @@ import { createRequest, fetchFileObjectUrl, resubmitRequest, uploadFile } from '
 import { currencyLabel } from '@/lib/currency'
 import { formatMoney } from '@/lib/money'
 import {
-  addExpenseLine, createExpenseReport, fetchMyExpenses, removeExpenseLine, removeExpenseReport, type ApiExpenseReport, type ApiMyExpenses,
+  addExpenseLine, attachTravelAdvance, createExpenseReport, fetchMyExpenses, removeExpenseLine, removeExpenseReport, type ApiExpenseReport, type ApiMyExpenses,
 } from '@/lib/expenses-api'
 
 const PHASE_STYLE: Record<string, string> = {
@@ -27,6 +27,7 @@ export default function MyExpensesPage() {
   const [busy, setBusy] = useState(false)
   const [draft, setDraft] = useState({ title: '', tripFrom: '', tripTo: '' })
   const [lines, setLines] = useState<Record<number, ReturnType<typeof emptyLine>>>({})
+  const [advance, setAdvance] = useState({ amount: '', reason: '' })
 
   const load = useCallback(() => {
     fetchMyExpenses().then(setData).catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل تقارير المصروفات'))
@@ -54,6 +55,16 @@ export default function MyExpensesPage() {
       setLines((current) => ({ ...current, [report.id]: emptyLine() }))
       if (saved.warning) setInfo(`اتحفظ البند — ${saved.warning}`)
     }, 'اتحفظ البند')
+  }
+
+  // (ب) طلب سلفة مأمورية: طلب عادي في سلسلته؛ بعد اعتماده وتسجيل صرفه بيتربط بتقرير
+  const askAdvance = () => {
+    const amount = amountOf(advance.amount)
+    if (amount === null || advance.reason.trim().length < 2) return setError('اكتب مبلغ السلفة وغرض المأمورية')
+    return run(async () => {
+      await createRequest(data!.advanceTypeCode!, { amount, reason: advance.reason.trim() }, true)
+      setAdvance({ amount: '', reason: '' })
+    }, 'طلب السلفة اتقدّم للاعتماد')
   }
 
   const submit = (report: ApiExpenseReport) => run(async () => {
@@ -105,12 +116,46 @@ export default function MyExpensesPage() {
           </div>
         )}
 
+        {data?.ready && (data.advanceTypeCode || data.advances.length > 0) && (
+          <div className="card space-y-3" data-travel-advances>
+            <h2 className="text-lg font-semibold text-gray-800">سلف المأموريات</h2>
+            <p className="text-xs text-gray-500">السلفة بتتصرف نقدًا بعد اعتماد طلبها، وبتتسوّى لما تربطها بتقرير مصروفات ويتعتمد: الفرق بيتضاف على راتبك أو بيتخصم منه.</p>
+            {data.advances.length > 0 && (
+              <ul className="divide-y divide-gray-100 text-sm">
+                {data.advances.map((row) => (
+                  <li key={row.id} className="py-2 flex flex-wrap items-center gap-3">
+                    <span className="font-mono text-xs text-gray-500" dir="ltr">{row.code}</span>
+                    <span>{row.purpose}</span>
+                    <b className="font-mono">{formatMoney(row.amount)}</b> {currency}
+                    <span className="mr-auto text-xs rounded-full px-3 py-1 bg-gray-100 text-gray-700">
+                      {row.status === 'OPEN' ? (row.paid ? (row.reportId ? 'مربوطة بتقرير' : 'اتصرفت — مستنية تقرير') : 'معتمدة — لسه مااتصرفتش') : row.statusLabel}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {data.advanceTypeCode && (
+              <div className="flex flex-wrap items-end gap-3 bg-gray-50 rounded-xl p-3" data-travel-advance-form>
+                <label className="text-sm text-gray-600">مبلغ السلفة ({currency})
+                  <input className="input mt-1 w-32 text-center" dir="ltr" inputMode="decimal" value={advance.amount} onChange={(event) => setAdvance({ ...advance, amount: event.target.value })} />
+                </label>
+                <label className="flex-1 min-w-56 text-sm text-gray-600">غرض المأمورية
+                  <input className="input w-full mt-1" maxLength={200} value={advance.reason} onChange={(event) => setAdvance({ ...advance, reason: event.target.value })} />
+                </label>
+                <button type="button" className="btn-secondary disabled:opacity-50" disabled={busy} onClick={askAdvance}>طلب سلفة</button>
+              </div>
+            )}
+          </div>
+        )}
+
         {data?.ready && data.reports.length === 0 && <div className="card text-gray-500">مفيش تقارير مصروفات لسه.</div>}
 
         {(data?.reports ?? []).map((report) => {
           const line = lines[report.id] ?? emptyLine()
           const change = (patch: Partial<ReturnType<typeof emptyLine>>) => setLines((current) => ({ ...current, [report.id]: { ...line, ...patch } }))
           const blocked = report.lines.find((row) => row.problem)
+          // سلف الحساب المصروفة المفتوحة اللي مش مربوطة بتقرير تاني
+          const linkable = (data?.advances ?? []).filter((row) => row.status === 'OPEN' && row.paid && (row.reportId === null || row.reportId === report.id))
           return (
             <div key={report.id} className="card space-y-3" data-expense-report={report.id}>
               <div className="flex flex-wrap items-center gap-3">
@@ -186,10 +231,28 @@ export default function MyExpensesPage() {
                 </div>
               )}
 
+              {(report.advance || (report.editable && linkable.length > 0)) && (
+                <div className="flex flex-wrap items-center gap-3 text-sm" data-expense-advance>
+                  <span className="text-gray-600">سلفة المأمورية:</span>
+                  {report.editable ? (
+                    <select className="input" aria-label={`سلفة تقرير ${report.code}`} disabled={busy} value={report.advance?.id ?? ''}
+                      onChange={(event) => run(() => attachTravelAdvance(report.id, event.target.value ? Number(event.target.value) : null), 'اتحدّثت سلفة التقرير')}>
+                      <option value="">من غير سلفة</option>
+                      {linkable.map((row) => <option key={row.id} value={row.id}>{row.code} — {formatMoney(row.amount)}</option>)}
+                    </select>
+                  ) : <span className="font-mono" dir="ltr">{report.advance!.code}</span>}
+                  {report.advance && report.net !== null && (
+                    <span className={report.net < 0 ? 'text-red-700' : 'text-gray-700'}>
+                      السلفة <b className="font-mono">{formatMoney(report.advance.amount)}</b> · {report.net < 0 ? 'هيتخصم منك' : 'هيتضاف لك'} <b className="font-mono">{formatMoney(Math.abs(report.net))}</b> {currency}
+                    </span>
+                  )}
+                </div>
+              )}
+
               {report.editable && (
                 <div className="flex flex-wrap items-center gap-3">
                   {data!.requestTypeCode && (
-                    <button type="button" className="btn-primary disabled:opacity-50" disabled={busy || report.lines.length === 0 || !!blocked} onClick={() => submit(report)}>
+                    <button type="button" className="btn-primary disabled:opacity-50" disabled={busy || (report.lines.length === 0 && !report.advance) || !!blocked} onClick={() => submit(report)}>
                       {report.phase === 'RETURNED' ? 'إعادة التقديم' : 'تقديم للاعتماد'}
                     </button>
                   )}

@@ -7,7 +7,7 @@ import { Receipt } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import { currencyLabel } from '@/lib/currency'
 import { formatMoney } from '@/lib/money'
-import { createExpenseCategory, fetchExpensesOverview, updateExpenseCategory, type ApiExpenseCategory, type ApiExpensesOverview } from '@/lib/expenses-api'
+import { createExpenseCategory, fetchExpensesOverview, travelAdvanceStep, updateExpenseCategory, type ApiExpenseCategory, type ApiExpensesOverview } from '@/lib/expenses-api'
 
 const PHASE_STYLE: Record<string, string> = {
   PENDING: 'bg-blue-50 text-blue-700', RETURNED: 'bg-amber-50 text-amber-800', REJECTED: 'bg-red-50 text-red-700', APPROVED: 'bg-green-50 text-green-700',
@@ -21,6 +21,7 @@ export default function ExpensesPage() {
   const [info, setInfo] = useState('')
   const [busy, setBusy] = useState(false)
   const [form, setForm] = useState(emptyForm())
+  const [notes, setNotes] = useState<Record<number, string>>({})
 
   const load = useCallback(() => {
     fetchExpensesOverview().then(setData).catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل المصروفات'))
@@ -37,6 +38,13 @@ export default function ExpensesPage() {
       if (form.id === null) await createExpenseCategory(body); else await updateExpenseCategory(form.id, body)
       setForm(emptyForm()); setInfo('اتحفظت الفئة'); load()
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'تعذر الحفظ') } finally { setBusy(false) }
+  }
+  // (ب) سلف المأموريات: تسجيل الصرف، أو القفل «اترجّعت نقدًا» بملاحظة
+  async function advanceStep(id: number, step: 'paid' | 'returned') {
+    const note = step === 'returned' ? (notes[id] ?? '').trim() : undefined
+    if (step === 'returned' && (!note || note.length < 2)) return setError('اكتب ملاحظة القفل الأول')
+    setBusy(true); setError(''); setInfo('')
+    try { await travelAdvanceStep(id, step, note); setInfo(step === 'paid' ? 'اتسجّل صرف السلفة' : 'اتقفلت السلفة'); load() } catch (cause) { setError(cause instanceof Error ? cause.message : 'تعذر التنفيذ') } finally { setBusy(false) }
   }
   const edit = (row: ApiExpenseCategory) => setForm({ id: row.id, name: row.name, limit: row.limitPerLine === null ? '' : String(row.limitPerLine), limitMode: row.limitMode, receiptRequired: row.receiptRequired, isActive: row.isActive })
 
@@ -106,6 +114,48 @@ export default function ExpensesPage() {
                 {form.id !== null && <button type="button" className="btn-secondary" onClick={() => setForm(emptyForm())}>إلغاء</button>}
               </div>
             )}
+          </div>
+        )}
+
+        {data?.ready && data.advances.length > 0 && (
+          <div className="card space-y-3" data-travel-advances>
+            <h2 className="text-lg font-semibold text-gray-800">سلف المأموريات</h2>
+            <p className="text-xs text-gray-500">السلفة بتتعمل من اعتماد طلبها. سجّل صرفها النقدي هنا؛ والتسوية بتتم لما الموظف يربطها بتقرير مصروفات ويتعتمد.</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-gray-600">
+                  <tr>
+                    <th className="table-header text-right">السلفة</th>
+                    <th className="table-header text-right">الموظف</th>
+                    <th className="table-header text-center">المبلغ</th>
+                    <th className="table-header text-center">الحالة</th>
+                    <th className="table-header" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.advances.map((row) => (
+                    <tr key={row.id} className="border-t border-gray-100">
+                      <td className="table-cell">{row.purpose}<span className="block text-xs text-gray-500 font-mono" dir="ltr">{row.code}</span></td>
+                      <td className="table-cell">{row.employeeName}{row.employeeCode ? <span className="text-xs text-gray-500" dir="ltr"> · {row.employeeCode}</span> : null}</td>
+                      <td className="table-cell text-center font-mono">{formatMoney(row.amount)} <span className="text-xs text-gray-500 font-sans">{currencyLabel(row.currency)}</span></td>
+                      <td className="table-cell text-center">
+                        {row.status === 'OPEN' ? (row.paid ? (row.reportId ? 'مربوطة بتقرير' : 'اتصرفت — مستنية تقرير') : 'لسه مااتصرفتش') : row.statusLabel}
+                        {row.closeNote && <span className="block text-xs text-gray-500">{row.closeNote}</span>}
+                      </td>
+                      <td className="table-cell text-left">
+                        {row.status === 'OPEN' && !row.paid && <button type="button" className="btn-primary text-xs disabled:opacity-50" disabled={busy} onClick={() => advanceStep(row.id, 'paid')}>اتصرفت</button>}
+                        {row.status === 'OPEN' && row.paid && row.reportId === null && (
+                          <span className="inline-flex items-center gap-2">
+                            <input className="input w-44 text-xs" maxLength={300} placeholder="ملاحظة القفل" aria-label={`ملاحظة قفل ${row.code}`} value={notes[row.id] ?? ''} onChange={(event) => setNotes({ ...notes, [row.id]: event.target.value })} />
+                            <button type="button" className="btn-secondary text-xs disabled:opacity-50" disabled={busy} onClick={() => advanceStep(row.id, 'returned')}>اترجّعت نقدًا</button>
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 

@@ -12,10 +12,12 @@ import {
   categoryFields, EXPENSE_MIGRATION_MISSING, EXPENSE_REPORT_HANDLER, ExpenseCategory, ExpenseLine, ExpenseReport, expenseReportsReady, lineFields, lineIssue, LINES_MAX, lockReport, phaseEditable,
   REPORT_NOT_FOUND, REPORT_PHASE_LABELS, reportCode, reportFields, reportPhase, type ReportPhase,
 } from './expense-reports'
+import { ADVANCE_MIGRATION_MISSING, ADVANCE_NOT_FOUND, ADVANCE_STATUS_LABELS, advanceCode, TRAVEL_ADVANCE_HANDLER, TravelAdvance, travelAdvancesReady } from './travel-advances'
 
 // B5.3 (أ): تقارير المصروفات — الموظف لتقاريره (مسودة وبنود وإيصالات)، وصاحب `expenses.manage` للفئات (تعريف للشركة كلها) ولقراءة تقارير
 // موظفين نطاق فروعه (فرع الموظف الحالي). التقديم والاعتماد والصرف في محرك الطلبات (expense-reports.ts). أي تعديل تحت قفل صف التقرير،
-// بترتيب الأقفال الواحد: صف الطلب ← صف التقرير.
+// بترتيب الأقفال الواحد: صف الطلب ← صف التقرير ← صف السلفة.
+// (ب) سلف المأموريات: الموظف بيربط سلفته المصروفة بتقريره؛ وصاحب الصلاحية بيسجّل صرف سلف موظفين نطاقه وقفلها «اترجّعت نقدًا».
 
 const NOT_EMPLOYEE = 'حسابك مش مربوط بملف موظف'
 const NOT_EDITABLE = 'التقرير تحت الاعتماد أو اتعتمد — مايتعدّلش'
@@ -24,6 +26,13 @@ const CATEGORY_NOT_FOUND = 'فئة المصروف مش موجودة'
 const CATEGORY_NAME_TAKEN = 'فيه فئة بنفس الاسم'
 const RECEIPT_INVALID = 'إيصال البند لازم يكون ملف رفعته إنت لنفسك من الشاشة دي'
 const DELETE_FILED = 'تقرير اتقدّم قبل كده مايتمسحش'
+const ADVANCE_UNPAID = 'السلفة لسه مااتسجّلش صرفها — ماتتربطش بتقرير'
+const ADVANCE_TAKEN = 'السلفة مربوطة بتقرير تاني — فكّها منه الأول'
+const ADVANCE_CLOSED = 'السلفة اتقفلت قبل كده'
+const ADVANCE_PAID = 'صرف السلفة متسجّل قبل كده'
+const ADVANCE_LINKED = 'السلفة مربوطة بتقرير مصروفات — التسوية بتتم باعتماده'
+const ADVANCE_NOTE = 'اكتب ملاحظة القفل (من حرفين لحد 300 حرف)'
+const ADVANCE_STEP = 'الخطوة «اتصرفت» أو «اترجّعت»'
 const flag = (value: unknown) => value === true || value === 1
 const ymd = (value: unknown) => (value == null ? null : value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10))
 const idOf = (value: unknown) => (value == null ? null : Number(value))
@@ -41,6 +50,11 @@ export class ExpenseReportsService {
     return Number(user.employeeId)
   }
 
+  private advanceView(row: TravelAdvance) {
+    return { id: row.id, code: advanceCode(row.id), employeeId: row.employeeId, amount: Number(row.amount), purpose: row.purpose, status: row.status, statusLabel: ADVANCE_STATUS_LABELS[row.status] ?? row.status,
+      paid: row.paidAt != null, paidAt: row.paidAt ?? null, reportId: idOf(row.reportId), requestId: row.requestId, closedAt: row.closedAt ?? null, closeNote: row.closeNote ?? null }
+  }
+
   private categoryView(row: ExpenseCategory) {
     return { id: row.id, name: row.name, limitPerLine: row.limitPerLine == null ? null : Number(row.limitPerLine), limitMode: row.limitMode, receiptRequired: flag(row.receiptRequired), isActive: flag(row.isActive) }
   }
@@ -56,6 +70,8 @@ export class ExpenseReportsService {
       const rows: Array<{ id: number; status: string }> = await em.query(`SELECT [id], [status] FROM dbo.requests WHERE [id] IN (${requestIds.map((_, index) => `@${index}`).join(', ')})`, requestIds)
       for (const row of rows) statuses.set(Number(row.id), String(row.status))
     }
+    // (ب) السلفة المربوطة بكل تقرير: المفتوحة، أو اللي اتسوّت فيه
+    const advances = (await travelAdvancesReady(em)) ? await em.getRepository(TravelAdvance).find({ where: { reportId: In(reports.map(row => row.id)), status: In(['OPEN', 'SETTLED']) }, order: { id: 'ASC' } }) : []
     return reports.map(report => {
       const requestId = idOf(report.requestId)
       const phase: ReportPhase = reportPhase(report.status, requestId === null ? null : statuses.get(requestId) ?? null)
@@ -65,9 +81,11 @@ export class ExpenseReportsService {
         return { id: line.id, categoryId: line.categoryId, categoryName: category?.name ?? '—', expenseDate: ymd(line.expenseDate), amount: Number(line.amount), note: line.note ?? null,
           receiptFileId: idOf(line.receiptFileId), warning: issue.warn, problem: issue.block }
       })
+      const totalCents = Math.round(own.reduce((sum, line) => sum + Math.round(line.amount * 100), 0))
+      const linked = advances.find(row => idOf(row.reportId) === report.id) ?? null
       return { id: report.id, code: reportCode(report.id), employeeId: report.employeeId, title: report.title, tripFrom: ymd(report.tripFrom), tripTo: ymd(report.tripTo), phase, phaseLabel: REPORT_PHASE_LABELS[phase],
-        editable: phaseEditable(phase), requestId, total: Math.round(own.reduce((sum, line) => sum + Math.round(line.amount * 100), 0)) / 100, submittedAt: report.submittedAt ?? null,
-        approvedAt: report.approvedAt ?? null, lines: own }
+        editable: phaseEditable(phase), requestId, total: totalCents / 100, submittedAt: report.submittedAt ?? null, approvedAt: report.approvedAt ?? null, lines: own,
+        advance: linked ? { id: linked.id, code: advanceCode(linked.id), amount: Number(linked.amount) } : null, net: linked ? (totalCents - Math.round(Number(linked.amount) * 100)) / 100 : null }
     })
   }
 
@@ -76,13 +94,18 @@ export class ExpenseReportsService {
   /** «مصروفاتي»: تقارير الحساب، والفئات المفعّلة، وعملة فرعه، ونوع الطلب اللي التقرير بيتقدّم بيه (لو متعرّف) */
   async mine(user: JwtPayload) {
     const em = this.ds.manager, employeeId = this.employeeOf(user)
-    if (!(await expenseReportsReady(em))) return { ready: false, currency: null, requestTypeCode: null, categories: [], reports: [] }
+    if (!(await expenseReportsReady(em))) return { ready: false, currency: null, requestTypeCode: null, advanceTypeCode: null, categories: [], reports: [], advances: [] }
     const [person]: Array<{ branchId: number | null }> = await em.query('SELECT [branchId] FROM dbo.employees WHERE [id] = @0', [employeeId])
     const currencyOf = await readBranchCurrencyOf(em)
     const type = await em.getRepository(RequestType).findOne({ where: { destinationHandler: EXPENSE_REPORT_HANDLER, isActive: true }, order: { id: 'ASC' } })
     const categories = await em.getRepository(ExpenseCategory).find({ where: { isActive: true }, order: { name: 'ASC', id: 'ASC' } })
     const reports = await em.getRepository(ExpenseReport).find({ where: { employeeId }, order: { id: 'DESC' } })
-    return { ready: true, currency: currencyOf(idOf(person?.branchId)), requestTypeCode: type?.code ?? null, categories: categories.map(row => this.categoryView(row)), reports: await this.reportViews(em, reports) }
+    // (ب) سلف المأموريات: نوع طلبها (لو متعرّف والترحيل متطبّق)، وسلف الحساب بحالتها
+    const advancesReady = await travelAdvancesReady(em)
+    const advanceType = advancesReady ? await em.getRepository(RequestType).findOne({ where: { destinationHandler: TRAVEL_ADVANCE_HANDLER, isActive: true }, order: { id: 'ASC' } }) : null
+    const advances = advancesReady ? await em.getRepository(TravelAdvance).find({ where: { employeeId }, order: { id: 'DESC' } }) : []
+    return { ready: true, currency: currencyOf(idOf(person?.branchId)), requestTypeCode: type?.code ?? null, advanceTypeCode: advanceType?.code ?? null, categories: categories.map(row => this.categoryView(row)),
+      reports: await this.reportViews(em, reports), advances: advances.map(row => this.advanceView(row)) }
   }
 
   async createReport(user: JwtPayload, body: unknown) {
@@ -123,6 +146,8 @@ export class ExpenseReportsService {
     return this.ds.transaction(async em => {
       const report = await this.lockOwnEditable(em, user, id)
       if (report.status !== 'DRAFT' || report.requestId != null) throw new ConflictException(DELETE_FILED)
+      // سلفة مربوطة بالمسودة بتتفكّ (بتفضل مفتوحة لتقرير تاني)
+      if (await travelAdvancesReady(em)) await em.getRepository(TravelAdvance).update({ reportId: report.id, status: 'OPEN' }, { reportId: null })
       await em.getRepository(ExpenseLine).delete({ reportId: report.id })
       await em.getRepository(ExpenseReport).delete({ id: report.id })
       return { removed: true }
@@ -163,16 +188,45 @@ export class ExpenseReportsService {
     })
   }
 
+  /**
+   * (ب) ربط سلفة مأمورية بالتقرير أو فكّها (`advanceId: null`): التقرير في حالة بتتعدّل وتحت قفل صفه، وبعده صف السلفة — بتاعة صاحب التقرير
+   * (وإلا «مش موجودة»)، مفتوحة، صرفها متسجّل، ومش مربوطة بتقرير تاني. سلفة واحدة للتقرير: الربط بيفكّ السابقة.
+   */
+  async attachAdvance(user: JwtPayload, reportId: number, body: unknown) {
+    const raw = ((body ?? {}) as Record<string, unknown>).advanceId
+    if (raw !== null && (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw < 1)) throw new BadRequestException(ADVANCE_NOT_FOUND)
+    return this.ds.transaction(async em => {
+      const report = await this.lockOwnEditable(em, user, reportId)
+      if (!(await travelAdvancesReady(em))) throw new BadRequestException(ADVANCE_MIGRATION_MISSING)
+      const advances = em.getRepository(TravelAdvance)
+      if (raw !== null) {
+        const advance = await advances.findOne({ where: { id: raw }, lock: { mode: 'pessimistic_write' } })
+        if (!advance || advance.employeeId !== report.employeeId) throw new NotFoundException(ADVANCE_NOT_FOUND)
+        if (advance.status !== 'OPEN') throw new ConflictException(ADVANCE_CLOSED)
+        if (advance.paidAt == null) throw new BadRequestException(ADVANCE_UNPAID)
+        if (advance.reportId != null && Number(advance.reportId) !== report.id) throw new ConflictException(ADVANCE_TAKEN)
+      }
+      await advances.update({ reportId: report.id, status: 'OPEN' }, { reportId: null })
+      if (raw !== null) await advances.update({ id: raw }, { reportId: report.id })
+      await em.getRepository(ExpenseReport).update({ id: report.id }, { updatedAt: new Date() })
+      return { advanceId: raw }
+    })
+  }
+
   // ===== الإدارة: الفئات وتقارير الموظفين =====
 
   /** الفئات كلها (بالمقفولة)، وتقارير موظفين نطاق الحساب اللي اتقدّمت — بفرع الموظف الحالي */
   async overview(user: JwtPayload) {
     const em = this.ds.manager, canEdit = branchScopeOf(user) === null
-    if (!(await expenseReportsReady(em))) return { ready: false, canEdit, categories: [], reports: [] }
+    if (!(await expenseReportsReady(em))) return { ready: false, canEdit, categories: [], reports: [], advances: [] }
     const scope = branchScopeOf(user), currencyOf = await readBranchCurrencyOf(em)
     const categories = await em.getRepository(ExpenseCategory).find({ order: { name: 'ASC', id: 'ASC' } })
     const filed = await em.getRepository(ExpenseReport).find({ where: { status: In(['SUBMITTED', 'APPROVED']) }, order: { id: 'DESC' }, take: 300 })
-    const employeeIds = [...new Set(filed.map(row => row.employeeId))]
+    // (ب) سلف المأموريات: المفتوحة كلها وآخر 100 اتقفلوا
+    const advancesReady = await travelAdvancesReady(em)
+    const advances = advancesReady ? [...await em.getRepository(TravelAdvance).find({ where: { status: 'OPEN' }, order: { id: 'DESC' } }),
+      ...await em.getRepository(TravelAdvance).find({ where: { status: In(['SETTLED', 'RETURNED']) }, order: { id: 'DESC' }, take: 100 })] : []
+    const employeeIds = [...new Set([...filed.map(row => row.employeeId), ...advances.map(row => row.employeeId)])]
     const people = new Map<number, { fullName: string; employeeCode: string | null; branchId: number | null }>()
     if (employeeIds.length) {
       const rows: Array<{ id: number; fullName: string; employeeCode: string | null; branchId: number | null }> = await em.query(
@@ -181,8 +235,41 @@ export class ExpenseReportsService {
     }
     const visible = filed.filter(row => { const person = people.get(row.employeeId); return !!person && inBranchScope(scope, person.branchId) })
     const views = await this.reportViews(em, visible)
-    return { ready: true, canEdit, categories: categories.map(row => this.categoryView(row)),
-      reports: views.map(view => { const person = people.get(view.employeeId)!; return { ...view, employeeName: person.fullName, employeeCode: person.employeeCode, currency: currencyOf(person.branchId) } }) }
+    const named = <T extends { employeeId: number }>(view: T) => { const person = people.get(view.employeeId)!; return { ...view, employeeName: person.fullName, employeeCode: person.employeeCode, currency: currencyOf(person.branchId) } }
+    return { ready: true, canEdit, categories: categories.map(row => this.categoryView(row)), reports: views.map(named),
+      advances: advances.filter(row => { const person = people.get(row.employeeId); return !!person && inBranchScope(scope, person.branchId) }).map(row => named(this.advanceView(row))) }
+  }
+
+  /**
+   * (ب) خطوة المالية على سلفة موظف في نطاق الحساب (فرعه الحالي، والحكم بعد قفل صف السلفة): «paid» تسجيل الصرف النقدي، و«returned» قفلها
+   * «اترجّعت نقدًا» بملاحظة — لسلفة مصروفة مش مربوطة بتقرير. بيانات بس: مفيش قيد في الدفتر من هنا.
+   */
+  async advanceStep(user: JwtPayload, id: number, step: string, body: unknown) {
+    if (step !== 'paid' && step !== 'returned') throw new BadRequestException(ADVANCE_STEP)
+    const rawNote = ((body ?? {}) as Record<string, unknown>).note
+    const note = typeof rawNote === 'string' ? rawNote.trim().replace(/\s+/g, ' ') : ''
+    if (step === 'returned' && (note.length < 2 || note.length > 300)) throw new BadRequestException(ADVANCE_NOTE)
+    return this.ds.transaction(async em => {
+      if (!(await travelAdvancesReady(em))) throw new BadRequestException(ADVANCE_MIGRATION_MISSING)
+      const advance = await em.getRepository(TravelAdvance).findOne({ where: { id }, lock: { mode: 'pessimistic_write' } })
+      const [person]: Array<{ branchId: number | null }> = advance ? await em.query('SELECT [branchId] FROM dbo.employees WHERE [id] = @0', [advance.employeeId]) : []
+      // سلفة موظف برّه النطاق زي اللي مش موجودة
+      if (!advance || !person || !inBranchScope(branchScopeOf(user), idOf(person.branchId))) throw new NotFoundException(ADVANCE_NOT_FOUND)
+      if (advance.status !== 'OPEN') throw new ConflictException(ADVANCE_CLOSED)
+      const now = new Date()
+      if (step === 'paid') {
+        if (advance.paidAt != null) throw new ConflictException(ADVANCE_PAID)
+        await em.getRepository(TravelAdvance).update({ id: advance.id }, { paidAt: now, paidByUserId: user.sub })
+      } else {
+        if (advance.paidAt == null) throw new BadRequestException(ADVANCE_UNPAID)
+        if (advance.reportId != null) throw new ConflictException(ADVANCE_LINKED)
+        await em.getRepository(TravelAdvance).update({ id: advance.id }, { status: 'RETURNED', closedAt: now, closedByUserId: user.sub, closeNote: note })
+      }
+      await recordAudit(em, { category: 'SETTINGS', action: step === 'paid' ? 'TRAVEL_ADVANCE_PAID' : 'TRAVEL_ADVANCE_RETURNED', entityType: 'travel_advance', entityId: String(advance.id), actorUserId: user.sub,
+        branchId: idOf(person.branchId) ?? undefined, summary: `سلفة المأمورية ${advanceCode(advance.id)} بمبلغ ${Number(advance.amount)}: ${step === 'paid' ? 'اتسجّل صرفها' : 'اتقفلت «اترجّعت نقدًا»'}`,
+        after: { status: step === 'paid' ? 'OPEN' : 'RETURNED', paid: true, employeeId: advance.employeeId } })
+      return { id: advance.id }
+    })
   }
 
   /** اسم الفئة مايتكررش: الحكم تحت قفل مدى على الاسم */

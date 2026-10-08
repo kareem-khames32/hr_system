@@ -185,6 +185,8 @@ export const typesSeed: TypeSeed[] = [
   { code: 'EXPENSE_CLAIM', nameAr: 'صرف مصروفات', category: 'financial', chain: 'CHAIN_MANAGER_FINANCE', handler: 'expense_register', requiredFields: ['amount', 'description'], phase: 'P2' },
   // B5.3: تقرير مصروفات ببنود — بيتقدّم من شاشة «مصروفاتي» (ميزة expenses.reports، مقفولة افتراضيًا)
   { code: 'EXPENSE_REPORT', nameAr: 'تقرير مصروفات', category: 'financial', chain: 'CHAIN_MANAGER_FINANCE', handler: 'expense_report', requiredFields: ['reportId'], phase: 'P3' },
+  // B5.3 (ب): سلفة مأمورية — بتتصرف نقدًا وبتتسوّى بتقرير مصروفات (ميزة expenses.reports، مقفولة افتراضيًا)
+  { code: 'TRAVEL_ADVANCE', nameAr: 'سلفة مأمورية', category: 'financial', chain: 'CHAIN_MANAGER_FINANCE', handler: 'travel_advance', requiredFields: ['amount', 'reason'], phase: 'P3' },
   { code: 'BONUS', nameAr: 'مكافأة/حافز', category: 'financial', chain: 'CHAIN_MANAGER_HR', handler: 'payroll_bonus', requiredFields: ['amount', 'reason'], phase: 'P2' },
   { code: 'PER_DIEM', nameAr: 'بدل سفر/انتداب', category: 'financial', chain: 'CHAIN_MANAGER_FINANCE', handler: 'payroll_allowance', requiredFields: ['amount'], phase: 'P3' },
   { code: 'EARLY_LOAN_SETTLEMENT', nameAr: 'سداد سلفة مبكر', category: 'financial', chain: 'CHAIN_FINANCE', handler: 'loans_installments', requiredFields: ['loanId'], phase: 'P3' },

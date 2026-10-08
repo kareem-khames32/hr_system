@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, UseGuards } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Put, UseGuards } from '@nestjs/common'
 import { IsOptional } from 'class-validator'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
@@ -17,6 +17,12 @@ class LineDto {
   @IsOptional() amount?: unknown
   @IsOptional() note?: unknown
   @IsOptional() receiptFileId?: unknown
+}
+class AdvanceLinkDto {
+  @IsOptional() advanceId?: unknown
+}
+class AdvanceStepDto {
+  @IsOptional() note?: unknown
 }
 class CategoryDto {
   @IsOptional() name?: unknown
@@ -68,6 +74,19 @@ export class ExpensesController {
   @Delete('my/reports/:id/lines/:lineId')
   removeLine(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Param('lineId', ParseIntPipe) lineId: number) {
     return this.service.removeLine(user, id, lineId)
+  }
+
+  // (ب) ربط سلفة مأمورية مصروفة بالتقرير أو فكّها — الخدمة بتحكم بصاحب التقرير والسلفة
+  @Put('my/reports/:id/advance')
+  attachAdvance(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: AdvanceLinkDto) {
+    return this.service.attachAdvance(user, id, dto)
+  }
+
+  // (ب) المالية: تسجيل صرف سلفة موظف في نطاق الحساب، أو قفلها «اترجّعت نقدًا»
+  @Perm('expenses.manage')
+  @Post('advances/:id/steps/:step')
+  advanceStep(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Param('step') step: string, @Body() dto: AdvanceStepDto) {
+    return this.service.advanceStep(user, id, step, dto)
   }
 
   // الإدارة: الفئات (الكتابة لحساب بكل الفروع) وتقارير موظفين النطاق

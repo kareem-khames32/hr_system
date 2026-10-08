@@ -98,6 +98,7 @@ const EXCEPTIONS = {
   'ExpensesController.addLine': 'SELF', // POST /expenses/my/reports/:id/lines
   'ExpensesController.updateLine': 'SELF', // PATCH /expenses/my/reports/:id/lines/:lineId
   'ExpensesController.removeLine': 'SELF', // DELETE /expenses/my/reports/:id/lines/:lineId
+  'ExpensesController.attachAdvance': 'SELF', // PUT /expenses/my/reports/:id/advance
   // B2.7: قراءة نسخة سياسة وملفها — لصاحب صلاحية السياسات، أو للموظف اللي السياسة في جمهوره (الحكم في الخدمة)
   'PoliciesController.version': 'SERVICE_CHECK', // GET /policies/versions/:versionId
   'PoliciesController.versionFile': 'SERVICE_CHECK', // GET /policies/versions/:versionId/file

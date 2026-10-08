@@ -116,6 +116,7 @@ import {
 import {
   EXPENSE_REPORT_CLIENT_KEYS, EXPENSE_REPORT_HANDLER, EXPENSE_REPORT_STAGED_KEYS, EXPENSE_REPORTS_FEATURE, expenseReportFields, stageExpenseReport,
 } from '../expenses/expense-reports'
+import { stageTravelAdvance, TRAVEL_ADVANCE_CLIENT_KEYS, TRAVEL_ADVANCE_HANDLER } from '../expenses/travel-advances'
 import { POSITION_REQUEST_HANDLER, POSITION_REQUEST_STAGED_KEYS, positionRequestFields, positionRequestTitles, stagePositionRequest } from '../positions/position-requests'
 import { REVIEW_OBJECTION_CLIENT_KEYS, REVIEW_OBJECTION_STAGED_KEYS, stageReviewObjection } from '../performance/review-objections'
 import { REVIEW_OBJECTION_TYPE } from '../performance/review-rules'
@@ -193,6 +194,8 @@ const HANDLER_PAYLOAD_KEYS: Record<string, string[]> = {
   [DEPENDENTS_REQUEST_HANDLER]: [...DEPENDENTS_REQUEST_CLIENT_KEYS, ...DEPENDENTS_REQUEST_STAGED_KEYS],
   // B5.3: «تقرير مصروفات». الإجمالي والعنوان والبنود مش من العميل: الخادم بيثبّتهم عند كل تقديم
   [EXPENSE_REPORT_HANDLER]: [...EXPENSE_REPORT_CLIENT_KEYS, ...EXPENSE_REPORT_STAGED_KEYS],
+  // B5.3 (ب): «سلفة مأمورية» — المبلغ وفترة المأمورية (والغرض في «السبب» المشترك)
+  [TRAVEL_ADVANCE_HANDLER]: [...TRAVEL_ADVANCE_CLIENT_KEYS],
 }
 
 // C4 / الخطوة 27: المكافأة لا تُقترح عبر محرك الطلبات (كانت تُقيد لمقدم الطلب لا للمستفيد، وتسمح بمكافأة للنفس، وبلا فترة).
@@ -329,9 +332,9 @@ export class RequestsService {
     if (!(await this.moduleGate.allowedFor(moduleOfRequestType(type), user)) || !(await this.typeFeatureOpen(type))) throw new NotFoundException('نوع الطلب غير موجود')
   }
 
-  // B5.3: نوع وجهته «تقرير مصروفات» تبع ميزة فرعية مقفولة افتراضيًا — وهي مقفولة، النوع زي اللي موديوله مقفول (الطلبات المفتوحة بتكمّل سلسلتها)
+  // B5.3: نوع وجهته «تقرير مصروفات» أو «سلفة مأمورية» تبع ميزة فرعية مقفولة افتراضيًا — وهي مقفولة، النوع زي اللي موديوله مقفول (الطلبات المفتوحة بتكمّل سلسلتها)
   private async typeFeatureOpen(type: Pick<RequestType, 'destinationHandler'>): Promise<boolean> {
-    return type.destinationHandler !== EXPENSE_REPORT_HANDLER || !this.modules || await this.modules.isFeatureEnabled(EXPENSE_REPORTS_FEATURE)
+    return (type.destinationHandler !== EXPENSE_REPORT_HANDLER && type.destinationHandler !== TRAVEL_ADVANCE_HANDLER) || !this.modules || await this.modules.isFeatureEnabled(EXPENSE_REPORTS_FEATURE)
   }
 
   // هل النوع متاح للمستخدم ده؟ (ب4)
@@ -611,6 +614,8 @@ export class RequestsService {
     if (type.destinationHandler === DEPENDENTS_REQUEST_HANDLER) req.payload = JSON.stringify(await stageDependentsRequest(em, req))
     // B5.3: «تقرير مصروفات» — التقرير بتاع مقدّم الطلب تحت قفل صفه، بنوده بحكم السياسة دلوقتي، وتثبيت إجماليه وبنوده، عند كل تقديم وإعادة تقديم
     if (type.destinationHandler === EXPENSE_REPORT_HANDLER) req.payload = JSON.stringify(await stageExpenseReport(em, req))
+    // B5.3 (ب): «سلفة مأمورية» — المبلغ والغرض بنفس فحوص الاعتماد النهائي بدري
+    if (type.destinationHandler === TRAVEL_ADVANCE_HANDLER) req.payload = JSON.stringify(await stageTravelAdvance(em, req))
     if (type.destinationHandler === 'custody_transfer') {
       const payload = JSON.parse(req.payload || '{}')
       await custodyTransferTarget(em, Number(payload.assignmentId), Number(payload.toEmployeeId), req, user)

@@ -1,6 +1,7 @@
 'use strict'
 // B5.3 (أ) على SQL حقيقي: تقارير المصروفات — الميزة الفرعية مقفولة افتراضيًا، الترحيلات 149–151، الفئات وحدودها، البنود والإيصالات، التقديم كطلب
-// (الخادم بيثبّت الإجمالي والبنود)، الإرجاع والرفض، والاعتماد النهائي بقيد دائن واحد في الدفتر. قاعدة اختبار عشوائية تُحذف في النهاية.
+// (الخادم بيثبّت الإجمالي والبنود)، الإرجاع والرفض، والاعتماد النهائي بقيد دائن واحد في الدفتر. و(ب): سلفة المأمورية (ترحيل 152) — طلبها، تسجيل
+// صرفها، ربطها بتقرير، وتسويتها في اعتماده (دائن أو مدين أو من غير قيد)، وبند إخلاء الطرف. قاعدة اختبار عشوائية تُحذف في النهاية.
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), crypto = require('node:crypto')
@@ -16,8 +17,10 @@ const uploads = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-expense-reports-files-
 const secret = crypto.randomBytes(48).toString('hex')
 const jwt = new (require('../node_modules/@nestjs/jwt').JwtService)({ secret })
 const rules = require('../src/expenses/expense-reports')
-const MIGRATIONS = ['20261009_149_expense_categories.sql', '20261009_150_expense_reports.sql', '20261009_151_expense_lines.sql'].map(name => path.resolve(apiRoot, '..', 'docs', 'migrations', 'payroll', name))
-const TABLES = ['expense_categories', 'expense_reports', 'expense_lines']
+const advanceRules = require('../src/expenses/travel-advances')
+const { openOffboardingCase } = require('../src/offboarding/offboarding-open')
+const MIGRATIONS = ['20261009_149_expense_categories.sql', '20261009_150_expense_reports.sql', '20261009_151_expense_lines.sql', '20261009_152_travel_advances.sql'].map(name => path.resolve(apiRoot, '..', 'docs', 'migrations', 'payroll', name))
+const TABLES = ['expense_categories', 'expense_reports', 'expense_lines', 'travel_advances']
 let master, pool, app, ds, base, modules, created = false, sequence = 0
 const B = {}, E = {}, U = {}, C = {}
 const repo = name => { assert.match(database, NAME); assert.equal(ds.options.database, database); return ds.getRepository(name) }
@@ -80,6 +83,8 @@ before(async () => {
   await repo('ApprovalStep').save({ chainId: chain.id, stepOrder: 1, approverRole: 'hr' })
   await repo('RequestType').save({ code: 'EXPENSE_REPORT', nameAr: 'تقرير مصروفات', category: 'financial', destinationHandler: rules.EXPENSE_REPORT_HANDLER, approvalChainId: chain.id, isActive: true,
     requiredFields: JSON.stringify(['reportId']) })
+  await repo('RequestType').save({ code: 'TRAVEL_ADVANCE', nameAr: 'سلفة مأمورية', category: 'financial', destinationHandler: advanceRules.TRAVEL_ADVANCE_HANDLER, approvalChainId: chain.id, isActive: true,
+    requiredFields: JSON.stringify(['amount', 'reason']) })
 }, { timeout: 120000 })
 
 after(async t => {
@@ -116,16 +121,17 @@ test('EX-01: الميزة الفرعية مقفولة افتراضيًا = مف�
   // الترحيل على جداول الكيانات (synchronize) بيعدّي = نفس الشكل
   await runMigrations()
   for (const name of [...TABLES].reverse()) await pool.request().batch(`DROP TABLE dbo.${name}`)
-  rules.resetExpenseReportsCache()
-  assert.deepEqual(Object.values(await tablesExist()), [null, null, null])
-  assert.deepEqual(await mine(U.one), { ready: false, currency: null, requestTypeCode: null, categories: [], reports: [] })
-  assert.deepEqual(ok(await request(U.admin, 'GET', '/expenses/overview')), { ready: false, canEdit: true, categories: [], reports: [] })
+  rules.resetExpenseReportsCache(); advanceRules.resetTravelAdvancesCache()
+  assert.deepEqual(Object.values(await tablesExist()), [null, null, null, null])
+  assert.deepEqual(await mine(U.one), { ready: false, currency: null, requestTypeCode: null, advanceTypeCode: null, categories: [], reports: [], advances: [] })
+  assert.deepEqual(ok(await request(U.admin, 'GET', '/expenses/overview')), { ready: false, canEdit: true, categories: [], reports: [], advances: [] })
+  refused(await request(U.one, 'POST', '/requests', { typeCode: 'TRAVEL_ADVANCE', payload: { amount: 100, reason: 'مأمورية' }, submit: true }), 400, advanceRules.ADVANCE_MIGRATION_MISSING)
   refused(await request(U.one, 'POST', `${M}/reports`, { title: 'مأمورية' }), 400, rules.EXPENSE_MIGRATION_MISSING)
   refused(await request(U.admin, 'POST', '/expenses/categories', { name: 'انتقالات' }), 400, rules.EXPENSE_MIGRATION_MISSING)
   await runMigrations(); await runMigrations()
   assert.ok(Object.values(await tablesExist()).every(id => id != null))
   const ready = await mine(U.one)
-  assert.deepEqual([ready.ready, ready.currency, ready.requestTypeCode, ready.reports], [true, 'SAR', 'EXPENSE_REPORT', []])
+  assert.deepEqual([ready.ready, ready.currency, ready.requestTypeCode, ready.advanceTypeCode, ready.reports, ready.advances], [true, 'SAR', 'EXPENSE_REPORT', 'TRAVEL_ADVANCE', [], []])
   assert.equal((await mine(U.cairo)).currency, 'EGP')
   // النوع ظهر في الكتالوج بحقل رقم التقرير بس
   const type = ok(await request(U.one, 'GET', '/requests/types')).find(row => row.code === 'EXPENSE_REPORT')
@@ -317,4 +323,141 @@ test('EX-07: شاشة الإدارة — التقارير المتقدّمة ل�
   assert.deepEqual((await entries(open.id)).map(entry => [entry.employeeId, Number(entry.amount), entry.category]), [[E.cairo.id, 70, 'expense']])
   ok(await request(U.admin, 'PUT', `/modules/features/${rules.EXPENSE_REPORTS_FEATURE}`, { enabled: true })); modules.invalidate()
   assert.equal((await reportOf(U.cairo, cairo)).phase, 'APPROVED')
+})
+
+const askAdvance = (user, amount, reason = 'مأمورية الدمام') => request(user, 'POST', '/requests', { typeCode: 'TRAVEL_ADVANCE', payload: { amount, reason }, submit: true })
+const step = (user, id, name, note) => request(user, 'POST', `/expenses/advances/${id}/steps/${name}`, note === undefined ? {} : { note })
+const attach = (user, reportId, advanceId) => request(user, 'PUT', `${M}/reports/${reportId}/advance`, { advanceId })
+/** سلفة معتمدة (ومصروفة لو `paid`) لموظف */
+async function advanceFor(user, amount, paid = true) {
+  const sent = ok(await askAdvance(user, amount), 201)
+  ok(await act(U.approver, sent.id, 'APPROVE'), 201)
+  const row = await repo('TravelAdvance').findOneByOrFail({ requestId: sent.id })
+  if (paid) ok(await step(U.admin, row.id, 'paid'), 201)
+  return row.id
+}
+
+test('EX-08: سلفة المأمورية — الاعتماد بيسجّلها مفتوحة من غير قيد؛ المالية بتسجّل الصرف لموظفين نطاقها؛ والربط بتقرير صاحبها بعد الصرف بس، سلفة واحدة لتقرير واحد', async () => {
+  const before = await repo('EmployeeObligation').count()
+  refused(await askAdvance(U.one, 0), 400, advanceRules.ADVANCE_AMOUNT)
+  refused(await askAdvance(U.one, '12.345'), 400, advanceRules.ADVANCE_AMOUNT)
+  refused(await askAdvance(U.one, 1000, 'م'), 400, advanceRules.ADVANCE_PURPOSE)
+  const sent = ok(await askAdvance(U.one, '1000.50', '  مأمورية   الدمام '), 201)
+  assert.deepEqual([JSON.parse((await repo('Request').findOneByOrFail({ id: sent.id })).payload).amount, await repo('TravelAdvance').count()], [1000.5, 0])
+  ok(await act(U.approver, sent.id, 'APPROVE'), 201)
+  const row = await repo('TravelAdvance').findOneByOrFail({ requestId: sent.id })
+  assert.deepEqual([row.employeeId, Number(row.amount), row.purpose, row.status, row.paidAt, row.reportId], [E.one.id, 1000.5, 'مأمورية الدمام', 'OPEN', null, null])
+  assert.equal(await repo('EmployeeObligation').count(), before, 'السلفة من غير قيد في الدفتر')
+  // تنفيذ اتعاد لنفس الطلب: نفس السلفة
+  const again = await ds.transaction(async em => advanceRules.executeTravelAdvance(em, await em.getRepository('Request').findOneByOrFail({ id: sent.id }), null, { amount: 1000.5, reason: 'مأمورية الدمام' }))
+  assert.deepEqual([again, await repo('TravelAdvance').count({ where: { requestId: sent.id } })], [{ ref: advanceRules.advanceCode(row.id), completed: true }, 1])
+  const own = (await mine(U.one)).advances
+  assert.deepEqual(own.map(item => [item.id, item.code, item.amount, item.status, item.paid, item.reportId]), [[row.id, advanceRules.advanceCode(row.id), 1000.5, 'OPEN', false, null]])
+  assert.deepEqual((await mine(U.two)).advances, [])
+  // الربط قبل الصرف مرفوض؛ وسلفة غيره زي اللي مش موجودة
+  const report = await newReport(U.one, 'مأمورية الدمام'); E.tripReport = report; E.tripAdvance = row.id
+  refused(await attach(U.one, report, row.id), 400, 'السلفة لسه مااتسجّلش صرفها — ماتتربطش بتقرير')
+  const foreign = await newReport(U.two, 'تقرير موظف تاني')
+  refused(await attach(U.two, foreign, row.id), 404, advanceRules.ADVANCE_NOT_FOUND)
+  refused(await attach(U.one, report, 999999), 404, advanceRules.ADVANCE_NOT_FOUND)
+  refused(await attach(U.one, report, 'x'), 400, advanceRules.ADVANCE_NOT_FOUND)
+  // خطوات المالية: بالصلاحية، ولموظف في نطاق الحساب (غيره «مش موجودة»)، و«اترجّعت» بعد الصرف وبملاحظة
+  assert.equal((await step(U.loose, row.id, 'paid')).status, 403)
+  refused(await step(U.financeCairo, row.id, 'paid'), 404, advanceRules.ADVANCE_NOT_FOUND)
+  refused(await step(U.finance, row.id, 'cancel'), 400, 'الخطوة «اتصرفت» أو «اترجّعت»')
+  refused(await step(U.finance, row.id, 'returned', 'اترجّعت للخزينة'), 400, 'السلفة لسه مااتسجّلش صرفها — ماتتربطش بتقرير')
+  ok(await step(U.finance, row.id, 'paid'), 201)
+  refused(await step(U.finance, row.id, 'paid'), 409, 'صرف السلفة متسجّل قبل كده')
+  const paid = await repo('TravelAdvance').findOneByOrFail({ id: row.id })
+  assert.deepEqual([paid.paidAt != null, paid.paidByUserId, paid.status], [true, U.finance.id, 'OPEN'])
+  // الربط: سلفة واحدة للتقرير وتقرير واحد للسلفة؛ والمربوطة ماتتقفلش «اترجّعت»
+  ok(await attach(U.one, report, row.id))
+  const other = await newReport(U.one, 'تقرير تاني')
+  refused(await attach(U.one, other, row.id), 409, 'السلفة مربوطة بتقرير تاني — فكّها منه الأول')
+  refused(await step(U.finance, row.id, 'returned', 'اترجّعت للخزينة'), 409, 'السلفة مربوطة بتقرير مصروفات — التسوية بتتم باعتماده')
+  const linked = await reportOf(U.one, report)
+  assert.deepEqual([linked.advance, linked.net, linked.total], [{ id: row.id, code: advanceRules.advanceCode(row.id), amount: 1000.5 }, -1000.5, 0])
+  ok(await attach(U.one, report, null))
+  assert.deepEqual([(await reportOf(U.one, report)).advance, (await repo('TravelAdvance').findOneByOrFail({ id: row.id })).reportId], [null, null])
+  // مسح مسودة مربوطة بسلفة بيفكّها
+  ok(await attach(U.one, other, row.id)); ok(await request(U.one, 'DELETE', `${M}/reports/${other}`))
+  assert.equal((await repo('TravelAdvance').findOneByOrFail({ id: row.id })).reportId, null)
+  // «اترجّعت نقدًا»: بملاحظة، وبتقفل السلفة من غير قيد
+  const cash = await advanceFor(U.two, 300)
+  refused(await step(U.finance, cash, 'returned', ' '), 400, 'اكتب ملاحظة القفل (من حرفين لحد 300 حرف)')
+  ok(await step(U.finance, cash, 'returned', 'المأمورية اتلغت واترجّعت للخزينة'), 201)
+  refused(await step(U.finance, cash, 'returned', 'تاني'), 409, 'السلفة اتقفلت قبل كده')
+  refused(await attach(U.two, foreign, cash), 409, 'السلفة اتقفلت قبل كده')
+  const closed = await repo('TravelAdvance').findOneByOrFail({ id: cash })
+  assert.deepEqual([closed.status, closed.closeNote, closed.closedByUserId, closed.closedAt != null], ['RETURNED', 'المأمورية اتلغت واترجّعت للخزينة', U.finance.id, true])
+  assert.equal(await repo('EmployeeObligation').count(), before)
+  const audit = await pool.request().query(`SELECT [action], COUNT(*) AS n FROM dbo.audit_log WHERE [entityType] = N'travel_advance' GROUP BY [action]`)
+  assert.deepEqual(Object.fromEntries(audit.recordset.map(item => [item.action, Number(item.n)])), { TRAVEL_ADVANCE_PAID: 2, TRAVEL_ADVANCE_RETURNED: 1 })
+  // نظرة المالية: سلف موظفين النطاق بس
+  assert.deepEqual(ok(await request(U.finance, 'GET', '/expenses/overview')).advances.map(item => [item.id, item.employeeName, item.status, item.currency]).sort((a, b) => a[0] - b[0]),
+    [[row.id, 'موظف أول', 'OPEN', 'SAR'], [cash, 'موظف تاني', 'RETURNED', 'SAR']])
+  assert.deepEqual(ok(await request(U.financeCairo, 'GET', '/expenses/overview')).advances, [])
+})
+
+test('EX-09: التسوية في اعتماد التقرير — الصافي دائن لو المصروف أكتر، ومدين لو أقل، ومن غير قيد لو متساويين؛ والمعتمد شايف السلفة والصافي؛ وسلفة اتغيّرت بعد التقديم بتوقّف الاعتماد', async () => {
+  // مصروف 1200.50 وسلفة 1000.50 ← دائن 200
+  ok(await line(U.one, E.tripReport, { categoryId: C.meals, amount: 1200.5 }), 201)
+  ok(await attach(U.one, E.tripReport, E.tripAdvance))
+  const sent = ok(await send(U.one, E.tripReport, { advanceAmount: 1, netAmount: 5000 }), 201)
+  const stored = JSON.parse((await repo('Request').findOneByOrFail({ id: sent.id })).payload)
+  assert.deepEqual([stored.amount, stored.advanceAmount, stored.netAmount], [1200.5, 1000.5, 200])
+  // تحت الاعتماد: السلفة ماتتفكّش
+  refused(await attach(U.one, E.tripReport, null), 409, 'التقرير تحت الاعتماد أو اتعتمد — مايتعدّلش')
+  // مبلغ السلفة اتغيّر من ورا الخادم: الاعتماد بيقف من غير قيد ولا تسوية
+  const count = await repo('EmployeeObligation').count()
+  await pool.request().query(`UPDATE dbo.travel_advances SET [amount] = 10 WHERE [id] = ${Number(E.tripAdvance)}`)
+  refused(await act(U.approver, sent.id, 'APPROVE'), 400, `لم يُعتمد الطلب — ${rules.REPORT_TOTAL_CHANGED}. الطلب باقٍ في صندوقك: ارفضه أو أرجعه لاستكمال المعلومات`)
+  assert.deepEqual([await repo('EmployeeObligation').count(), (await repo('TravelAdvance').findOneByOrFail({ id: E.tripAdvance })).status], [count, 'OPEN'])
+  await pool.request().query(`UPDATE dbo.travel_advances SET [amount] = 1000.50 WHERE [id] = ${Number(E.tripAdvance)}`)
+  ok(await act(U.approver, sent.id, 'APPROVE'), 201)
+  const code = advanceRules.advanceCode(E.tripAdvance)
+  assert.deepEqual((await entries(sent.id)).map(entry => [entry.employeeId, entry.type, entry.category, Number(entry.amount), entry.label]),
+    [[E.one.id, 'CREDIT', 'expense', 200, `تسوية سلفة مأمورية ${code}: تقرير ${rules.reportCode(E.tripReport)} (المصروف 1200.50 − السلفة 1000.50)`]])
+  const settled = await repo('TravelAdvance').findOneByOrFail({ id: E.tripAdvance })
+  assert.deepEqual([settled.status, settled.reportId, settled.closedAt != null], ['SETTLED', E.tripReport, true])
+  const done = await reportOf(U.one, E.tripReport)
+  assert.deepEqual([done.phase, done.advance.id, done.net], ['APPROVED', E.tripAdvance, 200])
+  refused(await step(U.finance, E.tripAdvance, 'returned', 'ملاحظة'), 409, 'السلفة اتقفلت قبل كده')
+  // مصروف 300 وسلفة 500 ← مدين 200 (تسوية)
+  const less = await advanceFor(U.two, 500), lessReport = await newReport(U.two, 'مأمورية قصيرة')
+  ok(await line(U.two, lessReport, { categoryId: C.meals, amount: 300 }), 201); ok(await attach(U.two, lessReport, less))
+  const lessSent = ok(await send(U.two, lessReport), 201)
+  assert.equal(JSON.parse((await repo('Request').findOneByOrFail({ id: lessSent.id })).payload).netAmount, -200)
+  ok(await act(U.approver, lessSent.id, 'APPROVE'), 201)
+  assert.deepEqual((await entries(lessSent.id)).map(entry => [entry.employeeId, entry.type, entry.category, Number(entry.amount), entry.status]), [[E.two.id, 'DEBIT', 'adjustment', 200, 'PENDING']])
+  // مأمورية اتلغت: تقرير من غير بنود مربوط بسلفة ← السلفة كلها مدين
+  const whole = await advanceFor(U.two, 400), emptyReport = await newReport(U.two, 'مأمورية اتلغت')
+  refused(await send(U.two, emptyReport), 400, rules.REPORT_EMPTY)
+  ok(await attach(U.two, emptyReport, whole))
+  const emptySent = ok(await send(U.two, emptyReport), 201)
+  assert.deepEqual((({ amount, advanceAmount, netAmount, lines }) => [amount, advanceAmount, netAmount, lines])(JSON.parse((await repo('Request').findOneByOrFail({ id: emptySent.id })).payload)), [0, 400, -400, []])
+  ok(await act(U.approver, emptySent.id, 'APPROVE'), 201)
+  assert.deepEqual((await entries(emptySent.id)).map(entry => [entry.type, Number(entry.amount)]), [['DEBIT', 400]])
+  // متساويين ← من غير قيد، والتقرير معتمد والسلفة متسوّية
+  const even = await advanceFor(U.two, 50), evenReport = await newReport(U.two, 'مأمورية بالظبط')
+  ok(await line(U.two, evenReport, { categoryId: C.meals, amount: 50 }), 201); ok(await attach(U.two, evenReport, even))
+  const evenSent = ok(await send(U.two, evenReport), 201)
+  ok(await act(U.approver, evenSent.id, 'APPROVE'), 201)
+  const evenRow = await repo('ExpenseReport').findOneByOrFail({ id: evenReport })
+  assert.deepEqual([(await entries(evenSent.id)).length, evenRow.status, evenRow.obligationId, (await repo('TravelAdvance').findOneByOrFail({ id: even })).status], [0, 'APPROVED', null, 'SETTLED'])
+  // تنفيذ اتعاد: ولا قيد
+  await ds.transaction(async em => rules.executeExpenseReport(em, await em.getRepository('Request').findOneByOrFail({ id: evenSent.id }), null, { reportId: evenReport, amount: 50, advanceAmount: 50 }))
+  assert.equal((await entries(evenSent.id)).length, 0)
+})
+
+test('EX-10: إنهاء الخدمة — سلف مأموريات مفتوحة بتطلع بند إخلاء طرف عند المالية بعددها وإجماليها؛ ومن غير سلف مفتوحة مفيش بند', async () => {
+  await advanceFor(U.cairo, 250); await advanceFor(U.cairo, 100.5, false)
+  assert.deepEqual(await advanceRules.openAdvancesOf(ds.manager, E.cairo.id), { count: 2, total: 350.5 })
+  const kase = await ds.transaction(em => openOffboardingCase(em, { employeeId: E.cairo.id, lastWorkingDay: day(20), terminationReason: 'resignation', openedBy: U.admin.id }))
+  const items = await repo('ClearanceItem').find({ where: { caseId: kase.id }, order: { id: 'ASC' } })
+  assert.deepEqual(items.map(row => [row.party, row.label]).at(-1), ['finance', 'تسوية سلف مأموريات مفتوحة (2) بإجمالي 350.5'])
+  // موظف سلفه كلها اتقفلت: من غير بند
+  assert.deepEqual(await advanceRules.openAdvancesOf(ds.manager, E.two.id), { count: 0, total: 0 })
+  const clean = await ds.transaction(em => openOffboardingCase(em, { employeeId: E.two.id, lastWorkingDay: day(20), terminationReason: 'resignation', openedBy: U.admin.id }))
+  assert.equal((await repo('ClearanceItem').find({ where: { caseId: clean.id } })).some(row => row.label.includes('سلف مأموريات')), false)
 })

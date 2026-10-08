@@ -3,23 +3,26 @@ import { Column, Entity, PrimaryGeneratedColumn, type EntityManager } from 'type
 import { EmployeeObligation } from '../requests/entities/financial.entities'
 import type { Request } from '../requests/entities/request.entity'
 import type { RequestType } from '../requests/entities/request-type.entity'
+import { advanceCode, attachedAdvance, TravelAdvance } from './travel-advances'
 
 // B5.3 (أ): تقارير المصروفات — تقرير ببنود وإيصال لكل بند وحد لكل فئة. ميزة فرعية `expenses.reports` (مقفولة افتراضيًا) جوه موديول
 //  المصروفات القائم. الاعتماد كله في محرك الطلبات: التقرير بيتقدّم كطلب وجهته `expense_report`، والخادم بيثبّت إجماليه وبنوده في الحمولة
 //  عند كل تقديم، وعند الاعتماد النهائي بيتكتب قيد دائن واحد في الدفتر بنفس شكل قيد «صرف مصروفات» القائم.
-//  ترتيب الأقفال واحد: صف الطلب ← صف التقرير. كله بـem بس: مفيش نداء لخدمة تانية جوه معاملة.
+//  (ب) سلفة مأمورية مربوطة بالتقرير بتتسوّى في نفس الاعتماد: الصافي = الإجمالي − السلفة ← قيد دائن أو مدين أو من غير قيد.
+//  ترتيب الأقفال واحد: صف الطلب ← صف التقرير ← صف السلفة. كله بـem بس: مفيش نداء لخدمة تانية جوه معاملة.
 
 export const EXPENSE_REPORTS_FEATURE = 'expenses.reports'
 export const EXPENSE_REPORT_HANDLER = 'expense_report'
-/** من العميل: رقم التقرير. ومن الخادم عند كل تقديم: الإجمالي (شروط السلسلة على المبلغ) والعنوان وفترة المأمورية والبنود */
+/** من العميل: رقم التقرير. ومن الخادم عند كل تقديم: الإجمالي (شروط السلسلة على المبلغ) والعنوان وفترة المأمورية والبنود، والسلفة المربوطة وصافيها */
 export const EXPENSE_REPORT_CLIENT_KEYS = ['reportId'] as const
-export const EXPENSE_REPORT_STAGED_KEYS = ['amount', 'reportTitle', 'tripFrom', 'tripTo', 'lines'] as const
+export const EXPENSE_REPORT_STAGED_KEYS = ['amount', 'reportTitle', 'tripFrom', 'tripTo', 'lines', 'advanceAmount', 'netAmount'] as const
 
 export const EXPENSE_MIGRATION_MISSING = 'جداول تقارير المصروفات ناقصة — طبّق ترحيلات 149 و150 و151 الأول'
 export const REPORT_NOT_FOUND = 'تقرير المصروفات غير موجود'
 export const REPORT_BUSY = 'التقرير متقدّم في طلب تاني لسه شغال'
 export const REPORT_DONE = 'التقرير اتعتمد واتصرف قبل كده'
 export const REPORT_EMPTY = 'التقرير من غير بنود — ضيف بند واحد على الأقل'
+export const SETTLEMENT_CATEGORY = 'adjustment'
 export const REPORT_CHANGED = 'التقرير اتغيّر — حدّث الصفحة وجرّب تاني'
 export const REPORT_NOT_LINKED = 'تقرير المصروفات مش مربوط بالطلب ده — ارفض الطلب، أو رجّعه لمقدّمه يقدّمه تاني'
 export const REPORT_TOTAL_CHANGED = 'إجمالي بنود التقرير مش مطابق للمبلغ المتقدّم — رجّع الطلب لمقدّمه يقدّمه تاني'
@@ -290,7 +293,7 @@ const reportIdOf = (raw: unknown): number | null => {
 
 /**
  * التقديم (وكل إعادة تقديم) جوه معاملته، وصف الطلب مقفول: التقرير تحت قفل صفه — بتاع مقدّم الطلب وإلا «غير موجود»، مش معتمد، ومش متقدّم في
- * طلب تاني شغال؛ فيه بنود، ومفيش بند ممنوع بالسياسة. التقرير بيتربط بالطلب، وبترجع الحمولة اللي هتتخزّن: الإجمالي والعنوان والبنود
+ * طلب تاني شغال؛ فيه بنود (أو مربوط بسلفة مأمورية — اعتماده بيخصمها)، ومفيش بند ممنوع بالسياسة. التقرير بيتربط بالطلب، وبترجع الحمولة اللي هتتخزّن: الإجمالي والعنوان والبنود
  * من الخادم فوق أي قيمة جاية من العميل.
  */
 export async function stageExpenseReport(em: EntityManager, req: Pick<Request, 'id' | 'payload' | 'requesterId' | 'status'>): Promise<Record<string, unknown>> {
@@ -308,18 +311,22 @@ export async function stageExpenseReport(em: EntityManager, req: Pick<Request, '
   if (!own && reportPhase(report.status, linkedStatus) === 'PENDING') throw new ConflictException(REPORT_BUSY)
   if (!own && reportPhase(report.status, linkedStatus) === 'RETURNED') throw new ConflictException(REPORT_BUSY)
   const judged = await judgeLines(em, report.id)
-  if (!judged.lines.length) throw new BadRequestException(REPORT_EMPTY)
+  // سلفة المأمورية المربوطة تحت قفل صفها (بعد قفل التقرير)
+  const advance = await attachedAdvance(em, report.id)
+  if (!judged.lines.length && !advance) throw new BadRequestException(REPORT_EMPTY)
   if (judged.block) throw new BadRequestException(judged.block)
   const now = new Date()
   await em.getRepository(ExpenseReport).update({ id: report.id }, { status: 'SUBMITTED', requestId: req.id, totalAmount: judged.totalCents / 100, submittedAt: now, updatedAt: now })
   return { ...payload, reportId: report.id, amount: judged.totalCents / 100, reportTitle: report.title, tripFrom: report.tripFrom ? ymd(report.tripFrom) : null,
-    tripTo: report.tripTo ? ymd(report.tripTo) : null, lines: judged.lines }
+    tripTo: report.tripTo ? ymd(report.tripTo) : null, lines: judged.lines,
+    ...(advance ? { advanceAmount: cents(advance.amount) / 100, netAmount: (judged.totalCents - cents(advance.amount)) / 100 } : {}) }
 }
 
 /**
  * التنفيذ عند الاعتماد النهائي، جوه معاملة الاعتماد وصف الطلب مقفول: التقرير تحت قفل صفه لازم يكون بتاع مقدّم الطلب ومربوط بالطلب ده
- * نفسه ولسه «اتقدّم»، والإجمالي — محسوب تاني من البنود — يساوي المثبّت عند التقديم والمبلغ اللي المعتمدين شافوه. بعدها قيد دائن واحد
- * في الدفتر بنفس شكل قيد «صرف مصروفات»، مربوط بالطلب. تنفيذ اتعاد بيرجّع القيد نفسه.
+ * نفسه ولسه «اتقدّم»، والإجمالي — محسوب تاني من البنود — يساوي المثبّت عند التقديم والمبلغ اللي المعتمدين شافوه، والسلفة المربوطة هي اللي
+ * شافوها. بعدها قيد واحد في الدفتر مربوط بالطلب: من غير سلفة قيد دائن بنفس شكل «صرف مصروفات»؛ وبسلفة الصافي (الإجمالي − السلفة) دائن لو
+ * موجب ومدين لو سالب ومن غير قيد لو صفر، والسلفة بتتقفل «اتسوّت». تنفيذ اتعاد مابيكتبش تاني.
  */
 export async function executeExpenseReport(em: EntityManager, req: Request, _type: RequestType, payload: Record<string, unknown>): Promise<{ ref: string; completed: boolean; note?: string }> {
   if (!(await expenseReportsReady(em))) throw new BadRequestException(EXPENSE_MIGRATION_MISSING)
@@ -327,19 +334,30 @@ export async function executeExpenseReport(em: EntityManager, req: Request, _typ
   const locked = reportId === null ? null : await lockReport(em, reportId, { id: req.id, status: req.status })
   if (!locked || locked.report.employeeId !== req.requesterId || locked.report.requestId == null || Number(locked.report.requestId) !== req.id) throw new BadRequestException(REPORT_NOT_LINKED)
   const report = locked.report
-  if (report.status === 'APPROVED' && report.obligationId) return { ref: reportCode(report.id), completed: true }
+  if (report.status === 'APPROVED') return { ref: reportCode(report.id), completed: true }
   if (report.status !== 'SUBMITTED') throw new BadRequestException(REPORT_NOT_LINKED)
   const judged = await judgeLines(em, report.id)
-  const staged = expenseAmount(payload.amount, 999_999_999)
-  if (!judged.lines.length || staged === null || cents(staged) !== judged.totalCents || cents(report.totalAmount) !== judged.totalCents) throw new BadRequestException(REPORT_TOTAL_CHANGED)
-  const amount = judged.totalCents / 100
-  const entry = await em.getRepository(EmployeeObligation).save({
-    employeeId: req.requesterId, type: 'CREDIT', category: 'expense', amount, label: `مصروفات: تقرير ${reportCode(report.id)} — ${report.title}`.slice(0, 300), status: 'PENDING',
+  const advance = await attachedAdvance(em, report.id)
+  const centsOf = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? cents(value) : NaN)
+  const stagedAdvance = payload.advanceAmount === undefined || payload.advanceAmount === null ? null : centsOf(payload.advanceAmount)
+  const advanceCents = advance ? cents(advance.amount) : null
+  if ((!judged.lines.length && !advance) || centsOf(payload.amount) !== judged.totalCents || cents(report.totalAmount) !== judged.totalCents || stagedAdvance !== advanceCents) {
+    throw new BadRequestException(REPORT_TOTAL_CHANGED)
+  }
+  // الصافي بعد السلفة: موجب = دائن للموظف، سالب = مدين عليه (تسوية)، صفر = من غير قيد
+  const netCents = judged.totalCents - (advanceCents ?? 0), amount = Math.abs(netCents) / 100
+  const label = advance
+    ? `تسوية سلفة مأمورية ${advanceCode(advance.id)}: تقرير ${reportCode(report.id)} (المصروف ${money(judged.totalCents)} − السلفة ${money(advanceCents ?? 0)})`
+    : `مصروفات: تقرير ${reportCode(report.id)} — ${report.title}`
+  const entry = netCents === 0 ? null : await em.getRepository(EmployeeObligation).save({
+    employeeId: req.requesterId, type: netCents > 0 ? 'CREDIT' : 'DEBIT', category: netCents > 0 ? 'expense' : SETTLEMENT_CATEGORY, amount, label: label.slice(0, 300), status: 'PENDING',
     sourceRequestId: req.id, effectiveDate: null as unknown as string,
   })
   const now = new Date()
-  await em.getRepository(ExpenseReport).update({ id: report.id }, { status: 'APPROVED', obligationId: entry.id, approvedAt: now, updatedAt: now })
-  return { ref: reportCode(report.id), completed: true, note: `إضافة ${amount} في دفتر المديونيات (تقرير ${reportCode(report.id)}، ${judged.lines.length} بند)` }
+  if (advance) await em.getRepository(TravelAdvance).update({ id: advance.id }, { status: 'SETTLED', closedAt: now })
+  await em.getRepository(ExpenseReport).update({ id: report.id }, { status: 'APPROVED', obligationId: entry ? entry.id : null, approvedAt: now, updatedAt: now })
+  const effect = netCents === 0 ? 'من غير قيد (المصروف = السلفة)' : `${netCents > 0 ? 'إضافة' : 'خصم'} ${amount} في دفتر المديونيات`
+  return { ref: reportCode(report.id), completed: true, note: `${effect} (تقرير ${reportCode(report.id)}، ${judged.lines.length} بند${advance ? `، سلفة ${advanceCode(advance.id)}` : ''})` }
 }
 
 /** حقل نموذج الطلب: رقم التقرير (التقديم المعتاد من شاشة «مصروفاتي»)، وبعده أي حقول زوّدها مسؤول النظام على النوع */

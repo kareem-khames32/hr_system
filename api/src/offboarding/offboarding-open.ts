@@ -1,5 +1,6 @@
 import { EntityManager, In } from 'typeorm'
 import { raiseOffboardingRemovals } from '../benefits/insurance-members'
+import { openAdvancesOf } from '../expenses/travel-advances'
 import { CustodyAssignment } from '../requests/entities/custody.entities'
 import {
   ClearanceItem,
@@ -63,6 +64,9 @@ export async function openOffboardingCase(
   // B5.2 (ب): اشتراكات تأمين سارية للموظف أو معاليه = طلب حذف لكل اشتراك وبند إخلاء طرف عند الموارد البشرية. من غير اشتراكات (أو قبل ترحيلها): ولا حاجة زيادة
   const insuranceRemovals = await raiseOffboardingRemovals(em, input.employeeId, input.openedBy ?? 0)
   if (insuranceRemovals > 0) items.push({ caseId: kase.id, party: 'hr', label: `حذف التأمين الطبي من الوثيقة (${insuranceRemovals} عضو)` })
+  // B5.3 (ب): سلف مأموريات مفتوحة = بند إخلاء طرف عند المالية بعددها وإجماليها. من غير سلف (أو قبل ترحيل 152) مفيش بند
+  const advances = await openAdvancesOf(em, input.employeeId)
+  if (advances.count > 0) items.push({ caseId: kase.id, party: 'finance', label: `تسوية سلف مأموريات مفتوحة (${advances.count}) بإجمالي ${advances.total}` })
   await em.getRepository(ClearanceItem).save(items)
   return kase
 }
