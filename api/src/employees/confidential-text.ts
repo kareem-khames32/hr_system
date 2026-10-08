@@ -1,17 +1,20 @@
 // CRP4C (P4C-B01): نص سردي من طلب سري ممكن يتنسخ لصف قايم بالتحديث (سبب حذف معال، وصف فقد عهدة، سبب أرشفة في ملف الموظف) — ورابط
 // إنشاء الصف مابيحميش النسخة دي. فالتصدير بيحجب النص نفسه أينما اتنسخ: أي خانة نصية فيها نص سردي من طلب سري للموظف (كله، أو أوله لو
 // النسخة مقطوعة أو قدامها بادئة) بتطلع بعلامة الحجب. حساب نقي من غير قاعدة بيانات.
-//  - «سردي» = نص فيه مسافة أو حروف غير لاتينية (سبب، وصف، ملاحظة)، أو كلمة لاتينية واحدة تحت خانة اسمها سردي (reason، description، notes…).
-//  - قيم البيانات مش سردية: الأكواد والحالات والأرقام والتواريخ (ANNUAL، archived، 2026-10-01، رقم موبايل). دي بتتطبق على السجل وبتبقى
-//    بياناته، وحجبها كان هيمسح خانات سليمة (حالة الموظف، نوع الإجازة) عند أي موظف له طلب سري.
+//  - «سردي» = أي نص تحت خانة اسمها سردي (reason، description، notes…) أيًا كان شكله — كلمة واحدة أو حروف كبيرة زي الأكواد — غير الأرقام
+//    والتواريخ؛ وتحت أي خانة تانية: نص فيه مسافة أو حروف غير لاتينية.
+//  - قيم البيانات تحت خانات البيانات مش سردية: الأكواد والحالات والأرقام والتواريخ (ANNUAL، archived، 2026-10-01، رقم موبايل). دي بتتطبق
+//    على السجل وبتبقى بياناته، وحجبها كان هيمسح خانات سليمة (حالة الموظف، نوع الإجازة) عند أي موظف له طلب سري.
 
 export const CONFIDENTIAL_TEXT_MARK = '[محجوب: نص من طلب سري]'
 /** أقصر نص سردي بيتحجب، وأقصر نسخة مقطوعة بتتطابق، وطول البداية اللي بتكفي لتمييز نسخة مقطوعة قدامها بادئة */
 const MIN_LENGTH = 4, MIN_PART_LENGTH = 8, HEAD_LENGTH = 20
 /** خانات الحمولة اللي محتواها كلام مكتوب حتى لو كلمة لاتينية واحدة */
 const NARRATIVE_KEY = /reason|description|note|comment|detail|text|justif|message|remark|explain|subject|title|complaint|statement/i
-/** أرقام وتواريخ وأوقات وأكواد بحروف كبيرة — مش كلام */
+/** أرقام وتواريخ وأوقات وأكواد بحروف كبيرة — مش كلام (تحت خانة بيانات) */
 const CODE = /^[A-Z0-9_\-:.\/+ ]*$/
+/** أرقام وتواريخ وأوقات بس — دي الوحيدة اللي مش كلام حتى تحت خانة سردية */
+const NUMERIC = /^[0-9\-:.\/+ ]*$/
 
 const narrative = (text: string) => text.length >= MIN_LENGTH && (/\s/.test(text) || /[^\u0000-\u007f]/.test(text)) && !CODE.test(text)
 /** شكل النص جوه خانة JSON نصية (علامات التنصيص والسطور بتتكتب بهروب) */
@@ -23,7 +26,7 @@ export function confidentialTexts(payloads: ReadonlyArray<string | null | undefi
   const walk = (value: unknown, key: string) => {
     if (typeof value === 'string') {
       const text = value.trim()
-      if (narrative(text) || (NARRATIVE_KEY.test(key) && text.length >= MIN_LENGTH && !CODE.test(text))) found.add(text)
+      if (narrative(text) || (NARRATIVE_KEY.test(key) && text.length >= MIN_LENGTH && !NUMERIC.test(text))) found.add(text)
     } else if (Array.isArray(value)) value.forEach(entry => walk(entry, key))
     else if (value !== null && typeof value === 'object') for (const [name, entry] of Object.entries(value as Record<string, unknown>)) walk(entry, name)
   }

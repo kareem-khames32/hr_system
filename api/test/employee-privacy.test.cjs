@@ -131,9 +131,10 @@ test('EPU-06 (P4C-B01): حجب النص السردي المنسوخ من طلب 
   const text = require('../src/employees/confidential-text')
   const long = 'الموظف طلب حذف المعال بسبب خلاف عائلي خاص جدًا لا يجوز تداوله خارج لجنة شؤون الموظفين مطلقًا'
   const secrets = text.confidentialTexts([JSON.stringify({ reason: ' طلاق ', description: long, leaveTypeCode: 'ANNUAL', fromDate: '2026-10-01', phone: '0551234567', amount: 321, newStatus: 'archived', payMethod: 'cash', startsAt: '2026-10-01 09:30',
-    nested: { notes: ['family issue'], rejectionReason: 'divorce', type: 'divorce2' } }), null, '', 'نص مش JSON'])
-  // السردي بس، والأطول أولًا: كلمة لاتينية واحدة بتدخل لو خانتها سردية (rejectionReason) ومابتدخلش لو خانة بيانات (type، newStatus)
-  assert.deepEqual(secrets, [long, 'family issue', 'نص مش JSON', 'divorce', 'طلاق'])
+    nested: { notes: ['family issue'], rejectionReason: 'divorce', type: 'divorce2', detailsCode: 'PRIVATE_ARCHIVE_REASON', comment: '2026-10-01', remarks: '12345' } }), null, '', 'نص مش JSON'])
+  // السردي بس، والأطول أولًا: تحت خانة سردية أي نص بيدخل (كلمة واحدة، أو حروف كبيرة زي الأكواد) غير الأرقام والتواريخ؛ وتحت خانة بيانات (type، newStatus) لأ
+  assert.deepEqual(secrets, [long, 'PRIVATE_ARCHIVE_REASON', 'family issue', 'نص مش JSON', 'divorce', 'طلاق'])
+  assert.deepEqual([text.isConfidentialCopy('PRIVATE_ARCHIVE_REASON', secrets), text.isConfidentialCopy('ARCHIVE', secrets), text.isConfidentialCopy('12345', secrets)], [true, false, false])
   const copy = value => text.isConfidentialCopy(value, secrets)
   // النص كله، بمسافات، بادئة قدامه، مقطوع (أول 100 حرف)، بادئة ومقطوع، وجوه JSON
   assert.deepEqual(['طلاق', '  طلاق  ', 'مكافأة: طلاق', long.slice(0, 100), ('مرحّل من قيد #5: ' + long).slice(0, 60), JSON.stringify({ note: long }), 'family issue'].map(copy), [true, true, true, true, true, true, true])
