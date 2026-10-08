@@ -19,6 +19,7 @@ import { LeaveBalancesService } from '../requests/leave-balances.service'
 import { Loan, LoanInstallment } from '../requests/entities/financial.entities'
 import { EmployeeDocument } from './assets.entities'
 import { canReadEmployeeFinance, projectEmployee, projectEmployeeHistory } from '../employees/employee-projection'
+import { partialMaskingOn } from '../employees/employee-privacy'
 import { readLoanInstallmentPositions } from '../payroll/payroll-installment-balances'
 import { PayrollDecimal } from '../payroll/payroll-decimal'
 import { RequireModule } from '../modules-registry/module.guard'
@@ -187,7 +188,7 @@ export class EmployeeExtrasController {
       : []
     const assetById = new Map(assetRows.map((a) => [a.id, a]))
     return {
-      employee: projectEmployee(employee, user),
+      employee: projectEmployee(employee, user, await partialMaskingOn(this.custody.manager)),
       leaves: empLeaves,
       balances: empBalances,
       history: projectEmployeeHistory(empHistory, user, id),

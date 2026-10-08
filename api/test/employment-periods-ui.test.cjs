@@ -71,5 +71,6 @@ test('PU-03: قسم «فترات الخدمة» في ملف الموظف لمو�
   // الخادم: القراءة بصلاحية عرض الموظفين، والتنفيذ بصلاحية إنشاء موظف، والاتنين بنطاق فروع الحساب
   has(controller, "  @Perm('employees.view')\n  @Get(':id/employment-periods')\n  employmentPeriods(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: JwtPayload) {\n    return this.employees.employmentPeriods(id, branchScopeOf(user))")
   has(controller, "  @Perm('employees.create')\n  @Post(':id/rehire')")
-  has(controller, '    return projectEmployee(await this.employees.rehire(id, body, branchScopeOf(user), user.sub), user)')
+  // B4.8 (أ): الرد بياخد حكم «الإخفاء الجزئي» زي باقي ردود ملف الموظف
+  has(controller, '    return projectEmployee(await this.employees.rehire(id, body, branchScopeOf(user), user.sub), user, await this.employees.partialMasking())')
 })

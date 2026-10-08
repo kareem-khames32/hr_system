@@ -65,6 +65,7 @@ import { openCustodyStatuses } from '../requests/employment-destinations'
 import { attachSuspensionPaid, markSuspensionPaid, suspensionPaidReady, readEmployeeSuspensions, readOpenSuspensions, suspensionTableReady, suspensionView } from './employee-suspensions'
 import { inclusiveDays, SUSPENSION_PAID_CLOSED, SUSPENSION_PAID_KEY, SUSPENSION_PAID_MIGRATION, suspensionPaidTooLong } from './employee-suspension-rules'
 import { paidSuspensionMaxDays } from './employee-suspension-paid'
+import { partialMaskingOn } from './employee-privacy'
 import { readStatutoryEntries } from '../statutory/statutory.service'
 import type { CreateEmployeeSuspensionDto, EndEmployeeSuspensionDto } from './employees.dto'
 import { recordOutboxEvent } from '../queue/outbox'
@@ -224,6 +225,11 @@ export class EmployeesService {
       },
       order: { fullName: 'ASC' },
     })
+  }
+
+  /** B4.8 (أ): إعداد «الإخفاء الجزئي للهوية والآيبان» مفتوح؟ — بيتقري عند حدود الرد (القايمة والملف) */
+  partialMasking(): Promise<boolean> {
+    return partialMaskingOn(this.employees.manager)
   }
 
   async findOne(id: number, branchScope: BranchScope) {

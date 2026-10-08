@@ -24,6 +24,13 @@ export interface EmployeeSuspension {
   paid?: boolean
 }
 
+// B4.8 (أ): تصدير بيانات موظف واحد كاملة (طلب اطلاع) — للي معاه «تعديل الموظفين»
+export interface ApiEmployeeDataExport {
+  exportedAt: string; employeeId: number; employee: Record<string, unknown>
+  sections: Array<{ key: string; label: string; count: number; truncated: boolean; rows: unknown[] }>
+}
+export const fetchEmployeeDataExport = (employeeId: number) => apiFetch<ApiEmployeeDataExport>(`/employees/${employeeId}/data-export`)
+
 export const fetchSuspensionOptions = (employeeId: number) =>
   apiFetch<{ paidAvailable: boolean; paidMaxDays: number | null }>(`/employees/${employeeId}/suspension-options`)
 

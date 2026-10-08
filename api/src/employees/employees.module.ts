@@ -25,6 +25,7 @@ import { EmployeeSelfPhotoController } from './employee-self-photo.controller'
 import { QualificationsController } from './qualifications.controller'
 import { EmployeesService } from './employees.service'
 import { EmployeeExportService } from './employee-export.service'
+import { EmployeeDataExportService } from './employee-data-export'
 import { EmployeeCustomField, EmployeeCustomValue } from './employee-custom-fields.entities'
 import { EmployeeCustomFieldsController, EmployeeFieldsSettingsController } from './employee-custom-fields.controller'
 import { EmployeeCustomFieldsService } from './employee-custom-fields.service'
@@ -67,7 +68,7 @@ import { PositionsModule } from '../positions/positions.module'
     PositionsModule,
   ],
   controllers: [EmployeesController, QualificationsController, EmployeeSelfPhotoController, EmployeeFieldsSettingsController, EmployeeCustomFieldsController],
-  providers: [EmployeesService, EmployeeExportService, EmployeeCustomFieldsService],
+  providers: [EmployeesService, EmployeeExportService, EmployeeDataExportService, EmployeeCustomFieldsService],
   exports: [EmployeesService],
 })
 export class EmployeesModule {}

@@ -3,6 +3,7 @@ import { userHasPerm } from '../auth/guards'
 import type { EmployeeStatusHistory } from '../requests/entities/employment.entities'
 import type { Employee } from './employee.entity'
 import { historyWithLegacyLabels, FINANCIAL_CHANGE_FIELDS, LOGIN_ACCOUNT_FIELD } from './employee-change-log'
+import { canSeeFullIdentity, maskIbanPartial, maskIdentityPartial } from './employee-privacy'
 
 /**
  * يشوف الراتب والبدلات والبنك لكل الموظفين في نطاقه (مش ملفه هو بس) — نفس القاعدة للقراءة والتصدير ولوحة «فريقي».
@@ -19,9 +20,22 @@ export function canReadEmployeeFinance(user: JwtPayload, employeeId: number) {
 
 // Apply only at HTTP response boundaries. Internal payroll/settlement services
 // still receive the complete entity, and editors retain unchanged field values.
-export function projectEmployee(employee: Employee, user: JwtPayload): Partial<Employee> {
-  if (canReadEmployeeFinance(user, employee.id)) return employee
-  const safe: Partial<Employee> = { ...employee }
+// partialMasking (B4.8-أ): إعداد «الإخفاء الجزئي» مفتوح — غير المصرّح له بياخد الهوية والجواز والآيبان مخفيين جزئيًا في خانات لوحدها
+// (…Masked) والخانة الأصلية بتتشال. مقفول (الافتراضي) = الناتج زي الأول بالحرف.
+export type ProjectedEmployee = Partial<Employee> & { nationalIdMasked?: string | null; passportNoMasked?: string | null; ibanMasked?: string | null }
+export function projectEmployee(employee: Employee, user: JwtPayload, partialMasking = false): ProjectedEmployee {
+  const finance = canReadEmployeeFinance(user, employee.id)
+  const identity = !partialMasking || canSeeFullIdentity(user, employee.id)
+  if (finance && identity) return employee
+  const safe: ProjectedEmployee = { ...employee }
+  if (!identity) {
+    safe.nationalIdMasked = maskIdentityPartial(employee.nationalId)
+    safe.passportNoMasked = maskIdentityPartial(employee.passportNo)
+    delete safe.nationalId
+    delete safe.passportNo
+  }
+  if (finance) return safe
+  if (partialMasking) safe.ibanMasked = maskIbanPartial(employee.iban)
   const financialFields: (keyof Employee)[] = [
     'currency', 'salaryCycle', 'basicSalary', 'housingAllowance', 'transportAllowance',
     'phoneAllowance', 'workNatureAllowance', 'otherAllowance', 'workPressureAllowance', 'payMethod', 'bankTransferAmount',

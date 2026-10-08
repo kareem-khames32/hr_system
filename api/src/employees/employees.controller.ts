@@ -30,6 +30,7 @@ import { EmployeesService } from './employees.service'
 import { projectEmployee } from './employee-projection'
 import { parseEmployeeExportIds } from './employee-export'
 import { EmployeeExportService } from './employee-export.service'
+import { EmployeeDataExportService } from './employee-data-export'
 import { RequireModule } from '../modules-registry/module.guard'
 
 // تغيير الأجر (أو قراءة سياقه للتغيير) يغيّر صافي المسير → اعتماد المسير شرط إضافي
@@ -58,12 +59,13 @@ class SalaryChangeAuthorityGuard implements CanActivate {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('employees')
 export class EmployeesController {
-  constructor(private readonly employees: EmployeesService, private readonly exporter: EmployeeExportService) {}
+  constructor(private readonly employees: EmployeesService, private readonly exporter: EmployeeExportService, private readonly dataExporter: EmployeeDataExportService) {}
 
   @Perm('employees.view')
   @Get()
   async findAll(@CurrentUser() user: JwtPayload) {
-    return (await this.employees.findAll(branchScopeOf(user))).map(employee => projectEmployee(employee, user))
+    const masking = await this.employees.partialMasking()
+    return (await this.employees.findAll(branchScopeOf(user))).map(employee => projectEmployee(employee, user, masking))
   }
 
   // دليل مختصر (id/اسم/كود) للنشطين في النطاق — بلا employees.view، لمنتقيات
@@ -103,7 +105,7 @@ export class EmployeesController {
     if (user.employeeId !== id && !userHasPerm(user, 'employees.view')) {
       throw new ForbiddenException('لا تملك صلاحية عرض الموظفين')
     }
-    return projectEmployee(await this.employees.findOne(id, branchScopeOf(user)), user)
+    return projectEmployee(await this.employees.findOne(id, branchScopeOf(user)), user, await this.employees.partialMasking())
   }
 
   @Perm('employees.create')
@@ -120,7 +122,7 @@ export class EmployeesController {
       if (dto.branchId == null && scope.length > 1) throw new BadRequestException('حسابك على أكتر من فرع — اختار فرع الموظف')
       dto.branchId = dto.branchId != null ? Number(dto.branchId) : scope[0]
     }
-    return projectEmployee(await this.employees.create(dto, user.sub, scope), user)
+    return projectEmployee(await this.employees.create(dto, user.sub, scope), user, await this.employees.partialMasking())
   }
 
   // سياق تعديل الأجر (الأجر الحالي الدقيق + بصمة المصدر) = بداية تغيير الراتب →
@@ -155,7 +157,7 @@ export class EmployeesController {
     @Body() dto: RenewEmployeeContractDto,
     @CurrentUser() user: JwtPayload
   ) {
-    return projectEmployee(await this.employees.renewContract(id, dto, branchScopeOf(user), user.sub), user)
+    return projectEmployee(await this.employees.renewContract(id, dto, branchScopeOf(user), user.sub), user, await this.employees.partialMasking())
   }
 
   // أرشفة بدل حذف — السجل الوظيفي يبقى (بسبب موثّق)
@@ -166,7 +168,7 @@ export class EmployeesController {
     @CurrentUser() user: JwtPayload,
     @Body() body?: { reason?: string }
   ) {
-    return projectEmployee(await this.employees.archive(id, branchScopeOf(user), body?.reason, user.sub), user)
+    return projectEmployee(await this.employees.archive(id, branchScopeOf(user), body?.reason, user.sub), user, await this.employees.partialMasking())
   }
 
   // ===== الإيقاف عن العمل لفترة (قرار المالك 16 سبتمبر) =====
@@ -180,6 +182,13 @@ export class EmployeesController {
       throw new ForbiddenException('لا تملك صلاحية عرض الموظفين')
     }
     return this.employees.listSuspensions(id, branchScopeOf(user))
+  }
+
+  // B4.8 (أ): تصدير بيانات موظف واحد كاملة (طلب اطلاع) — للي معاه «تعديل الموظفين» وفرع الموظف في نطاقه، وبسطر تدقيق
+  @Perm('employees.edit')
+  @Get(':id/data-export')
+  dataExport(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: JwtPayload) {
+    return this.dataExporter.export(user, id)
   }
 
   // B4.5 (د): خيارات تسجيل الإيقاف (هل «بأجر» متاح وحدّه) — لنفس صلاحية التسجيل
@@ -219,7 +228,7 @@ export class EmployeesController {
     @CurrentUser() user: JwtPayload,
     @Body() body?: { reason?: string }
   ) {
-    return projectEmployee(await this.employees.reactivate(id, branchScopeOf(user), user.sub, body?.reason), user)
+    return projectEmployee(await this.employees.reactivate(id, branchScopeOf(user), user.sub, body?.reason), user, await this.employees.partialMasking())
   }
 
   // B2.10: فترات خدمة الموظف المقفولة وبداية الحالية، وهل «إعادة تعيين» متاحة له
@@ -237,6 +246,6 @@ export class EmployeesController {
     @CurrentUser() user: JwtPayload,
     @Body() body?: { startDate?: string; reason?: string }
   ) {
-    return projectEmployee(await this.employees.rehire(id, body, branchScopeOf(user), user.sub), user)
+    return projectEmployee(await this.employees.rehire(id, body, branchScopeOf(user), user.sub), user, await this.employees.partialMasking())
   }
 }

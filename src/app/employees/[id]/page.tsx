@@ -79,7 +79,7 @@ import EmployeeCustomFieldsCard from '@/components/EmployeeCustomFieldsCard'
 import DependentsCard from '@/components/DependentsCard'
 import EmploymentPeriodsCard from '@/components/EmploymentPeriodsCard'
 import { EmployeePayrollRunsCard } from '@/components/payroll/PayrollRunMoveMemberModal'
-import { SUSPENSION_STATE_LABELS, suspensionHistoryNote, suspensionPeriodText, type EmployeeSuspension } from '@/lib/employee-suspensions-api'
+import { SUSPENSION_STATE_LABELS, fetchEmployeeDataExport, suspensionHistoryNote, suspensionPeriodText, type EmployeeSuspension } from '@/lib/employee-suspensions-api'
 
 // الحقول الشخصية والمالية الجديدة المدعومة في الباك إند (ليست بعد ضمن ApiEmployee)
 type EmployeeExtras = {
@@ -451,6 +451,28 @@ export default function EmployeeProfilePage() {
   // إيقاف منتهي مختار من السجل للإلغاء أو تقديم نهايته (بدل الساري/القادم)
   const [finishedSuspension, setFinishedSuspension] = useState<EmployeeSuspension | null>(null)
   const [notice, setNotice] = useState('')
+  // B4.8 (أ): تصدير بيانات الموظف كاملة — الملف بيتبني في المتصفح من رد الخادم
+  const [exportingData, setExportingData] = useState(false)
+  const exportEmployeeData = async () => {
+    if (!employee) return
+    setExportingData(true)
+    try {
+      const data = await fetchEmployeeDataExport(employee.id)
+      const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' }))
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `employee-${employee.id}-data.json`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+      setNotice('اتصدّرت بيانات الموظف — والتصدير اتسجّل في سجل التدقيق.')
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : 'تعذر تصدير بيانات الموظف')
+    } finally {
+      setExportingData(false)
+    }
+  }
   const [reloadKey, setReloadKey] = useState(0)
   // «مرتبط بحساب دخول» — الكارت بيتقرا بصلاحية الملف نفسها، وزرّ «مزامنة من AD» بـusers.manage
   // ونطاق كل الفروع (الخادم بيفرضها، وcanSync مرآتها عشان الزر مايظهرش لمين مايقدرش)
@@ -582,8 +604,9 @@ export default function EmployeeProfilePage() {
           managerTitle: manager?.jobTitle ?? '',
           nationality: e.nationality || '—',
           // رقم الهوية أو الجواز (واحد منهم على الأقل) — الناقص «—»
-          nationalId: val(e.nationalId),
-          passportNo: val(e.passportNo),
+          // B4.8 (أ): الرقم الكامل، أو المخفي جزئيًا لو حسابك مش مصرّح له
+          nationalId: val(e.nationalId ?? e.nationalIdMasked),
+          passportNo: val(e.passportNo ?? e.passportNoMasked),
           passportExpiry: e.passportExpiry ? fmtDate(e.passportExpiry) : '—',
           birthDate: fmtDate(e.birthDate),
           birthPlace: val(e.birthPlace),
@@ -637,7 +660,7 @@ export default function EmployeeProfilePage() {
           currencyCode: labelOf(CURRENCY_AR, currencyCode),
           bankName: e.bankName ?? '—',
           bankBranch: val(e.bankBranch),
-          bankAccount: e.iban ?? '—',
+          bankAccount: e.iban ?? e.ibanMasked ?? '—',
           gosiNumber: val(e.gosiNumber),
           isGosiRegistered:
             e.isGosiRegistered == null ? '—' : e.isGosiRegistered ? 'نعم' : 'لا',
@@ -1016,6 +1039,12 @@ export default function EmployeeProfilePage() {
                 <Printer size={18} />
                 طباعة
               </button>
+              {/* B4.8 (أ): تصدير بيانات الموظف كاملة (طلب اطلاع) — ملف JSON، وبيتسجّل في سجل التدقيق */}
+              {can('employees.edit') && (
+                <button type="button" onClick={exportEmployeeData} disabled={exportingData} className="btn-secondary flex items-center gap-2 disabled:opacity-50" data-employee-data-export>
+                  {exportingData ? 'جارٍ التصدير...' : 'تصدير بيانات الموظف'}
+                </button>
+              )}
               {/* التعديل بصلاحيته — الحفظ يحتاج employees.edit */}
               {can('employees.edit') && (
                 <Link href={`/employees/${employee.id}/edit`} className="btn-primary flex items-center gap-2">

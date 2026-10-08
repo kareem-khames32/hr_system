@@ -375,6 +375,8 @@ export const configSeed: Array<{ key: string; value: string }> = [
   // B4.5 (أ): المكافأة مطبّقة لكل دولة (الافتراضي = زي ما كانت: مطبّقة للكل)
   // B4.5 (د): الإيقاف الاحتياطي بأجر متاح عند تسجيل الإيقاف — مقفول = كل إيقاف بيتخصم زي الأول
   { key: 'suspension.paid_precautionary.enabled', value: 'false' },
+  // B4.8 (أ): الإخفاء الجزئي للهوية والآيبان لغير المصرّح — مقفول = الشاشات زي الأول
+  { key: 'privacy.partial_masking.enabled', value: 'false' },
   { key: 'eos.applies.eg', value: 'true' },
   { key: 'eos.applies.sa', value: 'true' },
   { key: 'eos.tier1_years', value: '5' },

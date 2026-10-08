@@ -7,6 +7,7 @@ import { localDateOf } from '../attendance/attendance.service'
 import { readBranchCurrencies, readSystemCurrency } from '../org/branch-currency-db'
 import { BULK_CONTENT_TYPES } from './employee-bulk-update.sheet'
 import { canSeeEmployeesFinance } from './employee-projection'
+import { canSeeFullIdentity, maskIdentityPartial, partialMaskingOn } from './employee-privacy'
 import { recordAudit } from '../audit/audit'
 import {
   employeeExportCells, employeeExportColumns, writeEmployeesWorkbook,
@@ -44,6 +45,14 @@ export class EmployeeExportService {
     for (const row of rows) row.currency = (row.branchId != null ? currencies.get(Number(row.branchId)) : undefined) ?? system
     const byId = new Map(rows.map(row => [row.id, row]))
     const ordered = ids.map(id => byId.get(id)).filter((row): row is EmployeeExportRow => !!row)
+    // B4.8 (أ): نفس حكم الشاشة — لما «الإخفاء الجزئي» مفتوح، غير المصرّح له بياخد الهوية والجواز بآخر 4 خانات في الملف كمان
+    if (await partialMaskingOn(this.ds.manager)) {
+      for (const row of ordered) {
+        if (canSeeFullIdentity(user, row.id)) continue
+        row.nationalId = maskIdentityPartial(row.nationalId)
+        row.passportNo = maskIdentityPartial(row.passportNo)
+      }
+    }
     const columns = employeeExportColumns(canSeeEmployeesFinance(user))
     const lookups = await this.lookups(ordered)
     const buffer = await writeEmployeesWorkbook(columns, ordered.map(row => employeeExportCells(row, lookups, columns)))

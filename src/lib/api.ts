@@ -494,6 +494,8 @@ export interface ApiTeam {
 export interface ApiEmployee {
   id: number; employeeCode: string; fullName: string; fullNameEn?: string
   email?: string; phone?: string; nationalId?: string; jobTitle?: string
+  // B4.8 (أ): «الإخفاء الجزئي» مفتوح وحسابك مش مصرّح له بالرقم الكامل — آخر 4 خانات بس (والخانة الأصلية مابتجيش)
+  nationalIdMasked?: string | null; passportNoMasked?: string | null; ibanMasked?: string | null
   branchId: number; departmentId?: number; teamId?: number
   workScheduleId?: number; annualLeaveEntitled?: boolean
   flexOverrideMode?: 'INHERIT' | 'ENABLED' | 'DISABLED'
