@@ -1,0 +1,81 @@
+'use strict'
+const fs = require('node:fs'), path = require('node:path'), { run } = require('node:test')
+const env = require('../node_modules/dotenv').parse(fs.readFileSync(path.join(__dirname, '../.env')))
+const secrets = Object.entries(env).filter(([k,v]) => /password|secret|token|ad_bind_dn|smtp_(host|from|user)|ad_host/i.test(k) && v.length > 2).map(([,v]) => v)
+const redact = input => {
+  let s = String(input)
+  for (const v of secrets) s = s.split(v).join('[REDACTED]')
+  return s.replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[JWT REDACTED]')
+    .replace(/("(?:accessToken|challengeToken|password|codeHash)"\s*:\s*")[^"]+/g, '$1[REDACTED]')
+}
+const testDir=__dirname
+const defaults = ["salary-bands","compensation-cycles","benefits-insurance","benefits-members","benefits-extras","expense-reports","skills","schedule-tools","swap-consents","mobile-punch","safety","timesheets","report-builder","people-feedback"]
+const selected = process.argv.slice(2).length ? process.argv.slice(2) : defaults
+// Owner explicitly permits migrations on our disposable databases (24 September clarification).
+const reviewedTemporaryMigrations=new Set(['hiring-documents-migration.integration.cjs','codex-review-p5c-migrations.integration.cjs','codex-review-round18-overtime.integration.cjs','codex-review-round17-overtime.integration.cjs','overtime-auto-approve-period.integration.cjs','codex-review-p5c-overtime.integration.cjs','codex-review-p5c-termination-adapted.integration.cjs','custom-termination-reasons.integration.cjs','department-unit-type-migration.integration.cjs','codex-review-p5c-migrations.integration.cjs','payroll-work-pressure-allowance.integration.cjs','public-holiday-audience.integration.cjs','roles-scope-presets.integration.cjs','security-role-grants.integration.cjs','codex-review-p5c-migrations.integration.cjs','user-branch-scopes.integration.cjs','holiday-work.integration.cjs','leave-year-end.integration.cjs','assets-branch.integration.cjs','leave-contract.integration.cjs','codex-review-round2-migration067.integration.cjs'])
+reviewedTemporaryMigrations.add('payroll-policy-publish.integration.cjs')
+for(const name of ['modules-enforcement','modules-migration','modules-settings','login-security-migration','scheduled-jobs','statutory-migration','payment-changes-migration','loan-disbursement-migration','settlement-payment-migration','gosi-tracks','one-person-controls','loan-disbursement','settlement-payment','settlement-pending-obligations']) reviewedTemporaryMigrations.add(name+'.integration.cjs')
+reviewedTemporaryMigrations.add('codex-review-p5c-default-money.integration.cjs')
+reviewedTemporaryMigrations.add('ops-backup-restore.integration.cjs')
+for(const name of ['audit-log-migration','stored-file-sha256-migration','queue-outbox-migration','codex-review-p5c-migrations']) reviewedTemporaryMigrations.add(name+'.integration.cjs')
+for(const n of ['codex-review-p5c-one-person-a','codex-review-p5c-money','payroll-live','payroll-daily-accrual','payroll-performance','attendance-live-absences']) reviewedTemporaryMigrations.add(n+'.integration.cjs')
+reviewedTemporaryMigrations.add('codex-review-p5c-performance.integration.cjs')
+for(const n of ['decimal-output-precision','codex-review-p5c-money','codex-review-p5c-precision','payroll-live','one-person-controls','payroll-daily-accrual','queue-outbox','codex-review-p5c-live','codex-review-p5c-live-controls','codex-review-p5c-screen-history','codex-review-p5c-script-precision']) reviewedTemporaryMigrations.add(n+'.integration.cjs')
+reviewedTemporaryMigrations.add('notifications-migration.integration.cjs')
+reviewedTemporaryMigrations.add('tasks-migration.integration.cjs')
+reviewedTemporaryMigrations.add('request-execution-migration.integration.cjs')
+reviewedTemporaryMigrations.add('approval-delegations-migration.integration.cjs')
+reviewedTemporaryMigrations.add('policies-migration.integration.cjs')
+reviewedTemporaryMigrations.add('user-temporary-password.integration.cjs')
+reviewedTemporaryMigrations.add('hr-document-acknowledgements-migration.integration.cjs')
+reviewedTemporaryMigrations.add('codex-review-p5c-schema-cache.integration.cjs')
+reviewedTemporaryMigrations.add('codex-review-p5c-migration-races.integration.cjs')
+reviewedTemporaryMigrations.add('codex-review-p5c-before-after.integration.cjs')
+reviewedTemporaryMigrations.add('comments-migration.integration.cjs')
+reviewedTemporaryMigrations.add('employee-custom-fields-migration.integration.cjs')
+reviewedTemporaryMigrations.add('codex-review-p5c-migration-shape.integration.cjs')
+reviewedTemporaryMigrations.add('codex-review-p5c-migration-extra.integration.cjs')
+reviewedTemporaryMigrations.add('employment-periods-migration.integration.cjs')
+reviewedTemporaryMigrations.add('codex-review-p5c-migration.integration.cjs')
+reviewedTemporaryMigrations.add('tasks-assignment-rules-migration.integration.cjs')
+reviewedTemporaryMigrations.add('positions-migration.integration.cjs')
+for(const n of ['user-sessions-migration','totp-migration','announcements-migration','document-expiry-migration','saved-reports-migration']) reviewedTemporaryMigrations.add(n+'.integration.cjs')
+for(const n of ['phase3-migrations','onboarding-templates-migration','recruitment-jobs-migration']) reviewedTemporaryMigrations.add(n+'.integration.cjs')
+for(const name of ['legal-entities','legal-entities-migration','statutory-pack','statutory-migration','salary-items','eg-salary-tax','payroll-statutory','eos-country','overtime-legal-minimum','leave-entitlement-tiers','suspension-paid','penalty-fine-cap','resignation-legal-terms','saudization-report','banks','hijri-display','employee-privacy','data-protection']) reviewedTemporaryMigrations.add(name+'.integration.cjs')
+reviewedTemporaryMigrations.add('codex-review-p5c-tiers-race.integration.cjs')
+reviewedTemporaryMigrations.add('codex-review-p5c-tiers-writers.integration.cjs')
+for(const n of ['salary-bands','compensation-cycles','benefits-insurance','benefits-members','benefits-extras','expense-reports','skills','schedule-tools','swap-consents','mobile-punch','safety','timesheets','report-builder','people-feedback']) reviewedTemporaryMigrations.add(n+'.integration.cjs')
+for(const n of ['reports','mobile','compensation','feedback','expenses']) reviewedTemporaryMigrations.add('codex-review-p5c-'+n+'.integration.cjs')
+reviewedTemporaryMigrations.add('codex-review-p5c-schedule.integration.cjs')
+reviewedTemporaryMigrations.add('codex-review-p5c-expense-pool.integration.cjs')
+for(const n of ['module-parity','extended','decision-race','receipt-pool']) reviewedTemporaryMigrations.add('codex-review-p5c-'+n+'.integration.cjs')
+const files = selected.map(name => path.join(testDir, name + '.integration.cjs')).filter(f => {
+  const source = fs.readFileSync(f, 'utf8')
+  if (!reviewedTemporaryMigrations.has(path.basename(f)) && /migrat\w*\.apply\(|\.splitBatches\(|\.executionUnits\(|migrations-lib|child_process|docs[\\/'" ,]+migrations|readFileSync\(MIGRATION/.test(source)) { console.log('EXCLUDED_MIGRATION_FIXTURE ' + path.basename(f)); return false }
+  return true
+})
+const results = [], failures = [], diagnostics = [], stdout = []
+const preloads = [path.join(__dirname,'codex-review-p5c-preload.cjs'),path.join(testDir, 'codex-review-round5-harness.cjs')]; if (process.env.REVIEW_SHADOW === 'true') preloads.push(path.join(__dirname, 'helpers/attendance-batch-shadow.cjs')); if (process.env.REVIEW_PRELOAD) { if (!/^codex-review-p5c-[a-z0-9-]+[.]cjs$/.test(process.env.REVIEW_PRELOAD)) throw new Error('Invalid preload'); preloads.splice(1,0,path.join(__dirname, process.env.REVIEW_PRELOAD)) };
+if(process.env.REVIEW_BASELINE==='true') preloads[preloads.length-1]=path.resolve(__dirname,'../../../b01s-fix/api/test/codex-review-round5-harness.cjs')
+const stream = run({ files, testNamePatterns: process.env.REVIEW_PATTERN ? [process.env.REVIEW_PATTERN] : undefined, concurrency: Number(process.env.REVIEW_CONCURRENCY||2), execArgv: preloads.flatMap(file => ['--require', file]) })
+const output = value => console.log(redact(JSON.stringify(value)))
+stream.on('test:stdout', d => { const s=redact(d.message); stdout.push(s); if (/REVIEW_MEASURE|REVIEW_PROGRESS|cleanupVerified|BATCH_SHADOW|CR(?:[56789]|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|P1)_/.test(s)) console.log(s.trim()) })
+stream.on('test:stderr', d => { stdout.push(redact(d.message)); console.log(redact(d.message)) })
+stream.on('test:pass', d => results.push({ file: path.basename(d.file || ''), name: d.name, ms: d.details.duration_ms, pass: true, skip: d.skip || false }))
+stream.on('test:fail', d => {
+  const f = { file: path.basename(d.file || ''), name: d.name, ms: d.details.duration_ms, pass: false,
+    error: d.details.error?.message, cause: d.details.error?.cause?.message, stack: d.details.error?.cause?.stack }
+  failures.push(f); results.push(f); output(f)
+})
+stream.on('test:diagnostic', d => { diagnostics.push(redact(d.message)); if (/Cleanup|\{|scenario|النتيجة|ناجح|فرق/.test(d.message)) output({ diagnostic: d.message }) })
+stream.on('test:summary', d => {
+  if (!d.file) {
+    const final = { selected, summary: d, results, failures, diagnostics, stdout }
+    const suffix = process.env.REVIEW_RESULT_SUFFIX || 'core'
+    if (!/^[a-z0-9_-]+$/.test(suffix)) throw new Error('Invalid result suffix')
+    fs.writeFileSync(path.join(__dirname, `codex-review-p5c-results-${suffix}.cjs`), 'module.exports = ' + redact(JSON.stringify(final, null, 2)) + '\n')
+    output({ summary: d, failures: failures.length }); process.exitCode = d.success ? 0 : 1
+  }
+})
+stream.on('error', e => { output({ runnerError: e.message }); process.exitCode = 1 })
+stream.resume()

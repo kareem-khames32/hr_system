@@ -228,3 +228,24 @@ test('EXU-10 (Codex P5B): مصدر الكود — الاعتماد البشري 
   const fresh = modules.slice(modules.indexOf('private async freshLoaded('))
   assert.match(fresh, /if \(sqlErrorNumber\(error\) !== MISSING_TABLE\) throw error\n\s+return \{ state: \{ modules: \{\}, features: \{\} \}, audiences: \{\} \}/)
 })
+
+test('EXU-11 (Codex P5C): معاملة التقديم وإعادة التقديم — فحص المرفقات وتقويم الموظف بمدير المعاملة، ومفيش قارئ مخزن جواها', () => {
+  const requests = read('requests/requests.service.ts')
+  const submit = requests.slice(requests.indexOf('private async submitLocked('), requests.indexOf('// مرات نوع الإجازة للموظف في سنة'))
+  const resubmit = requests.slice(requests.indexOf('async resubmit('), requests.indexOf('// ===== الإلغاء (صاحب الطلب قبل البت فيه) ====='))
+  assert.ok(submit.length > 20000 && resubmit.length > 2000, `${submit.length} ${resubmit.length}`)
+  // فحص المرفقات بمدير المعاملة في المسارين، والدالة نفسها بتقرا بيه
+  assert.match(submit, /await this\.assertAttachmentOwnership\(req, user, em\)/)
+  assert.match(resubmit, /await this\.assertAttachmentOwnership\(req, user, em\)/)
+  assert.match(requests, /private async assertAttachmentOwnership\(req: Request, actor: JwtPayload, em\?: EntityManager\) \{/)
+  assert.match(requests, /await \(em \?\? this\.ds\.manager\)\.getRepository\(StoredFile\)\.findOne\(\{ where: \{ id \} \}\)/)
+  // تقويم الموظف (يوم العطلة وأيام الإجازة) بنسخة الحضور المربوطة بالمعاملة
+  assert.equal((submit.match(/this\.attendance\.batchScope\(em\)\.(calendarDay|workingDaysForEmployee)\(/g) || []).length, 3)
+  // ولا قارئ مخزن جوه المعاملتين: لا مصدر البيانات ولا مستودع محقون ولا قارئ الموديولات بالذاكرة المؤقتة ولا خدمة حضور غير مربوطة
+  for (const body of [submit, resubmit]) {
+    assert.doesNotMatch(body, /this\.ds\.(getRepository|query|manager)/)
+    assert.doesNotMatch(body, /this\.(requests|types|chains|steps|approvals|employees|overtimeEntries)\.(find|findOne|findOneBy|count|save|query|createQueryBuilder)\(/)
+    assert.doesNotMatch(body, /this\.attendance\.(?!batchScope\(em\))/)
+    assert.doesNotMatch(body, /this\.modules\.(isEnabled|isFeatureEnabled|allowedFor)\(|this\.moduleGate\./)
+  }
+})
