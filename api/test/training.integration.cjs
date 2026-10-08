@@ -234,3 +234,73 @@ test('TR-03: الموظف — «دوراتي» بشهادته، وتقييم ا�
   expectStatus(await request(users.admin, 'PUT', '/modules/training', { enabled: false }), 200); modules.invalidate()
   try { assert.equal((await request(users.a1, 'GET', T + '/mine')).status, 404) } finally { expectStatus(await request(users.admin, 'PUT', '/modules/training', { enabled: true }), 200); modules.invalidate() }
 })
+
+test('TR-04: «طلب تدريب» — الجلسة من المتاح لفرع مقدّم الطلب، ورقمها بيثبّته الخادم، والاعتماد النهائي بيسجّله تحت قفل الجلسة والسعة، والجلسة اللي راحت بتوقّف الاعتماد', async () => {
+  const links = require('../src/training/training-requests')
+  const { localDateOf } = require('../src/attendance/attendance.service')
+  const plus = days => localDateOf(new Date(Date.now() + days * 86400000))
+  const chain = await repo('ApprovalChain').save({ code: 'TR_HR', nameAr: 'سلسلة طلب التدريب', isActive: true, autoApprove: false })
+  await repo('ApprovalStep').save({ chainId: chain.id, stepOrder: 1, approverRole: 'hr' })
+  await repo('RequestType').save({ code: 'TRAINING_REQUEST', nameAr: 'طلب تدريب/دورة', category: 'training', destinationHandler: links.TRAINING_REQUEST_HANDLER, approvalChainId: chain.id, isActive: true,
+    requiredFields: JSON.stringify(['courseName']) })
+  users.approver = await account('approver', ['approve.hr', 'requests.view_all'])
+  users.a3 = await account('a3', [], { employeeId: emps.a3.id })
+  users.b1 = await account('b1', [], { employeeId: emps.b1.id, branchId: org.branchB.id })
+  const ask = (user, payload) => request(user, 'POST', '/requests', { typeCode: 'TRAINING_REQUEST', payload, submit: true })
+  const approve = (user, id) => request(user, 'POST', `/requests/${id}/act`, { action: 'APPROVE' })
+  const open = expectStatus(await request(users.hrA, 'POST', T + '/sessions', session({ startDate: plus(30), endDate: plus(31), capacity: 1 })), 201)
+  const later = expectStatus(await request(users.hrA, 'POST', T + '/sessions', session({ startDate: plus(40), endDate: plus(40), capacity: null })), 201)
+  const past = expectStatus(await request(users.hrA, 'POST', T + '/sessions', session({ startDate: plus(-3), endDate: plus(-2) })), 201)
+  const option = row => `السلامة المهنية — ${row.startDate} (#${row.id})`
+
+  // حقول النموذج من الخادم: الجلسات المجدولة اللي لسه مابدأتش، لفرع صاحب الحساب (أو لكل الشركة)
+  const fieldsFor = async user => { const type = expectStatus(await request(user, 'GET', '/requests/types'), 200).find(row => row.code === 'TRAINING_REQUEST'); return [JSON.parse(type.customFields), JSON.parse(type.requiredFields)] }
+  const [fields, required] = await fieldsFor(users.a1)
+  assert.deepEqual([fields.map(field => [field.key, field.type, field.required]), required], [[['trainingSession', 'select', true]], ['trainingSession']])
+  assert.deepEqual([fields[0].options.includes(option(open)), fields[0].options.includes(option(later)), fields[0].options.includes(option(past)), fields[0].options.some(text => text.endsWith(`(#${state.session})`)),
+    fields[0].options.some(text => text.endsWith(`(#${state.sessionB})`))], [true, true, false, false, false], 'مجدولة ولسه مابدأتش ولفرعه')
+  const [fieldsB] = await fieldsFor(users.b1)
+  assert.deepEqual([fieldsB[0].options.includes(option(open)), fieldsB[0].options.some(text => text.endsWith(`(#${state.sessionB})`))], [false, true])
+
+  // التقديم: اختيار من المتاح بس — جلسة فرع تاني أو فاتت أو مش موجودة نفس الرد؛ ورقم الجلسة واسم الدورة بيثبّتهم الخادم
+  for (const bad of [{ trainingSession: 'أي حاجة' }, { trainingSession: `السلامة المهنية — 2026-11-01 (#${state.sessionB})` }, { trainingSession: option(past) }]) {
+    assert.deepEqual(answer(await ask(users.a1, bad)), [400, links.TRAINING_REQUEST_SESSION], JSON.stringify(bad))
+  }
+  // الجلسة هي الإلزامية (مش اسم الدورة القديم)، ورقمها مايتبعتش من العميل بدلها
+  for (const bad of [{}, { trainingSessionId: open.id, courseName: 'السلامة المهنية' }]) assert.deepEqual(answer(await ask(users.a1, bad)), [400, 'حقول ناقصة: trainingSession'], JSON.stringify(bad))
+  assert.equal(await repo('Request').count(), 0, 'المرفوض مابيسيبش مسودة')
+  const sent = expectStatus(await ask(users.a1, { trainingSession: option(open), trainingSessionId: later.id, courseName: 'اسم مزيّف', reason: 'محتاجها لشغلي' }), 201)
+  assert.deepEqual(JSON.parse((await repo('Request').findOneByOrFail({ id: sent.id })).payload), { trainingSession: option(open), reason: 'محتاجها لشغلي', trainingSessionId: open.id, courseName: 'السلامة المهنية' })
+  assert.equal(await repo('TrainingEnrollment').count({ where: { sessionId: open.id } }), 0, 'التقديم مابيسجّلش')
+  // الاعتماد النهائي بيسجّله مربوط بالطلب
+  assert.notEqual((await approve(users.a1, sent.id)).status, 201)
+  expectStatus(await approve(users.approver, sent.id), 201)
+  const made = await repo('TrainingEnrollment').findOneByOrFail({ sessionId: open.id, employeeId: emps.a1.id })
+  const done = await repo('Request').findOneByOrFail({ id: sent.id })
+  assert.deepEqual([made.status, made.requestId, made.enrolledByUserId, done.status, done.destinationRef], ['ENROLLED', sent.id, 0, 'COMPLETED', `TRN-${made.id}`])
+  assert.deepEqual(expectStatus(await request(users.hrA, 'GET', T + `/sessions/${open.id}`), 200).enrollments.map(row => [row.employeeName, row.fromRequest]), [['متدرب أول', true]])
+  assert.deepEqual(answer(await ask(users.a1, { trainingSession: option(open) })), [400, links.TRAINING_REQUEST_TAKEN])
+  // السعة: الجلسة اتملت ← الاعتماد واقف والطلب باقي عند المعتمد؛ ولما السعة تزيد بيعدّي
+  const second = expectStatus(await ask(users.a2, { trainingSession: option(open) }), 201)
+  const full = await approve(users.approver, second.id)
+  assert.deepEqual([full.status === 201, messageOf(full).includes(rules.TRAINING_FULL), (await repo('Request').findOneByOrFail({ id: second.id })).status === 'COMPLETED', await repo('TrainingEnrollment').count({ where: { sessionId: open.id } })],
+    [false, true, false, 1])
+  expectStatus(await request(users.hrA, 'PATCH', T + `/sessions/${open.id}`, { capacity: 2 }), 200)
+  expectStatus(await approve(users.approver, second.id), 201)
+  assert.equal(await repo('TrainingEnrollment').count({ where: { sessionId: open.id, status: 'ENROLLED' } }), 2)
+  // إدارة التدريب سجّلته في النص: الاعتماد بيربط التسجيل القايم بالطلب من غير صف تاني
+  const third = expectStatus(await ask(users.a3, { trainingSession: option(later) }), 201)
+  expectStatus(await request(users.hrA, 'POST', T + `/sessions/${later.id}/enroll`, { employeeIds: [emps.a3.id] }), 200)
+  expectStatus(await approve(users.approver, third.id), 201)
+  assert.deepEqual((await repo('TrainingEnrollment').find({ where: { sessionId: later.id } })).map(row => [row.employeeId, row.requestId, row.enrolledByUserId]), [[emps.a3.id, third.id, users.hrA.id]])
+  // الجلسة اتلغت بعد التقديم: الاعتماد مابيعدّيش والطلب باقي
+  const fourth = expectStatus(await ask(users.a2, { trainingSession: option(later) }), 201)
+  expectStatus(await request(users.hrA, 'PATCH', T + `/sessions/${later.id}`, { status: 'CANCELLED' }), 200)
+  const gone = await approve(users.approver, fourth.id)
+  assert.deepEqual([gone.status === 201, messageOf(gone).includes(links.TRAINING_REQUEST_GONE), (await repo('Request').findOneByOrFail({ id: fourth.id })).status === 'COMPLETED', await repo('TrainingEnrollment').count({ where: { sessionId: later.id } })],
+    [false, true, false, 1])
+  // الموديول مقفول: نوع الطلب مابيظهرش في التقديم
+  expectStatus(await request(users.admin, 'PUT', '/modules/training', { enabled: false }), 200); modules.invalidate()
+  try { assert.equal(expectStatus(await request(users.a1, 'GET', '/requests/types'), 200).some(row => row.code === 'TRAINING_REQUEST'), false) }
+  finally { expectStatus(await request(users.admin, 'PUT', '/modules/training', { enabled: true }), 200); modules.invalidate() }
+})

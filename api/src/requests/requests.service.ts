@@ -103,6 +103,9 @@ import { moduleOfRequestType } from '../modules-registry/registry'
 import { onePersonControlEnabled } from '../payroll/one-person-controls'
 import { assertPersonalDataKeys, PERSONAL_DATA_HANDLER, validatePersonalDataRequest } from './personal-data-requests'
 import { DOCUMENT_RENEWAL_HANDLER, DOCUMENT_RENEWAL_STAGED_KEYS, documentRenewalFields, documentRenewalTypeNames, stageDocumentRenewal } from '../assets/document-renewal'
+import {
+  TRAINING_REQUEST_CLIENT_KEYS, TRAINING_REQUEST_HANDLER, TRAINING_REQUEST_STAGED_KEYS, stageTrainingRequest, trainingRequestFields, trainingRequestOptions,
+} from '../training/training-requests'
 import { POSITION_REQUEST_HANDLER, POSITION_REQUEST_STAGED_KEYS, positionRequestFields, positionRequestTitles, stagePositionRequest } from '../positions/position-requests'
 import { REVIEW_OBJECTION_CLIENT_KEYS, REVIEW_OBJECTION_STAGED_KEYS, stageReviewObjection } from '../performance/review-objections'
 import { REVIEW_OBJECTION_TYPE } from '../performance/review-rules'
@@ -174,6 +177,8 @@ const HANDLER_PAYLOAD_KEYS: Record<string, string[]> = {
   [REQUISITION_HANDLER]: [...REQUISITION_CLIENT_KEYS, ...REQUISITION_STAGED_KEYS],
   // B2.15-ب: «تجديد مستند». كود النوع مش من العميل: الخادم بيثبّته عند كل تقديم
   [DOCUMENT_RENEWAL_HANDLER]: ['documentType', 'expiryDate', 'documentNumber', 'issueDate', ...DOCUMENT_RENEWAL_STAGED_KEYS],
+  // B3.9-ب: «طلب تدريب». رقم الجلسة واسم الدورة مش من العميل: الخادم بيثبّتهم عند كل تقديم
+  [TRAINING_REQUEST_HANDLER]: [...TRAINING_REQUEST_CLIENT_KEYS, ...TRAINING_REQUEST_STAGED_KEYS],
 }
 
 // C4 / الخطوة 27: المكافأة لا تُقترح عبر محرك الطلبات (كانت تُقيد لمقدم الطلب لا للمستفيد، وتسمح بمكافأة للنفس، وبلا فترة).
@@ -244,6 +249,8 @@ export class RequestsService {
     const vacancyTitles = (await this.types.count({ where: { isActive: true, destinationHandler: REQUISITION_HANDLER } })) ? await requisitionTitles(this.ds.manager) : []
     // B2.15-ب: اختيارات خانة نوع المستند في طلب «تجديد مستند» من كتالوج أنواع المستندات (لو فيه نوع طلب مفعّل بالوجهة دي بس)
     const renewalTypes = (await this.types.count({ where: { isActive: true, destinationHandler: DOCUMENT_RENEWAL_HANDLER } })) ? await documentRenewalTypeNames(this.ds.manager) : []
+    // B3.9-ب: اختيارات خانة الجلسة في «طلب تدريب» — الجلسات المجدولة المتاحة لفرع صاحب الحساب (لو فيه نوع طلب مفعّل بالوجهة دي بس)
+    const trainingSessions = (await this.types.count({ where: { isActive: true, destinationHandler: TRAINING_REQUEST_HANDLER } })) ? await trainingRequestOptions(this.ds.manager, user?.employeeId) : []
     const every = (
       await this.types.find({
         where: { isActive: true },
@@ -272,6 +279,7 @@ export class RequestsService {
       ...(t.destinationHandler === POSITION_REQUEST_HANDLER ? positionRequestFields(positionTitles, t) : {}),
       ...(t.destinationHandler === REQUISITION_HANDLER ? requisitionFields(vacancyTitles, t) : {}),
       ...(t.destinationHandler === DOCUMENT_RENEWAL_HANDLER ? documentRenewalFields(renewalTypes, t) : {}),
+      ...(t.destinationHandler === TRAINING_REQUEST_HANDLER ? trainingRequestFields(trainingSessions, t) : {}),
       ...(t.code === 'RETIREMENT' ? {
         requiredFields: JSON.stringify([...new Set([...JSON.parse(t.requiredFields || '[]'), 'effectiveDate'])]),
       } : {}),
@@ -574,6 +582,8 @@ export class RequestsService {
     if (type.code === REVIEW_OBJECTION_TYPE) req.payload = JSON.stringify(await stageReviewObjection(em, req))
     // B2.15-ب: «تجديد مستند» — الحكم على النوع والتاريخ وتثبيت كود النوع، عند كل تقديم وإعادة تقديم
     if (type.destinationHandler === DOCUMENT_RENEWAL_HANDLER) req.payload = JSON.stringify(await stageDocumentRenewal(em, req))
+    // B3.9-ب: «طلب تدريب» — الجلسة من المتاح لمقدّم الطلب دلوقتي، وتثبيت رقمها واسم دورتها، عند كل تقديم وإعادة تقديم
+    if (type.destinationHandler === TRAINING_REQUEST_HANDLER) req.payload = JSON.stringify(await stageTrainingRequest(em, req))
     if (type.destinationHandler === 'custody_transfer') {
       const payload = JSON.parse(req.payload || '{}')
       await custodyTransferTarget(em, Number(payload.assignmentId), Number(payload.toEmployeeId), req, user)
@@ -3578,6 +3588,10 @@ export class RequestsService {
     if (isSalaryChangeType(type)) return [...new Set([...required.filter(key => !['increase_pct', 'salaryChangeBasis', 'salaryChangeApproval'].includes(key)), ...SALARY_CHANGE_CLIENT_FIELDS])]
     // قرار المالك 30 سبتمبر: السلفة العادية شهر واحد فعدد الأشهر مش إلزامي (الغايب = 1)؛ الاستثنائية بتبعته من نافذتها
     if (isLoanCapRequestType(type)) return required.filter(key => key !== 'months')
+    // B3.9-ب: «طلب تدريب» بوجهة التسجيل — الجلسة هي الإلزامية؛ اسم الدورة (الإلزامي القديم للنوع) ورقم الجلسة الخادم بيثبّتهم عند التقديم
+    if (type.destinationHandler === TRAINING_REQUEST_HANDLER) {
+      return [...new Set([...TRAINING_REQUEST_CLIENT_KEYS, ...required.filter(key => !(TRAINING_REQUEST_STAGED_KEYS as readonly string[]).includes(key))])]
+    }
     // الساعات الاختيارية القديمة للعادي تأتي من البصمة؛ إلزام المستثنى يُفحص من دليل يومه عند التقديم.
     // حقول العميل المخصصة المطلوبة تُضاف بعد هذه القائمة ولا تتغير إعداداتها المحفوظة.
     return type.code === 'OVERTIME' && type.destinationHandler === 'overtime_entries' ? required.filter(key => key !== 'hours') : required

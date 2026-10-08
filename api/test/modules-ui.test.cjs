@@ -85,8 +85,8 @@ test('MU-01: كل شاشة لها صاحب (موديول أو ميزة شاشا�
   // الشاشات الوهمية بالظبط — أي شاشة ببيانات عرض جديدة لازم تتسجّل، وأي شاشة حقيقية ماتتحسبش وهمية
   assert.deepEqual(pages.filter(route => owners[route].feature === registry.DEMO_SCREENS_FEATURE), [
     '/performance/new',
-    '/recruitment/5', '/recruitment/add', '/reports/custom',
-    '/training', '/training/5', '/training/add', '/training/certificates', '/training/my-courses'])
+    // B3.9-ب: شاشات التدريب بقت حقيقية تبع موديولها
+    '/recruitment/5', '/recruitment/add', '/reports/custom'])
   // أمثلة من كل موديول (المطابقة الكاملة في modules-registry.test.cjs)
   for (const [route, module] of [['/', 'platform'], ['/settings/modules', 'platform'], ['/employees/5', 'employees'], ['/employees/5/terminate', 'offboarding'],
     ['/my/payslips', 'payroll'], ['/payroll/payslip/5', 'payroll'], ['/payroll/loans', 'loans'], ['/attendance/overtime', 'overtime'], ['/leaves/holidays', 'platform'],
@@ -107,14 +107,20 @@ test('MU-02: القايمة الجانبية من السجل — الوهمي و
   // مدير النظام بافتراضي السجل (شاشات العرض مقفولة): كل الحقيقي ظاهر، والوهمي مختفي — المجموعات مقفولة فبنشوف عناوينها
   let view = menu(admin, state())
   for (const label of ['إدارة الموظفين', 'الحضور والانصراف', 'الإجازات', 'الرواتب', 'التوظيف', 'التقارير', 'الإعدادات', 'إنهاء الخدمة', 'صرف الرواتب']) assert.ok(view.has(label), label)
-  for (const label of ['إدارة الأداء', 'التدريب والتطوير']) assert.ok(!view.has(label), `${label}: مجموعة كلها شاشات عرض`)
+  for (const label of ['إدارة الأداء', 'التدريب والتطوير']) assert.ok(!view.has(label), `${label}: موديولها مقفول افتراضيًا`)
   for (const href of ['/', '/requests', '/my/attendance', '/my/leaves', '/my/payslips', '/my/loans', '/my/custody', '/my/documents', '/profile', '/notifications', '/calendar', '/offboarding']) {
     assert.ok(view.links.includes(href), href)
   }
   // شاشات العرض مفتوحة: مجموعتا الأداء والتدريب بيرجعوا
   modules.invalidateModules(); localStorage.clear(); sessionStorage.clear()
   view = menu(admin, state({}, DEMO_ON))
-  for (const label of ['التدريب والتطوير', 'التوظيف']) assert.ok(view.has(label), label)
+  assert.ok(view.has('التوظيف'))
+  // B3.9-ب: مجموعة «التدريب والتطوير» بقت شاشات حقيقية: بتظهر بموديولها (المقفول افتراضيًا)، مش بميزة شاشات العرض
+  assert.ok(!view.has('التدريب والتطوير'), 'التدريب مقفول: ميزة العرض مابتفتحهوش')
+  modules.invalidateModules(); localStorage.clear(); sessionStorage.clear()
+  assert.ok(menu(admin, state({ training: true })).has('التدريب والتطوير'), 'التدريب مفتوح')
+  modules.invalidateModules(); localStorage.clear(); sessionStorage.clear()
+  view = menu(admin, state({}, DEMO_ON))
   // B3.7: مجموعة «إدارة الأداء» بقت شاشات حقيقية: بتظهر بموديولها (المقفول افتراضيًا)، مش بميزة شاشات العرض
   assert.ok(!view.has('إدارة الأداء'), 'الأداء مقفول: ميزة العرض مابتفتحهوش')
   modules.invalidateModules(); localStorage.clear(); sessionStorage.clear()
@@ -135,7 +141,7 @@ test('MU-02: القايمة الجانبية من السجل — الوهمي و
   modules.invalidateModules(); localStorage.clear(); sessionStorage.clear()
   view = menu(admin, state({ payroll: false, recruitment: false, offboarding: false }, DEMO_ON))
   for (const label of ['الرواتب', 'التوظيف', 'إنهاء الخدمة', 'صرف الرواتب']) assert.ok(!view.has(label), `${label} مقفول`)
-  for (const label of ['إدارة الموظفين', 'الحضور والانصراف', 'الإجازات', 'التقارير', 'الإعدادات', 'التدريب والتطوير']) assert.ok(view.has(label), label)
+  for (const label of ['إدارة الموظفين', 'الحضور والانصراف', 'الإجازات', 'التقارير', 'الإعدادات']) assert.ok(view.has(label), label)
 
   // من غير حالة مقروءة (أول رسم): افتراضي السجل — القايمة ماتفضاش
   modules.invalidateModules(); localStorage.clear(); sessionStorage.clear()

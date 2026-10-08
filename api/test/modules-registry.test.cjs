@@ -149,7 +149,8 @@ test('MR-03: صاحب مسار الواجهة — أطول نمط بيكسب، �
     assert.deepEqual(registry.routeOwner(route), { module: 'performance', feature: null }, route)
   }
   demo('/performance/new', 'performance')
-  demo('/training/my-courses', null)
+  // B3.9-ب: شاشات التدريب بقت حقيقية تبع موديول التدريب
+  for (const route of ['/training', '/training/my-courses', '/training/add', '/training/certificates', '/training/7']) assert.deepEqual(registry.routeOwner(route), { module: 'training', feature: null }, route)
   demo('/reports/custom', 'reports')
   demo('/recruitment/add', 'recruitment')
   // B3.4-ب: شاشة المقابلات بقت حقيقية (تبع الموديول، مش شاشة عرض)
@@ -157,7 +158,7 @@ test('MR-03: صاحب مسار الواجهة — أطول نمط بيكسب، �
   // B3.5-أ: شاشة العروض بقت حقيقية
   assert.deepEqual(registry.routeOwner('/recruitment/offers'), registry.routeOwner('/recruitment/jobs'))
   demo('/recruitment/15', 'recruitment')
-  assert.ok(DEMO_ROUTES.length >= 5) // B3.4-ب وB3.5-أ: شاشتي المقابلات والعروض خرجوا من شاشات العرض
+  assert.ok(DEMO_ROUTES.length >= 4) // B3.4-ب وB3.5-أ: شاشتي المقابلات والعروض خرجوا من شاشات العرض؛ B3.9-ب: وشاشات التدريب
 
   // routeAvailable: الموديول مفعّل والميزة (لو فيه) مفعّلة
   const basic = registry.enabledSnapshot(state())
@@ -167,8 +168,10 @@ test('MR-03: صاحب مسار الواجهة — أطول نمط بيكسب، �
   assert.equal(registry.routeAvailable('/recruitment/applicants', basic), true)
   assert.equal(registry.routeAvailable('/something-new', basic), true)
   const withDemo = registry.enabledSnapshot(state({}, { [DEMO_SCREENS_FEATURE]: true }))
-  // شاشة عرض من غير موديول بتفتح بالميزة؛ وشاشة الأداء الحقيقية بموديولها (المقفول افتراضيًا) مش بميزة العرض
-  assert.equal(registry.routeAvailable('/training', withDemo), true)
+  // شاشة العرض بتفتح بالميزة؛ وشاشات الأداء والتدريب الحقيقية بموديولها (المقفول افتراضيًا) مش بميزة العرض
+  assert.equal(registry.routeAvailable('/reports/custom', withDemo), true)
+  assert.equal(registry.routeAvailable('/training', withDemo), false)
+  assert.equal(registry.routeAvailable('/training', registry.enabledSnapshot(state({ training: true }))), true)
   assert.equal(registry.routeAvailable('/performance', withDemo), false)
   assert.equal(registry.routeAvailable('/performance', registry.enabledSnapshot(state({ performance: true }))), true)
   assert.equal(registry.routeAvailable('/recruitment/add', withDemo), true)
@@ -176,7 +179,7 @@ test('MR-03: صاحب مسار الواجهة — أطول نمط بيكسب، �
   const demoNoRecruitment = registry.enabledSnapshot(state({ recruitment: false }, { [DEMO_SCREENS_FEATURE]: true }))
   assert.equal(registry.routeAvailable('/recruitment', demoNoRecruitment), false)
   assert.equal(registry.routeAvailable('/recruitment/add', demoNoRecruitment), false)
-  assert.equal(registry.routeAvailable('/training', demoNoRecruitment), true)
+  assert.equal(registry.routeAvailable('/reports/custom', demoNoRecruitment), true)
   // الحضور مقفول: شاشاته وشاشات اللي بيعتمد عليه مقفولة، والإجازات شغالة
   const noAttendance = registry.enabledSnapshot(state({ attendance: false }))
   for (const pathname of ['/attendance', '/my/attendance', '/attendance/shifts', '/attendance/overtime']) assert.equal(registry.routeAvailable(pathname, noAttendance), false, pathname)

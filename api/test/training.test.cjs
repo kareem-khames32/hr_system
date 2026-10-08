@@ -65,6 +65,40 @@ test('TU-02: a new closed module with its permission, enrolling under the sessio
   assert.match(rate, /enrollment\.employeeId !== user\.employeeId\) throw new NotFoundException\(TRAINING_ENROLLMENT_NOT_FOUND\)/)
   const controller = read('api/src/training/training.controller.ts')
   assert.match(controller, /@RequireModule\('training'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)\n@Controller\('training'\)/)
-  assert.equal(controller.split("@Perm('training.manage')").length - 1, 9, 'الكتالوج والجلسات والتسجيل والحالة بالصلاحية')
+  assert.equal(controller.split("@Perm('training.manage')").length - 1, 10, 'الكتالوج والجلسات والتسجيل والحالة والشهادات بالصلاحية')
+  assert.ok(controller.indexOf("@Get('certificates')") > 0 && controller.indexOf("@Get('mine')") > 0)
   assert.doesNotMatch(read('api/src/training/training.entities.ts'), /default:|CreateDateColumn/, 'من غير افتراضي (زي الترحيلات)')
+})
+
+test('TU-03: the training request destination — a selectable handler owned by the module, the session staged by the server, enrollment at final approval under the session row lock, and the real screens', () => {
+  const links = require('../src/training/training-requests')
+  const { moduleOfHandler } = require('../src/modules-registry/registry')
+  assert.deepEqual([links.TRAINING_REQUEST_HANDLER, MODULES.training.requestHandlers, links.TRAINING_REQUEST_STAGED_KEYS, links.TRAINING_REQUEST_CLIENT_KEYS],
+    ['training_enrollment', ['training_enrollment'], ['trainingSessionId', 'courseName'], ['trainingSession']])
+  if (typeof moduleOfHandler === 'function') assert.equal(moduleOfHandler('training_enrollment'), 'training')
+  // حقول النموذج: الجلسة اختيار إلزامي، وحقول الباني الخاصة بعدها، ومفاتيح الخادم مش حقول
+  const fields = links.trainingRequestFields(['دورة — 2026-11-01 (#3)'], { requiredFields: JSON.stringify(['courseName', 'reason']),
+    customFields: JSON.stringify([{ key: 'note2', label: 'ملاحظة', type: 'text', required: false }, { key: 'trainingSessionId', label: 'x', type: 'number' }, { key: 'courseName', label: 'x', type: 'text' }]) })
+  assert.deepEqual([JSON.parse(fields.requiredFields), JSON.parse(fields.customFields).map(field => [field.key, field.type])],
+    [['trainingSession', 'reason'], [['trainingSession', 'select'], ['note2', 'text'], ['reason', 'text']]])
+  const source = read('api/src/training/training-requests.ts')
+  const execute = source.slice(source.indexOf('export async function executeTrainingRequest('))
+  const order = ["getRepository(TrainingSession).findOne({ where: { id: sessionId }, lock: { mode: 'pessimistic_write' } })", "session.status !== 'PLANNED'", 'session.branchId !== employee.branchId',
+    "row.employeeId === employee.id && row.status !== 'CANCELLED'", 'session.capacity != null && seats + 1 > session.capacity', 'getRepository(TrainingEnrollment).insert('].map(part => execute.indexOf(part))
+  assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), JSON.stringify(order))
+  assert.doesNotMatch(source, /this\.|DataSource/, 'كله بـem اللي محرك الطلبات ماسكه')
+  const requests = read('api/src/requests/requests.service.ts')
+  assert.match(requests, /if \(type\.destinationHandler === TRAINING_REQUEST_HANDLER\) req\.payload = JSON\.stringify\(await stageTrainingRequest\(em, req\)\)/)
+  assert.match(requests, /\[TRAINING_REQUEST_HANDLER\]: \[\.\.\.TRAINING_REQUEST_CLIENT_KEYS, \.\.\.TRAINING_REQUEST_STAGED_KEYS\]/)
+  assert.match(read('api/src/requests/destinations.service.ts'), /\[TRAINING_REQUEST_HANDLER\]: executeTrainingRequest,/)
+  assert.match(read('api/src/settings/settings.controller.ts'), /\{ key: 'training_enrollment', labelAr: 'تسجيل في جلسة تدريب' \}/)
+  assert.match(read('src/app/requests/page.tsx'), /training_enrollment: 'تسجيل في جلسة تدريب',/)
+  // الشاشات حقيقية: على الخادم ومن غير بيانات وهمية
+  assert.deepEqual(MODULES.training.routes, ['/training', '/training/add', '/training/certificates', '/training/my-courses', '/training/*'])
+  for (const [page, call] of [['src/app/training/page.tsx', 'fetchTrainingSessions()'], ['src/app/training/[id]/page.tsx', 'fetchTrainingSession(id)'], ['src/app/training/add/page.tsx', 'createTrainingCourse('],
+    ['src/app/training/certificates/page.tsx', 'fetchTrainingCertificates()'], ['src/app/training/my-courses/page.tsx', 'fetchMyTraining()']]) {
+    const text = read(page)
+    assert.ok(text.includes(call), `${page}: ${call}`)
+    assert.doesNotMatch(text, /window\.(prompt|confirm|alert)|mockData|const (courses|certificates|sessions) = \[/, page)
+  }
 })

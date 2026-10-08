@@ -269,6 +269,28 @@ export class TrainingService {
     return this.sessionDetail(user, sessionId)
   }
 
+  /** B3.9-ب: شهادات التدريب (لإدارة التدريب) — تسجيلات أكملت ولها مستند شهادة، لموظفين فرعهم الحالي في نطاق الحساب، الأقرب انتهاءً الأول */
+  async certificates(user: JwtPayload) {
+    this.assertManager(user)
+    const em = this.ds.manager
+    if (!(await trainingReady(em))) return { available: false, message: TRAINING_MIGRATION_MISSING, certificates: [] }
+    const rows = (await em.getRepository(TrainingEnrollment).find({ where: { status: 'COMPLETED' }, order: { id: 'DESC' } })).filter((row) => row.documentId != null)
+    if (!rows.length) return { available: true, certificates: [] }
+    const scope = branchScopeOf(user)
+    const people = new Map((await em.getRepository(Employee).find({ where: { id: In([...new Set(rows.map((row) => row.employeeId))]) } })).map((row) => [row.id, row]))
+    const visible = rows.filter((row) => inBranchScope(scope, people.get(row.employeeId)?.branchId ?? null))
+    if (!visible.length) return { available: true, certificates: [] }
+    const documents = new Map((await em.getRepository(EmployeeDocument).find({ where: { id: In(visible.map((row) => row.documentId as number)) } })).map((row) => [row.id, row]))
+    const sessions = new Map((await em.getRepository(TrainingSession).find({ where: { id: In([...new Set(visible.map((row) => row.sessionId))]) } })).map((row) => [row.id, row]))
+    const courses = new Map((await em.getRepository(TrainingCourse).find({ where: { id: In([...new Set([...sessions.values()].map((row) => row.courseId))]) } })).map((row) => [row.id, row.name]))
+    const today = new Date().toLocaleDateString('en-CA')
+    return { available: true, certificates: visible.filter((row) => documents.has(row.documentId as number)).map((row) => {
+      const document = documents.get(row.documentId as number)!, expiryDate = document.expiryDate ? day(document.expiryDate) : null
+      return { enrollmentId: row.id, employeeName: people.get(row.employeeId)?.fullName ?? '—', courseName: courses.get(sessions.get(row.sessionId)?.courseId ?? 0) ?? '—',
+        issueDate: document.issueDate ? day(document.issueDate) : null, expiryDate, expired: expiryDate !== null && expiryDate < today }
+    }).sort((left, right) => (left.expiryDate ?? '9999-12-31').localeCompare(right.expiryDate ?? '9999-12-31')) }
+  }
+
   // ===== الموظف =====
 
   /** «دوراتي»: تسجيلات الموظف بدوراتها وجلساتها وشهاداتها */

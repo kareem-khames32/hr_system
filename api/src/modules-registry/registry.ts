@@ -317,13 +317,15 @@ export const MODULES = {
     // B3.7-ب: التقييمات ودوراتها ونماذجها ونموذج التقييم بقوا حقيقيين (كانوا شاشات عرض)؛ «تقييم جديد» لسه شاشة عرض
     routes: ['/performance/goals', '/performance', '/performance/cycles', '/performance/templates', '/performance/*'],
   }),
-  // B3.9: التدريب — كتالوج الدورات والجلسات والتسجيل والشهادة (الخادم أولًا؛ شاشات /training شاشات عرض لحد ما الواجهة تنزل).
+  // B3.9: التدريب — كتالوج الدورات والجلسات والتسجيل والشهادة، وشاشاته (كانت شاشات عرض) بقت حقيقية في الجزء (ب).
   // موديول جديد = مقفول لحد ما الشركة تفتحه
   training: moduleDef({
     nameAr: 'التدريب', group: 'talent', dependsOn: ['employees'], softUses: ['documents'], preset: 'standard', defaultEnabled: false,
     description: 'كتالوج الدورات، وجلساتها بالسعة والتكلفة، وتسجيل الموظفين وحضورهم وإكمالهم، والشهادة كمستند للموظف بتاريخ انتهائه وتنبيه تجديده',
     permissions: ['training.manage'],
-    routes: [],
+    routes: ['/training', '/training/add', '/training/certificates', '/training/my-courses', '/training/*'],
+    // B3.9-ب: وجهة «طلب تدريب» (أي نوع طلب وجهته دي بيتبع الموديول)
+    requestHandlers: ['training_enrollment'],
   }),
   // B2.11: الوظائف المعتمدة — وظيفة في وحدة بعدد معتمد، وتقرير «معتمد / مشغول / شاغر». موديول جديد = مقفول لحد ما الشركة تفعّله
   // (أول موديول defaultEnabled: false: مفيش حاجة كانت شغالة قبله)
@@ -362,7 +364,8 @@ export const isFeatureKey = (value: unknown): value is string => typeof value ==
  * النجمة = جزء واحد من المسار (رقم سجل)، والمسارات الثابتة تحت نفس الأب بتكسب عليها.
  */
 export const DEMO_SCREENS_FEATURE = 'platform.demo_screens'
-export const DEMO_ROUTES = ['/performance/new', '/training', '/recruitment/add', '/recruitment/*', '/reports/custom']
+// B3.9-ب: شاشات التدريب خرجت من هنا (بقت تبع موديول التدريب)
+export const DEMO_ROUTES = ['/performance/new', '/recruitment/add', '/recruitment/*', '/reports/custom']
 
 const segmentsOf = (path: string) => path.split('?')[0].split('#')[0].split('/').filter(Boolean)
 

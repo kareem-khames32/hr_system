@@ -229,6 +229,7 @@ const handlerLabels: Record<string, string> = {
   employee_status: 'تغيير حالة وظيفية',
   positions_headcount: 'وظيفة معتمدة جديدة / زيادة عدد',
   document_renewal: 'تجديد مستند',
+  training_enrollment: 'تسجيل في جلسة تدريب',
   document_vault: 'خزنة الوثائق',
   expense_register: 'سجل المصروفات',
   training_register: 'سجل التدريب',

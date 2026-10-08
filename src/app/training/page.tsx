@@ -1,533 +1,249 @@
 'use client'
 
-import { useState } from 'react'
+// B3.9: «الدورات التدريبية» (لإدارة التدريب) — جلسات التدريب بسعتها وتسجيلاتها، وكتالوج الدورات. (كانت شاشة عرض ببيانات وهمية؛ بقت على الخادم.)
+import { useCallback, useEffect, useState } from 'react'
+import Link from 'next/link'
+import { GraduationCap, Plus, X } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import EmptyState from '@/components/EmptyState'
+import { fetchBranches, type ApiBranch } from '@/lib/api'
+import { formatDate } from '@/lib/dates'
 import {
-  Search,
-  Filter,
-  Plus,
-  BookOpen,
-  GraduationCap,
-  Clock,
-  Users,
-  Calendar,
-  Play,
-  CheckCircle2,
-  Award,
-  TrendingUp,
-  Star,
-  Video,
-  FileText,
-  Download,
-  Eye,
-  BarChart3,
-} from 'lucide-react'
-import Link from 'next/link'
+  createTrainingSession, fetchTrainingCourses, fetchTrainingSessions, updateTrainingCourse, type ApiTrainingCourse, type ApiTrainingSession, type TrainingSessionStatus,
+} from '@/lib/training-api'
 
-interface Course {
-  id: string
-  title: string
-  description: string
-  category: string
-  instructor: string
-  duration: string
-  lessonsCount: number
-  enrolledCount: number
-  completedCount: number
-  rating: number
-  level: 'beginner' | 'intermediate' | 'advanced'
-  status: 'active' | 'draft' | 'archived'
-  thumbnail: string
-  type: 'video' | 'document' | 'interactive'
-  mandatory: boolean
-}
-
-const courses: Course[] = [
-  {
-    id: '1',
-    title: 'أساسيات الأمن السيبراني',
-    description: 'تعلم أساسيات حماية المعلومات والأمن الرقمي في بيئة العمل',
-    category: 'تقنية المعلومات',
-    instructor: 'م. أحمد السعيد',
-    duration: '4 ساعات',
-    lessonsCount: 12,
-    enrolledCount: 180,
-    completedCount: 145,
-    rating: 4.8,
-    level: 'beginner',
-    status: 'active',
-    thumbnail: '🔐',
-    type: 'video',
-    mandatory: true,
-  },
-  {
-    id: '2',
-    title: 'مهارات القيادة الفعالة',
-    description: 'برنامج شامل لتطوير المهارات القيادية والإدارية',
-    category: 'تطوير ذاتي',
-    instructor: 'د. سارة الخالدي',
-    duration: '8 ساعات',
-    lessonsCount: 20,
-    enrolledCount: 65,
-    completedCount: 42,
-    rating: 4.9,
-    level: 'intermediate',
-    status: 'active',
-    thumbnail: '👔',
-    type: 'video',
-    mandatory: false,
-  },
-  {
-    id: '3',
-    title: 'إدارة المشاريع الاحترافية PMP',
-    description: 'التحضير لشهادة إدارة المشاريع الاحترافية',
-    category: 'إدارة المشاريع',
-    instructor: 'م. عمر الحربي',
-    duration: '24 ساعة',
-    lessonsCount: 40,
-    enrolledCount: 35,
-    completedCount: 18,
-    rating: 4.7,
-    level: 'advanced',
-    status: 'active',
-    thumbnail: '📊',
-    type: 'interactive',
-    mandatory: false,
-  },
-  {
-    id: '4',
-    title: 'سياسات الشركة والامتثال',
-    description: 'دليل شامل لسياسات الشركة وإجراءات الامتثال',
-    category: 'موارد بشرية',
-    instructor: 'نورة الدوسري',
-    duration: '2 ساعة',
-    lessonsCount: 8,
-    enrolledCount: 248,
-    completedCount: 230,
-    rating: 4.5,
-    level: 'beginner',
-    status: 'active',
-    thumbnail: '📋',
-    type: 'document',
-    mandatory: true,
-  },
-  {
-    id: '5',
-    title: 'تقنيات البيع الاحترافية',
-    description: 'استراتيجيات ومهارات البيع المتقدمة',
-    category: 'المبيعات',
-    instructor: 'أ. فهد العتيبي',
-    duration: '6 ساعات',
-    lessonsCount: 15,
-    enrolledCount: 48,
-    completedCount: 35,
-    rating: 4.6,
-    level: 'intermediate',
-    status: 'active',
-    thumbnail: '💼',
-    type: 'video',
-    mandatory: false,
-  },
-  {
-    id: '6',
-    title: 'التواصل الفعال في بيئة العمل',
-    description: 'مهارات التواصل والعرض والتفاوض',
-    category: 'تطوير ذاتي',
-    instructor: 'د. ريم الشمري',
-    duration: '5 ساعات',
-    lessonsCount: 12,
-    enrolledCount: 92,
-    completedCount: 78,
-    rating: 4.8,
-    level: 'beginner',
-    status: 'active',
-    thumbnail: '🎯',
-    type: 'interactive',
-    mandatory: false,
-  },
-]
-
-const levelLabels = {
-  beginner: 'مبتدئ',
-  intermediate: 'متوسط',
-  advanced: 'متقدم',
-}
-
-const levelColors = {
-  beginner: 'bg-green-100 text-green-700',
-  intermediate: 'bg-blue-100 text-blue-700',
-  advanced: 'bg-purple-100 text-purple-700',
-}
-
-const typeIcons = {
-  video: Video,
-  document: FileText,
-  interactive: Play,
-}
+const statusStyle: Record<TrainingSessionStatus, string> = { PLANNED: 'bg-blue-50 text-blue-700', DONE: 'bg-green-50 text-green-700', CANCELLED: 'bg-gray-100 text-gray-500' }
 
 export default function TrainingPage() {
-  const [searchTerm, setSearchTerm] = useState('')
-  const [filterCategory, setFilterCategory] = useState('all')
-  const [filterLevel, setFilterLevel] = useState('all')
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
+  const [sessions, setSessions] = useState<ApiTrainingSession[] | null>(null)
+  const [courses, setCourses] = useState<ApiTrainingCourse[]>([])
+  const [canCompany, setCanCompany] = useState(false)
+  const [notice, setNotice] = useState('')
+  const [error, setError] = useState('')
+  const [adding, setAdding] = useState(false)
 
-  const filteredCourses = courses.filter((course) => {
-    const matchesSearch =
-      course.title.includes(searchTerm) || course.description.includes(searchTerm)
-    const matchesCategory = filterCategory === 'all' || course.category === filterCategory
-    const matchesLevel = filterLevel === 'all' || course.level === filterLevel
-    return matchesSearch && matchesCategory && matchesLevel && course.status === 'active'
-  })
+  const load = useCallback(() => {
+    setError('')
+    Promise.all([fetchTrainingSessions(), fetchTrainingCourses()])
+      .then(([sessionData, courseData]) => {
+        setSessions(sessionData.sessions)
+        setCanCompany(sessionData.canCompany)
+        setCourses(courseData.courses)
+        setNotice(sessionData.available ? '' : sessionData.message ?? '')
+      })
+      .catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل التدريب'))
+  }, [])
+  useEffect(load, [load])
 
-  const categories = [...new Set(courses.map((c) => c.category))]
-
-  const stats = {
-    totalCourses: courses.filter((c) => c.status === 'active').length,
-    totalEnrolled: courses.reduce((sum, c) => sum + c.enrolledCount, 0),
-    totalCompleted: courses.reduce((sum, c) => sum + c.completedCount, 0),
-    avgRating: courses.reduce((sum, c) => sum + c.rating, 0) / courses.length,
+  const toggle = async (course: ApiTrainingCourse) => {
+    setError('')
+    try {
+      await updateTrainingCourse(course.id, { isActive: !course.isActive })
+      load()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'تعذر تعديل الدورة')
+    }
   }
 
   return (
     <MainLayout>
       <div className="space-y-6">
-        {/* Page Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">الدورات التدريبية</h1>
-            <p className="text-gray-500 mt-1">منصة التعلم الإلكتروني للموظفين</p>
+            <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
+              <GraduationCap size={24} className="text-primary-600" />
+              الدورات التدريبية
+            </h1>
+            <p className="text-gray-500 mt-1">جلسات التدريب بسعتها وتسجيلاتها، وكتالوج الدورات</p>
           </div>
-          <div className="flex items-center gap-3">
-            <Link href="/training/my-courses" className="btn-secondary flex items-center gap-2">
-              <BookOpen size={18} />
-              دوراتي
-            </Link>
-            <button className="btn-primary flex items-center gap-2">
-              <Plus size={18} />
-              إضافة دورة
-            </button>
-          </div>
+          {sessions && !notice && (
+            <div className="flex items-center gap-2">
+              <Link href="/training/add" className="btn-secondary flex items-center gap-2">
+                <Plus size={18} />
+                دورة جديدة
+              </Link>
+              <button onClick={() => setAdding(true)} disabled={!courses.some((course) => course.isActive)} className="btn-primary flex items-center gap-2 disabled:opacity-50">
+                <Plus size={18} />
+                جلسة جديدة
+              </button>
+            </div>
+          )}
         </div>
+        {error && (
+          <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-4">
+            {error}
+          </div>
+        )}
+        {notice && (
+          <div role="status" className="bg-amber-50 text-amber-800 rounded-xl p-4">
+            {notice}
+          </div>
+        )}
+        {sessions && !notice && sessions.length === 0 && <EmptyState title="مفيش جلسات تدريب لسه" icon={GraduationCap} />}
+        {sessions && sessions.length > 0 && (
+          <div className="grid gap-3 md:grid-cols-2" data-sessions>
+            {sessions.map((session) => (
+              <Link key={session.id} href={`/training/${session.id}`} className="card block hover:shadow-md transition-shadow">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h2 className="font-bold text-gray-800">{session.courseName}</h2>
+                    <p className="text-xs text-gray-500 mt-1">
+                      {formatDate(session.startDate)} – {formatDate(session.endDate)} · {session.branchName ?? 'كل الشركة'}
+                      {session.location ? ` · ${session.location}` : ''}
+                    </p>
+                  </div>
+                  <span className={`inline-block px-2 py-0.5 rounded-full text-xs ${statusStyle[session.status]}`}>{session.statusLabel}</span>
+                </div>
+                <p className="text-sm text-gray-600 mt-3 tabular-nums">
+                  مسجّلين {session.counts.seats}
+                  {session.capacity !== null ? ` من ${session.capacity}` : ''} · حضروا {session.counts.attended} · أكملوا {session.counts.completed}
+                </p>
+              </Link>
+            ))}
+          </div>
+        )}
+        {courses.length > 0 && (
+          <div className="card overflow-x-auto">
+            <h2 className="text-lg font-bold text-gray-800 mb-3">كتالوج الدورات</h2>
+            <table className="w-full text-sm" data-courses>
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-3 py-2 text-right font-medium text-gray-600">الدورة</th>
+                  <th className="px-3 py-2 text-right font-medium text-gray-600">النوع</th>
+                  <th className="px-3 py-2 text-right font-medium text-gray-600">المدة</th>
+                  <th className="px-3 py-2 text-right font-medium text-gray-600">المزوّد</th>
+                  <th className="px-3 py-2 text-right font-medium text-gray-600">الشهادة</th>
+                  <th className="px-3 py-2" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {courses.map((course) => (
+                  <tr key={course.id} className={course.isActive ? '' : 'opacity-60'}>
+                    <td className="px-3 py-2 text-gray-800">{course.name}</td>
+                    <td className="px-3 py-2 text-gray-600">{course.kindLabel}</td>
+                    <td className="px-3 py-2 tabular-nums">{course.durationHours !== null ? `${course.durationHours} ساعة` : '—'}</td>
+                    <td className="px-3 py-2 text-gray-600">{course.provider ?? '—'}</td>
+                    <td className="px-3 py-2 text-gray-600">{course.givesCertificate ? (course.certificateValidMonths ? `صالحة ${course.certificateValidMonths} شهر` : 'من غير انتهاء') : '—'}</td>
+                    <td className="px-3 py-2 text-left">
+                      <button onClick={() => toggle(course)} className="text-primary-600 hover:underline text-xs">
+                        {course.isActive ? 'إيقاف' : 'إتاحة'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      {adding && <SessionModal courses={courses.filter((course) => course.isActive)} canCompany={canCompany} onClose={() => setAdding(false)} onDone={() => { setAdding(false); load() }} />}
+    </MainLayout>
+  )
+}
 
-        {/* Stats Cards */}
-        <div className="grid grid-cols-4 gap-4">
-          <div className="card flex items-center gap-4">
-            <div className="w-12 h-12 bg-primary-100 rounded-2xl flex items-center justify-center">
-              <BookOpen size={24} className="text-primary-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-500">الدورات المتاحة</p>
-              <p className="text-2xl font-bold text-gray-800">{stats.totalCourses}</p>
-            </div>
-          </div>
-          <div className="card flex items-center gap-4">
-            <div className="w-12 h-12 bg-blue-100 rounded-2xl flex items-center justify-center">
-              <Users size={24} className="text-blue-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-500">إجمالي التسجيلات</p>
-              <p className="text-2xl font-bold text-gray-800">{stats.totalEnrolled}</p>
-            </div>
-          </div>
-          <div className="card flex items-center gap-4">
-            <div className="w-12 h-12 bg-success-50 rounded-2xl flex items-center justify-center">
-              <GraduationCap size={24} className="text-success-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-500">الدورات المكتملة</p>
-              <p className="text-2xl font-bold text-gray-800">{stats.totalCompleted}</p>
-            </div>
-          </div>
-          <div className="card flex items-center gap-4">
-            <div className="w-12 h-12 bg-warning-50 rounded-2xl flex items-center justify-center">
-              <Star size={24} className="text-warning-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-500">متوسط التقييم</p>
-              <p className="text-2xl font-bold text-gray-800">{stats.avgRating.toFixed(1)}/5</p>
-            </div>
-          </div>
+function SessionModal({ courses, canCompany, onClose, onDone }: { courses: ApiTrainingCourse[]; canCompany: boolean; onClose: () => void; onDone: () => void }) {
+  const [branches, setBranches] = useState<ApiBranch[]>([])
+  const [courseId, setCourseId] = useState(courses[0]?.id ?? 0)
+  const [branchId, setBranchId] = useState(0)
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+  const [location, setLocation] = useState('')
+  const [trainer, setTrainer] = useState('')
+  const [capacity, setCapacity] = useState('')
+  const [cost, setCost] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    fetchBranches().then((rows) => { setBranches(rows); if (!canCompany && rows.length) setBranchId(rows[0].id) }).catch(() => setBranches([]))
+  }, [canCompany])
+
+  const save = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      await createTrainingSession({ courseId, branchId: branchId || null, startDate, endDate: endDate || startDate, location: location.trim() || null, trainer: trainer.trim() || null,
+        capacity: capacity.trim() ? Number(capacity) : null, costPerSeat: cost.trim() || null })
+      onDone()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'تعذر حفظ الجلسة')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-label="جلسة جديدة">
+      <div className="bg-white rounded-2xl w-full max-w-lg mx-4 max-h-[90vh] overflow-auto">
+        <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+          <h2 className="text-xl font-bold text-gray-800">جلسة تدريب جديدة</h2>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg" aria-label="إغلاق">
+            <X size={20} />
+          </button>
         </div>
-
-        {/* Filters */}
-        <div className="card">
-          <div className="flex items-center gap-4">
-            <div className="relative flex-1">
-              <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input
-                type="text"
-                placeholder="بحث عن دورة..."
-                className="input pr-10 w-full"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
+        <div className="p-6 space-y-4">
+          {error && (
+            <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 text-sm">
+              {error}
             </div>
-            <select
-              value={filterCategory}
-              onChange={(e) => setFilterCategory(e.target.value)}
-              className="input w-48"
-            >
-              <option value="all">كل التصنيفات</option>
-              {categories.map((cat) => (
-                <option key={cat} value={cat}>
-                  {cat}
+          )}
+          <label className="block text-sm text-gray-600">
+            الدورة
+            <select className="input mt-1 w-full" value={courseId} onChange={(e) => setCourseId(Number(e.target.value))}>
+              {courses.map((course) => (
+                <option key={course.id} value={course.id}>
+                  {course.name}
                 </option>
               ))}
             </select>
-            <select
-              value={filterLevel}
-              onChange={(e) => setFilterLevel(e.target.value)}
-              className="input w-40"
-            >
-              <option value="all">كل المستويات</option>
-              <option value="beginner">مبتدئ</option>
-              <option value="intermediate">متوسط</option>
-              <option value="advanced">متقدم</option>
+          </label>
+          <label className="block text-sm text-gray-600">
+            الفرع
+            <select className="input mt-1 w-full" value={branchId} onChange={(e) => setBranchId(Number(e.target.value))}>
+              {canCompany && <option value={0}>كل الشركة</option>}
+              {branches.map((branch) => (
+                <option key={branch.id} value={branch.id}>
+                  {branch.name}
+                </option>
+              ))}
             </select>
-            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
-              <button
-                onClick={() => setViewMode('grid')}
-                className={`p-2 rounded-lg transition-colors ${
-                  viewMode === 'grid' ? 'bg-white shadow-sm' : 'hover:bg-gray-200'
-                }`}
-              >
-                <BarChart3 size={18} className="text-gray-600" />
-              </button>
-              <button
-                onClick={() => setViewMode('list')}
-                className={`p-2 rounded-lg transition-colors ${
-                  viewMode === 'list' ? 'bg-white shadow-sm' : 'hover:bg-gray-200'
-                }`}
-              >
-                <FileText size={18} className="text-gray-600" />
-              </button>
-            </div>
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block text-sm text-gray-600">
+              من يوم
+              <input type="date" className="input mt-1 w-full" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+            </label>
+            <label className="block text-sm text-gray-600">
+              إلى يوم
+              <input type="date" className="input mt-1 w-full" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+            </label>
+            <label className="block text-sm text-gray-600">
+              المكان
+              <input className="input mt-1 w-full" maxLength={200} value={location} onChange={(e) => setLocation(e.target.value)} />
+            </label>
+            <label className="block text-sm text-gray-600">
+              المدرب
+              <input className="input mt-1 w-full" maxLength={200} value={trainer} onChange={(e) => setTrainer(e.target.value)} />
+            </label>
+            <label className="block text-sm text-gray-600">
+              السعة (فاضية = من غير حد)
+              <input className="input mt-1 w-full" inputMode="numeric" value={capacity} onChange={(e) => setCapacity(e.target.value.replace(/\D/g, ''))} />
+            </label>
+            <label className="block text-sm text-gray-600">
+              تكلفة المقعد (للتقرير بس)
+              <input className="input mt-1 w-full" inputMode="decimal" value={cost} onChange={(e) => setCost(e.target.value)} />
+            </label>
           </div>
-        </div>
-
-        {/* Mandatory Courses Banner */}
-        <div className="bg-primary-50 border border-primary-200 rounded-2xl p-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-primary-500 rounded-xl flex items-center justify-center">
-              <Award size={20} className="text-white" />
-            </div>
-            <div className="flex-1">
-              <p className="font-medium text-primary-800">دورات إلزامية</p>
-              <p className="text-sm text-primary-600">
-                لديك {courses.filter((c) => c.mandatory).length} دورات إلزامية يجب إكمالها
-              </p>
-            </div>
-            <button className="btn-primary btn-sm">عرض الدورات</button>
-          </div>
-        </div>
-
-        {filteredCourses.length === 0 && <EmptyState title="لا توجد دورات مطابقة للبحث أو الفلاتر" />}
-
-        {/* Courses Grid */}
-        <div className={viewMode === 'grid' ? 'grid grid-cols-3 gap-4' : 'space-y-4'}>
-          {filteredCourses.map((course) => {
-            const TypeIcon = typeIcons[course.type]
-            const completionRate = Math.round(
-              (course.completedCount / course.enrolledCount) * 100
-            )
-
-            if (viewMode === 'grid') {
-              return (
-                <div
-                  key={course.id}
-                  className="card hover:shadow-lg transition-shadow overflow-hidden"
-                >
-                  {/* Thumbnail */}
-                  <div className="h-32 bg-gradient-to-br from-primary-500 to-primary-600 flex items-center justify-center text-5xl relative">
-                    {course.thumbnail}
-                    {course.mandatory && (
-                      <span className="absolute top-2 left-2 px-2 py-0.5 bg-red-500 text-white text-xs font-medium rounded-full">
-                        إلزامي
-                      </span>
-                    )}
-                    <span
-                      className={`absolute top-2 right-2 px-2 py-0.5 rounded-full text-xs font-medium ${
-                        levelColors[course.level]
-                      }`}
-                    >
-                      {levelLabels[course.level]}
-                    </span>
-                  </div>
-
-                  <div className="p-4">
-                    <div className="flex items-start justify-between mb-2">
-                      <h3 className="font-bold text-gray-800 line-clamp-2">{course.title}</h3>
-                    </div>
-                    <p className="text-sm text-gray-500 line-clamp-2 mb-3">
-                      {course.description}
-                    </p>
-
-                    <div className="flex items-center gap-4 text-sm text-gray-500 mb-3">
-                      <span className="flex items-center gap-1">
-                        <Clock size={14} />
-                        {course.duration}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <TypeIcon size={14} />
-                        {course.lessonsCount} درس
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-1 mb-3">
-                      {[...Array(5)].map((_, i) => (
-                        <Star
-                          key={i}
-                          size={14}
-                          className={
-                            i < Math.floor(course.rating)
-                              ? 'text-warning-500 fill-warning-500'
-                              : 'text-gray-300'
-                          }
-                        />
-                      ))}
-                      <span className="text-sm text-gray-600 mr-1">
-                        ({course.rating})
-                      </span>
-                    </div>
-
-                    <div className="flex items-center justify-between pt-3 border-t border-gray-100">
-                      <span className="text-sm text-gray-500">
-                        {course.enrolledCount} مشترك
-                      </span>
-                      <button className="btn-primary btn-sm flex items-center gap-1">
-                        <Play size={14} />
-                        ابدأ الدورة
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )
-            } else {
-              return (
-                <div
-                  key={course.id}
-                  className="card hover:shadow-lg transition-shadow"
-                >
-                  <div className="flex items-center gap-4">
-                    <div className="w-20 h-20 bg-gradient-to-br from-primary-500 to-primary-600 rounded-2xl flex items-center justify-center text-3xl flex-shrink-0">
-                      {course.thumbnail}
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <h3 className="font-bold text-gray-800">{course.title}</h3>
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                            levelColors[course.level]
-                          }`}
-                        >
-                          {levelLabels[course.level]}
-                        </span>
-                        {course.mandatory && (
-                          <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs font-medium rounded-full">
-                            إلزامي
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-sm text-gray-500 mb-2">{course.description}</p>
-                      <div className="flex items-center gap-6 text-sm text-gray-500">
-                        <span className="flex items-center gap-1">
-                          <Clock size={14} />
-                          {course.duration}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <TypeIcon size={14} />
-                          {course.lessonsCount} درس
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <Users size={14} />
-                          {course.enrolledCount} مشترك
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <Star size={14} className="text-warning-500 fill-warning-500" />
-                          {course.rating}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="text-left">
-                      <p className="text-sm text-gray-500 mb-2">معدل الإكمال</p>
-                      <div className="w-24 h-2 bg-gray-200 rounded-full overflow-hidden mb-2">
-                        <div
-                          className="h-full bg-success-500 rounded-full"
-                          style={{ width: `${completionRate}%` }}
-                        />
-                      </div>
-                      <p className="text-xs text-gray-500">{completionRate}%</p>
-                    </div>
-                    <button className="btn-primary flex items-center gap-2">
-                      <Play size={18} />
-                      ابدأ الدورة
-                    </button>
-                  </div>
-                </div>
-              )
-            }
-          })}
-        </div>
-
-        {/* Learning Paths */}
-        <div className="card">
-          <h2 className="text-lg font-bold text-gray-800 mb-4">مسارات التعلم</h2>
-          <div className="grid grid-cols-3 gap-4">
-            {[
-              {
-                title: 'مسار القيادة والإدارة',
-                courses: 5,
-                duration: '25 ساعة',
-                enrolled: 45,
-                color: 'from-blue-500 to-blue-600',
-                icon: '🎯',
-              },
-              {
-                title: 'مسار التطوير التقني',
-                courses: 8,
-                duration: '40 ساعة',
-                enrolled: 78,
-                color: 'from-purple-500 to-purple-600',
-                icon: '💻',
-              },
-              {
-                title: 'مسار المهارات الشخصية',
-                courses: 6,
-                duration: '18 ساعة',
-                enrolled: 120,
-                color: 'from-green-500 to-green-600',
-                icon: '🌟',
-              },
-            ].map((path, index) => (
-              <div
-                key={index}
-                className="bg-gray-50 rounded-2xl p-4 hover:bg-gray-100 transition-colors cursor-pointer"
-              >
-                <div className="flex items-center gap-3 mb-3">
-                  <div
-                    className={`w-12 h-12 bg-gradient-to-br ${path.color} rounded-2xl flex items-center justify-center text-2xl`}
-                  >
-                    {path.icon}
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-gray-800">{path.title}</h3>
-                    <p className="text-sm text-gray-500">
-                      {path.courses} دورات • {path.duration}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-500">{path.enrolled} مشترك</span>
-                  <button className="text-primary-600 text-sm font-medium hover:text-primary-700">
-                    عرض المسار ←
-                  </button>
-                </div>
-              </div>
-            ))}
+          <div className="flex items-center justify-end gap-2">
+            <button onClick={onClose} className="btn-secondary text-sm">
+              إلغاء
+            </button>
+            <button onClick={save} disabled={busy || !courseId || !startDate} className="btn-primary text-sm disabled:opacity-50">
+              حفظ الجلسة
+            </button>
           </div>
         </div>
       </div>
-    </MainLayout>
+    </div>
   )
 }

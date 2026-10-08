@@ -73,6 +73,7 @@ import { applyPersonalDataRequest, PERSONAL_DATA_COLUMNS } from './personal-data
 import { executePositionRequest, POSITION_REQUEST_HANDLER } from '../positions/position-requests'
 import { executeRequisition, REQUISITION_HANDLER } from '../recruitment/requisition-requests'
 import { DOCUMENT_RENEWAL_HANDLER, executeDocumentRenewal } from '../assets/document-renewal'
+import { TRAINING_REQUEST_HANDLER, executeTrainingRequest } from '../training/training-requests'
 
 // ناتج تنفيذ الوجهة: المرجع الدائم + هل اكتمل فوراً أم ينتظر (سريان/تأكيد استلام)
 export interface DestinationResult {
@@ -1069,6 +1070,8 @@ export class DestinationsService {
     [REQUISITION_HANDLER]: executeRequisition,
     // B2.15-ب: «تجديد مستند» — الاعتماد بيحدّث تاريخ انتهاء مستند صاحب الطلب وبيقفل مهمة تجديده
     [DOCUMENT_RENEWAL_HANDLER]: executeDocumentRenewal,
+    // B3.9-ب: «طلب تدريب» — الاعتماد النهائي بيسجّل صاحب الطلب في الجلسة (تحت قفل صفها والسعة)
+    [TRAINING_REQUEST_HANDLER]: executeTrainingRequest,
     shift_schedule: executeShiftSwap,
     // بيانات شخصية
     employee_record: this.personalDataHandler,

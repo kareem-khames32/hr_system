@@ -103,6 +103,13 @@ export class TrainingController {
     return this.training.mark(user, id, dto)
   }
 
+  // B3.9-ب: شهادات التدريب بانتهائها
+  @Perm('training.manage')
+  @Get('certificates')
+  certificates(@CurrentUser() user: JwtPayload) {
+    return this.training.certificates(user)
+  }
+
   @Get('mine')
   mine(@CurrentUser() user: JwtPayload) {
     return this.training.mine(user)
