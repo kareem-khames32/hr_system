@@ -14,7 +14,7 @@ const headersOf = kind => rules.IMPORT_COLUMNS[kind].map(column => column.header
 const sheetOf = (header, rows) => ({ header, rows: rows.map((cells, index) => ({ row: index + 2, cells })) })
 
 test('SIU-01: القوالب — أعمدة الموظفين بتغطي كل حقل إجباري في إنشاء الموظف، والعناوين من غير تكرار', () => {
-  assert.deepEqual([rules.IMPORT_KINDS, rules.IMPORT_MAX_ROWS], [['structure', 'employees'], 2000])
+  assert.deepEqual([rules.IMPORT_KINDS, rules.IMPORT_MAX_ROWS], [['structure', 'employees', 'balances', 'loans'], 2000])
   for (const kind of rules.IMPORT_KINDS) assert.equal(new Set(headersOf(kind)).size, headersOf(kind).length, kind)
   const keys = rules.IMPORT_COLUMNS.employees.map(column => column.key)
   // الفرع والقسم بيتحلّوا من كودهم واسمهم؛ والهوية واحد من عمودين
@@ -69,4 +69,31 @@ test('SIU-04: مصدر الكود — لحساب بكل الفروع، المع�
   assert.match(controller, /@RequireModule\('employees'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)\n@Controller\('setup-import'\)/)
   assert.equal((controller.match(/@Perm\('settings\.manage'\)/g) || []).length, 3)
   assert.equal((controller.match(/@Post\(/g) || []).length, 3)
+})
+
+test('SIU-05: (ج) صف الرصيد الافتتاحي وصف السلفة القائمة — النوع والأيام، والمبلغ نص بكسرين، والأقساط، وشهر أول قسط مش قبل الشهر الحالي', () => {
+  const balance = (balanceType, remaining) => rules.balanceDraft({ balanceType, remaining })
+  assert.deepEqual([balance('سنوية', '12.5'), balance('مرضي', '0'), balance('SICK', '30')].map(item => [item.balanceType, item.days, item.issues]), [['annual', 12.5, []], ['sick', 0, []], ['sick', 30, []]])
+  assert.deepEqual([balance('عارضة', '4').issues, balance('سنوية', '-1').issues, balance('سنوية', '1.234').issues, balance('سنوية', 'كتير').days],
+    [['«نوع الرصيد» سنوية أو مرضية'], ['«الرصيد المتبقي بالأيام» رقم من صفر بكسرين بالكتير'], ['«الرصيد المتبقي بالأيام» رقم من صفر بكسرين بالكتير'], null])
+  const loan = (amount, months, firstInstallmentPeriod) => rules.loanDraft({ amount, months, firstInstallmentPeriod }, '2026-10')
+  assert.deepEqual([loan('6,000', '6', '2026-11'), loan('1500.5', '1', '2026-10-01')], [{ amount: '6000.00', months: 6, firstInstallmentPeriod: '2026-11', issues: [] }, { amount: '1500.50', months: 1, firstInstallmentPeriod: '2026-10', issues: [] }])
+  assert.deepEqual([loan('0', '2', '2026-11').issues, loan('100', '0', '2026-11').issues, loan('100', '121', '2026-11').issues, loan('100', '2', '2026-09').issues, loan('100', '2', 'قريب').issues, loan('1.234', '1.5', '2026-13').issues],
+    [['«المتبقي من السلفة» رقم أكبر من صفر بكسرين بالكتير'], ['«عدد الأقساط المتبقية» رقم صحيح من 1 لـ120'], ['«عدد الأقساط المتبقية» رقم صحيح من 1 لـ120'], ['«شهر أول قسط» فات — اكتب الشهر الحالي أو اللي بعده'],
+      ['«شهر أول قسط» بصيغة YYYY-MM'], ['«المتبقي من السلفة» رقم أكبر من صفر بكسرين بالكتير', '«عدد الأقساط المتبقية» رقم صحيح من 1 لـ120', '«شهر أول قسط» بصيغة YYYY-MM']])
+  assert.deepEqual(rules.IMPORT_COLUMNS.loans.filter(column => column.money).map(column => column.key), ['amount'])
+})
+
+test('SIU-06: (ج) مصدر الخدمة — الرصيد بخدمة تعديله بصلاحيتها وموديولها، والسلفة طلب بالنيابة بصلاحياته؛ مفيش مبلغ بيتكتب مباشرة', () => {
+  const service = read('setup-import/setup-import.service.ts')
+  const balance = service.slice(service.indexOf('private async balancePlan('), service.indexOf('private async loanPlan('))
+  const loan = service.slice(service.indexOf('private async loanPlan('), service.indexOf('private async plan('))
+  // الصلاحية والموديول قبل أي قراية
+  assert.match(balance, /^private async balancePlan\([^\n]+\n\s+if \(!userHasPerm\(user, 'leave_balances\.manage'\)\) throw new ForbiddenException\([^\n]+\n\s+if \(!\(await this\.modules\.isEnabled\('leave'\)\)\) throw new BadRequestException/)
+  assert.match(loan, /^private async loanPlan\([^\n]+\n\s+if \(!userHasPerm\(user, 'requests\.create_on_behalf'\) \|\| !userHasPerm\(user, 'loans\.exceptional'\)\) throw new ForbiddenException/)
+  // الرصيد: خدمة التعديل القايمة بسببها ومفتاح عملية و«المتوقع» اللي بيرفض لو الرصيد اتغيّر
+  assert.match(balance, /await this\.balances\.adjust\(person\.id, \{ balanceType, period: now\.period, delta, reason: OPENING_BALANCE_REASON, idempotencyKey: randomUUID\(\), expectedRemaining: now\.shown \}, user\.sub, null\)/)
+  // السلفة: طلب بالنيابة بيتقدّم — من غير أي كتابة في جدول السلف
+  assert.match(loan, /await this\.requests\.create\(user, \{ typeCode: 'LOAN', onBehalfEmployeeId: person\.id, submit: true, payload \}\)/)
+  assert.doesNotMatch(service, /INSERT INTO|UPDATE dbo|\.save\(|\.insert\(|getRepository|\bloans\]|dbo\.loans/)
 })

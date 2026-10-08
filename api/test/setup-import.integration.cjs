@@ -59,6 +59,14 @@ before(async () => {
   await repo('Department').save({ name: 'قسم قديم', branchId: B.old.id, isActive: true })
   U.admin = await repo('User').save({ email: 'admin@setup-import.invalid', displayName: 'مدير النظام', passwordHash: 'test-only', role: 'super_admin', scopeAllBranches: true, permissions: '[]', isActive: true })
   U.branch = await repo('User').save({ email: 'branch@setup-import.invalid', displayName: 'مدير فرع', passwordHash: 'test-only', role: 'employee', branchId: B.old.id, permissions: JSON.stringify(['settings.manage', 'employees.edit']), isActive: true })
+  // (ج) حساب بكل الفروع بصلاحية الإعدادات بس — من غير صلاحيات الأرصدة والسلف
+  U.setup = await repo('User').save({ email: 'setup@setup-import.invalid', displayName: 'مسؤول تجهيز', passwordHash: 'test-only', role: 'employee', scopeAllBranches: true, permissions: JSON.stringify(['settings.manage']), isActive: true })
+  // حساب بكل الفروع بصلاحيات استيراد السلف من غير سلطة الموارد البشرية: طلباته بالنيابة بتستنى سلسلتها
+  U.desk = await repo('User').save({ email: 'desk@setup-import.invalid', displayName: 'مكتب التجهيز', passwordHash: 'test-only', role: 'employee', scopeAllBranches: true,
+    permissions: JSON.stringify(['settings.manage', 'requests.create_on_behalf', 'loans.exceptional']), isActive: true })
+  const chain = await repo('ApprovalChain').save({ code: 'SETUP_LOAN', nameAr: 'سلسلة السلف', isActive: true, autoApprove: false })
+  await repo('ApprovalStep').save({ chainId: chain.id, stepOrder: 1, approverRole: 'hr' })
+  await repo('RequestType').save({ code: 'LOAN', nameAr: 'سلفة', category: 'financial', destinationHandler: 'loans_installments', requiredFields: '["amount","months"]', approvalChainId: chain.id, isActive: true })
   U.plain = await repo('User').save({ email: 'plain@setup-import.invalid', displayName: 'حساب عادي', passwordHash: 'test-only', role: 'employee', branchId: B.old.id, permissions: JSON.stringify(['employees.edit']), isActive: true })
 }, { timeout: 120000 })
 
@@ -137,4 +145,64 @@ test('SI-03: الموظفين — نفس قواعد إنشاء الموظف في
   const second = ok(await send(U.admin, 'employees', 'preview', more))
   assert.deepEqual([second.toCreate, second.existing, second.withErrors, second.rows.find(row => row.status === 'ERROR').errors], [1, 1, 1, ['رقم الهوية أو الجواز مسجّل لموظف تاني']])
   assert.equal(await repo('Employee').count(), 3)
+})
+
+const http = async (user, route) => { const response = await fetch(base + route, { headers: { Authorization: 'Bearer ' + token(user) } }); return { status: response.status, body: await response.json().catch(() => null) } }
+const remainingOf = async (employee, type) => { const view = ok(await http(U.admin, '/leaves/balances/' + employee.id)).find(row => row.balanceType === type); assert.ok(view, `no ${type} balance for ${employee.fingerprintCode}`); return Math.round((view.remaining - view.deficit) * 100) / 100 }
+
+test('SI-04: (ج) الأرصدة الافتتاحية — بصلاحية الأرصدة فوق صلاحية الإعدادات؛ المعاينة مابتكتبش؛ والتطبيق بخدمة تعديل الرصيد (سبب وسجل) لحد ما المتبقي يساوي الملف؛ واللي رصيده زي الملف بيتخطّى', async () => {
+  const people = Object.fromEntries((await repo('Employee').find()).map(row => [row.fingerprintCode, row]))
+  const before = { a: await remainingOf(people['1001'], 'annual'), b: await remainingOf(people['1002'], 'annual'), c: await remainingOf(people['1003'], 'sick') }
+  const target = { a: before.a + 3.5, c: before.c + 2 }
+  refused(await send(U.setup, 'balances', 'preview', await sheet('balances', [['1001', 'سنوية', '10']])), 403, 'استيراد الأرصدة محتاج صلاحية إدارة أرصدة الإجازات')
+  const bad = await sheet('balances', [['1001', 'سنوية', String(target.a)], ['1001', 'سنوي', '3'], ['9999', 'مرضية', '5'], ['1002', 'عارضة', '4'], ['1003', 'مرضية', '-1']])
+  const preview = ok(await send(U.admin, 'balances', 'preview', bad))
+  assert.deepEqual([preview.total, preview.toCreate, preview.withErrors, preview.canApply, preview.rows.map(row => [row.row, row.status, row.errors])],
+    [5, 1, 4, false, [[2, 'NEW', []], [3, 'ERROR', ['الموظف والنوع ده مكررين في الملف (الصف 2)']], [4, 'ERROR', ['«رقم البصمة» مش لموظف موجود — ارفع ملف الموظفين الأول']], [5, 'ERROR', ['«نوع الرصيد» سنوية أو مرضية']],
+      [6, 'ERROR', ['«الرصيد المتبقي بالأيام» رقم من صفر بكسرين بالكتير']]]])
+  assert.deepEqual([(await send(U.admin, 'balances', 'apply', bad)).status, await repo('LeaveBalanceAdjustment').count(), await remainingOf(people['1001'], 'annual')], [400, 0, before.a])
+  const good = await sheet('balances', [['1001', 'سنوية', String(target.a)], ['1002', 'سنوية', String(before.b)], ['1003', 'مرضية', String(target.c)]])
+  assert.deepEqual((({ toCreate, existing, withErrors, canApply }) => [toCreate, existing, withErrors, canApply])(ok(await send(U.admin, 'balances', 'preview', good))), [2, 1, 0, true])
+  assert.deepEqual(ok(await send(U.admin, 'balances', 'apply', good)), { kind: 'balances', total: 3, created: 2, existing: 1, stoppedAt: null })
+  assert.deepEqual([await remainingOf(people['1001'], 'annual'), await remainingOf(people['1002'], 'annual'), await remainingOf(people['1003'], 'sick')], [target.a, before.b, target.c])
+  const adjustments = await repo('LeaveBalanceAdjustment').find({ order: { id: 'ASC' } })
+  assert.deepEqual(adjustments.map(row => [row.employeeId, row.balanceType, Number(row.delta), row.reason, row.actorUserId]),
+    [[people['1001'].id, 'annual', 3.5, rules.OPENING_BALANCE_REASON, U.admin.id], [people['1003'].id, 'sick', 2, rules.OPENING_BALANCE_REASON, U.admin.id]])
+  // إعادة رفع نفس الملف: كل الأرصدة زي الملف — مفيش تعديل تاني
+  const again = ok(await send(U.admin, 'balances', 'preview', good))
+  assert.deepEqual([again.toCreate, again.existing, again.canApply, ok(await send(U.admin, 'balances', 'apply', good)).created, await repo('LeaveBalanceAdjustment').count()], [0, 3, false, 0, 2])
+})
+
+test('SI-05: (ج) السلف القائمة — بصلاحيتَي النيابة والاستثنائية؛ كل صف طلب سلفة بالنيابة بحكم النيابة القايم (من غير سلطة الموارد البشرية بيستنى سلسلته ومفيش سلفة، وبسلطتها بيتعتمد باسم اللي رفع)؛ والطلب القايم بيتخطّى', async () => {
+  const people = Object.fromEntries((await repo('Employee').find()).map(row => [row.fingerprintCode, row]))
+  const next = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1), period = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`
+  refused(await send(U.setup, 'loans', 'preview', await sheet('loans', [['1001', '6000', '6', period]])), 403, 'استيراد السلف محتاج صلاحية تقديم الطلبات بالنيابة وصلاحية السلفة الاستثنائية')
+  const bad = await sheet('loans', [['1001', '6000', '6', period], ['1001', '6,000.00', '6', period], ['9999', '100', '1', period], ['1002', '0', '2', period], ['1003', '500', '0', period], ['1003', '500', '2', '2020-01'], ['1003', '500', '2', 'قريب']])
+  const preview = ok(await send(U.admin, 'loans', 'preview', bad))
+  assert.deepEqual([preview.total, preview.toCreate, preview.withErrors, preview.canApply, preview.rows.map(row => [row.row, row.status, row.errors])],
+    [7, 1, 6, false, [[2, 'NEW', []], [3, 'ERROR', ['نفس السلفة مكررة في الملف (الصف 2)']], [4, 'ERROR', ['«رقم البصمة» مش لموظف موجود — ارفع ملف الموظفين الأول']], [5, 'ERROR', ['«المتبقي من السلفة» رقم أكبر من صفر بكسرين بالكتير']],
+      [6, 'ERROR', ['«عدد الأقساط المتبقية» رقم صحيح من 1 لـ120']], [7, 'ERROR', ['«شهر أول قسط» فات — اكتب الشهر الحالي أو اللي بعده']], [8, 'ERROR', ['«شهر أول قسط» بصيغة YYYY-MM']]]])
+  assert.deepEqual([(await send(U.admin, 'loans', 'apply', bad)).status, await repo('Request').count()], [400, 0])
+  const good = await sheet('loans', [['1001', '6000', '6', period], ['1002', '1,500.50', '1', period]])
+  const applied = ok(await send(U.desk, 'loans', 'apply', good))
+  assert.deepEqual(applied, { kind: 'loans', total: 2, created: 2, existing: 0, stoppedAt: null }, JSON.stringify(applied))
+  const requests = await repo('Request').find({ order: { id: 'ASC' } })
+  assert.deepEqual(requests.map(row => { const payload = JSON.parse(row.payload); return [row.typeCode, row.requesterId, row.createdByUserId, row.status, payload.amount, payload.months, payload.exceptional,
+    payload.exceptionalCategory, payload.firstInstallmentPeriod, payload.reason] }),
+  [['LOAN', people['1001'].id, U.desk.id, 'UNDER_REVIEW', '6000.00', 6, true, 'OTHER', period, rules.LEGACY_LOAN_REASON], ['LOAN', people['1002'].id, U.desk.id, 'UNDER_REVIEW', '1500.50', 1, true, 'OTHER', period, rules.LEGACY_LOAN_REASON]])
+  // من غير سلطة الموارد البشرية: مفيش سلفة ولا قسط ولا قرار من غير اعتماد السلسلة
+  assert.deepEqual([await repo('Loan').count(), await repo('LoanInstallment').count(), await repo('RequestApproval').count()], [0, 0, 0])
+  // إعادة الرفع مع صف جديد من صاحب سلطة الموارد البشرية: الطلب القايم بيتخطّى، والجديد بيتعتمد باسمه (حكم النيابة القايم) وسلفته بتتسجّل بأقساطها
+  const more = await sheet('loans', [['1001', '6000', '6', period], ['1003', '900', '3', period]])
+  const second = ok(await send(U.admin, 'loans', 'preview', more))
+  assert.deepEqual([second.toCreate, second.existing, second.withErrors, await repo('Request').count()], [1, 1, 0, 2])
+  assert.deepEqual(ok(await send(U.admin, 'loans', 'apply', more)), { kind: 'loans', total: 2, created: 1, existing: 1, stoppedAt: null })
+  const last = (await repo('Request').find({ order: { id: 'DESC' }, take: 1 }))[0]
+  const loans = await repo('Loan').find(), installments = await repo('LoanInstallment').find({ order: { dueDate: 'ASC' } }), decisions = await repo('RequestApproval').find()
+  assert.deepEqual([last.requesterId, last.status, loans.map(row => [row.requestId, row.employeeId, Number(row.amount), row.installmentMonths, row.firstInstallmentPeriod]), installments.map(row => [row.loanId, Number(row.amount), String(row.dueDate).slice(0, 7)])[0],
+    installments.length, decisions.map(row => [row.requestId, row.approverId, row.action])],
+  [people['1003'].id, 'COMPLETED', [[last.id, people['1003'].id, 900, 3, period]], [loans[0].id, 300, period], 3, [[last.id, U.admin.id, 'APPROVED']]])
+  // الملف نفسه تاني: الاتنين موجودين
+  const third = ok(await send(U.admin, 'loans', 'preview', more))
+  assert.deepEqual([third.toCreate, third.existing, third.canApply, await repo('Request').count(), await repo('Loan').count()], [0, 2, false, 3, 1])
 })

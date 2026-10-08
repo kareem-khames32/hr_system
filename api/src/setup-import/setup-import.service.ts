@@ -1,24 +1,35 @@
-import { BadRequestException, Injectable } from '@nestjs/common'
+import { randomUUID } from 'node:crypto'
+import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource } from 'typeorm'
 import { localDateOf } from '../attendance/attendance.service'
 import type { JwtPayload } from '../auth/auth.service'
-import { assertCompanyWideWrite } from '../auth/guards'
+import { assertCompanyWideWrite, userHasPerm } from '../auth/guards'
 import { readBulkFile, writeBulkWorkbook } from '../employees/employee-bulk-update.sheet'
 import type { CreateEmployeeDto } from '../employees/employees.dto'
 import { employeeCreateIssue, EmployeesService } from '../employees/employees.service'
 import type { CreateBranchDto, CreateDepartmentDto } from '../org/org.dto'
+import { ModulesService } from '../modules-registry/modules.service'
 import { OrgService } from '../org/org.service'
-import { duplicatesIn, employeeDraft, IMPORT_COLUMNS, IMPORT_KIND_LABELS, importRows, isImportKind, structureShapeIssues, type ImportKind, type ImportRow } from './setup-import'
+import { LeaveBalancesService } from '../requests/leave-balances.service'
+import { RequestsService } from '../requests/requests.service'
+import { balanceDraft, duplicatesIn, employeeDraft, IMPORT_COLUMNS, IMPORT_KIND_LABELS, IMPORT_KIND_NOTES, importRows, isImportKind, LEGACY_LOAN_REASON, loanDraft, OPENING_BALANCE_REASON, structureShapeIssues,
+  type ImportKind, type ImportRow } from './setup-import'
 
 // B6.1 (ب): مستوردات تجهيز العميل — لحساب بكل الفروع بصلاحية الإعدادات. المعاينة مابتكتبش حاجة؛ والتطبيق بيعيد بناء نفس الخطة من الملف ويرفض لو فيها أي
 // خطأ، وبعدها بيكتب بخدمات الإنشاء القايمة نفسها (`OrgService.createBranch/createDepartment` و`EmployeesService.create`) — من غير إدخال مباشر في الجداول.
 // الموجود قبل كده (فرع بكوده، قسم باسمه في فرعه، موظف برقم بصمته) بيتخطّى، فإعادة رفع نفس الملف آمنة.
+// B6.1 (ج): الأرصدة الافتتاحية بخدمة تعديل الرصيد القايمة (`LeaveBalancesService.adjust` بسببها وسجلّها)، والسلف القائمة **طلبات سلفة بالنيابة**
+// (`RequestsService.create`) بتمشي في سلسلة الاعتماد والسقوف العادية — مفيش مبلغ بيتكتب من الملف مباشرة.
 
 export interface ImportUploadedFile { buffer: Buffer; originalname: string; size: number }
 type Status = 'NEW' | 'EXISTS' | 'ERROR'
 interface PlanRow { row: number; summary: string; status: Status; errors: string[]; work: Array<() => Promise<void>> }
 interface BranchRef { id: number; code: string; name: string }
+interface EmployeeRef { id: number; fullName: string; status: string }
+const cents = (value: number) => Math.round(value * 100) / 100
+// طلبات السلف اللي لسه قايمة أو اتنفذت: صف الملف اللي ليه طلب بنفس المبلغ والأقساط والشهر بيتخطّى
+const LIVE_LOAN_REQUEST = ['SUBMITTED', 'UNDER_REVIEW', 'APPROVED', 'IN_EXECUTION', 'COMPLETED', 'RETURNED_FOR_INFO']
 
 const lower = (value: string) => value.trim().toLowerCase()
 const messageOf = (failure: unknown): string => {
@@ -28,7 +39,8 @@ const messageOf = (failure: unknown): string => {
 
 @Injectable()
 export class SetupImportService {
-  constructor(@InjectDataSource() private readonly ds: DataSource, private readonly org: OrgService, private readonly employees: EmployeesService) {}
+  constructor(@InjectDataSource() private readonly ds: DataSource, private readonly org: OrgService, private readonly employees: EmployeesService,
+    private readonly balances: LeaveBalancesService, private readonly requests: RequestsService, private readonly modules: ModulesService) {}
 
   private kindOf(raw: unknown): ImportKind {
     if (!isImportKind(raw)) throw new BadRequestException('نوع الاستيراد مش معروف')
@@ -41,7 +53,7 @@ export class SetupImportService {
     const kind = this.kindOf(rawKind)
     const buffer = await writeBulkWorkbook({ columns: IMPORT_COLUMNS[kind].map(column => ({ header: column.header, width: column.width, text: !column.money, money: column.money, list: column.list, note: column.note })),
       rows: [], references: [], instructions: [`قالب استيراد ${IMPORT_KIND_LABELS[kind]}.`, 'الصف الأول عناوين — ماتغيّرهاش. املا من الصف التاني.', 'ارفع الملف للمعاينة الأول: مفيش حاجة بتتحفظ قبل ما تراجع النتيجة وتأكد.',
-        'الموجود قبل كده بيتخطّى، فإعادة رفع نفس الملف آمنة.'] })
+        'الموجود قبل كده بيتخطّى، فإعادة رفع نفس الملف آمنة.', ...(IMPORT_KIND_NOTES[kind] ?? [])] })
     return { buffer, fileName: `قالب-${IMPORT_KIND_LABELS[kind]}.xlsx`, asciiName: `import-${kind}-template.xlsx` }
   }
 
@@ -118,13 +130,84 @@ export class SetupImportService {
     })
   }
 
+  private async employeesByPrint(): Promise<Map<string, EmployeeRef>> {
+    const rows: Array<{ id: number; fingerprintCode: string | null; fullName: string; status: string }> = await this.ds.query('SELECT [id], [fingerprintCode], [fullName], [status] FROM dbo.employees')
+    return new Map(rows.filter(row => row.fingerprintCode).map(row => [lower(String(row.fingerprintCode)), { id: Number(row.id), fullName: row.fullName, status: row.status }]))
+  }
+
+  /** الرصيد الحقيقي دلوقتي (المتبقي ناقص العجز) — null لو مفيش صف رصيد للنوع ده لسه */
+  private async remainingOf(employeeId: number, balanceType: 'annual' | 'sick') {
+    const view = await this.balances.balanceOf(employeeId, balanceType)
+    return view ? { period: view.period, shown: view.remaining, real: cents(view.remaining - view.deficit) } : null
+  }
+
+  // الأرصدة الافتتاحية: نفس صلاحية وموديول شاشة تعديل الرصيد، والكتابة بخدمتها (سبب، مفتاح عملية، سجل تعديلات، قفل الموظف)
+  private async balancePlan(rows: ImportRow[], user: JwtPayload): Promise<PlanRow[]> {
+    if (!userHasPerm(user, 'leave_balances.manage')) throw new ForbiddenException('استيراد الأرصدة محتاج صلاحية إدارة أرصدة الإجازات')
+    if (!(await this.modules.isEnabled('leave'))) throw new BadRequestException('موديول الإجازات مقفول')
+    const people = await this.employeesByPrint(), seen = new Map<string, number>(), plan: PlanRow[] = []
+    for (const line of rows) {
+      const { values } = line, { balanceType, days, issues } = balanceDraft(values), errors = [...line.errors, ...issues]
+      const person = people.get(lower(values.fingerprintCode)) ?? null
+      if (values.fingerprintCode && !person) errors.push('«رقم البصمة» مش لموظف موجود — ارفع ملف الموظفين الأول')
+      else if (person && ['archived', 'terminated'].includes(person.status)) errors.push('الموظف مؤرشف أو منتهية خدمته')
+      const key = `${lower(values.fingerprintCode)}:${balanceType}`, first = seen.get(key)
+      if (balanceType && first !== undefined) errors.push(`الموظف والنوع ده مكررين في الملف (الصف ${first})`)
+      else if (balanceType) seen.set(key, line.row)
+      const summary = `${values.fingerprintCode}${person ? ` — ${person.fullName}` : ''} · ${values.balanceType} ← ${values.remaining}`
+      if (errors.length || !person || !balanceType || days === null) { plan.push({ row: line.row, summary, status: 'ERROR', errors: errors.length ? errors : ['الصف ناقص'], work: [] }); continue }
+      const current = await this.remainingOf(person.id, balanceType)
+      if (current && current.real === days) { plan.push({ row: line.row, summary, status: 'EXISTS', errors: [], work: [] }); continue }
+      plan.push({ row: line.row, summary: `${summary}${current ? ` (الحالي ${current.real})` : ''}`, status: 'NEW', errors: [], work: [async () => {
+        // الفرق بيتحسب وقت التطبيق من الرصيد وقتها، و`expectedRemaining` بيرفض لو الرصيد اتغيّر بين القراية والكتابة
+        let now = await this.remainingOf(person.id, balanceType)
+        if (!now) { await this.balances.ensureYearRows(localDateOf(new Date()).slice(0, 4)); now = await this.remainingOf(person.id, balanceType) }
+        if (!now) throw new BadRequestException('مفيش رصيد من النوع ده للموظف في السنة الجارية')
+        const delta = cents(days - now.real)
+        if (delta === 0) return
+        await this.balances.adjust(person.id, { balanceType, period: now.period, delta, reason: OPENING_BALANCE_REASON, idempotencyKey: randomUUID(), expectedRemaining: now.shown }, user.sub, null)
+      }] })
+    }
+    return plan
+  }
+
+  // السلف القائمة: كل صف = طلب سلفة استثنائية بالنيابة (المتبقي على عدد الأقساط من شهر أول قسط) — بنفس صلاحيات الشاشة، والطلب بيمشي في الاعتماد والسقوف
+  private async loanPlan(rows: ImportRow[], user: JwtPayload): Promise<PlanRow[]> {
+    if (!userHasPerm(user, 'requests.create_on_behalf') || !userHasPerm(user, 'loans.exceptional')) throw new ForbiddenException('استيراد السلف محتاج صلاحية تقديم الطلبات بالنيابة وصلاحية السلفة الاستثنائية')
+    const people = await this.employeesByPrint(), currentPeriod = localDateOf(new Date()).slice(0, 7)
+    const existing: Array<{ requesterId: number; payload: string | null }> = await this.ds.query(
+      `SELECT [requesterId], [payload] FROM dbo.requests WHERE [typeCode] = N'LOAN' AND [status] IN (${LIVE_LOAN_REQUEST.map(status => `N'${status}'`).join(', ')})`)
+    const signature = (employeeId: number, amount: unknown, months: unknown, period: unknown) => `${employeeId}:${Number(amount).toFixed(2)}:${Number(months)}:${String(period ?? '').slice(0, 7)}`
+    const live = new Set<string>()
+    for (const row of existing) {
+      try { const payload = JSON.parse(row.payload || '{}'); live.add(signature(Number(row.requesterId), payload.amount, payload.months ?? 1, payload.firstInstallmentPeriod)) } catch { /* حمولة تالفة مابتتحسبش موجودة */ }
+    }
+    const seen = new Map<string, number>()
+    return rows.map(line => {
+      const { values } = line, draft = loanDraft(values, currentPeriod), errors = [...line.errors, ...draft.issues]
+      const person = people.get(lower(values.fingerprintCode)) ?? null
+      if (values.fingerprintCode && !person) errors.push('«رقم البصمة» مش لموظف موجود — ارفع ملف الموظفين الأول')
+      else if (person && ['archived', 'terminated'].includes(person.status)) errors.push('الموظف مؤرشف أو منتهية خدمته')
+      const summary = `${values.fingerprintCode}${person ? ` — ${person.fullName}` : ''} · ${values.amount} على ${values.months} قسط من ${values.firstInstallmentPeriod}`
+      if (errors.length || !person || !draft.amount || !draft.months || !draft.firstInstallmentPeriod) return { row: line.row, summary, status: 'ERROR' as const, errors: errors.length ? errors : ['الصف ناقص'], work: [] }
+      const key = signature(person.id, draft.amount, draft.months, draft.firstInstallmentPeriod), first = seen.get(key)
+      if (first !== undefined) return { row: line.row, summary, status: 'ERROR' as const, errors: [`نفس السلفة مكررة في الملف (الصف ${first})`], work: [] }
+      seen.set(key, line.row)
+      if (live.has(key)) return { row: line.row, summary, status: 'EXISTS' as const, errors: [], work: [] }
+      const payload = { amount: draft.amount, months: draft.months, exceptional: true, exceptionalCategory: 'OTHER', firstInstallmentPeriod: draft.firstInstallmentPeriod, reason: LEGACY_LOAN_REASON }
+      return { row: line.row, summary, status: 'NEW' as const, errors: [], work: [async () => { await this.requests.create(user, { typeCode: 'LOAN', onBehalfEmployeeId: person.id, submit: true, payload }) }] }
+    })
+  }
+
   private async plan(user: JwtPayload, rawKind: unknown, file: ImportUploadedFile | undefined): Promise<{ kind: ImportKind; rows: PlanRow[] }> {
     assertCompanyWideWrite(user)
     const kind = this.kindOf(rawKind)
     if (!file?.buffer?.length) throw new BadRequestException('ارفع ملف القالب')
     const { rows, fileError } = importRows(kind, await readBulkFile(file.buffer, file.originalname))
     if (fileError) throw new BadRequestException(fileError)
-    return { kind, rows: kind === 'structure' ? await this.structurePlan(rows, user) : await this.employeePlan(rows, user) }
+    const plans: Record<ImportKind, () => Promise<PlanRow[]>> = { structure: () => this.structurePlan(rows, user), employees: () => this.employeePlan(rows, user),
+      balances: () => this.balancePlan(rows, user), loans: () => this.loanPlan(rows, user) }
+    return { kind, rows: await plans[kind]() }
   }
 
   private report(kind: ImportKind, rows: PlanRow[]) {

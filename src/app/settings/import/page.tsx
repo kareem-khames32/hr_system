@@ -3,16 +3,20 @@
 // B6.1 (ب): «استيراد بيانات التجهيز» — الهيكل (فروع وأقسام) والموظفين من Excel: نزّل القالب ← ارفع الملف للمعاينة (مفيش حاجة بتتحفظ) ← راجع الأخطاء بالصف ←
 // طبّق. الموجود قبل كده بيتخطّى، فإعادة رفع نفس الملف آمنة. لحساب بكل الفروع بصلاحية الإعدادات (الخادم اللي بيحكم).
 import { useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
 import { FileSpreadsheet } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
-import { ApiError, getCurrentUser, sessionInit } from '@/lib/api'
+import { ApiError, can, getCurrentUser, sessionInit } from '@/lib/api'
 import { branchScopeOfUser } from '@/lib/branch-scope'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'
-type Kind = 'structure' | 'employees'
+type Kind = 'structure' | 'employees' | 'balances' | 'loans'
 const KINDS: Array<{ key: Kind; label: string; hint: string }> = [
   { key: 'structure', label: 'الهيكل (الفروع والأقسام)', hint: 'ابدأ بيه: كل صف فرع (بكوده) أو قسم جوه فرع.' },
   { key: 'employees', label: 'الموظفين', hint: 'بعد الهيكل: كل موظف بكود فرعه واسم قسمه. كود الموظف بيتولّد لوحده.' },
+  // B6.1 (ج): الأرصدة بخدمة تعديل الرصيد، والسلف طلبات بالنيابة — بنفس صلاحيات شاشاتهم (الخادم اللي بيحكم)
+  { key: 'balances', label: 'أرصدة الإجازات الافتتاحية', hint: 'اكتب الرصيد اللي المفروض يبان للموظف النهارده؛ الفرق بيتسجّل تعديل رصيد بسبب «رصيد افتتاحي». محتاج صلاحية إدارة أرصدة الإجازات.' },
+  { key: 'loans', label: 'السلف القائمة', hint: 'كل صف طلب سلفة باسم الموظف بالمتبقي وعدد الأقساط وشهر أول قسط. لو اللي بيرفع صاحب سلطة الموارد البشرية الطلب بيتعتمد باسمه والسلفة بتتسجّل؛ وغير كده بيستنى سلسلة الاعتماد. محتاج صلاحية الطلبات بالنيابة والسلفة الاستثنائية.' },
 ]
 interface PreviewRow { row: number; summary: string; status: 'NEW' | 'ERROR'; errors: string[] }
 interface Preview { kind: Kind; total: number; toCreate: number; existing: number; withErrors: number; canApply: boolean; rows: PreviewRow[] }
@@ -47,7 +51,12 @@ export default function SetupImportPage() {
   const input = useRef<HTMLInputElement>(null)
   // الاستيراد لحساب بكل الفروع (نفس حكم الخادم): الحساب المقيّد بفروع بيشوف السبب بدل نموذج بيترفض
   const [wide, setWide] = useState(true)
-  useEffect(() => setWide(branchScopeOfUser(getCurrentUser()) === null), [])
+  // النوع اللي صلاحيته مش عند الحساب مابيظهرش (نفس حكم الخادم): الأرصدة بصلاحية إدارتها، والسلف بالنيابة والاستثنائية
+  const [kinds, setKinds] = useState(KINDS)
+  useEffect(() => {
+    setWide(branchScopeOfUser(getCurrentUser()) === null)
+    setKinds(KINDS.filter((item) => item.key === 'balances' ? can('leave_balances.manage') : item.key === 'loans' ? can('requests.create_on_behalf') && can('loans.exceptional') : true))
+  }, [])
 
   function reset(next?: Kind) {
     if (next) setKind(next)
@@ -71,20 +80,21 @@ export default function SetupImportPage() {
             <FileSpreadsheet size={24} className="text-primary-600" />
             استيراد بيانات التجهيز
           </h1>
-          <p className="text-gray-500 mt-1">حمّل الهيكل والموظفين من Excel. الملف بيتراجع الأول ومفيش حاجة بتتحفظ قبل ما تأكد، والموجود قبل كده بيتخطّى.</p>
+          <p className="text-gray-500 mt-1">حمّل الهيكل والموظفين والأرصدة الافتتاحية والسلف القائمة من Excel. الملف بيتراجع الأول ومفيش حاجة بتتحفظ قبل ما تأكد، والموجود قبل كده بيتخطّى.</p>
         </div>
 
         {error && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
 
-        {!wide && <div className="card text-gray-600">الاستيراد بيضيف فروع وموظفين في كل الشركة، فهو لحساب «كل الفروع» بس.</div>}
+        {!wide && <div className="card text-gray-600">الاستيراد بيضيف فروع وموظفين وأرصدة وسلف في كل الشركة، فهو لحساب «كل الفروع» بس.</div>}
 
         {wide && <div className="card space-y-4" data-import-form>
           <div className="flex flex-wrap gap-2">
-            {KINDS.map((item) => (
+            {kinds.map((item) => (
               <button key={item.key} type="button" className={item.key === kind ? 'btn-primary' : 'btn-secondary'} onClick={() => reset(item.key)}>{item.label}</button>
             ))}
           </div>
           <p className="text-sm text-gray-600">{current.hint}</p>
+          {kind === 'employees' && <p className="text-sm text-gray-500">باقي البدلات وبيانات البنك والعقد بعد الإنشاء من <Link href="/employees/bulk-update" className="text-primary-600 hover:underline">تحديث جماعي من Excel</Link>.</p>}
           <div className="flex flex-wrap items-end gap-3">
             <button type="button" className="btn-secondary disabled:opacity-50" disabled={busy} onClick={template}>تنزيل القالب</button>
             <label className="text-sm text-gray-600">ملف Excel (القالب بعد ما تملاه)
