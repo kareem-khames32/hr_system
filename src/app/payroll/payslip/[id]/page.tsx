@@ -1,4 +1,5 @@
 'use client'
+import { useLang, useT } from '@/lib/i18n'
 import { useParams } from 'next/navigation'
 
 import { useEffect, useState } from 'react'
@@ -107,6 +108,8 @@ function numberToArabicWords(num: number, currency: string): string {
 }
 
 export default function PayslipPage() {
+  // B6.2 (ب): القسيمة بلغة الحساب — النصوص من القاموس، والجمل المركّبة بصيغتين، والتفقيط العربي بالعربي بس
+  const t = useT(), lang = useLang()
   const params = useParams<{ id: string }>()
   // عنوان القسيمة من غير فرع: اسم الشركة من «بيانات الشركة» (useBranding بيرجع اسم المنتج لو مش متظبط)
   const brand = useBranding()
@@ -162,6 +165,7 @@ export default function PayslipPage() {
     const total = component ? savedExemptions?.totals.byComponent[component] : undefined
     if (!component || !savedExemptions || !total) return null
     const requested = component === 'LATENESS' ? savedExemptions.requested.lateness : component === 'SHORTFALL' ? savedExemptions.requested.shortfall : component === 'ABSENCE' ? savedExemptions.requested.absence : null
+    if (lang === 'en') return `${requested ? `Before cancellation ${formatMoney(requested)} — ` : ''}cancelled ${formatMoney(total.exempted)}`
     return `${requested ? `الأصل قبل الإلغاء ${formatMoney(requested)} — ` : ''}أُلغي منه ${formatMoney(total.exempted)}`
   }
 
@@ -174,8 +178,9 @@ export default function PayslipPage() {
       const detail = item?.breakdown ? JSON.parse(item.breakdown) : {}
       const windows = Array.isArray(detail.attendanceExemptions) ? detail.attendanceExemptions : []
       const notes = windows.map((window: { effectiveFrom: string; effectiveTo: string | null }) =>
-        `خصومات الحضور غير مولّدة في أيام استثناء الحضور من ${window.effectiveFrom} إلى ${window.effectiveTo ?? 'نهاية مفتوحة'}`)
-      if (Number(detail.exemptUnpaidLeaveDays) > 0) notes.push(`إجازة بلا أجر ${detail.exemptUnpaidLeaveDays} يوم — غير مخصومة بقرار الاستثناء`)
+        lang === 'en' ? `Attendance deductions are not generated on attendance exemption days from ${window.effectiveFrom} to ${window.effectiveTo ?? 'open end'}`
+          : `خصومات الحضور غير مولّدة في أيام استثناء الحضور من ${window.effectiveFrom} إلى ${window.effectiveTo ?? 'نهاية مفتوحة'}`)
+      if (Number(detail.exemptUnpaidLeaveDays) > 0) notes.push(lang === 'en' ? `Unpaid leave ${detail.exemptUnpaidLeaveDays} day(s) — not deducted by the exemption decision` : `إجازة بلا أجر ${detail.exemptUnpaidLeaveDays} يوم — غير مخصومة بقرار الاستثناء`)
       // بدل ضغط العمل (قرار المالك 26 سبتمبر): سطره في الاستحقاقات، ومعاه توضيح إنه من غير مؤثرات
       const pressure = detail.workPressureAllowance
       if (pressure && Number(pressure.earnedAmount) > 0) {
@@ -192,16 +197,16 @@ export default function PayslipPage() {
         <div className="flex max-lg:flex-wrap items-center justify-between max-lg:gap-3">
           <div className="flex items-center gap-2 text-sm text-gray-500">
             <Link href="/payroll" className="hover:text-primary-600">
-              الرواتب
+              {t('الرواتب')}
             </Link>
             <ArrowRight size={16} />
-            <span className="text-gray-800">قسيمة الراتب</span>
+            <span className="text-gray-800">{t('قسيمة الراتب')}</span>
           </div>
           <div className="flex items-center gap-3">
             {/* «إرسال بالبريد» و«تحميل PDF» أُخفيا لأنهما بلا تنفيذ؛ الطباعة تتيح الحفظ PDF من المتصفح (الخطوة 30) */}
             <button type="button" onClick={() => window.print()} className="btn-primary flex items-center gap-2">
               <Printer size={18} />
-              طباعة / حفظ
+              {t('طباعة / حفظ')}
             </button>
           </div>
         </div>
@@ -210,7 +215,7 @@ export default function PayslipPage() {
         {error && (
           <div className="bg-red-50 text-red-700 rounded-xl p-4 flex items-center gap-2">
             <AlertTriangle size={18} />
-            {error}
+            {t(error)}
           </div>
         )}
 
@@ -237,7 +242,7 @@ export default function PayslipPage() {
               </div>
             </div>
             <div className="text-end">
-              <h2 className="text-2xl font-bold text-primary-600">قسيمة الراتب</h2>
+              <h2 className="text-2xl font-bold text-primary-600">{t('قسيمة الراتب')}</h2>
               <p className="text-lg font-bold text-gray-800 mt-2">{run.period}</p>
             </div>
           </div>
@@ -247,57 +252,57 @@ export default function PayslipPage() {
           {/* Employee Info */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 mb-8">
             <div className="space-y-4">
-              <h3 className="font-bold text-gray-700 border-b border-gray-200 pb-2">بيانات الموظف</h3>
+              <h3 className="font-bold text-gray-700 border-b border-gray-200 pb-2">{t('بيانات الموظف')}</h3>
               <div className="grid grid-cols-2 gap-y-3 text-sm">
-                <span className="text-gray-500">الاسم:</span>
+                <span className="text-gray-500">{t('الاسم:')}</span>
                 <span className="font-medium text-gray-800">{employee.fullName}</span>
 
-                <span className="text-gray-500">الرقم الوظيفي:</span>
+                <span className="text-gray-500">{t('الرقم الوظيفي:')}</span>
                 <span className="font-medium text-gray-800 font-mono">{employee.employeeCode}</span>
 
-                <span className="text-gray-500">المسمى الوظيفي:</span>
+                <span className="text-gray-500">{t('المسمى الوظيفي:')}</span>
                 <span className="font-medium text-gray-800">{employee.jobTitle ?? '—'}</span>
 
-                <span className="text-gray-500">تاريخ التعيين:</span>
+                <span className="text-gray-500">{t('تاريخ التعيين:')}</span>
                 <span className="font-medium text-gray-800">{employee.joinDate ?? '—'}</span>
 
-                <span className="text-gray-500">رقم الهوية:</span>
+                <span className="text-gray-500">{t('رقم الهوية:')}</span>
                 <span className="font-medium text-gray-800 font-mono">{employee.nationalId ?? '—'}</span>
               </div>
             </div>
 
             <div className="space-y-4">
-              <h3 className="font-bold text-gray-700 border-b border-gray-200 pb-2">بيانات الدفع</h3>
+              <h3 className="font-bold text-gray-700 border-b border-gray-200 pb-2">{t('بيانات الدفع')}</h3>
               <div className="grid grid-cols-2 gap-y-3 text-sm">
-                <span className="text-gray-500">الفترة:</span>
+                <span className="text-gray-500">{t('الفترة:')}</span>
                 <span className="font-medium text-gray-800">
                   {run.startDate} - {run.endDate}
                 </span>
 
-                <span className="text-gray-500">حالة المسير:</span>
-                <span className="font-medium text-gray-800">{runStatusLabels[run.status] ?? 'غير معروف'}</span>
+                <span className="text-gray-500">{t('حالة المسير:')}</span>
+                <span className="font-medium text-gray-800">{t(runStatusLabels[run.status] ?? 'غير معروف')}</span>
 
                 {/* الخطوة 22 (B5): التغطية والمعامل وأساس الأيام من تفصيل البند المحفوظ */}
-                <span className="text-gray-500">التغطية:</span>
+                <span className="text-gray-500">{t('التغطية:')}</span>
                 <span className="font-medium text-gray-800">{payrollCoverageText(payrollItemCoverage(item)) ?? '—'}</span>
 
                 {run.status === 'PAID' && paidRun?.payReference && <>
-                  <span className="text-gray-500">مرجع الصرف:</span>
+                  <span className="text-gray-500">{t('مرجع الصرف:')}</span>
                   <span className="font-medium text-gray-800">{PAY_CHANNEL_LABELS[paidRun.payChannel as PayrollPayChannel] ?? ''} {paidRun.payReference}</span>
                 </>}
 
-                <span className="text-gray-500">طريقة الدفع:</span>
-                <span className="font-medium text-gray-800">{payMethodLabels[employee.payMethod ?? item.payMethod] ?? 'غير معروف'}</span>
+                <span className="text-gray-500">{t('طريقة الدفع:')}</span>
+                <span className="font-medium text-gray-800">{t(payMethodLabels[employee.payMethod ?? item.payMethod] ?? 'غير معروف')}</span>
 
                 {employee.paySplit && <>
-                  <span className="text-gray-500">الصرف:</span>
-                  <span className="font-medium text-gray-800">تحويل بنكي {formatMoney(employee.paySplit.bank)} — نقدي {formatMoney(employee.paySplit.cash)}</span>
+                  <span className="text-gray-500">{t('الصرف:')}</span>
+                  <span className="font-medium text-gray-800">{t('تحويل بنكي')} {formatMoney(employee.paySplit.bank)} {t('— نقدي')} {formatMoney(employee.paySplit.cash)}</span>
                 </>}
 
-                <span className="text-gray-500">البنك:</span>
+                <span className="text-gray-500">{t('البنك:')}</span>
                 <span className="font-medium text-gray-800">{employee.bankName ?? '—'}</span>
 
-                <span className="text-gray-500">رقم الحساب البنكي الدولي:</span>
+                <span className="text-gray-500">{t('رقم الحساب البنكي الدولي:')}</span>
                 <span className="font-medium text-gray-800 font-mono text-xs max-lg:break-all">{employee.iban ?? '—'}</span>
               </div>
             </div>
@@ -317,7 +322,7 @@ export default function PayslipPage() {
                       <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                         <td className="px-4 py-3 text-sm">
                           <div>
-                            <p className="text-gray-800">{earning.name}</p>
+                            <p className="text-gray-800">{t(earning.name)}</p>
                           </div>
                         </td>
                         <td className="px-4 py-3 text-end font-mono font-medium text-success-600">
@@ -346,12 +351,12 @@ export default function PayslipPage() {
               <div className="border border-gray-200 border-t-0 rounded-b-xl overflow-hidden">
                 <table className="w-full">
                   <tbody>
-                    {deductions.length === 0 && <tr><td colSpan={2} className="px-4 py-3 text-sm text-gray-400">مفيش استقطاعات</td></tr>}
+                    {deductions.length === 0 && <tr><td colSpan={2} className="px-4 py-3 text-sm text-gray-400">{t('مفيش استقطاعات')}</td></tr>}
                     {deductions.map((deduction, index) => (
                       <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                         <td className="px-4 py-3 text-sm">
                           <div>
-                            <p className="text-gray-800">{deduction.name}</p>
+                            <p className="text-gray-800">{t(deduction.name)}</p>
                             {exemptionNote(deduction.component) && <p className="text-success-700 text-xs">{exemptionNote(deduction.component)}</p>}
                           </div>
                         </td>
@@ -385,15 +390,15 @@ export default function PayslipPage() {
           {attendanceNotes.length > 0 && (
             <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-6 text-sm text-gray-700 space-y-1">
               {attendanceNotes.map((note, index) => <p key={index}>{note}</p>)}
-              <p>استثناء الحضور لا يلغي أقساط السلف والمديونيات والخصومات الإدارية.</p>
+              <p>{t('استثناء الحضور لا يلغي أقساط السلف والمديونيات والخصومات الإدارية.')}</p>
             </div>
           )}
           <div className="bg-gradient-to-r from-primary-500 to-primary-600 rounded-2xl p-6 text-white mb-8">
             <div className="flex items-center justify-between max-lg:gap-4">
               <div className="max-lg:min-w-0 max-lg:break-words">
-                <p className="text-primary-100">صافي الراتب</p>
-                <p className="text-4xl font-bold mt-1">{formatMoney(netSalary)} {currency}</p>
-                <p className="text-primary-200 text-sm mt-2">{numberToArabicWords(netSalary, currency)}</p>
+                <p className="text-primary-100">{t('صافي الراتب')}</p>
+                <p className="text-4xl font-bold mt-1">{formatMoney(netSalary)} {t(currency)}</p>
+                {lang === 'ar' && <p className="text-primary-200 text-sm mt-2">{numberToArabicWords(netSalary, currency)}</p>}
               </div>
               <div className="w-20 h-20 bg-white/20 rounded-2xl hidden sm:flex items-center justify-center max-lg:shrink-0">
                 <CreditCard size={40} />
@@ -404,7 +409,7 @@ export default function PayslipPage() {
           {/* Footer */}
           <div className="border-t border-gray-200 pt-6 text-center">
             <p className="text-xs text-gray-400">
-              هذه القسيمة صادرة إلكترونياً ولا تحتاج إلى توقيع
+              {t('هذه القسيمة صادرة إلكترونياً ولا تحتاج إلى توقيع')}
             </p>
           </div>
         </div>

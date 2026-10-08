@@ -80,3 +80,30 @@ test('I18N-04: كلاسات الاتجاه — الواجهة على الكلا�
   assert.ok(web('components/layout/Sidebar.tsx').includes(`'fixed start-0 top-0 h-screen w-72 bg-white border-e border-gray-100 flex flex-col z-50'`))
   assert.ok(web('components/org-chart/OrgChartView.tsx').includes('.lg\\\\:ms-72 { margin-inline-start: 0 !important; }'))
 })
+
+test('I18N-05: (ب) البوابة والقسيمة — كل نص متلفّ في دالة الترجمة ليه مفتاح في القاموس، مفيش نص عربي ظاهر برّاها في القسيمتين، والتفقيط العربي بالعربي بس', () => {
+  const en = dictionary()
+  const has = key => Object.prototype.hasOwnProperty.call(en, key.replace(/\\'/g, "'")) || Object.prototype.hasOwnProperty.call(en, key)
+  const pages = ['app/my/payslips/page.tsx', 'app/payroll/payslip/[id]/page.tsx', 'components/dashboard/EmployeeHome.tsx']
+  for (const page of pages) {
+    const source = web(page)
+    assert.match(source, /const t = useT\(\)/, page)
+    const wrapped = [...source.matchAll(/\bt\('((?:[^'\\]|\\.)+)'\)/g)].map(match => match[1]).filter(key => /[\u0600-\u06FF]/.test(key))
+    assert.ok(wrapped.length >= 15, `${page}: ${wrapped.length}`)
+    for (const key of wrapped) assert.ok(has(key), `${page}: من غير ترجمة: ${key}`)
+  }
+  // القسيمتين: مفيش نص عربي ظاهر برّه دالة الترجمة (نص JSX خام، أو خاصية نصها عربي)
+  for (const page of pages.slice(0, 2)) {
+    const source = web(page).split('\n').filter(line => !/^\s*(\/\/|\{\/\*)/.test(line)).join('\n')
+    assert.doesNotMatch(source, />\s*[^<>{}\n]*[\u0600-\u06FF][^<>{}\n]*</, page)
+    assert.doesNotMatch(source, /\s(title|placeholder|aria-label|alt)="[^"]*[\u0600-\u06FF]/, page)
+  }
+  const slip = web('app/payroll/payslip/[id]/page.tsx'), list = web('app/my/payslips/page.tsx')
+  // أسماء البنود والحالة وطريقة الدفع والعملة بتعدّي على القاموس عند العرض
+  for (const text of ['{t(earning.name)}', '{t(deduction.name)}', "{t(runStatusLabels[run.status] ?? 'غير معروف')}", "{t(payMethodLabels[employee.payMethod ?? item.payMethod] ?? 'غير معروف')}", '{t(currency)}']) assert.ok(slip.includes(text), text)
+  for (const text of ["{t(runStatusLabels[run.status] ?? 'غير معروف')}", "{t(payMethodLabels[item.payMethod] ?? 'غير معروف')}", '{t(currency)}']) assert.ok(list.includes(text), text)
+  // المبلغ بالحروف عربي بس — في الإنجليزي السطر مابيظهرش
+  assert.match(slip, /\{lang === 'ar' && <p className="text-primary-200 text-sm mt-2">\{numberToArabicWords\(netSalary, currency\)\}<\/p>\}/)
+  // بنود القسيمة الثابتة اللي الخادم بيسميها ليها ترجمة
+  for (const name of ['الأساسي', 'بدل السكن', 'بدل الانتقال', 'الإضافي', 'التأخير', 'الغياب', 'السلف', 'التأمينات (حصة الموظف)', 'خصومات أخرى', 'ر.س', 'ج.م']) assert.ok(has(name), name)
+})

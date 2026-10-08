@@ -56,7 +56,7 @@ test('no direct toLocaleString(\'ar-EG\') in payroll screens; the run table and 
   }
   for (const file of ['src/app/payroll/deductions/page.tsx', 'src/app/payroll/payslips/page.tsx']) assert.doesNotMatch(read(file), /\.toLocaleString\(/, file)
   assert.match(read('src/app/payroll/page.tsx'), /\{formatMoney\(item\.netPay\)\}/)
-  assert.match(read('src/app/payroll/payslip/[id]/page.tsx'), /\{formatMoney\(netSalary\)\} \{currency\}/)
+  assert.match(read('src/app/payroll/payslip/[id]/page.tsx'), /\{formatMoney\(netSalary\)\} \{t\(currency\)\}/)
   // 1500.50 بالشكل نفسه في تفصيل الأقساط والإضافي داخل الجدول والقسيمة
   const plan = { version: 'LOAN_ALLOCATION_V1_20260913', policy: { mode: 'PARTIAL_THEN_CARRY' }, budget: { availableBudget: '1500.50' }, excludedClaimedIds: [],
     allocation: { lines: [{ installmentRef: '7', loanRef: '3', originalDuePeriod: '2026-09', eligible: true, dueAmount: '1500.50', deductedAmount: '1500.50',
@@ -95,7 +95,7 @@ test('one formatter with one rounding on every payroll money screen (review fix)
   }
   const payslips = read('src/app/my/payslips/page.tsx')
   assert.match(payslips, /from '@\/lib\/money'/)
-  for (const text of ['{formatMoney(latest.item.netPay)} {currency}', '{formatMoney(item.basicSalary)}', '+{formatMoney(item.overtimeAmount)}', '-{formatMoney(payrollItemDeductions(item))}', '{formatMoney(item.netPay)} {currency}']) {
+  for (const text of ['{formatMoney(latest.item.netPay)} {t(currency)}', '{formatMoney(item.basicSalary)}', '+{formatMoney(item.overtimeAmount)}', '-{formatMoney(payrollItemDeductions(item))}', '{formatMoney(item.netPay)} {t(currency)}']) {
     assert.ok(payslips.includes(text), text)
   }
 })

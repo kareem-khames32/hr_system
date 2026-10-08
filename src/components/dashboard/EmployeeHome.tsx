@@ -3,6 +3,7 @@
 // لوحة الموظف — كل بياناتها من السيرفر لصاحب الحساب: حضور اليوم ووردية اليوم
 // (GET /attendance/my-today)، وطلباتي (/requests/mine)، وأرصدتي، وعهدي. كانت كلها
 // مكتوبة في الكود («صباح الخير، أحمد» ووردية 10-7 وطلبات REQ-1042 وهمية لأي أحد)
+import { useLang, useT } from '@/lib/i18n'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import {
@@ -98,6 +99,7 @@ interface ActionItem {
 }
 
 export default function EmployeeHome() {
+  const t = useT()
   // اللوحة لا تُرسم إلا على العميل بعد التركيب (الصفحة تنتظر قراءة الجلسة)
   const [user] = useState<CurrentUser | null>(() => getCurrentUser())
   const [today, setToday] = useState<ApiMyToday | null>(null)
@@ -148,6 +150,9 @@ export default function EmployeeHome() {
   }, [attendanceOn, leaveOn, custodyOn])
 
   const greeting = new Date().getHours() < 12 ? 'صباح الخير' : 'مساء الخير'
+  // B6.2 (ب): الساعة بعلامة ص/م بالعربي وAM/PM بالإنجليزي
+  const lang = useLang()
+  const clock = (value?: string | null) => { const shown = to12h(value); return lang === 'en' ? shown.replace(/ ص$/, ' AM').replace(/ م$/, ' PM') : shown }
   const day = today?.day ?? null
   const fullDayLeave = today?.leave?.period === 'FULL'
   const halfDayLeave =
@@ -156,15 +161,15 @@ export default function EmployeeHome() {
   // سطر الوردية: صف اليوم المحسوب إن وُجد، وإلا جدول اليوم (حتى قبل أول بصمة)
   let shiftLine: string | null = null
   if (today) {
-    if (fullDayLeave) shiftLine = 'أنت في إجازة معتمدة اليوم'
+    if (fullDayLeave) shiftLine = t('أنت في إجازة معتمدة اليوم')
     else if (day?.unscheduled || (!day && today.workingDay && !today.shift))
-      shiftLine = 'لا توجد وردية مُسندة لك اليوم — راجع الموارد البشرية'
+      shiftLine = t('لا توجد وردية مُسندة لك اليوم — راجع الموارد البشرية')
     else if (day)
-      shiftLine = `ورديتك اليوم: ${day.shiftName} (${to12h(day.shiftStart)} — ${to12h(day.shiftEnd)})`
-    else if (!today.workingDay) shiftLine = 'اليوم عطلة — لا دوام مجدول لك'
+      shiftLine = `${t('ورديتك اليوم:')} ${day.shiftName} (${clock(day.shiftStart)} — ${clock(day.shiftEnd)})`
+    else if (!today.workingDay) shiftLine = t('اليوم عطلة — لا دوام مجدول لك')
     else if (today.shift)
-      shiftLine = `ورديتك اليوم: ${today.shift.name} (${to12h(today.shift.start)} — ${to12h(today.shift.end)})`
-    if (halfDayLeave && shiftLine) shiftLine += ` — إجازة نصف يوم ${halfDayLeave}`
+      shiftLine = `${t('ورديتك اليوم:')} ${today.shift.name} (${clock(today.shift.start)} — ${clock(today.shift.end)})`
+    if (halfDayLeave && shiftLine) shiftLine += ` — ${t('إجازة نصف يوم')} ${t(halfDayLeave)}`
   }
 
   const typeNameOf = (code: string) =>
@@ -178,14 +183,14 @@ export default function EmployeeHome() {
       ? [
           {
             id: 'custody-ack',
-            title: `${pendingCustody.length} عهدة بانتظار تأكيد استلامك`,
+            title: `${pendingCustody.length} ${t('عهدة بانتظار تأكيد استلامك')}`,
             description: pendingCustody
               .slice(0, 3)
               .map((c) => c.assetName ?? `أصل #${c.assetId}`)
               .join('، '),
             icon: Package,
             color: 'bg-blue-100 text-blue-600',
-            cta: 'تأكيد الاستلام',
+            cta: t('تأكيد الاستلام'),
             href: '/my/custody',
           },
         ]
@@ -194,14 +199,14 @@ export default function EmployeeHome() {
       ? [
           {
             id: 'returned-requests',
-            title: `${returnedRequests.length} طلب مُرجَع لاستكمال معلومات`,
+            title: `${returnedRequests.length} ${t('طلب مُرجَع لاستكمال معلومات')}`,
             description: returnedRequests
               .slice(0, 3)
               .map((r) => `${typeNameOf(r.typeCode)} REQ-${r.id}`)
               .join('، '),
             icon: FileText,
             color: 'bg-orange-50 text-orange-600',
-            cta: 'استكمال الطلب',
+            cta: t('استكمال الطلب'),
             href: '/requests',
           },
         ]
@@ -222,7 +227,7 @@ export default function EmployeeHome() {
         <div className="flex max-lg:flex-wrap items-center justify-between gap-4">
           <div>
             <h2 className="text-xl sm:text-2xl font-bold">
-              {greeting}، {user?.displayName ?? ''} 👋
+              {t(greeting)}{t('،')} {user?.displayName ?? ''} 👋
             </h2>
             {shiftLine && <p className="text-primary-100 mt-1">{shiftLine}</p>}
           </div>
@@ -231,33 +236,33 @@ export default function EmployeeHome() {
               <div className="flex items-center gap-2 bg-white/15 rounded-xl px-4 py-2">
                 <Fingerprint size={20} />
                 <div>
-                  <p className="text-xs text-primary-100">بصمة الحضور اليوم</p>
+                  <p className="text-xs text-primary-100">{t('بصمة الحضور اليوم')}</p>
                   {day?.checkIn ? (
                     <p className="font-bold flex items-center gap-1">
-                      <span dir="ltr">{to12h(day.checkIn)}</span>
+                      <span dir="ltr">{clock(day.checkIn)}</span>
                       <CheckCircle2 size={14} />
                       {day.checkOut && (
                         <span className="text-xs font-normal text-primary-100">
-                          · انصراف <span dir="ltr">{to12h(day.checkOut)}</span>
+                          {t('· انصراف')} <span dir="ltr">{clock(day.checkOut)}</span>
                         </span>
                       )}
                     </p>
                   ) : day?.checkOut ? (
                     <p className="font-bold text-sm">
-                      انصراف فقط <span dir="ltr">{to12h(day.checkOut)}</span>
+                      {t('انصراف فقط')} <span dir="ltr">{clock(day.checkOut)}</span>
                     </p>
                   ) : (
                     <p className="font-bold text-sm">
                       {fullDayLeave
-                        ? 'في إجازة'
+                        ? t('في إجازة')
                         : !today.workingDay
-                        ? 'لا دوام اليوم'
-                        : 'لم تُسجَّل بعد'}
+                        ? t('لا دوام اليوم')
+                        : t('لم تُسجَّل بعد')}
                     </p>
                   )}
                   {day && (
                     <p className="text-xs text-primary-100 mt-0.5">
-                      {dayStatusLabels[day.status] ?? day.status}
+                      {t(dayStatusLabels[day.status] ?? day.status)}
                       {day.status === 'late' && Number(day.lateMinutes) > 0
                         ? ` ${Number(day.lateMinutes)} دقيقة`
                         : ''}
@@ -278,14 +283,14 @@ export default function EmployeeHome() {
         <div className="card p-12 text-center">
           <UserX size={48} className="mx-auto text-gray-300 mb-4" />
           <p className="text-gray-500">
-            حسابك غير مرتبط بملف موظف — تواصل مع الموارد البشرية لربط حسابك
+            {t('حسابك غير مرتبط بملف موظف — تواصل مع الموارد البشرية لربط حسابك')}
           </p>
         </div>
       ) : (
         <>
           {failed.length > 0 && (
             <div className="bg-red-50 text-red-700 rounded-xl p-4">
-              تعذر تحميل: {failed.join('، ')} — أعد تحميل الصفحة
+              {t('تعذر تحميل:')} {failed.join(t('، '))} {t('— أعد تحميل الصفحة')}
             </div>
           )}
 
@@ -294,7 +299,7 @@ export default function EmployeeHome() {
             <div className="card p-6">
               <div className="flex items-center gap-2 mb-4">
                 <Bell size={20} className="text-primary-500" />
-                <h3 className="font-bold text-gray-800">مطلوب منك</h3>
+                <h3 className="font-bold text-gray-800">{t('مطلوب منك')}</h3>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {actionItems.map((item) => (
@@ -332,15 +337,15 @@ export default function EmployeeHome() {
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
                   <ClipboardList size={20} className="text-primary-500" />
-                  <h3 className="font-bold text-gray-800">طلباتي</h3>
+                  <h3 className="font-bold text-gray-800">{t('طلباتي')}</h3>
                 </div>
                 {/* شاشة التقديم — منها يُختار نوع الطلب ويُقدَّم */}
                 <Link href="/requests" className="btn-primary text-sm px-4 py-2">
-                  + طلب جديد
+                  {t('+ طلب جديد')}
                 </Link>
               </div>
               {requests.length === 0 ? (
-                <p className="text-sm text-gray-400 text-center py-8">لم تقدّم أي طلب بعد</p>
+                <p className="text-sm text-gray-400 text-center py-8">{t('لم تقدّم أي طلب بعد')}</p>
               ) : (
                 <div className="space-y-3">
                   {requests.slice(0, 5).map((req) => (
@@ -364,7 +369,7 @@ export default function EmployeeHome() {
                           statusStyles[req.status as RequestStatus] ?? 'bg-gray-100 text-gray-600'
                         }`}
                       >
-                        {statusLabels[req.status as RequestStatus] ?? req.status}
+                        {t(statusLabels[req.status as RequestStatus] ?? req.status)}
                       </span>
                     </div>
                   ))}
@@ -373,7 +378,7 @@ export default function EmployeeHome() {
                       href="/requests"
                       className="inline-flex items-center gap-1 text-primary-600 text-sm font-medium hover:text-primary-700"
                     >
-                      كل طلباتي ({requests.length})
+                      {t('كل طلباتي (')}{requests.length})
                       <ChevronLeft size={14} />
                     </Link>
                   )}
@@ -389,18 +394,18 @@ export default function EmployeeHome() {
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-2">
                     <Wallet size={20} className="text-primary-500" />
-                    <h3 className="font-bold text-gray-800">أرصدة إجازاتي</h3>
+                    <h3 className="font-bold text-gray-800">{t('أرصدة إجازاتي')}</h3>
                   </div>
                   <Link
                     href="/my/leaves"
                     className="text-sm text-primary-500 hover:text-primary-600 font-medium"
                   >
-                    التفاصيل
+                    {t('التفاصيل')}
                   </Link>
                 </div>
                 {balances.length === 0 ? (
                   <p className="text-sm text-gray-400 text-center py-4">
-                    لا توجد أرصدة إجازات لحسابك
+                    {t('لا توجد أرصدة إجازات لحسابك')}
                   </p>
                 ) : (
                   <div className="space-y-4">
@@ -418,8 +423,8 @@ export default function EmployeeHome() {
                       return (
                         <div key={b.balanceType}>
                           <div className="flex items-center justify-between text-sm mb-1">
-                            <span className="text-gray-600">{cfg.label}</span>
-                            <span className="font-bold text-gray-800">{remaining} يوم متبقٍ</span>
+                            <span className="text-gray-600">{t(cfg.label)}</span>
+                            <span className="font-bold text-gray-800">{remaining} {t('يوم متبقٍ')}</span>
                           </div>
                           <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
                             <div
@@ -428,7 +433,7 @@ export default function EmployeeHome() {
                             />
                           </div>
                           <p className="text-[11px] text-gray-400 mt-1">
-                            استحقاق السنة {Number(b.annualEntitlement ?? b.entitled)} · مستهلك {taken}
+                            {t('استحقاق السنة')} {Number(b.annualEntitlement ?? b.entitled)} {t('· مستهلك')} {taken}
                           </p>
                         </div>
                       )
@@ -439,15 +444,14 @@ export default function EmployeeHome() {
                   <div className="mt-4 p-3 bg-amber-50 rounded-xl border border-amber-100">
                     <p className="text-xs text-amber-700">
                       <Layers size={12} className="inline me-1" />
-                      لديك رصيد مُرحّل <strong>{Number(carried.opening.available)} يوم</strong>
+                      {t('لديك رصيد مُرحّل')} <strong>{Number(carried.opening.available)} {t('يوم')}</strong>
                       {carried.opening.expiry ? (
                         <>
                           {' '}
-                          ينتهي في <strong dir="ltr">{carried.opening.expiry}</strong> — استخدمه
-                          قبل انتهاء صلاحيته
+                          {t('ينتهي في')} <strong dir="ltr">{carried.opening.expiry}</strong> {t('— استخدمه قبل انتهاء صلاحيته')}
                         </>
                       ) : (
-                        ' بدون تاريخ انتهاء'
+                        t(' بدون تاريخ انتهاء')
                       )}
                     </p>
                   </div>
@@ -459,18 +463,18 @@ export default function EmployeeHome() {
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-2">
                     <Package size={20} className="text-primary-500" />
-                    <h3 className="font-bold text-gray-800">عهدي</h3>
+                    <h3 className="font-bold text-gray-800">{t('عهدي')}</h3>
                   </div>
                   <Link
                     href="/my/custody"
                     className="text-sm text-primary-500 hover:text-primary-600 font-medium"
                   >
-                    عرض الكل
+                    {t('عرض الكل')}
                   </Link>
                 </div>
                 {currentCustody.length === 0 ? (
                   <p className="text-sm text-gray-400 text-center py-4">
-                    لا توجد عهد في عهدتك حالياً
+                    {t('لا توجد عهد في عهدتك حالياً')}
                   </p>
                 ) : (
                   <div className="space-y-3">
@@ -489,7 +493,7 @@ export default function EmployeeHome() {
                             custodyStatusStyles[c.status] ?? 'bg-gray-100 text-gray-600'
                           }`}
                         >
-                          {custodyStatusLabels[c.status]}
+                          {t(custodyStatusLabels[c.status])}
                         </span>
                       </div>
                     ))}

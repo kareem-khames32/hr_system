@@ -94,7 +94,7 @@ test('الربط: البصمات برقم البصمة وحده، والتولي
   assert.doesNotMatch(form, /setField\('employeeCode'/)
   assert.match(form, /<option value="mixed">نقدي \+ بنك<\/option>/)
   assert.match(read('src/components/layout/Sidebar.tsx'), /\{ label: 'كشف البنوك', href: '\/payroll\/bank-sheet' \}/)
-  assert.match(read('src/app/payroll/payslip/[id]/page.tsx'), /تحويل بنكي \{formatMoney\(employee\.paySplit\.bank\)\} — نقدي \{formatMoney\(employee\.paySplit\.cash\)\}/)
+  assert.match(read('src/app/payroll/payslip/[id]/page.tsx'), /\{t\('تحويل بنكي'\)\} \{formatMoney\(employee\.paySplit\.bank\)\} \{t\('— نقدي'\)\} \{formatMoney\(employee\.paySplit\.cash\)\}/)
   const migration = read('docs/migrations/payroll/20260916_050_pay_method_mixed_employee_code.sql')
   assert.match(migration, /IF COL_LENGTH\(N'dbo\.employees', N'bankTransferAmount'\) IS NULL\s+ALTER TABLE dbo\.employees ADD \[bankTransferAmount\] decimal\(18,2\) NULL;/)
   assert.match(migration, /WHERE NULLIF\(LTRIM\(RTRIM\(e\.\[fingerprintCode\]\)\), N''\) IS NULL/)
