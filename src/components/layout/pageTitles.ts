@@ -13,6 +13,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/my/shift-swaps', 'تبديل ورديتي'],
   ['/my/punch', 'بصمتي'],
   ['/my/safety', 'بلاغات السلامة'],
+  ['/assistant', 'المساعد'],
   ['/my/timesheets', 'ساعاتي'],
   ['/my/feedback360', 'تقييم 360'],
   ['/my/one-on-ones', 'اجتماعات 1:1'],

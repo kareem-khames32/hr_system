@@ -37,6 +37,9 @@ const EXCEPTIONS = {
   'PublicApiController.structure': 'PUBLIC_OK', // GET /public/v1/structure
   // ===== SELF (26) — خدمة ذاتية: بيشتغل على بيانات صاحب الحساب بس (user.sub / user.employeeId) — دور «موظف» صلاحياته فاضية فمفيش مفتاح ينفع =====
   // B2.16: لوحة الإعلانات وتسجيل القراءة — الموظف لنفسه (الإعلان ساري وهو في جمهوره؛ الفحص في الخدمة)
+  // B6.6: مساعد القراءة — الحساب بيسأل والأدوات بتتنفّذ بهويته هو (موديول ai وميزة ai.read_assistant مقفولين افتراضيًا)
+  'AiController.ask': 'SELF', // POST /ai/ask
+  'AiController.status': 'SELF', // GET /ai/status
   'AnnouncementsController.board': 'SELF', // GET /announcements/board
   'AnnouncementsController.markRead': 'SELF', // POST /announcements/:id/read
   'AnnouncementsController.occasions': 'SELF', // GET /announcements/occasions — B2.16-ب: زمايل فرع الموظف (الميزة الفرعية مقفولة افتراضيًا)

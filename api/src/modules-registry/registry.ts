@@ -496,6 +496,16 @@ export const MODULES = {
     permissions: ['integrations.manage'],
     routes: ['/settings/integrations'],
   }),
+  // B6.6: الذكاء الاصطناعي — حوكمة (سجل ai_actions) ومساعد قراءة بهوية المستخدم ونطاقه. موديول جديد = مقفول، وكل ميزة فيه مقفولة لوحدها
+  ai: moduleDef({
+    nameAr: 'الذكاء الاصطناعي', group: 'core', dependsOn: ['employees'], softUses: ['leave', 'attendance', 'payroll', 'policies'], preset: 'full', defaultEnabled: false,
+    description: 'مساعد بيجاوب من بيانات النظام بهوية المستخدم وصلاحياته ونطاقه، وكل سؤال بيتسجّل. مزوّد النموذج بيتضبط على الخادم، ومفيش قرار بياخده المساعد',
+    features: {
+      'ai.read_assistant': { nameAr: 'مساعد القراءة', default: false, routes: ['/assistant'],
+        description: 'الموظف بيسأل عن رصيده وطلباته وحضوره وقسيمته وسياسات الشركة، والرد من نفس بيانات شاشاته. للقراءة بس' },
+    },
+    routes: ['/assistant'],
+  }),
   // B2.11: الوظائف المعتمدة — وظيفة في وحدة بعدد معتمد، وتقرير «معتمد / مشغول / شاغر». موديول جديد = مقفول لحد ما الشركة تفعّله
   // (أول موديول defaultEnabled: false: مفيش حاجة كانت شغالة قبله)
   positions: moduleDef({

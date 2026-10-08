@@ -148,6 +148,6 @@ test('CU-14: the penalties catalog steps, the step for a repetition, the countin
   assert.match(controller, /@RequireModule\('cases'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)\n@Controller\('penalties'\)/)
   assert.equal(controller.split("@Perm('cases.penalties')").length - 1, 7, 'اللائحة والسجل والمعاينة والتوقيع والإلغاء بالصلاحية')
   assert.ok(controller.indexOf("@Get('mine')") > 0 && controller.indexOf("@Post('preview')") < controller.indexOf("@Post(':id/cancel')"))
-  assert.match(read('api/src/payroll/payroll.module.ts'), /exports: \[BonusesService, TypedDeductionsService\]/)
+  assert.match(read('api/src/payroll/payroll.module.ts'), /exports: \[BonusesService, TypedDeductionsService[,\]]/)
   assert.ok(read('src/app/cases/penalties/page.tsx').includes('previewPenalty(target())'))
 })

@@ -165,6 +165,6 @@ import { HiddenRunPeriodsInterceptor } from './hidden-run-periods.interceptor'
     { provide: APP_INTERCEPTOR, useClass: HiddenRunPeriodsInterceptor }],
   // B3.8-ب: مكافآت نتيجة التقييم بتتقدّم بخدمة المكافآت نفسها
   // B3.12: وجزاء الخصم من لائحة الجزاءات بخدمة الخصومات المصنّفة نفسها
-  exports: [BonusesService, TypedDeductionsService],
+  exports: [BonusesService, TypedDeductionsService, PayrollService],
 })
 export class PayrollModule {}

@@ -576,7 +576,7 @@ test('ME-09: قبل ترحيل 076 (الجداول مش موجودة) — كل �
   // شاشة الموديولات قبل الترحيل: القراية شغالة (الكتالوج على الافتراضي وسجل التغييرات فاضي)، والتغيير بيرفض برسالة واضحة مش خطأ خادم
   const catalog = ok(await request(admin(), 'GET', '/modules/catalog'))
   assert.ok(catalog.modules.every(row => row.enabled === registry.MODULES[row.key].defaultEnabled && row.effective === row.enabled), 'كل موديول على افتراضيه')
-  assert.deepEqual(catalog.modules.filter(row => !row.enabled).map(row => row.key), ['announcements', 'manager', 'performance', 'training', 'helpdesk', 'cases', 'surveys', 'dependents', 'compensation', 'benefits', 'skills', 'safety', 'timesheets', 'integrations', 'positions'], 'المقفول افتراضيًا: المضاف بعد نظام الموديولات — الإعلانات (B2.16) ولوحة فريقي (B2.14) والأداء (B3.6) والوظائف المعتمدة (B2.11)')
+  assert.deepEqual(catalog.modules.filter(row => !row.enabled).map(row => row.key), ['announcements', 'manager', 'performance', 'training', 'helpdesk', 'cases', 'surveys', 'dependents', 'compensation', 'benefits', 'skills', 'safety', 'timesheets', 'integrations', 'ai', 'positions'], 'المقفول افتراضيًا: المضاف بعد نظام الموديولات — الإعلانات (B2.16) ولوحة فريقي (B2.14) والأداء (B3.6) والوظائف المعتمدة (B2.11)')
   assert.deepEqual(ok(await request(admin(), 'GET', '/modules/events')), [])
   ok(await request(admin(), 'GET', '/modules/recruitment/impact'))
   ok(await request(admin(), 'GET', '/modules/presets/standard/diff'))

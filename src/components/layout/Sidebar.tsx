@@ -40,6 +40,7 @@ import {
   X,
   KeyRound,
   ShieldCheck,
+  Sparkles,
   LogOut,
   Bell,
   ClipboardList,
@@ -570,6 +571,8 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
       // B5.7: بلاغ حادث ومتابعة بلاغاتي (بتظهر لما موديول السلامة مفتوح)
       { id: 'my-safety', label: 'بلاغات السلامة', icon: <ShieldCheck size={20} />, href: '/my/safety' },
       { id: 'my-payslips', label: 'قسائم راتبي', icon: <Wallet size={20} />, href: '/my/payslips' },
+      // B6.6: مساعد القراءة (بيظهر لما موديول الذكاء الاصطناعي وميزة المساعد مفتوحين)
+      { id: 'my-assistant', label: 'المساعد', icon: <Sparkles size={20} />, href: '/assistant' },
       { id: 'my-loans', label: 'سلفي', icon: <Wallet size={20} />, href: '/my/loans' },
       // الخطوة 25: الخصومات المصنفة عليّ، ومساحة المدير لإنشاء خصومات فريقه ومتابعة اعتمادها
       { id: 'my-deductions', label: 'خصوماتي', icon: <ClipboardList size={20} />, href: '/my/deductions' },

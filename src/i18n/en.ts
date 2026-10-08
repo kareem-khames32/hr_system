@@ -87,6 +87,7 @@ const SHELL: Record<string, string> = {
   'بصمة الموبايل': 'Mobile punch',
   'بصمتي': 'My punch',
   'بلاغات السلامة': 'Safety reports',
+  'المساعد': 'Assistant',
   'بنود الراتب': 'Salary items',
   'بيانات الشركة': 'Company details',
   'تبديل ورديتي': 'Swap my shift',
