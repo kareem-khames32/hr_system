@@ -8,6 +8,7 @@ import { MailSendError, MailService, maskEmail } from '../auth/mail.service'
 import { User } from '../auth/user.entity'
 import { CommentsService } from '../comments/comments.service'
 import { AnnouncementsService } from '../announcements/announcements.service'
+import { publicationAudience } from '../attendance/schedule-tools'
 import { supersededSql } from '../assets/document-expiry'
 import { isCommentEntity, parseCommentMentions } from '../comments/comment-rules'
 import type { Comment } from '../comments/comment.entity'
@@ -63,6 +64,8 @@ export const NOTIFICATION_SOURCE_EVENTS: readonly DomainEventType[] = ['REQUEST_
   'DOCUMENT_EXPIRING',
   // B2.16
   'ANNOUNCEMENT_PUBLISHED',
+  // B5.5
+  'SCHEDULE_PUBLISHED',
   // B2.6
   'REQUEST_EXECUTED',
   // B2.8
@@ -183,6 +186,7 @@ export class NotificationsService implements OnModuleInit {
       case 'COMMENT_MENTION': return this.onCommentMention(event)
       case 'DOCUMENT_EXPIRING': return this.onDocumentExpiring(event)
       case 'ANNOUNCEMENT_PUBLISHED': return this.onAnnouncementPublished(event)
+      case 'SCHEDULE_PUBLISHED': return this.onSchedulePublished(event)
       default: return 0
     }
   }
@@ -276,6 +280,22 @@ export class NotificationsService implements OnModuleInit {
 
   // ===== B2.16: «إعلان جديد» لجمهور الإعلان =====
   /** الإعلان لسه ساري وقت التوزيع، والمستلمين حسابات موظفين جمهوره دلوقتي (العنوان بس في الإشعار) */
+  /** B5.5: جدول أسبوع اتنشر — لحسابات موظفين الفرع (بفرعهم الحالي) اللي لهم وردية في الأسبوع دلوقتي */
+  private async onSchedulePublished(event: SourceEvent): Promise<number> {
+    const id = Number(event.payload?.publicationId)
+    if (!Number.isSafeInteger(id)) return 0
+    const audience = await publicationAudience(this.ds.manager, id)
+    if (!audience || !audience.employeeIds.length) return 0
+    const users: User[] = []
+    for (let offset = 0; offset < audience.employeeIds.length; offset += 1000) {
+      users.push(...await this.ds.getRepository(User).find({ where: { isActive: true, employeeId: In(audience.employeeIds.slice(offset, offset + 1000)) } }))
+    }
+    return this.deliver({
+      event, code: 'schedule.published', category: 'schedule', kind: 'info', recipients: await this.auth.accountPayloads(users),
+      entityType: 'schedule_publication', entityId: id, link: '/my/attendance', values: { 'schedule.week': audience.weekStart },
+    })
+  }
+
   private async onAnnouncementPublished(event: SourceEvent): Promise<number> {
     const id = Number(event.payload?.announcementId)
     if (!Number.isSafeInteger(id)) return 0
@@ -601,6 +621,11 @@ export class NotificationsService implements OnModuleInit {
     if (notification.entityType === 'announcement') {
       // B2.16: الإعلان لسه ساري والحساب لسه في جمهوره (اتسحب أو انتهى أو الموظف اتنقل = مفيش رسالة)
       return (await this.announcements.liveFor(account, Number(notification.entityId))) ? null : 'الإعلان مابقاش ساري أو الحساب مابقاش في جمهوره'
+    }
+    if (notification.entityType === 'schedule_publication') {
+      // B5.5: الموظف لسه في فرع النشر وله وردية في أسبوعه (اتنقل أو ورديته اتشالت = مفيش رسالة)
+      const audience = await publicationAudience(this.ds.manager, Number(notification.entityId))
+      return audience && user.employeeId != null && audience.employeeIds.includes(Number(user.employeeId)) ? null : 'الجدول مابقاش يخص الحساب ده'
     }
     if (notification.entityType === 'employee_document') {
       // B2.15: المستند لسه بتاريخ الحدث، ولسه مستند موظف الحساب ده

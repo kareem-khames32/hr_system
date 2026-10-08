@@ -163,6 +163,8 @@ const adminMenuDefs: MenuItem[] = [
     children: [
       { label: 'سجل الحضور', href: '/attendance', perm: 'attendance.view_all' },
       { label: 'الجدول الأسبوعي', href: '/attendance/weekly-schedule', perm: 'attendance.view_all' },
+      // B5.5: نسخ أسبوع وأنماط تدوير ونشر الجدول (بتظهر لما ميزة «الجدولة المتقدمة» مفتوحة)
+      { label: 'أدوات الجدولة', href: '/attendance/schedule-tools', perm: 'attendance.manage' },
       { label: 'الورديات', href: '/attendance/shifts', perm: 'settings.manage' },
       { label: 'الأذونات', href: '/attendance/permissions', perm: 'attendance.view_all' },
       { label: 'استثناء الحضور', href: '/attendance/exemptions', perm: 'attendance_exemption.view' },

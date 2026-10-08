@@ -21,9 +21,11 @@ test('NE-01: الكتالوج متسق — فئة معروفة، وقالب لك
     // B2.15: «مستندك هينتهي» (بريد؛ جوه النظام العنصر المحسوب القايم)
     'document.expiring',
     // B2.16: «إعلان جديد» لجمهور الإعلان
-    'announcement.published', 'task.assigned', 'task.due_soon', 'task.overdue', 'comment.mentioned'])
+    'announcement.published',
+    // B5.5: «جدول الأسبوع اتنشر» لموظفين الفرع اللي لهم وردية
+    'schedule.published', 'task.assigned', 'task.due_soon', 'task.overdue', 'comment.mentioned'])
   assert.deepEqual([...events.NOTIFICATION_CHANNELS], ['IN_APP', 'EMAIL'])
-  assert.deepEqual(Object.keys(events.NOTIFICATION_CATEGORIES), ['approval', 'request', 'payroll', 'task', 'comment', 'document', 'announcement'])
+  assert.deepEqual(Object.keys(events.NOTIFICATION_CATEGORIES), ['approval', 'request', 'payroll', 'task', 'comment', 'document', 'announcement', 'schedule'])
   for (const code of events.NOTIFICATION_EVENT_CODES) {
     const def = events.notificationEventDef(code)
     assert.ok(events.isNotificationCategory(def.category), code)
@@ -43,7 +45,7 @@ test('NE-01: الكتالوج متسق — فئة معروفة، وقالب لك
   }
   // الأحداث اللي ليها عنصر محسوب في القايمة (العدّاد وقرار طلبك) مابتتخزنش للقايمة؛ القسيمة، وإشارة التعليق (B2.8)، والإعلان الجديد (B2.16)
   assert.deepEqual(events.NOTIFICATION_EVENT_CODES.filter(code => events.notificationEventDef(code).storedInApp),
-    ['payroll.payslip_available', 'announcement.published', 'comment.mentioned'])
+    ['payroll.payslip_available', 'announcement.published', 'schedule.published', 'comment.mentioned']) // B5.5: + نشر جدول الأسبوع
   assert.equal(events.isNotificationEvent('request.unknown'), false)
   assert.equal(events.isNotificationEvent('toString'), false)
   assert.equal(events.isNotificationCategory('constructor'), false)

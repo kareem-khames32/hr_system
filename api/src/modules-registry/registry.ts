@@ -175,6 +175,15 @@ export const MODULES = {
     description: 'الورديات وجداول العمل والجدول الأسبوعي',
     routes: ['/attendance/shifts', '/attendance/weekly-schedule'],
     requestHandlers: ['shift_schedule'],
+    features: {
+      // B5.5: أدوات الجدولة المتقدمة فوق الجدول الأسبوعي القايم — مقفولة لحد ما الشركة تقرر
+      'shifts.advanced': {
+        nameAr: 'الجدولة المتقدمة',
+        description: 'نسخ أسبوع، وأنماط تدوير الورديات، ونشر جدول الأسبوع للموظفين بإشعار',
+        default: false,
+        routes: ['/attendance/schedule-tools'],
+      },
+    },
   }),
   overtime: moduleDef({
     nameAr: 'الإضافي ودوام العطلات', group: 'time', dependsOn: ['attendance'], softUses: ['payroll'],

@@ -31,6 +31,10 @@ import { HolidayWorkOrder } from './holiday-work.entities'
 import { HolidayWorkController } from './holiday-work.controller'
 import { HolidayWorkService } from './holiday-work.service'
 
+import { SchedulePublication, ShiftRotation } from './schedule-tools'
+import { ScheduleToolsController } from './schedule-tools.controller'
+import { ScheduleToolsService } from './schedule-tools.service'
+
 @Module({
   imports: [
     TypeOrmModule.forFeature([
@@ -58,10 +62,13 @@ import { HolidayWorkService } from './holiday-work.service'
       AttendanceExemptionEvent,
       AttendanceRuleVersion,
       HolidayWorkOrder,
+      // B5.5: أدوات الجدولة (ميزة shifts.advanced، مقفولة افتراضيًا)
+      ShiftRotation,
+      SchedulePublication,
     ]),
   ],
-  controllers: [AttendanceController, AttendanceExemptionsController, AttendanceRuleController, HolidayWorkController],
-  providers: [AttendanceService, DeviceSyncService, AttendanceScheduler, AttendanceExemptionsService, HolidayWorkService],
+  controllers: [AttendanceController, AttendanceExemptionsController, AttendanceRuleController, HolidayWorkController, ScheduleToolsController],
+  providers: [AttendanceService, DeviceSyncService, AttendanceScheduler, AttendanceExemptionsService, HolidayWorkService, ScheduleToolsService],
   exports: [AttendanceService],
 })
 export class AttendanceModule {}

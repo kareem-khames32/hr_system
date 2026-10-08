@@ -60,6 +60,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/policies', 'مكتبة السياسات'],
   // الحضور والانصراف
   ['/attendance/weekly-schedule', 'الجدول الأسبوعي'],
+  ['/attendance/schedule-tools', 'أدوات الجدولة'],
   ['/attendance/shifts', 'الورديات'],
   ['/attendance/permissions', 'الأذونات'],
   ['/attendance/exemptions', 'استثناء الحضور'],

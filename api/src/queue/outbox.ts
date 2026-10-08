@@ -24,6 +24,8 @@ export const DOMAIN_EVENTS = {
   COMMENT_MENTION: 'إشارة في تعليق',
   // B2.16: إعلان اتنشر ووصل تاريخ نشره (الإشعار لجمهوره)
   ANNOUNCEMENT_PUBLISHED: 'إعلان اتنشر',
+  // B5.5: جدول أسبوع اتنشر لفرع (الإشعار لموظفيه اللي لهم وردية)
+  SCHEDULE_PUBLISHED: 'جدول أسبوع اتنشر',
 } as const
 export type DomainEventType = keyof typeof DOMAIN_EVENTS
 export const QUEUE_MIGRATION_MISSING = 'الطابور والـoutbox محتاجين ترحيل 20261003_086 على قاعدة البيانات'

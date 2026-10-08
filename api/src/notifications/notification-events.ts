@@ -27,6 +27,8 @@ export const NOTIFICATION_CATEGORIES = {
   document: 'مستنداتي',
   // B2.16
   announcement: 'الإعلانات',
+  // B5.5
+  schedule: 'جدول الورديات',
 } as const
 export type NotificationCategoryCode = keyof typeof NOTIFICATION_CATEGORIES
 export const isNotificationCategory = (value: unknown): value is NotificationCategoryCode =>
@@ -142,6 +144,16 @@ export const NOTIFICATION_EVENTS = {
       IN_APP: { title: 'إعلان جديد', body: '{{announcement.title}}' },
       EMAIL: { title: 'إعلان جديد: {{announcement.title}}',
         body: `${greeting}\n\nفيه إعلان جديد: {{announcement.title}}.\n\nاقراه من هنا:\n{{link}}\n\n${closing}` },
+    },
+  },
+  // B5.5: جدول أسبوع اتنشر لموظفين الفرع اللي لهم وردية فيه
+  'schedule.published': {
+    label: 'جدول الأسبوع اتنشر', category: 'schedule', kind: 'info', storedInApp: true,
+    variables: [{ key: 'schedule.week', label: 'بداية الأسبوع', sample: '2026-10-11' }, ...COMMON],
+    templates: {
+      IN_APP: { title: 'جدول الأسبوع اتنشر', body: 'جدول ورديات أسبوع {{schedule.week}} اتنشر — راجع ورديتك' },
+      EMAIL: { title: 'جدول ورديات أسبوع {{schedule.week}}',
+        body: `${greeting}\n\nجدول ورديات الأسبوع اللي بيبدأ {{schedule.week}} اتنشر.\n\nراجع ورديتك من هنا:\n{{link}}\n\n${closing}` },
     },
   },
   // B2.5 (محرك المهام): جوه النظام العدّاد المحسوب على «مهامي»، والمحرك بيضيف البريد
