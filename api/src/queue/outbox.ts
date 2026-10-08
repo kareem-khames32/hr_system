@@ -16,6 +16,8 @@ export const DOMAIN_EVENTS = {
   PAYROLL_RUN_APPROVED: 'المسير اتعتمد',
   DOCUMENT_EXPIRING: 'مستند هينتهي',
   EMPLOYEE_TERMINATED: 'الموظف انتهت خدمته',
+  // B6.3 (ج): بيانات موظف اتعدّلت من ملفه (للأنظمة الخارجية — مراجع بس)
+  EMPLOYEE_UPDATED: 'بيانات الموظف اتعدّلت',
   // B2.5: مهمة اتكلّف بيها مسؤول (أو اتحوّلت له)، وموعدها قرّب، واتأخرت عن موعدها
   TASK_ASSIGNED: 'مهمة اتكلّف بيها مسؤول',
   TASK_DUE_SOON: 'موعد المهمة قرّب',

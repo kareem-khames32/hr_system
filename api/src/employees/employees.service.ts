@@ -950,6 +950,8 @@ export class EmployeesService {
       if (dto.annualLeaveEntitled !== undefined) await this.annualEntitlementIn(em, id, dto.annualLeaveEntitled)
       // تعديل رصيد افتتاحي مُرحّل لموظف قائم (انتقل من نظام سابق) — لا يُطبَّق مع «لا يستحق»
       if (dto.annualLeaveEntitled !== false) await this.openingBalanceIn(em, id, openingBalanceDays, openingBalanceExpiry)
+      // B6.3 (ج): «بيانات الموظف اتعدّلت» في نفس معاملة التعديل — مراجع بس (النظام الخارجي بيقرا الجديد من الـAPI العام بمفتاحه ونطاقه)
+      await recordOutboxEvent(em, { type: 'EMPLOYEE_UPDATED', entityType: 'employee', entityId: id, payload: { employeeId: id, branchId: result.branchId ?? null } })
       return result
     })
     // تغيّر رقم البصمة → بصماته اليتيمة السابقة بالرقم الجديد تُربط به

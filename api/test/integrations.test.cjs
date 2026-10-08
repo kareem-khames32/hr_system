@@ -71,7 +71,8 @@ test('INU-04: مصدر الكود — الحارس (حد العنوان ← ال
   assert.match(service, /COUNT\(i\.\[id\]\) AS \[employees\], CONVERT\(varchar\(40\), SUM\(i\.\[netPay\]\)\) AS \[totalNet\]/)
   // الإدارة: الصلاحية على كل مسار، والحكم «كل الفروع» في كل مدخل؛ والمفتاح بيرجع في رد الإنشاء بس وبصمته مابترجعش
   assert.match(manage, /@RequireModule\('integrations'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)\n@Controller\('integrations'\)/)
-  assert.equal((manage.match(/@Perm\('integrations\.manage'\)/g) || []).length, 3)
+  // 3 للمفاتيح + 3 لنقاط الاستقبال (الجزء ج)
+  assert.equal((manage.match(/@Perm\('integrations\.manage'\)/g) || []).length, 6)
   assert.equal((store.match(/assertCompanyWideWrite\(user\)/g) || []).length, 3)
   assert.match(store, /return \{ \.\.\.view\(row\), key: fresh\.key \}/)
   assert.doesNotMatch(store.slice(store.indexOf('const view = '), store.indexOf('@Injectable()')), /keyHash/)
