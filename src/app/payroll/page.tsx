@@ -87,6 +87,7 @@ import { dayRangeLabel } from '@/lib/payroll-month-range'
 import { PayrollOvertimeBreakdown } from '@/components/PayrollOvertimeBreakdown'
 import { PayrollInstallmentBreakdown } from '@/components/PayrollInstallmentBreakdown'
 import { PayrollObligationBreakdown } from '@/components/PayrollObligationBreakdown'
+import PayrollEntityWarnings from '@/components/payroll/PayrollEntityWarnings'
 
 const payMethodLabels: Record<string, string> = {
   transfer: 'تحويل بنكي',
@@ -728,6 +729,8 @@ export default function PayrollPage() {
         </div>
 
         {tab === 'runs' ? (<>
+        {/* B4.1: مسيرات مفتوحة بتجمع أكتر من كيان قانوني (تحذير بس) */}
+        <PayrollEntityWarnings refreshKey={runs} />
         {/* Error Banner */}
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
 

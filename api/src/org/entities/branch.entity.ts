@@ -53,6 +53,10 @@ export class Branch {
   @Column({ length: 20, default: 'NONE' })
   insuranceSystem: string
 
+  // B4.1 (ترحيل 134): كيان الفرع القانوني (legal_entities.id). برّه الكيان للقراءة والكتابة: org/legal-entities.service.ts
+  @Column({ type: 'int', nullable: true, select: false, insert: false, update: false })
+  legalEntityId?: number | null
+
   @Column({ default: true })
   isActive: boolean
 

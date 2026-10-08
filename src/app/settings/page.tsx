@@ -25,6 +25,8 @@ const groups: { title: string; description: string; links: SettingsLink[] }[] = 
     description: 'البيانات التي تربط الموظفين بفروع الشركة وفرقها.',
     links: [
       { title: 'بيانات الشركة', description: 'الاسم والشعار وبيانات التواصل المستخدمة في المستندات.', href: '/settings/company', permission: 'settings.manage', icon: Building2 },
+      // B4.1: كيان لكل دولة بأرقام تسجيله، وربط الفروع بيه
+      { title: 'الكيانات القانونية', description: 'كيان لكل دولة بأرقام تسجيله وبنك رواتبه، وربط الفروع بكيان دولتها.', href: '/settings/legal-entities', permission: 'settings.manage', icon: Building2 },
       { title: 'الفروع', description: 'الفروع وأيام العطلة ومراكز التكلفة المرتبطة بها.', href: '/settings/branches', permission: 'org.manage', icon: GitBranch },
       { title: 'الإدارات والأقسام', description: 'الإدارات وأقسامها والتسلسل الإداري داخل كل فرع.', href: '/settings/departments', permission: 'org.manage', icon: Layers3 },
       { title: 'الفرق', description: 'فرق العمل والأقسام التي تتبعها.', href: '/settings/teams', permission: 'org.manage', icon: UsersRound },

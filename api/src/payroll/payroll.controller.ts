@@ -280,6 +280,13 @@ export class PayrollController {
     return this.service.list(user)
   }
 
+  // B4.1: المسيرات المفتوحة اللي بتجمع أكتر من كيان قانوني (تحذير) — قبل runs/:id
+  @Perm('payroll.view')
+  @Get('runs/entity-warnings')
+  entityWarnings(@CurrentUser() user: JwtPayload) {
+    return this.service.entityWarnings(user)
+  }
+
   // B1.12: ?view=screen لشاشة المسير (تفصيل كل بند بالمفاتيح اللي الشاشة بتقراها بس). أي قيمة تانية أو من غيره = الرد الكامل زي ما هو
   @Perm('payroll.view')
   @Get('runs/:id')

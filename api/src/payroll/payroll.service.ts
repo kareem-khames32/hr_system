@@ -106,6 +106,7 @@ import { assertRunExemptionsForApproval, describePayslipExemptions, markRunExemp
   readExemptionObligationFacts, releaseRunExemptions, reserveExemptedObligations } from './payroll-financial-exemption-ledger'
 // C8 / الخطوة 31: مسار العكس والمسير التكميلي بعد الصرف — اعتماد مسير العكس وتنفيذه وإلغاؤه من نقاط المسير نفسها
 import { payrollRunTypeOf } from './payroll-corrections'
+import { assertRunSingleEntity, runEntityNames } from './payroll-run-entities'
 import { PayrollRunReversalLine } from './payroll-corrections.entities'
 import { cancelPayrollReversalLines, carryReversedRunExemptions, describePayrollItemReversal, describePayrollRunCorrection, lockPayrollRunForCorrection, planPayrollItemReversal,
   postPayrollReversalLine, type PayrollReversalBlocker } from './payroll-reversal-ledger'
@@ -1790,6 +1791,18 @@ export class PayrollService {
     return rows.filter(run => this.runInBranchScope(run, branch, byId, membersOf, itemsOf)).map(run => this.lightRun(run))
   }
 
+  // B4.1: المسيرات المفتوحة (مش مصروفة ولا ملغية) في نطاق الحساب اللي تعريفها بيجمع أكتر من كيان قانوني — تحذير، مش منع
+  async entityWarnings(user: JwtPayload) {
+    const open = (await this.list(user)).filter(run => run.status !== 'PAID' && run.status !== 'CANCELLED' && payrollRunTypeOf(run) === 'REGULAR')
+    const warnings: Array<{ runId: number; name: string | null; period: string; entities: string[] }> = []
+    for (const run of open) {
+      let entities: string[] = []
+      try { entities = await runEntityNames(this.runs.manager, payrollRunDefinitionOf(run)) } catch { entities = [] }
+      if (entities.length > 1) warnings.push({ runId: run.id, name: run.name ?? null, period: run.period, entities })
+    }
+    return { warnings }
+  }
+
   // الخطوتان 19 و20: نص اللقطة والتقرير الخام لا يُعاد في القوائم والقسيمة؛ التفاصيل عبر engine وpolicy-snapshot.
   private lightRun(run: PayrollRun): PayrollRun {
     const { policySnapshot: _snapshot, parityReport: _report, ...rest } = run
@@ -2542,6 +2555,8 @@ export class PayrollService {
       }
       const definition = await this.normalizeRunDefinition(em, user, dto, null)
       await this.assertPolicyBranchScope(em, context.policy, definition)
+      // B4.1: مسير جديد مايجمعش كيانين قانونيين. النسخ للشهر الجاي والمسير التكميلي مابيتمنعوش (تعريف قايم — بيظهر عليه تحذير)
+      if (!correction && !copiedFromRunId) await assertRunSingleEntity(em, definition, null)
       await this.assertRunNameAvailable(em, name, context.period, null)
       const preview = await this.membershipPreview(em, user, { id: null, name, period: context.period, startDate: context.startDate, endDate: context.endDate },
         definition, [], this.policyViewOf(context))
@@ -2674,6 +2689,8 @@ export class PayrollService {
         confirmEmptyScope: dto.confirmEmptyScope ?? !!before.emptyScope, emptyScopeReason: dto.emptyScopeReason ?? before.emptyScope?.reason ?? null,
       }, before)
       await this.assertPolicyBranchScope(em, context.policy, definition)
+      // B4.1: تعديل مسودة كانت لكيان واحد مايخلّيهاش تجمع كيانين (مسودة مجمّعة أصلًا بتفضل تتعدّل)
+      if (payrollRunTypeOf(run) !== 'SUPPLEMENTARY') await assertRunSingleEntity(em, definition, before)
       await this.assertRunNameAvailable(em, name, context.period, run.id)
       const preview = await this.membershipPreview(em, user, { id: run.id, name, period: context.period, startDate: context.startDate, endDate: context.endDate },
         definition, [], this.policyViewOf(context))

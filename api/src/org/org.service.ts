@@ -18,6 +18,7 @@ import { attendanceRuleToday, lockAttendanceRuleMutation } from '../attendance/a
 import { Employee } from '../employees/employee.entity'
 import { branchCountryOf, branchInsuranceIssue, normalizeBranchCountry } from './branch-currency'
 import { Branch } from './entities/branch.entity'
+import { unlinkBranchEntityOnCountryChange } from './legal-entities'
 import { Department, DEPARTMENT_UNIT_TYPES, UNIT_TYPE_MESSAGE } from './entities/department.entity'
 import type { DepartmentUnitType } from './entities/department.entity'
 import { Team } from './entities/team.entity'
@@ -189,6 +190,8 @@ export class OrgService {
       const before = calendarTouched || calendarChange ? await beginCalendarChange(em, 'BRANCH', id, calendarChange, actorId!) : null
       const updates = Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined))
       if (Object.keys(updates).length) await em.update(Branch, { id }, updates)
+      // B4.1: دولة الفرع اتغيّرت: كيانه القانوني لو مش كيان الدولة الجديدة بيتفك (عملة الفرع بتفضل تبع دولته)
+      if (countryChanged) await unlinkBranchEntityOnCountryChange(em, id, fields.country)
       if (before) await finishCalendarChange(em, before, calendarChange, actorId!)
       return em.findOneByOrFail(Branch, { id })
     })
