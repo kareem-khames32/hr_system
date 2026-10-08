@@ -12,6 +12,7 @@ import {
   matchEmployeeForDirectory,
 } from './domain-match'
 import { User } from './user.entity'
+import { lockEmployeeAccountSlot } from './employee-account-slot'
 
 // ===== ربط حساب المجال بالموظف «في لحظته» (Just-in-time) =====
 // قرار المالك 22 سبتمبر: أول دخول ناجح بحساب مجال بيلاقي الموظف ويعمل الحساب ويربطه. مفيش مطابقة =
@@ -40,6 +41,10 @@ const REFUSALS = {
 export const DOMAIN_LOGIN_REFUSALS = REFUSALS
 // CRP3H: الحساب اتغيّر (اتنقل لموظف تاني، أو اتعطّل، أو اتربط) بين مطابقة الهوية وكتابة الربط
 export const DOMAIN_LINK_ACCOUNT_CHANGED = 'حساب الموظف اتغيّر أثناء الربط بحساب الشركة — حاول تاني'
+/** CRP3I: حساب الموظف (أو ربط الهوية) ظهر أو اتغيّر بين المطابقة والإنشاء — الدخول بيعيد الحكم من الأول مرة واحدة */
+export class DomainAccountChangedError extends ConflictException {
+  constructor() { super(DOMAIN_LINK_ACCOUNT_CHANGED) }
+}
 
 /** كلمة مرور غير قابلة للاستخدام: حساب المجال مالوش كلمة عندنا، فمسار البريد+الكلمة بيفشل عليه دايمًا. */
 const unusablePasswordHash = (): Promise<string> =>
@@ -59,6 +64,17 @@ export class DomainLoginService {
    * أي رفض = UnauthorizedException برسالة عربية، ومفيش أي صف بيتعمل.
    */
   async resolveUser(directory: DirectoryUser): Promise<User> {
+    // CRP3I (P3I-B01): الإنشاء بيحجز الموظف ويعيد حكم حسابه تحت القفل؛ لو حساب ظهر في النص، الحكم كله بيتعاد من الأول مرة واحدة على
+    // الوضع الحالي (ربط، أو رفض الحساب المعطّل أو المربوط بهوية تانية) — زي الدخول اللي جه بعده بالظبط
+    try {
+      return await this.resolveOnce(directory)
+    } catch (error) {
+      if (!(error instanceof DomainAccountChangedError)) throw error
+      return this.resolveOnce(directory)
+    }
+  }
+
+  private async resolveOnce(directory: DirectoryUser): Promise<User> {
     // (أ) الربط الثابت: objectGUID — إعادة التسمية أو تغيير البريد في AD مابتكسرهوش
     const linked = await this.findByObjectGuid(directory.objectGuid)
     if (linked) {
@@ -161,15 +177,25 @@ export class DomainLoginService {
     employee: Employee,
     email: string
   ): Promise<User> {
-    const created = await this.users.save(
-      this.users.create({
+    const passwordHash = await unusablePasswordHash()
+    // CRP3I (P3I-B01): «الموظف مالوش حساب» اتحكم قبل كده من غير قفل. الإنشاء بيحجز الموظف (قفل صفه — نفس الحجز في إنشاء حساب وتغيير
+    // ربطه) ويعيد الحكم تحته: الملف لسه مفتوح، ومفيش حساب للموظف ولا حساب بالهوية دي. ظهر حساب = مفيش إنشاء، والمتصل يعيد من الأول
+    const created = await this.users.manager.transaction(async (em) => {
+      const slot = await lockEmployeeAccountSlot(em, employee.id)
+      if (!slot.employee) throw new UnauthorizedException(REFUSALS.noMatch)
+      this.assertEmployeeRowOpen(slot.employee)
+      if (slot.accounts.length > 0) throw new DomainAccountChangedError()
+      if (await em.getRepository(User).findOne({ where: { domainObjectGuid: directory.objectGuid }, select: ['id'] })) throw new DomainAccountChangedError()
+      return em.getRepository(User).save(
+      em.getRepository(User).create({
         email,
-        passwordHash: await unusablePasswordHash(),
+        passwordHash,
         // مفيش كلمة مرور اتعيّنت على النظام ده — الحساب بيدخل بالمجال
         passwordChangedAt: null,
         displayName: (directory.displayName ?? employee.fullName ?? email).slice(0, 200),
         role: 'employee',
-        branchId: employee.branchId as unknown as number,
+        // فرع الموظف زي ما هو تحت القفل
+        branchId: slot.employee.branchId as unknown as number,
         employeeId: employee.id,
         permissions: null as unknown as string,
         isActive: true,
@@ -178,7 +204,8 @@ export class DomainLoginService {
         scopeAllBranches: false,
         domainObjectGuid: directory.objectGuid,
       })
-    )
+      )
+    })
     this.logger.log(
       `حساب جديد ${created.id} (${created.email}) اتعمل واتربط بحساب المجال ${directory.sAMAccountName} — الموظف ${employee.employeeCode}`
     )
