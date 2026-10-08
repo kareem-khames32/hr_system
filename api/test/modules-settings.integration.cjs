@@ -292,7 +292,7 @@ test('MS-08: شاشة الأدوار — صلاحيات الموديول الم�
   assert.deepEqual(Object.keys(enabled).filter(key => !enabled[key]).sort(),
     // B1.8: loans.disburse (تسجيل صرف السلفة) من صلاحيات موديول السلف
     // B2.11: + صلاحيتي الوظائف المعتمدة (موديولها مقفول افتراضيًا)؛ B2.16: + إدارة الإعلانات
-    ['announcements.manage', 'candidates.manage', 'loans.cap_override', 'loans.disburse', 'loans.exceptional', 'loans.policies', 'loans.repay', 'loans.write_off', 'positions.manage', 'positions.view'])
+    ['announcements.manage', 'candidates.approve_offers', 'candidates.manage', 'loans.cap_override', 'loans.disburse', 'loans.exceptional', 'loans.policies', 'loans.repay', 'loans.write_off', 'positions.manage', 'positions.view'])
   // الدور لسه شايل الصلاحية، وتعديله بنفس القايمة بيعدّي (الصلاحية محفوظة ومالهاش أثر)
   ok(await request(U.admin, 'PATCH', `/roles/${role.id}`, { permissions: ['employees.view', 'candidates.manage'] }))
   assert.deepEqual(JSON.parse((await repo('Role').findOneByOrFail({ id: role.id })).permissions).sort(), ['candidates.manage', 'employees.view'])

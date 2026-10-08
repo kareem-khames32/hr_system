@@ -96,6 +96,8 @@ const EXCEPTIONS = {
   'MyInterviewsController.ics': 'SERVICE_CHECK', // GET /recruitment/my-interviews/:id/ics — B3.4-ب: ملف الدعوة لمسؤول التوظيف في نطاق المرشح أو لمحاور في المقابلة
   'MyInterviewsController.mine': 'SELF', // GET /recruitment/my-interviews — B3.4-ب: مقابلات الموظف المحاور نفسه
   'MyInterviewsController.submit': 'SELF', // POST /recruitment/my-interviews/:id/scorecard — B3.4-ب: بطاقة المحاور نفسه، مرة واحدة
+  'OfferLinkController.answer': 'PUBLIC_OK', // POST /careers/offers/:token — B3.5-أ: رد المرشح على عرضه برمز اللينك (ميزة مقفولة افتراضيًا، مرة واحدة، وحد بالعنوان)
+  'OfferLinkController.view': 'PUBLIC_OK', // GET /careers/offers/:token — B3.5-أ: العرض لصاحب رمز اللينك
   'PortalController.dismissNotification': 'SELF', // DELETE /notifications/:id
   'PortalController.markNotificationsRead': 'SELF', // PATCH /notifications/read
   'PortalController.notifications': 'SELF', // GET /notifications

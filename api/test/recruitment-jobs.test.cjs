@@ -53,7 +53,7 @@ test('RU-01: openings, the salary range, the start date, texts, status transitio
 
 test('RU-02: the destination is wired at its seven points, runs with the transaction manager only, and the service is scoped and writes fields', () => {
   const module = MODULES.recruitment
-  assert.deepEqual([module.requestTypes, module.requestHandlers, module.routes.includes('/recruitment/jobs'), module.permissions], [['RECRUITMENT_REQUISITION'], ['recruitment_requisition'], true, ['candidates.manage']])
+  assert.deepEqual([module.requestTypes, module.requestHandlers, module.routes.includes('/recruitment/jobs'), module.permissions], [['RECRUITMENT_REQUISITION'], ['recruitment_requisition'], true, ['candidates.manage', 'candidates.approve_offers']])
   const requests = read('api/src/requests/requests.service.ts')
   assert.match(requests, /\[REQUISITION_HANDLER\]: \[\.\.\.REQUISITION_CLIENT_KEYS, \.\.\.REQUISITION_STAGED_KEYS\]/)
   assert.match(requests, /\.\.\.\(t\.destinationHandler === REQUISITION_HANDLER \? requisitionFields\(vacancyTitles, t\) : \{\}\)/)

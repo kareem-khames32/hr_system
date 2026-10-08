@@ -85,7 +85,7 @@ test('MU-01: كل شاشة لها صاحب (موديول أو ميزة شاشا�
   // الشاشات الوهمية بالظبط — أي شاشة ببيانات عرض جديدة لازم تتسجّل، وأي شاشة حقيقية ماتتحسبش وهمية
   assert.deepEqual(pages.filter(route => owners[route].feature === registry.DEMO_SCREENS_FEATURE), [
     '/performance', '/performance/5', '/performance/cycles', '/performance/goals', '/performance/new', '/performance/templates',
-    '/recruitment/5', '/recruitment/add', '/recruitment/offers', '/reports/custom',
+    '/recruitment/5', '/recruitment/add', '/reports/custom',
     '/training', '/training/5', '/training/add', '/training/certificates', '/training/my-courses'])
   // أمثلة من كل موديول (المطابقة الكاملة في modules-registry.test.cjs)
   for (const [route, module] of [['/', 'platform'], ['/settings/modules', 'platform'], ['/employees/5', 'employees'], ['/employees/5/terminate', 'offboarding'],
@@ -146,7 +146,7 @@ test('MU-02: القايمة الجانبية من السجل — الوهمي و
   // بنود مجموعة التوظيف والتقارير: الوهمي منها بيتشال لوحده
   const visible = (enabled, hrefs) => hrefs.filter(href => registry.routeAvailable(href, enabled))
   const recruitment = ['/recruitment', '/recruitment/jobs', '/recruitment/applicants', '/recruitment/interviews', '/recruitment/offers', '/recruitment/add']
-  assert.deepEqual(visible(state(), recruitment), ['/recruitment', '/recruitment/jobs', '/recruitment/applicants', '/recruitment/interviews'])
+  assert.deepEqual(visible(state(), recruitment), ['/recruitment', '/recruitment/jobs', '/recruitment/applicants', '/recruitment/interviews', '/recruitment/offers'])
   assert.deepEqual(visible(state({ recruitment: false }, DEMO_ON), recruitment), [], 'موديول التوظيف مقفول = ولا بند')
   assert.deepEqual(visible(state({}, DEMO_ON), recruitment), recruitment)
   assert.deepEqual(visible(state(), ['/reports', '/reports/custom', '/reports/cost-centers']), ['/reports', '/reports/cost-centers'])
@@ -220,7 +220,7 @@ test('MU-04: حارس المسارات — «الصفحة دي مش متاحة»
     assert.equal(registry.routeAvailable(route, basic), true, route); assert.equal(registry.routeAvailable(route, noPayroll), false, route)
   }
   for (const route of ['/', '/employees/9', '/requests', '/settings', '/reports', '/leaves']) assert.equal(registry.routeAvailable(route, noPayroll), true, route)
-  for (const route of ['/performance', '/training/add', '/recruitment/offers', '/reports/custom']) assert.equal(registry.routeAvailable(route, basic), false, route)
+  for (const route of ['/performance', '/training/add', '/recruitment/add', '/reports/custom']) assert.equal(registry.routeAvailable(route, basic), false, route)
 })
 
 test('MU-05: <ModuleGate> — الجزء بيختفي لو الموديول أو الميزة مقفولين', () => {

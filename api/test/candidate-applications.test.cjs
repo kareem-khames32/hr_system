@@ -2,6 +2,7 @@
 // B3.3-أ: المرشح على وظيفة شاغرة — فحص من غير قاعدة (الدورة الفعلية في candidate-applications.integration.cjs):
 //  CU-01) القواعد: تطبيع الموبايل والبريد والهوية، ورقم الهوية والمصدر المكتوبين.
 //  CU-02) الربط: الإضافة والتقديم تحت قفل صف الوظيفة والحكم بعده، والتقديم الداخلي بقفل صف الموظف وفرعه الحالي، والمسارات محروسة.
+//  CU-06) (B3.5-أ) عروض العمل: قيم العرض، وبصمة الرمز، وحق كل إجراء، والانتقالات تحت قفل صف العرض، ولينك الرد من غير دخول بميزته.
 //  CU-05) (B3.4-ب) المقابلات: قيم المقابلة والبطاقة، وملف الدعوة (.ics)، وترتيب الحكم في التحديد والتسليم، والمسارات.
 //  CU-04) (B3.4-أ) نقل المراحل: القيم، والنقل تحت قفل الصف بترتيب الأرقام وبخانة المرحلة بس، والتعديل القايم بيعدّي عليه.
 //  CU-03) (ب) اللينك العام: قيم المتقدّم والموافقة، وحد المحاولات، والمسارات بميزة مقفولة ومن غير حارس جلسة عن قصد، والتقديم تحت قفل الوظيفة.
@@ -160,4 +161,35 @@ test('CU-05: interviews — values, the invite file, the judgment order in sched
   assert.match(controller, /@RequireModule\('recruitment'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)\n@Perm\('candidates\.manage'\)\n@Controller\('recruitment\/interviews'\)/)
   assert.match(controller, /@RequireModule\('recruitment'\)\n@UseGuards\(JwtAuthGuard\)\n@Controller\('recruitment\/my-interviews'\)/)
   assert.deepEqual([MODULES.recruitment.routes.includes('/recruitment/interviews'), MODULES.recruitment.routes.includes('/my/interviews')], [true, true])
+})
+
+test('CU-06: offers — values, the token hash, who may do what, transitions under the offer row lock, and the public answer link', () => {
+  const offers = require('../src/recruitment/offers.service')
+  assert.deepEqual([offers.cleanOfferSalary(8500), offers.cleanOfferSalary(' 8500.5 '), offers.cleanOfferStart('2026-11-01'), offers.cleanOfferExpiry('2026-10-09', '2026-10-09'), offers.cleanOfferExpiry('', '2026-10-09'),
+    offers.cleanOfferExpiry(undefined, '2026-10-09')], ['8500.00', '8500.50', '2026-11-01', '2026-10-09', null, null])
+  for (const bad of [0, -1, '1.234', 'x', null, 1e13, NaN]) refuses(() => offers.cleanOfferSalary(bad), 'salary ' + String(bad))
+  for (const bad of ['', null, undefined, '2026-02-31', '01-11-2026']) refuses(() => offers.cleanOfferStart(bad), 'start ' + String(bad))
+  for (const bad of ['2026-10-08', '2026-13-01', 'بكرة']) refuses(() => offers.cleanOfferExpiry(bad, '2026-10-09'), 'expiry ' + String(bad))
+  assert.equal(offers.offerTokenHash('a'.repeat(64)), require('node:crypto').createHash('sha256').update('a'.repeat(64)).digest('hex'))
+  assert.equal(offers.OFFER_APPROVE_PERMISSION, 'candidates.approve_offers')
+  const { PERMISSIONS, PERMISSION_MODULES, ROLE_PRESETS } = require('../src/auth/permissions')
+  assert.deepEqual(['candidates.approve_offers' in PERMISSIONS, PERMISSION_MODULES.find(unit => unit.key === 'recruitment').permissions, MODULES.recruitment.permissions,
+    ROLE_PRESETS.find(role => role.code === 'hr_manager').permissions.includes('candidates.approve_offers'), ROLE_PRESETS.find(role => role.code === 'employee').permissions.includes('candidates.approve_offers')],
+    [true, ['candidates.manage', 'candidates.approve_offers'], ['candidates.manage', 'candidates.approve_offers'], true, false])
+  const service = read('api/src/recruitment/offers.service.ts')
+  const act = service.slice(service.indexOf('async act('), service.indexOf('// ===== لينك الرد'))
+  const order = ["if (action !== 'approve' && action !== 'return') this.assertManager(user)", 'await this.locked(em, user, id)', 'if (!userHasPerm(user, OFFER_APPROVE_PERMISSION)) throw new ForbiddenException(OFFER_APPROVE_FORBIDDEN)',
+    "user.role !== 'super_admin' && offer.createdByUserId === user.sub", "token = randomBytes(32).toString('hex')", 'getRepository(CandidateOffer).update({ id: offer.id }, patch)', 'await recordAudit('].map(part => act.indexOf(part))
+  assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), JSON.stringify(order))
+  assert.match(service, /findOne\(\{ where: \{ id \}, lock: \{ mode: 'pessimistic_write' \} \}\)\n\s+const candidate = offer \? /, 'كل انتقال تحت قفل صف العرض')
+  assert.match(service, /status: 'SENT', tokenHash: offerTokenHash\(token\), sentAt: new Date\(\)/, 'المتخزّن بصمة الرمز')
+  assert.doesNotMatch(service, /tokenHash: token\b|linkToken: offer/, 'الرمز نفسه مابيتخزنش')
+  const answer = service.slice(service.indexOf('async publicAnswer('))
+  const answerOrder = ['this.limiter.take(', "body.answer !== 'ACCEPT' && body.answer !== 'DECLINE'", 'await this.byToken(em, rawToken, true)', "tokenHash: null, respondedAt: new Date(), respondedVia: 'LINK'"].map(part => answer.indexOf(part))
+  assert.ok(answerOrder.every((at, index) => at > 0 && (index === 0 || at > answerOrder[index - 1])), JSON.stringify(answerOrder))
+  assert.match(service, /if \(!offer \|\| offer\.status !== 'SENT' \|\| \(offer\.expiresOn && String\(offer\.expiresOn\)\.slice\(0, 10\) < today\(\)\)\) throw new NotFoundException\(OFFER_LINK_GONE\)/)
+  const controller = read('api/src/recruitment/offers.controller.ts')
+  assert.match(controller, /@Perm\('candidates\.manage', 'candidates\.approve_offers'\)\n@Controller\('recruitment\/offers'\)/)
+  assert.match(controller, /@RequireModule\('recruitment'\)\n@RequireFeature\(PUBLIC_CAREERS_FEATURE\)\n@Controller\('careers\/offers'\)/)
+  assert.doesNotMatch(controller.slice(controller.indexOf("@Controller('careers/offers')")), /UseGuards|CurrentUser/)
 })

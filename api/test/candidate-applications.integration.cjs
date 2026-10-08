@@ -10,6 +10,9 @@
 //  CA-05) (ب) التقديم من اللينك: القيم والموافقة، والسيرة الذاتية بنوعها الحقيقي (PDF/Word بس)، والمرشح بيتعمل على الوظيفة بمصدره وموافقته
 //         وملفه؛ المكرر بياخد نفس الرد من غير صف ولا ملف؛ وظيفة مش منشورة خارجيًا = غير موجودة؛ والحد بالعنوان 429.
 //  CA-06) (ب) السيرة الذاتية بتتقري بحكم المرشح: مسؤول توظيف فرعه 200، فرع تاني 404، ومن غير الصلاحية 403.
+//  CA-11) (B3.5-أ) عرض العمل: القيم، ونطاق المرشح، وعرض مفتوح واحد، والتحذير لما الراتب برّه نطاق الوظيفة، والاعتماد بصلاحيته ولغير اللي عمله،
+//         والإرجاع بسبب، والإرسال بلينك برمز (بصمته بس المتخزّنة).
+//  CA-12) (B3.5-أ) رد المرشح: من اللينك مرة واحدة وبدليله، أو مسجّل من مسؤول التوظيف؛ والمسحوب والمنتهي والميزة المقفولة = اللينك مابيشتغلش.
 //  CA-08) (B3.4-ب) تحديد مقابلة: القيم، ونطاق المرشح والمحاورين، والبطاقات الفاضية، والدعوة (.ics) بالبريد بعد ثبوت المعاملة.
 //  CA-09) (B3.4-ب) بطاقات التقييم: المحاور بيسلّم بطاقته مرة واحدة ومابيشوفش بطاقات غيره قبل ما يسلّم؛ وبيقرا سيرة المرشح وهو محاور بس.
 //  CA-10) (B3.4-ب) قفل المقابلة وإلغاؤها وملف الدعوة.
@@ -531,4 +534,122 @@ test('CA-10: قفل المقابلة وإلغاؤها وملف الدعوة — 
   try {
     assert.deepEqual([(await request(users.recruiterA, 'GET', '/recruitment/interviews')).status, (await request(users.a1, 'GET', '/recruitment/my-interviews')).status], [404, 404])
   } finally { expectStatus(await request(users.admin, 'PUT', '/modules/recruitment', { enabled: true }), 200); modules.invalidate() }
+})
+
+const offerState = {}
+const offerDay = days => { const d = new Date(Date.now() + days * 86400000); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') }
+const makeOffer = (user, body) => request(user, 'POST', '/recruitment/offers', body)
+const actOffer = (user, id, action, extra = {}) => request(user, 'POST', '/recruitment/offers/' + id + '/act', { action, ...extra })
+
+test('CA-11: عرض العمل — القيم والنطاق، وعرض مفتوح واحد، وتحذير النطاق، والاعتماد بصلاحيته ولغير اللي عمله، والإرسال بلينك برمز', async () => {
+  const offers = require('../src/recruitment/offers.service')
+  users.approver = await account('offer-approver', ['candidates.approve_offers'])
+  users.both = await account('offer-both', ['candidates.manage', 'candidates.approve_offers'])
+  const candidate = await repo('Candidate').findOneByOrFail({ email: 'link@applicant.invalid' })
+  const foreign = await repo('Candidate').save({ fullName: 'مرشح عرض فرع ب', positionTitle: 'محاسب', branchId: org.branchB.id, stage: 'interview' })
+  const closed = await repo('Candidate').save({ fullName: 'مرشح عرض مرفوض', positionTitle: 'محاسب', branchId: org.branchA.id, stage: 'rejected' })
+  const good = { candidateId: candidate.id, salary: 9500, startDate: offerDay(30), expiresOn: offerDay(7), notes: ' عرض  مبدئي ' }
+  for (const [change, status, message] of [
+    [{ salary: 0 }, 400, offers.OFFER_SALARY], [{ salary: -5 }, 400, offers.OFFER_SALARY], [{ salary: '1.234' }, 400, offers.OFFER_SALARY], [{ salary: 'كتير' }, 400, offers.OFFER_SALARY],
+    [{ startDate: undefined }, 400, offers.OFFER_START_DATE], [{ startDate: '2026-02-31' }, 400, offers.OFFER_START_DATE], [{ expiresOn: '2020-01-01' }, 400, offers.OFFER_EXPIRY],
+    [{ notes: 'م'.repeat(1001) }, 400, 'ملاحظات العرض لا يتجاوز 1000 حرف'], [{ candidateId: foreign.id }, 404, 'المرشح غير موجود'], [{ candidateId: 987654 }, 404, 'المرشح غير موجود'],
+    [{ candidateId: closed.id }, 400, offers.OFFER_CANDIDATE_CLOSED],
+  ]) assert.deepEqual(answer(await makeOffer(users.recruiterA, { ...good, ...change })), [status, message], JSON.stringify(change).slice(0, 60))
+  assert.deepEqual(answer(await makeOffer(users.approver, good)), [403, offers.OFFER_MANAGE_FORBIDDEN], 'المعتمد مش بيعمل عروض')
+  assert.equal((await makeOffer(users.nobody, good)).status, 403)
+  assert.equal(await count('candidate_offers'), 0)
+
+  // الراتب برّه نطاق الوظيفة (7000–9000): تحذير بس
+  const made = expectStatus(await makeOffer(users.recruiterA, good), 201)
+  assert.deepEqual([made.candidateName, made.salary, made.startDate, made.expiresOn, made.notes, made.status, made.statusLabel, made.rangeFrom, made.rangeTo, made.outOfRange, made.mine, made.canApprove],
+    ['متقدّم من اللينك', '9500.00', good.startDate, good.expiresOn, 'عرض  مبدئي', 'DRAFT', 'مسودة', '7000.00', '9000.00', true, true, false])
+  assert.deepEqual(answer(await makeOffer(users.recruiterA, good)), [409, offers.OFFER_ALREADY_OPEN])
+  const edited = expectStatus(await request(users.recruiterA, 'PATCH', '/recruitment/offers/' + made.id, { salary: '8500' }), 200)
+  assert.deepEqual([edited.salary, edited.outOfRange, edited.startDate], ['8500.00', false, good.startDate], 'الخانة المبعوتة بس')
+  assert.deepEqual(answer(await request(users.recruiterB, 'PATCH', '/recruitment/offers/' + made.id, { salary: 1 })), [404, offers.OFFER_NOT_FOUND])
+  assert.deepEqual(answer(await request(users.approver, 'PATCH', '/recruitment/offers/' + made.id, { salary: 1 })), [403, offers.OFFER_MANAGE_FORBIDDEN])
+
+  // الاعتماد: مسودة مابتتعتمدش؛ بعد الطلب: مسؤول التوظيف من غير الصلاحية 403، والمعتمد بيرجّع بسبب أو يعتمد
+  assert.equal((await actOffer(users.approver, made.id, 'approve')).status, 400)
+  assert.equal(expectStatus(await actOffer(users.recruiterA, made.id, 'submit'), 200).status, 'PENDING')
+  assert.equal((await request(users.recruiterA, 'PATCH', '/recruitment/offers/' + made.id, { salary: 9000 })).status, 400, 'مش مسودة')
+  assert.deepEqual(answer(await actOffer(users.recruiterA, made.id, 'approve')), [403, offers.OFFER_APPROVE_FORBIDDEN])
+  assert.deepEqual(answer(await actOffer(users.approver, made.id, 'submit')), [403, offers.OFFER_MANAGE_FORBIDDEN])
+  const inbox = expectStatus(await request(users.approver, 'GET', '/recruitment/offers'), 200)
+  assert.deepEqual([inbox.canApprove, inbox.offers.map(item => [item.id, item.canApprove])], [true, [[made.id, true]]])
+  assert.equal((await actOffer(users.approver, made.id, 'return')).status, 400, 'الإرجاع بسبب')
+  const back = expectStatus(await actOffer(users.approver, made.id, 'return', { reason: 'الراتب محتاج مراجعة' }), 200)
+  assert.deepEqual([back.status, back.returnReason], ['DRAFT', 'الراتب محتاج مراجعة'])
+  expectStatus(await actOffer(users.recruiterA, made.id, 'submit'), 200)
+  const approved = expectStatus(await actOffer(users.approver, made.id, 'approve'), 200)
+  assert.deepEqual([approved.status, approved.returnReason, (await repo('CandidateOffer').findOneByOrFail({ id: made.id })).approvedByUserId], ['APPROVED', null, users.approver.id])
+  // اللي عمل العرض مايعتمدوش حتى لو معاه الصلاحيتين؛ ومدير النظام بيعتمد
+  const second = await repo('Candidate').save({ fullName: 'مرشح عرض تاني', positionTitle: 'محاسب', branchId: org.branchA.id, stage: 'interview', email: 'offer2@applicant.invalid' })
+  const own = expectStatus(await makeOffer(users.both, { candidateId: second.id, salary: 6000, startDate: offerDay(20) }), 201)
+  assert.deepEqual([own.rangeFrom, own.outOfRange, own.expiresOn], [null, false, null], 'مرشح من غير وظيفة: من غير نطاق')
+  expectStatus(await actOffer(users.both, own.id, 'submit'), 200)
+  assert.deepEqual(answer(await actOffer(users.both, own.id, 'approve')), [403, offers.OFFER_SELF_APPROVAL])
+  assert.equal(expectStatus(await actOffer(users.admin, own.id, 'approve'), 200).status, 'APPROVED')
+
+  // الإرسال: رمز لينك مرة واحدة، والمتخزّن بصمته بس
+  assert.equal((await actOffer(users.approver, made.id, 'send')).status, 403, 'الإرسال لمسؤول التوظيف')
+  const sent = expectStatus(await actOffer(users.recruiterA, made.id, 'send'), 200)
+  const stored = await repo('CandidateOffer').findOneByOrFail({ id: made.id })
+  assert.deepEqual([sent.status, /^[a-f0-9]{64}$/.test(sent.linkToken), stored.tokenHash === offers.offerTokenHash(sent.linkToken), stored.tokenHash !== sent.linkToken, stored.sentAt instanceof Date],
+    ['SENT', true, true, true, true])
+  assert.equal((await actOffer(users.recruiterA, made.id, 'send')).status, 400)
+  assert.equal('linkToken' in expectStatus(await request(users.recruiterA, 'GET', '/recruitment/offers'), 200).offers.find(item => item.id === made.id), false, 'الرمز مابيطلعش تاني')
+  assert.deepEqual(expectStatus(await request(users.recruiterB, 'GET', '/recruitment/offers'), 200).offers, [])
+  assert.equal((await actOffer(users.recruiterA, made.id, 'fly')).status, 400)
+  Object.assign(offerState, { first: made.id, token: sent.linkToken, second: own.id, secondCandidate: second.id })
+})
+
+test('CA-12: رد المرشح — من اللينك مرة واحدة وبدليله، أو مسجّل من مسؤول التوظيف؛ والمسحوب والمنتهي والميزة المقفولة = اللينك مابيشتغلش', async () => {
+  const offers = require('../src/recruitment/offers.service')
+  app.get(offers.OffersService).limiter.reset()
+  const view = token => request(null, 'GET', '/careers/offers/' + token)
+  const reply = (token, body) => request(null, 'POST', '/careers/offers/' + token, body)
+  const shown = expectStatus(await view(offerState.token), 200)
+  assert.deepEqual(shown, { candidateName: 'متقدّم من اللينك', positionTitle: 'محاسب', branchName: 'فرع التقديم أ', salary: '8500.00', startDate: offerDay(30), expiresOn: offerDay(7) })
+  for (const bad of ['a'.repeat(64), 'short', offerState.token.toUpperCase(), offerState.token + 'ab']) assert.deepEqual(answer(await view(bad)), [404, offers.OFFER_LINK_GONE], bad.slice(0, 12))
+  assert.equal((await reply(offerState.token, { answer: 'MAYBE' })).status, 400)
+  assert.equal((await reply(offerState.token, { answer: 'ACCEPT', note: 'م'.repeat(501) })).status, 400)
+  // الميزة مقفولة = اللينك زي مسار مش موجود، وبترجع تشتغل لما تتفتح
+  expectStatus(await feature(false), 200); modules.invalidate()
+  try { assert.equal((await view(offerState.token)).status, 404); assert.equal((await reply(offerState.token, { answer: 'ACCEPT' })).status, 404) } finally { expectStatus(await feature(true), 200); modules.invalidate() }
+  assert.equal((await repo('CandidateOffer').findOneByOrFail({ id: offerState.first })).status, 'SENT')
+
+  const audits = async action => Number((await query('SELECT COUNT(*) AS [n] FROM [audit_log] WHERE [action] = @0', [action]))[0].n)
+  const before = await audits('RECRUITMENT_OFFER_ANSWERED')
+  assert.deepEqual(expectStatus(await reply(offerState.token, { answer: 'ACCEPT', note: ' موافق وهبدأ في الميعاد ' }), 200), { answered: true, status: 'ACCEPTED' })
+  const stored = await repo('CandidateOffer').findOneByOrFail({ id: offerState.first })
+  assert.deepEqual([stored.status, stored.respondedVia, stored.respondedNote, stored.tokenHash, stored.respondedAt instanceof Date, typeof stored.respondedIp, await audits('RECRUITMENT_OFFER_ANSWERED') - before],
+    ['ACCEPTED', 'LINK', 'موافق وهبدأ في الميعاد', null, true, 'string', 1])
+  // اللينك اتقفل بالرد: مفيش رد تاني ولا عرض
+  assert.deepEqual([answer(await view(offerState.token)), answer(await reply(offerState.token, { answer: 'DECLINE' }))], [[404, offers.OFFER_LINK_GONE], [404, offers.OFFER_LINK_GONE]])
+  assert.equal((await actOffer(users.recruiterA, offerState.first, 'withdraw')).status, 400, 'المقبول مابيتسحبش')
+  const listed = expectStatus(await request(users.recruiterA, 'GET', '/recruitment/offers'), 200).offers.find(item => item.id === offerState.first)
+  assert.deepEqual([listed.status, listed.statusLabel, listed.respondedVia, listed.respondedNote], ['ACCEPTED', 'مقبول', 'LINK', 'موافق وهبدأ في الميعاد'])
+
+  // الرد مسجّل من مسؤول التوظيف، والرمز بيموت
+  const sent = expectStatus(await actOffer(users.both, offerState.second, 'send'), 200)
+  assert.equal((await actOffer(users.approver, offerState.second, 'record', { answer: 'DECLINE' })).status, 403)
+  assert.equal((await actOffer(users.both, offerState.second, 'record', { answer: 'LATER' })).status, 400)
+  const declined = expectStatus(await actOffer(users.both, offerState.second, 'record', { answer: 'DECLINE', note: 'قبل عرض تاني' }), 200)
+  assert.deepEqual([declined.status, declined.respondedVia, declined.respondedNote, (await view(sent.linkToken)).status], ['DECLINED', 'RECRUITER', 'قبل عرض تاني', 404])
+  // بعد الرفض: عرض جديد لنفس المرشح مسموح؛ والمسحوب والمنتهي لينكهم مابيشتغلش
+  const again = expectStatus(await makeOffer(users.both, { candidateId: offerState.secondCandidate, salary: 6500, startDate: offerDay(25), expiresOn: offerDay(3) }), 201)
+  expectStatus(await actOffer(users.both, again.id, 'submit'), 200); expectStatus(await actOffer(users.admin, again.id, 'approve'), 200)
+  const live = expectStatus(await actOffer(users.both, again.id, 'send'), 200)
+  expectStatus(await view(live.linkToken), 200)
+  await repo('CandidateOffer').update({ id: again.id }, { expiresOn: offerDay(-1) })
+  assert.deepEqual([answer(await view(live.linkToken)), (await reply(live.linkToken, { answer: 'ACCEPT' })).status], [[404, offers.OFFER_LINK_GONE], 404], 'مدة الرد خلصت')
+  await repo('CandidateOffer').update({ id: again.id }, { expiresOn: offerDay(3) })
+  expectStatus(await view(live.linkToken), 200)
+  assert.equal(expectStatus(await actOffer(users.both, again.id, 'withdraw'), 200).status, 'WITHDRAWN')
+  assert.deepEqual([(await view(live.linkToken)).status, (await repo('CandidateOffer').findOneByOrFail({ id: again.id })).tokenHash], [404, null])
+  // الحد بالعنوان
+  const service = app.get(offers.OffersService), real = service.limiter
+  service.limiter = new (require('../src/recruitment/careers').AttemptLimiter)(1, 100, 60000)
+  try { assert.deepEqual([(await view('b'.repeat(64))).status, (await view('b'.repeat(64))).status], [404, 429]) } finally { service.limiter = real }
 })

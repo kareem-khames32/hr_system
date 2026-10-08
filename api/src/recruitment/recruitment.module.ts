@@ -10,6 +10,9 @@ import { AuthModule } from '../auth/auth.module'
 import { CandidateInterview, InterviewScorecard } from './interview.entities'
 import { MyInterviewsController, RecruitmentInterviewsController } from './interviews.controller'
 import { InterviewsService } from './interviews.service'
+import { CandidateOffer } from './offer.entity'
+import { OfferLinkController, RecruitmentOffersController } from './offers.controller'
+import { OffersService } from './offers.service'
 import { RecruitmentJob } from './recruitment-job.entity'
 import { RecruitmentJobsController } from './recruitment-jobs.controller'
 import { RecruitmentJobsService } from './recruitment-jobs.service'
@@ -21,10 +24,12 @@ import { RecruitmentOpeningsController } from './recruitment-openings.controller
 // B3.3-ب: صفحة الوظائف العامة والتقديم من لينك (من غير دخول، بميزة مقفولة).
 // B3.4-أ: نقل المرشح بين المراحل وسجله (candidate_stage_log).
 // B3.4-ب: المقابلات وبطاقات التقييم (AuthModule لخدمة البريد: دعوة .ics).
+// B3.5-أ: عروض العمل (candidate_offers) ولينك رد المرشح.
 @Module({
-  imports: [AuthModule, TypeOrmModule.forFeature([RecruitmentJob, CandidateApplication, CandidateStageLog, CandidateInterview, InterviewScorecard])],
-  controllers: [RecruitmentJobsController, RecruitmentOpeningsController, CareersController, RecruitmentInterviewsController, MyInterviewsController],
-  providers: [RecruitmentJobsService, CandidateApplicationsService, CareersService, CandidateStagesService, InterviewsService],
+  imports: [AuthModule, TypeOrmModule.forFeature([RecruitmentJob, CandidateApplication, CandidateStageLog, CandidateInterview, InterviewScorecard, CandidateOffer])],
+  controllers: [RecruitmentJobsController, RecruitmentOpeningsController, CareersController, RecruitmentInterviewsController, MyInterviewsController, RecruitmentOffersController,
+    OfferLinkController],
+  providers: [RecruitmentJobsService, CandidateApplicationsService, CareersService, CandidateStagesService, InterviewsService, OffersService],
   exports: [RecruitmentJobsService, CandidateApplicationsService, CandidateStagesService],
 })
 export class RecruitmentModule {}

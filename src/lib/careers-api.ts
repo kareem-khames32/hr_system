@@ -32,6 +32,21 @@ async function read<T>(path: string): Promise<T> {
 export const fetchPublicJobs = () => read<{ jobs: PublicJob[] }>('/careers/jobs')
 export const fetchPublicJob = (id: number) => read<PublicJob>(`/careers/jobs/${id}`)
 
+// B3.5-أ: لينك رد المرشح على عرض العمل (الرمز في اللينك هو الحق)
+export interface PublicOffer { candidateName: string; positionTitle: string; branchName: string | null; salary: string; startDate: string | null; expiresOn: string | null }
+export const fetchPublicOffer = (token: string) => read<PublicOffer>(`/careers/offers/${encodeURIComponent(token)}`)
+export async function answerPublicOffer(token: string, answer: 'ACCEPT' | 'DECLINE', note?: string): Promise<void> {
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE}/careers/offers/${encodeURIComponent(token)}`, { credentials: 'omit', method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answer, ...(note ? { note } : {}) }) })
+  } catch {
+    throw new Error('تعذر الاتصال بالخادم — حاول تاني بعد شوية')
+  }
+  if (response.status === 404) throw new CareersUnavailable()
+  if (!response.ok) throw new Error(await messageOf(response, 'تعذر تسجيل الرد'))
+}
+
 /** التقديم: نموذج متعدد الأجزاء (السيرة الذاتية اختيارية)، والموافقة صريحة */
 export async function applyToPublicJob(id: number, application: PublicApplication): Promise<void> {
   const form = new FormData()
