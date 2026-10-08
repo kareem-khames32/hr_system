@@ -10,6 +10,9 @@
 //  CA-05) (ب) التقديم من اللينك: القيم والموافقة، والسيرة الذاتية بنوعها الحقيقي (PDF/Word بس)، والمرشح بيتعمل على الوظيفة بمصدره وموافقته
 //         وملفه؛ المكرر بياخد نفس الرد من غير صف ولا ملف؛ وظيفة مش منشورة خارجيًا = غير موجودة؛ والحد بالعنوان 429.
 //  CA-06) (ب) السيرة الذاتية بتتقري بحكم المرشح: مسؤول توظيف فرعه 200، فرع تاني 404، ومن غير الصلاحية 403.
+//  CA-08) (B3.4-ب) تحديد مقابلة: القيم، ونطاق المرشح والمحاورين، والبطاقات الفاضية، والدعوة (.ics) بالبريد بعد ثبوت المعاملة.
+//  CA-09) (B3.4-ب) بطاقات التقييم: المحاور بيسلّم بطاقته مرة واحدة ومابيشوفش بطاقات غيره قبل ما يسلّم؛ وبيقرا سيرة المرشح وهو محاور بس.
+//  CA-10) (B3.4-ب) قفل المقابلة وإلغاؤها وملف الدعوة.
 //  CA-07) (B3.4-أ) نقل المراحل: كل نقل سطر في السجل (من، لـ، السبب، مين)، ونفس المرحلة من غير سطر؛ النقل الجماعي كلهم أو ولا واحد (مرشح برّه
 //         النطاق أو مُعيَّن بيوقف الكل)؛ السجل بنطاق المرشح واسم اللي نقل بنطاق القارئ؛ والتعديل بيكتب الخانات المبعوتة بس.
 // Run (من api/): node --test test/candidate-applications.integration.cjs
@@ -394,4 +397,138 @@ test('CA-07: نقل المراحل — كل نقل سطر في السجل، وا
   assert.deepEqual(expectStatus(await request(users.recruiterA, 'GET', '/candidates/' + three.id + '/history'), 200).lines.length, 1)
   // المُعيَّن مابيتنقلش من التعديل برضه
   assert.deepEqual(answer(await patchOne(users.recruiterA, hired, { stage: 'rejected' })), [400, stages.CANDIDATE_HIRED])
+})
+
+const interviewState = {}
+const tomorrow = (hour = 10) => { const d = new Date(Date.now() + 86400000); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') + 'T' + String(hour).padStart(2, '0') + ':30' }
+const scheduleInterview = (user, body) => request(user, 'POST', '/recruitment/interviews', body)
+// بريد الاختبار: الإرسال متبدّل على النسخة نفسها (ولا رسالة حقيقية)، وبيتجمّع هنا
+async function withMail(work) {
+  const mail = app.get(require('../src/auth/mail.service').MailService), old = { configured: mail.isConfigured, send: mail.send }, sent = []
+  assert.notEqual(mail.send, require('../src/auth/mail.service').MailService.prototype.send)
+  mail.isConfigured = () => true
+  mail.send = async message => { sent.push(message); if (String(message.to).startsWith('bounce')) throw new Error('fake bounce'); return { accepted: [message.to], rejected: [] } }
+  try { return await work(sent) } finally { mail.isConfigured = old.configured; mail.send = old.send }
+}
+
+test('CA-08: تحديد مقابلة — القيم، ونطاق المرشح والمحاورين، والبطاقات الفاضية، والدعوة بالبريد', async () => {
+  const rules = require('../src/recruitment/interview-rules')
+  const candidate = await repo('Candidate').findOneByOrFail({ email: 'link@applicant.invalid' })
+  const foreign = await repo('Candidate').save({ fullName: 'مرشح مقابلة فرع ب', positionTitle: 'محاسب', branchId: org.branchB.id, stage: 'applied' })
+  const rejected = await repo('Candidate').save({ fullName: 'مرشح مرفوض', positionTitle: 'محاسب', branchId: org.branchA.id, stage: 'rejected' })
+  const good = { candidateId: candidate.id, scheduledAt: tomorrow(), durationMinutes: 45, mode: 'VIDEO', location: ' https://meet.invalid/room ', notes: 'مقابلة أولى', interviewerEmployeeIds: [emps.a2.id, emps.a1.id] }
+  const before = [await count('candidate_interviews'), await count('interview_scorecards')]
+  for (const [change, status, message] of [
+    [{ scheduledAt: '2020-01-01T10:00' }, 400, rules.INTERVIEW_TIME], [{ scheduledAt: 'بكرة' }, 400, rules.INTERVIEW_TIME], [{ scheduledAt: tomorrow().slice(0, 8) + '32T10:00' }, 400, rules.INTERVIEW_TIME],
+    [{ durationMinutes: 10 }, 400, rules.INTERVIEW_DURATION], [{ durationMinutes: '45' }, 400, rules.INTERVIEW_DURATION], [{ mode: 'ZOOM' }, 400, rules.INTERVIEW_MODE],
+    [{ interviewerEmployeeIds: [] }, 400, rules.INTERVIEW_PANEL], [{ interviewerEmployeeIds: [emps.a1.id, emps.a1.id] }, 400, rules.INTERVIEW_PANEL],
+    [{ interviewerEmployeeIds: [emps.a1.id, emps.b1.id] }, 400, rules.INTERVIEW_PANEL_MEMBER], [{ interviewerEmployeeIds: [emps.gone.id] }, 400, rules.INTERVIEW_PANEL_MEMBER],
+    [{ interviewerEmployeeIds: [987654] }, 400, rules.INTERVIEW_PANEL_MEMBER], [{ location: 'م'.repeat(301) }, 400, 'مكان المقابلة لا يتجاوز 300 حرف'],
+    [{ candidateId: foreign.id }, 404, 'المرشح غير موجود'], [{ candidateId: 987654 }, 404, 'المرشح غير موجود'], [{ candidateId: rejected.id }, 400, rules.INTERVIEW_CANDIDATE_CLOSED],
+  ]) assert.deepEqual(answer(await scheduleInterview(users.recruiterA, { ...good, ...change })), [status, message], JSON.stringify(change).slice(0, 70))
+  assert.equal((await scheduleInterview(users.nobody, good)).status, 403)
+  assert.deepEqual([await count('candidate_interviews'), await count('interview_scorecards')], before, 'المرفوض ماعملش مقابلة')
+
+  // المقبول: المقابلة وبطاقتين فاضيين، والدعوة بعد ثبوت المعاملة (محاور ببريد عمل + المرشح؛ والمحاور اللي من غير بريد عمل من غير رسالة)
+  const made = await withMail(async sent => {
+    const body = expectStatus(await scheduleInterview(users.recruiterA, good), 201)
+    assert.deepEqual(sent.map(message => message.to).sort(), ['a1@work.invalid', 'link@applicant.invalid'])
+    assert.equal(body.invited, 2)
+    const [attachment] = sent[0].attachments
+    const ics = attachment.content.toString('utf8')
+    assert.deepEqual([attachment.filename, /^text\/calendar/.test(attachment.contentType), ics.startsWith('BEGIN:VCALENDAR\r\n'), ics.includes('UID:interview-' + body.id + '@hr-system'),
+      ics.includes('DTSTART:' + good.scheduledAt.replace(/[-:]/g, '') + '00'), ics.includes('METHOD:PUBLISH'), ics.endsWith('END:VCALENDAR\r\n')], ['interview.ics', true, true, true, true, true, true])
+    assert.match(sent.find(message => message.to === 'link@applicant.invalid').text, /اتحدد لك موعد مقابلة/)
+    assert.doesNotMatch(sent.find(message => message.to === 'link@applicant.invalid').text, /موظف التقديم/, 'رسالة المرشح مافيهاش أسماء المحاورين')
+    return body
+  })
+  interviewState.first = made
+  assert.deepEqual([made.candidateName, made.positionTitle, made.scheduledAt, made.durationMinutes, made.mode, made.modeLabel, made.location, made.status, made.statusLabel, made.cvFileId !== null],
+    ['متقدّم من اللينك', 'محاسب', good.scheduledAt, 45, 'VIDEO', 'فيديو', 'https://meet.invalid/room', 'SCHEDULED', 'محددة', true])
+  assert.deepEqual(made.scorecards.map(card => [card.interviewerName, card.submitted, card.rating, card.notes]), [[emps.a1.fullName, false, null, null], [emps.a2.fullName, false, null, null]])
+  // بريد واقع لمستلم مابيرجّعش المقابلة
+  await repo('Candidate').update({ id: candidate.id }, { email: 'bounce@applicant.invalid' })
+  try {
+    const second = await withMail(async () => expectStatus(await scheduleInterview(users.recruiterA, { ...good, scheduledAt: tomorrow(13), interviewerEmployeeIds: [emps.a1.id] }), 201))
+    assert.equal(second.invited, 1); interviewState.second = second
+  } finally { await repo('Candidate').update({ id: candidate.id }, { email: 'link@applicant.invalid' }) }
+  // من غير بريد مضبوط: المقابلة بتتحدد ومن غير دعوات
+  const quiet = expectStatus(await scheduleInterview(users.recruiterA, { ...good, scheduledAt: tomorrow(15), mode: 'ONSITE', location: undefined, notes: undefined, interviewerEmployeeIds: [emps.a2.id] }), 201)
+  assert.deepEqual([quiet.invited, quiet.location, quiet.notes], [0, null, null]); interviewState.third = quiet
+
+  // القايمة: مسؤول فرع المرشح بس، والنموذج بمرشحين ومحاورين نطاقه
+  const listed = expectStatus(await request(users.recruiterA, 'GET', '/recruitment/interviews'), 200)
+  assert.deepEqual([listed.available, listed.interviews.map(item => item.id).sort((a, b) => a - b)], [true, [made.id, interviewState.second.id, quiet.id]])
+  assert.deepEqual(expectStatus(await request(users.recruiterB, 'GET', '/recruitment/interviews'), 200).interviews, [])
+  assert.equal((await request(users.nobody, 'GET', '/recruitment/interviews')).status, 403)
+  const form = expectStatus(await request(users.recruiterA, 'GET', '/recruitment/interviews/form'), 200)
+  assert.deepEqual([form.candidates.some(item => item.id === candidate.id), form.candidates.some(item => item.id === foreign.id || item.id === rejected.id),
+    form.interviewers.some(item => item.id === emps.a1.id), form.interviewers.some(item => item.id === emps.b1.id || item.id === emps.gone.id)], [true, false, true, false])
+})
+
+test('CA-09: بطاقات التقييم — المحاور بيسلّم مرة واحدة ومابيشوفش بطاقات غيره قبل ما يسلّم، وبيقرا سيرة المرشح وهو محاور بس', async () => {
+  const rules = require('../src/recruitment/interview-rules')
+  const first = interviewState.first.id
+  const mine = async user => expectStatus(await request(user, 'GET', '/recruitment/my-interviews'), 200)
+  const submit = (user, id, body) => request(user, 'POST', '/recruitment/my-interviews/' + id + '/scorecard', body)
+  const cardOf = (view, own) => view.scorecards.find(card => card.mine === own)
+  const a1 = await mine(users.a1)
+  assert.deepEqual([a1.available, a1.interviews.map(item => item.id).sort((x, y) => x - y)], [true, [first, interviewState.second.id]])
+  const shown = a1.interviews.find(item => item.id === first)
+  assert.deepEqual([shown.candidateName, shown.positionTitle, cardOf(shown, true).submitted, cardOf(shown, false).interviewerName, cardOf(shown, false).submitted], ['متقدّم من اللينك', 'محاسب', false, emps.a2.fullName, false])
+  assert.deepEqual([(await mine(users.b1)).interviews, (await mine(users.nobody)).available, (await mine(users.recruiterA)).interviews], [[], false, []])
+  // المحاور بيقرا سيرة المرشح اللي هيقابله (كان 403 قبل ما يبقى محاور — CA-06)
+  const readCv = async user => (await fetch(base + '/files/' + shown.cvFileId, { headers: { Authorization: 'Bearer ' + jwt.sign(payloadOf(user)) } })).status
+  assert.deepEqual([await readCv(users.a1), await readCv(users.a2), await readCv(users.b1), await readCv(users.nobody)], [200, 200, 403, 403])
+
+  for (const [body, message] of [[{ rating: 6, recommendation: 'YES' }, rules.SCORECARD_RATING], [{ rating: '4', recommendation: 'YES' }, rules.SCORECARD_RATING], [{ rating: 4 }, rules.SCORECARD_RECOMMENDATION],
+    [{ rating: 4, recommendation: 'GOOD' }, rules.SCORECARD_RECOMMENDATION], [{ rating: 4, recommendation: 'YES', notes: 'م'.repeat(2001) }, 'ملاحظات البطاقة لا يتجاوز 2000 حرف']]) {
+    assert.deepEqual(answer(await submit(users.a1, first, body)), [400, message], JSON.stringify(body).slice(0, 60))
+  }
+  assert.deepEqual(answer(await submit(users.b1, first, { rating: 3, recommendation: 'NO' })), [404, rules.INTERVIEW_NOT_FOUND], 'مش محاور في المقابلة')
+  assert.equal((await submit(users.nobody, first, { rating: 3, recommendation: 'NO' })).status, 403)
+  assert.equal((await submit(users.recruiterA, first, { rating: 3, recommendation: 'NO' })).status, 403, 'مسؤول التوظيف من غير ملف موظف مايسلّمش بطاقة')
+  // a1 بيسلّم: بيشوف بطاقته، ولسه مايشوفش محتوى بطاقة a2 (ماسلّمش)؛ وa2 قبل ما يسلّم مايشوفش محتوى بطاقة a1
+  const done = expectStatus(await submit(users.a1, first, { rating: 4, recommendation: 'YES', notes: '  خبرة مناسبة\r\nومهارات كويسة ' }), 200)
+  assert.deepEqual([cardOf(done, true).rating, cardOf(done, true).recommendationLabel, cardOf(done, true).notes, cardOf(done, false).submitted, cardOf(done, false).rating], [4, 'مناسب', 'خبرة مناسبة\nومهارات كويسة', false, null])
+  assert.deepEqual(answer(await submit(users.a1, first, { rating: 1, recommendation: 'NO' })), [409, rules.SCORECARD_SUBMITTED])
+  const blind = (await mine(users.a2)).interviews.find(item => item.id === first)
+  assert.deepEqual([cardOf(blind, false).submitted, cardOf(blind, false).rating, cardOf(blind, false).recommendation, cardOf(blind, false).notes], [true, null, null, null], 'قبل ما يسلّم: عارف إن زميله سلّم بس')
+  const open = expectStatus(await submit(users.a2, first, { rating: 2, recommendation: 'MAYBE' }), 200)
+  assert.deepEqual([cardOf(open, false).rating, cardOf(open, false).recommendation, cardOf(open, false).notes, cardOf(open, true).rating], [4, 'YES', 'خبرة مناسبة\nومهارات كويسة', 2], 'بعد ما سلّم: شايف بطاقة زميله')
+  // مسؤول التوظيف شايف البطاقتين، وبطاقة مقابلة تانية لسه ماتسلّمتش فاضية عنده
+  const board = expectStatus(await request(users.recruiterA, 'GET', '/recruitment/interviews'), 200).interviews
+  assert.deepEqual(board.find(item => item.id === first).scorecards.map(card => [card.rating, card.recommendation]), [[4, 'YES'], [2, 'MAYBE']])
+  assert.deepEqual(board.find(item => item.id === interviewState.second.id).scorecards.map(card => [card.submitted, card.rating]), [[false, null]])
+  const stored = await repo('InterviewScorecard').find({ where: { interviewId: first }, order: { id: 'ASC' } })
+  assert.deepEqual(stored.map(card => [card.rating, card.submittedAt instanceof Date]), [[4, true], [2, true]])
+})
+
+test('CA-10: قفل المقابلة وإلغاؤها وملف الدعوة — من «محددة» بس، والملغاة بتختفي من «مقابلاتي» وبطاقتها مابتتسلّمش', async () => {
+  const rules = require('../src/recruitment/interview-rules')
+  const close = (user, id, status) => request(user, 'POST', '/recruitment/interviews/' + id + '/status', { status })
+  const first = interviewState.first.id, second = interviewState.second.id, third = interviewState.third.id
+  assert.deepEqual(answer(await close(users.recruiterA, first, 'OPEN')), [400, 'الحالة: DONE أو CANCELLED'])
+  assert.deepEqual(answer(await close(users.recruiterB, first, 'DONE')), [404, rules.INTERVIEW_NOT_FOUND])
+  assert.equal((await close(users.a1, first, 'DONE')).status, 403)
+  assert.deepEqual([expectStatus(await close(users.recruiterA, first, 'DONE'), 200).statusLabel, answer(await close(users.recruiterA, first, 'CANCELLED'))], ['تمّت', [400, rules.INTERVIEW_NOT_OPEN]])
+  // الإلغاء بيبعت دعوة إلغاء، وبيقفل بطاقة المحاور وقراءته لسيرة المرشح من المقابلة دي
+  await withMail(async sent => {
+    assert.equal(expectStatus(await close(users.recruiterA, second, 'CANCELLED'), 200).status, 'CANCELLED')
+    assert.deepEqual([sent.map(message => message.to).sort(), /^إلغاء مقابلة/.test(sent[0].subject), sent[0].attachments[0].content.toString('utf8').includes('METHOD:CANCEL')],
+      [['a1@work.invalid', 'link@applicant.invalid'], true, true])
+  })
+  assert.deepEqual((await request(users.a1, 'GET', '/recruitment/my-interviews')).body.interviews.map(item => item.id), [first], 'الملغاة مش في مقابلاتي')
+  assert.deepEqual(answer(await request(users.a1, 'POST', '/recruitment/my-interviews/' + second + '/scorecard', { rating: 3, recommendation: 'NO' })), [400, rules.SCORECARD_CANCELLED])
+  // ملف الدعوة: مسؤول التوظيف في نطاق المرشح، والمحاور في المقابلة — وغيرهم غير موجودة
+  const ics = async (user, id) => { const response = await fetch(base + '/recruitment/my-interviews/' + id + '/ics', { headers: { Authorization: 'Bearer ' + jwt.sign(payloadOf(user)) } }); return [response.status, response.headers.get('content-type'), await response.text()] }
+  const [status, type, text] = await ics(users.recruiterA, third)
+  assert.deepEqual([status, /^text\/calendar/.test(type), text.includes('BEGIN:VEVENT'), text.includes('UID:interview-' + third + '@hr-system')], [200, true, true, true])
+  assert.deepEqual([(await ics(users.a2, third))[0], (await ics(users.a1, third))[0], (await ics(users.recruiterB, third))[0], (await ics(users.nobody, third))[0], (await ics(users.recruiterA, 987654))[0]], [200, 404, 404, 404, 404])
+  assert.match((await ics(users.recruiterA, second))[2], /STATUS:CANCELLED/)
+  // الموديول المقفول بيقفل المسارات
+  expectStatus(await request(users.admin, 'PUT', '/modules/recruitment', { enabled: false }), 200); modules.invalidate()
+  try {
+    assert.deepEqual([(await request(users.recruiterA, 'GET', '/recruitment/interviews')).status, (await request(users.a1, 'GET', '/recruitment/my-interviews')).status], [404, 404])
+  } finally { expectStatus(await request(users.admin, 'PUT', '/modules/recruitment', { enabled: true }), 200); modules.invalidate() }
 })

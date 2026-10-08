@@ -4,6 +4,8 @@ import { Candidate } from '../assets/assets.entities'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, inBranchScope, userHasPerm } from '../auth/guards'
 import { CandidateApplication } from './candidate-application.entity'
+import { CandidateInterview, InterviewScorecard } from './interview.entities'
+import { interviewsReady } from './interview-rules'
 
 // B3.3-أ: قواعد تقديم المرشح على وظيفة — فحص وجود ترحيل 105، وتطبيع وسائل التواصل، وفحص التكرار على نفس الوظيفة. دوال بمدير المعاملة بس.
 
@@ -62,11 +64,17 @@ export function cleanSource(raw: unknown, fallback: string): string {
 /**
  * B3.3-ب: قراءة ملف سيرة ذاتية (stored_files بتصنيف candidate_cv) — بحكم المرشح نفسه: صلاحية إدارة التوظيف، والمرشح في نطاق فروع
  * الحساب. الملف لازم يكون هو ملف تقديم المرشح ده. برّه النطاق = غير موجود.
+ * B3.4-ب: والمحاور (موظف اسمه في مقابلة غير ملغاة للمرشح ده) بيقرا سيرته من غير الصلاحية.
  */
 export async function assertCandidateCvAccess(em: EntityManager, user: JwtPayload, file: { id: number; entityId?: number | null }): Promise<void> {
-  if (!userHasPerm(user, 'candidates.manage')) throw new ForbiddenException('لا تملك صلاحية الاطلاع على هذا الملف')
   const application = (await candidateApplicationsReady(em)) && file.entityId != null
     ? await em.getRepository(CandidateApplication).findOne({ where: { candidateId: file.entityId, cvFileId: file.id } }) : null
+  if (application && user.employeeId && (await interviewsReady(em))) {
+    const mine = await em.getRepository(InterviewScorecard).find({ where: { interviewerEmployeeId: user.employeeId } })
+    if (mine.length && (await em.getRepository(CandidateInterview).find({ where: { candidateId: application.candidateId } }))
+      .some((interview) => interview.status !== 'CANCELLED' && mine.some((card) => card.interviewId === interview.id))) return
+  }
+  if (!userHasPerm(user, 'candidates.manage')) throw new ForbiddenException('لا تملك صلاحية الاطلاع على هذا الملف')
   const candidate = application ? await em.getRepository(Candidate).findOne({ where: { id: application.candidateId } }) : null
   if (!candidate || candidate.branchId == null || !inBranchScope(branchScopeOf(user), candidate.branchId)) throw new NotFoundException('الملف غير موجود')
 }

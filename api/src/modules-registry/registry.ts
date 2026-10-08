@@ -267,7 +267,8 @@ export const MODULES = {
     permissions: ['candidates.manage'],
     // المتقدمين والوظائف الشاغرة (B3.2) شاشات حقيقية؛ باقي ما تحت /recruitment شاشات عرض (DEMO_ROUTES) لحد ما الموديول الكامل ينزل
     // B3.3-أ: «وظائف داخلية» في البوابة (/my/jobs). B3.3-ب: صفحة الوظائف العامة (/careers) — صفحتها من غير دخول، والخادم بيقفلها بميزتها
-    routes: ['/recruitment', '/recruitment/applicants', '/recruitment/jobs', '/my/jobs', '/careers', '/careers/*'],
+    // B3.4-ب: شاشة المقابلات بقت حقيقية (كانت شاشة عرض)، و«مقابلاتي» للمحاور في البوابة
+    routes: ['/recruitment', '/recruitment/applicants', '/recruitment/jobs', '/recruitment/interviews', '/my/jobs', '/my/interviews', '/careers', '/careers/*'],
     // B3.2-أ: طلب «احتياج توظيف» ووجهته (الاعتماد بيعمل وظيفة شاغرة مسودة)
     requestTypes: ['RECRUITMENT_REQUISITION'],
     requestHandlers: ['recruitment_requisition'],
@@ -342,7 +343,7 @@ export const isFeatureKey = (value: unknown): value is string => typeof value ==
  * النجمة = جزء واحد من المسار (رقم سجل)، والمسارات الثابتة تحت نفس الأب بتكسب عليها.
  */
 export const DEMO_SCREENS_FEATURE = 'platform.demo_screens'
-export const DEMO_ROUTES = ['/performance', '/training', '/recruitment/add', '/recruitment/interviews', '/recruitment/offers', '/recruitment/*', '/reports/custom']
+export const DEMO_ROUTES = ['/performance', '/training', '/recruitment/add', '/recruitment/offers', '/recruitment/*', '/reports/custom']
 
 const segmentsOf = (path: string) => path.split('?')[0].split('#')[0].split('/').filter(Boolean)
 

@@ -1,376 +1,276 @@
 'use client'
 
-import { useState } from 'react'
+// B3.4-ب: «المقابلات» — مسؤول التوظيف بيحدد مقابلة لمرشح بمحاوريها، وبيشوف بطاقات التقييم المسلّمة، وبيقفلها (تمّت) أو يلغيها.
+// (كانت شاشة عرض ببيانات وهمية؛ بقت على الخادم.)
+import { useCallback, useEffect, useState } from 'react'
+import { Calendar, Plus, Star, X } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import EmptyState from '@/components/EmptyState'
+import { fetchFileObjectUrl } from '@/lib/api'
 import {
-  Search,
-  Plus,
-  Calendar,
-  Clock,
-  MapPin,
-  Video,
-  User,
-  Users,
-  CheckCircle2,
-  XCircle,
-  AlertCircle,
-  Edit2,
-  MessageSquare,
-  Phone,
-} from 'lucide-react'
-import { formatDate } from '@/lib/dates'
+  INTERVIEW_MODE_LABELS, closeInterview, fetchInterviewForm, fetchInterviews, interviewWhen, scheduleInterview,
+  type ApiInterview, type ApiInterviewForm, type ApiInterviewsList, type InterviewMode, type InterviewStatus,
+} from '@/lib/interviews-api'
 
-interface Interview {
-  id: string
-  candidateName: string
-  candidateAvatar: string
-  position: string
-  date: string
-  time: string
-  duration: string
-  type: 'onsite' | 'video' | 'phone'
-  location: string
-  interviewers: string[]
-  status: 'scheduled' | 'completed' | 'cancelled' | 'no-show'
-  stage: 'screening' | 'technical' | 'hr' | 'final'
-  notes?: string
-}
-
-const interviews: Interview[] = [
-  {
-    id: '1',
-    candidateName: 'عبدالله محمد السعيد',
-    candidateAvatar: 'ع',
-    position: 'مطور واجهات أمامية Senior',
-    date: '2024-01-28',
-    time: '10:00',
-    duration: '1 ساعة',
-    type: 'video',
-    location: 'Microsoft Teams',
-    interviewers: ['أحمد العتيبي', 'سالم الحربي'],
-    status: 'scheduled',
-    stage: 'technical',
-  },
-  {
-    id: '2',
-    candidateName: 'سارة أحمد العتيبي',
-    candidateAvatar: 'س',
-    position: 'مصمم UI/UX',
-    date: '2024-01-28',
-    time: '14:00',
-    duration: '45 دقيقة',
-    type: 'onsite',
-    location: 'غرفة الاجتماعات A',
-    interviewers: ['نورة الدوسري'],
-    status: 'scheduled',
-    stage: 'hr',
-  },
-  {
-    id: '3',
-    candidateName: 'محمد خالد الحربي',
-    candidateAvatar: 'م',
-    position: 'مدير مشاريع',
-    date: '2024-01-27',
-    time: '11:00',
-    duration: '1 ساعة',
-    type: 'onsite',
-    location: 'غرفة الاجتماعات B',
-    interviewers: ['أحمد محمد', 'سارة الخالدي'],
-    status: 'completed',
-    stage: 'final',
-    notes: 'مرشح ممتاز، يُنصح بتقديم عرض',
-  },
-  {
-    id: '4',
-    candidateName: 'فهد عبدالرحمن',
-    candidateAvatar: 'ف',
-    position: 'مطور واجهات أمامية Senior',
-    date: '2024-01-26',
-    time: '15:00',
-    duration: '1 ساعة',
-    type: 'phone',
-    location: 'مكالمة هاتفية',
-    interviewers: ['أحمد العتيبي'],
-    status: 'cancelled',
-    stage: 'screening',
-  },
-  {
-    id: '5',
-    candidateName: 'ريم محمد الشمري',
-    candidateAvatar: 'ر',
-    position: 'مصمم UI/UX',
-    date: '2024-01-25',
-    time: '10:00',
-    duration: '1 ساعة',
-    type: 'video',
-    location: 'Zoom',
-    interviewers: ['نورة الدوسري', 'أحمد محمد'],
-    status: 'no-show',
-    stage: 'technical',
-  },
-]
-
-const statusLabels = {
-  scheduled: 'مجدولة',
-  completed: 'مكتملة',
-  cancelled: 'ملغاة',
-  'no-show': 'لم يحضر',
-}
-
-const statusColors = {
-  scheduled: 'bg-blue-100 text-blue-700',
-  completed: 'bg-success-50 text-success-700',
-  cancelled: 'bg-gray-100 text-gray-700',
-  'no-show': 'bg-red-100 text-red-700',
-}
-
-const stageLabels = {
-  screening: 'فرز أولي',
-  technical: 'مقابلة تقنية',
-  hr: 'مقابلة HR',
-  final: 'مقابلة نهائية',
-}
-
-const stageColors = {
-  screening: 'bg-gray-100 text-gray-700',
-  technical: 'bg-purple-100 text-purple-700',
-  hr: 'bg-blue-100 text-blue-700',
-  final: 'bg-primary-100 text-primary-700',
-}
-
-const typeIcons = {
-  onsite: MapPin,
-  video: Video,
-  phone: Phone,
-}
+const statusStyle: Record<InterviewStatus, string> = { SCHEDULED: 'bg-blue-50 text-blue-700', DONE: 'bg-green-50 text-green-700', CANCELLED: 'bg-gray-100 text-gray-600' }
 
 export default function InterviewsPage() {
-  const [searchTerm, setSearchTerm] = useState('')
-  const [filterStatus, setFilterStatus] = useState('all')
-  const [selectedDate, setSelectedDate] = useState('')
+  const [data, setData] = useState<ApiInterviewsList | null>(null)
+  const [form, setForm] = useState<ApiInterviewForm | null>(null)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [adding, setAdding] = useState(false)
+  const [busy, setBusy] = useState(0)
 
-  const filteredInterviews = interviews.filter((interview) => {
-    const matchesSearch =
-      interview.candidateName.includes(searchTerm) ||
-      interview.position.includes(searchTerm)
-    const matchesStatus = filterStatus === 'all' || interview.status === filterStatus
-    const matchesDate = !selectedDate || interview.date === selectedDate
-    return matchesSearch && matchesStatus && matchesDate
-  })
+  const load = useCallback(() => {
+    setError('')
+    fetchInterviews()
+      .then(setData)
+      .catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل المقابلات'))
+  }, [])
+  useEffect(load, [load])
+  useEffect(() => {
+    fetchInterviewForm().then(setForm).catch(() => setForm(null))
+  }, [])
 
-  const todayInterviews = interviews.filter(
-    (i) => i.date === '2024-01-28' && i.status === 'scheduled'
-  )
+  const close = async (interview: ApiInterview, status: 'DONE' | 'CANCELLED') => {
+    setBusy(interview.id)
+    setError('')
+    try {
+      await closeInterview(interview.id, status)
+      load()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'تعذر تغيير حالة المقابلة')
+    } finally {
+      setBusy(0)
+    }
+  }
+  const openCv = async (fileId: number) => {
+    const url = await fetchFileObjectUrl(fileId)
+    if (!url) {
+      setError('تعذر فتح السيرة الذاتية')
+      return
+    }
+    window.open(url, '_blank', 'noopener')
+    setTimeout(() => URL.revokeObjectURL(url), 60000)
+  }
 
   return (
     <MainLayout>
       <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">المقابلات</h1>
-            <p className="text-gray-500 mt-1">إدارة ومتابعة مقابلات المتقدمين</p>
+            <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
+              <Calendar size={24} className="text-primary-600" />
+              المقابلات
+            </h1>
+            <p className="text-gray-500 mt-1">مواعيد مقابلات المرشحين ومحاوريها، وبطاقات التقييم اللي اتسلّمت</p>
           </div>
-          <button className="btn-primary flex items-center gap-2">
-            <Plus size={18} />
-            جدولة مقابلة
-          </button>
+          {data?.available && (
+            <button onClick={() => setAdding(true)} disabled={!form} className="btn-primary flex items-center gap-2 disabled:opacity-50">
+              <Plus size={18} />
+              تحديد مقابلة
+            </button>
+          )}
         </div>
-
-        {/* Today's Interviews */}
-        {todayInterviews.length > 0 && (
-          <div className="card bg-gradient-to-br from-primary-500 to-primary-600 text-white">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-bold">مقابلات اليوم</h2>
-              <span className="px-3 py-1 bg-white/20 rounded-full text-sm">
-                {todayInterviews.length} مقابلات
-              </span>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              {todayInterviews.map((interview) => {
-                const TypeIcon = typeIcons[interview.type]
-                return (
-                  <div key={interview.id} className="bg-white/10 rounded-xl p-4">
-                    <div className="flex items-center gap-3 mb-2">
-                      <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center font-bold">
-                        {interview.candidateAvatar}
-                      </div>
-                      <div>
-                        <p className="font-medium">{interview.candidateName}</p>
-                        <p className="text-sm text-primary-100">{interview.position}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-4 text-sm text-primary-100">
-                      <span className="flex items-center gap-1">
-                        <Clock size={14} />
-                        {interview.time}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <TypeIcon size={14} />
-                        {interview.location}
-                      </span>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
+        {error && (
+          <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-4">
+            {error}
           </div>
         )}
-
-        {/* Stats */}
-        <div className="grid grid-cols-4 gap-4">
-          <div className="card flex items-center gap-4">
-            <div className="w-12 h-12 bg-blue-100 rounded-2xl flex items-center justify-center">
-              <Calendar size={24} className="text-blue-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-500">مجدولة</p>
-              <p className="text-2xl font-bold text-gray-800">
-                {interviews.filter((i) => i.status === 'scheduled').length}
-              </p>
-            </div>
+        {notice && (
+          <div role="status" className="bg-green-50 text-green-800 rounded-xl p-4">
+            {notice}
           </div>
-          <div className="card flex items-center gap-4">
-            <div className="w-12 h-12 bg-success-50 rounded-2xl flex items-center justify-center">
-              <CheckCircle2 size={24} className="text-success-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-500">مكتملة</p>
-              <p className="text-2xl font-bold text-gray-800">
-                {interviews.filter((i) => i.status === 'completed').length}
-              </p>
-            </div>
+        )}
+        {data && !data.available && (
+          <div role="status" className="bg-amber-50 text-amber-800 rounded-xl p-4">
+            {data.message}
           </div>
-          <div className="card flex items-center gap-4">
-            <div className="w-12 h-12 bg-gray-100 rounded-2xl flex items-center justify-center">
-              <XCircle size={24} className="text-gray-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-500">ملغاة</p>
-              <p className="text-2xl font-bold text-gray-800">
-                {interviews.filter((i) => i.status === 'cancelled').length}
-              </p>
-            </div>
-          </div>
-          <div className="card flex items-center gap-4">
-            <div className="w-12 h-12 bg-red-100 rounded-2xl flex items-center justify-center">
-              <AlertCircle size={24} className="text-red-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-500">لم يحضر</p>
-              <p className="text-2xl font-bold text-gray-800">
-                {interviews.filter((i) => i.status === 'no-show').length}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Filters */}
-        <div className="card">
-          <div className="flex items-center gap-4">
-            <div className="relative flex-1">
-              <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input
-                type="text"
-                placeholder="بحث عن متقدم أو وظيفة..."
-                className="input pr-10 w-full"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </div>
-            <input
-              type="date"
-              className="input w-44"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-            />
-            <select
-              value={filterStatus}
-              onChange={(e) => setFilterStatus(e.target.value)}
-              className="input w-40"
-            >
-              <option value="all">كل الحالات</option>
-              <option value="scheduled">مجدولة</option>
-              <option value="completed">مكتملة</option>
-              <option value="cancelled">ملغاة</option>
-              <option value="no-show">لم يحضر</option>
-            </select>
-          </div>
-        </div>
-
-        {filteredInterviews.length === 0 && <EmptyState title="لا توجد مقابلات مطابقة للبحث أو الفلاتر" />}
-
-        {/* Interviews List */}
-        <div className="space-y-4">
-          {filteredInterviews.map((interview) => {
-            const TypeIcon = typeIcons[interview.type]
-            return (
-              <div key={interview.id} className="card hover:shadow-lg transition-shadow">
-                <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 bg-gradient-to-br from-primary-500 to-primary-600 rounded-2xl flex items-center justify-center text-white font-bold text-xl">
-                    {interview.candidateAvatar}
+        )}
+        {data?.available && data.interviews.length === 0 && <EmptyState title="مفيش مقابلات محددة لسه" icon={Calendar} />}
+        {data?.available && data.interviews.length > 0 && (
+          <div className="grid gap-4" data-interviews>
+            {data.interviews.map((interview) => (
+              <div key={interview.id} className="card space-y-3">
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div>
+                    <h2 className="text-lg font-bold text-gray-800">{interview.candidateName}</h2>
+                    <p className="text-sm text-gray-500 mt-1">
+                      {interview.positionTitle ?? '—'} · <span dir="ltr">{interviewWhen(interview.scheduledAt)}</span> · {interview.durationMinutes} دقيقة · {interview.modeLabel}
+                      {interview.location ? ` · ${interview.location}` : ''}
+                    </p>
+                    {interview.notes && <p className="text-sm text-gray-600 mt-1 whitespace-pre-line">{interview.notes}</p>}
                   </div>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <h3 className="font-bold text-gray-800">{interview.candidateName}</h3>
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${stageColors[interview.stage]}`}>
-                        {stageLabels[interview.stage]}
-                      </span>
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusColors[interview.status]}`}>
-                        {statusLabels[interview.status]}
-                      </span>
-                    </div>
-                    <p className="text-sm text-primary-600 mb-2">{interview.position}</p>
-                    <div className="flex items-center gap-4 text-sm text-gray-500">
-                      <span className="flex items-center gap-1">
-                        <Calendar size={14} />
-                        {formatDate(interview.date)}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <Clock size={14} />
-                        {interview.time} ({interview.duration})
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <TypeIcon size={14} />
-                        {interview.location}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="text-left">
-                    <p className="text-sm text-gray-500 mb-1">المقابلون</p>
-                    <div className="flex items-center gap-1">
-                      {interview.interviewers.map((name, i) => (
-                        <span
-                          key={i}
-                          className="px-2 py-1 bg-gray-100 rounded-lg text-xs text-gray-600"
-                        >
-                          {name}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200">
-                      <Edit2 size={16} className="text-gray-600" />
-                    </button>
-                    <button className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200">
-                      <MessageSquare size={16} className="text-gray-600" />
-                    </button>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`inline-block px-3 py-1 rounded-full text-xs ${statusStyle[interview.status]}`}>{interview.statusLabel}</span>
+                    {interview.cvFileId !== null && (
+                      <button onClick={() => openCv(interview.cvFileId as number)} className="btn-secondary text-sm">
+                        السيرة الذاتية
+                      </button>
+                    )}
+                    {interview.status === 'SCHEDULED' && (
+                      <>
+                        <button onClick={() => close(interview, 'DONE')} disabled={busy === interview.id} className="btn-primary text-sm disabled:opacity-50">
+                          تمّت
+                        </button>
+                        <button onClick={() => close(interview, 'CANCELLED')} disabled={busy === interview.id} className="btn-secondary text-sm disabled:opacity-50">
+                          إلغاء
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
-                {interview.notes && (
-                  <div className="mt-4 pt-4 border-t border-gray-100">
-                    <p className="text-sm text-gray-600">
-                      <span className="font-medium">ملاحظات:</span> {interview.notes}
-                    </p>
-                  </div>
-                )}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {interview.scorecards.map((card, index) => (
+                    <div key={index} className="border border-gray-100 rounded-lg p-3 text-sm">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium text-gray-800">{card.interviewerName ?? 'محاور'}</span>
+                        {card.submitted ? (
+                          <span className="inline-flex items-center gap-1 text-amber-600">
+                            <Star size={14} />
+                            {card.rating} / 5 · {card.recommendationLabel}
+                          </span>
+                        ) : (
+                          <span className="text-gray-400">لسه ماسلّمش البطاقة</span>
+                        )}
+                      </div>
+                      {card.notes && <p className="text-gray-600 mt-2 whitespace-pre-line">{card.notes}</p>}
+                    </div>
+                  ))}
+                </div>
               </div>
-            )
-          })}
+            ))}
+          </div>
+        )}
+      </div>
+      {adding && form && (
+        <ScheduleModal
+          form={form}
+          onClose={() => setAdding(false)}
+          onDone={(made) => {
+            setAdding(false)
+            setNotice(made.invited ? `المقابلة اتحددت، واتبعتت ${made.invited} دعوة بالبريد.` : 'المقابلة اتحددت (من غير دعوات بريد).')
+            load()
+          }}
+        />
+      )}
+    </MainLayout>
+  )
+}
+
+function ScheduleModal({ form, onClose, onDone }: { form: ApiInterviewForm; onClose: () => void; onDone: (made: ApiInterview) => void }) {
+  const [candidateId, setCandidateId] = useState('')
+  const [date, setDate] = useState('')
+  const [time, setTime] = useState('10:00')
+  const [duration, setDuration] = useState('60')
+  const [mode, setMode] = useState<InterviewMode>('ONSITE')
+  const [location, setLocation] = useState('')
+  const [notes, setNotes] = useState('')
+  const [panel, setPanel] = useState<number[]>([])
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const durationOk = /^\d{2,3}$/.test(duration.trim()) && Number(duration) >= 15 && Number(duration) <= 480
+  const valid = candidateId !== '' && date !== '' && /^\d{2}:\d{2}$/.test(time) && durationOk && panel.length >= 1 && panel.length <= 8
+  const toggle = (id: number) => setPanel((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]))
+
+  const submit = async () => {
+    setSaving(true)
+    setError('')
+    try {
+      onDone(await scheduleInterview({
+        candidateId: Number(candidateId), scheduledAt: `${date}T${time}`, durationMinutes: Number(duration), mode,
+        ...(location.trim() ? { location: location.trim() } : {}), ...(notes.trim() ? { notes: notes.trim() } : {}), interviewerEmployeeIds: panel,
+      }))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'تعذر تحديد المقابلة')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-label="تحديد مقابلة">
+      <div className="bg-white rounded-2xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-auto">
+        <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+          <h2 className="text-xl font-bold text-gray-800">تحديد مقابلة</h2>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg" aria-label="إغلاق">
+            <X size={20} />
+          </button>
+        </div>
+        <div className="p-6 space-y-4">
+          {error && (
+            <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 text-sm">
+              {error}
+            </div>
+          )}
+          <label className="block text-sm text-gray-700">
+            المرشح
+            <select className="input w-full mt-1" value={candidateId} onChange={(e) => setCandidateId(e.target.value)}>
+              <option value="">اختر المرشح</option>
+              {form.candidates.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.fullName} · {row.positionTitle}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <label className="block text-sm text-gray-700 col-span-2 sm:col-span-1">
+              التاريخ
+              <input type="date" className="input w-full mt-1" value={date} onChange={(e) => setDate(e.target.value)} />
+            </label>
+            <label className="block text-sm text-gray-700">
+              الساعة
+              <input type="time" className="input w-full mt-1" value={time} onChange={(e) => setTime(e.target.value)} />
+            </label>
+            <label className="block text-sm text-gray-700">
+              المدة (دقيقة)
+              <input type="number" min={15} max={480} className="input w-full mt-1" value={duration} onChange={(e) => setDuration(e.target.value)} />
+            </label>
+            <label className="block text-sm text-gray-700 col-span-2 sm:col-span-1">
+              النوع
+              <select className="input w-full mt-1" value={mode} onChange={(e) => setMode(e.target.value as InterviewMode)}>
+                {(Object.keys(INTERVIEW_MODE_LABELS) as InterviewMode[]).map((key) => (
+                  <option key={key} value={key}>
+                    {INTERVIEW_MODE_LABELS[key]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <label className="block text-sm text-gray-700">
+            المكان أو رابط الاجتماع (اختياري)
+            <input className="input w-full mt-1" maxLength={300} value={location} onChange={(e) => setLocation(e.target.value)} />
+          </label>
+          <div>
+            <p className="text-sm text-gray-700 mb-1">المحاورين ({panel.length} من 8)</p>
+            <div className="border border-gray-200 rounded-lg max-h-44 overflow-auto divide-y divide-gray-100">
+              {form.interviewers.map((row) => (
+                <label key={row.id} className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 cursor-pointer hover:bg-gray-50">
+                  <input type="checkbox" checked={panel.includes(row.id)} onChange={() => toggle(row.id)} />
+                  <span>{row.fullName}</span>
+                  <span className="text-xs text-gray-400">{row.employeeCode}</span>
+                </label>
+              ))}
+              {form.interviewers.length === 0 && <p className="px-3 py-2 text-sm text-gray-500">مفيش موظفين في نطاق فروعك.</p>}
+            </div>
+            <p className="text-xs text-gray-500 mt-1">كل محاور بيسلّم بطاقته من «مقابلاتي»، ومابيشوفش بطاقات غيره قبل ما يسلّم.</p>
+          </div>
+          <label className="block text-sm text-gray-700">
+            ملاحظات للمحاورين (اختياري)
+            <textarea className="input w-full mt-1" rows={2} maxLength={1000} value={notes} onChange={(e) => setNotes(e.target.value)} />
+          </label>
+        </div>
+        <div className="p-6 border-t border-gray-100 flex justify-end gap-2">
+          <button onClick={onClose} className="btn-secondary">
+            إلغاء
+          </button>
+          <button onClick={submit} disabled={!valid || saving} title="المرشح والموعد ومحاور واحد على الأقل مطلوبين" className="btn-primary disabled:opacity-50">
+            تحديد المقابلة
+          </button>
         </div>
       </div>
-    </MainLayout>
+    </div>
   )
 }

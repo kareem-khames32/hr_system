@@ -93,6 +93,9 @@ const EXCEPTIONS = {
   'PayrollController.myPayslips': 'SELF', // GET /payroll/my-payslips
   // B1.14: مستحق الموظف التقديري عن نفسه (user.employeeId) — ورا الميزة الفرعية payroll.live_employee_view (مقفولة = 404)
   'PayrollLiveController.mine': 'SELF', // GET /payroll/live/mine
+  'MyInterviewsController.ics': 'SERVICE_CHECK', // GET /recruitment/my-interviews/:id/ics — B3.4-ب: ملف الدعوة لمسؤول التوظيف في نطاق المرشح أو لمحاور في المقابلة
+  'MyInterviewsController.mine': 'SELF', // GET /recruitment/my-interviews — B3.4-ب: مقابلات الموظف المحاور نفسه
+  'MyInterviewsController.submit': 'SELF', // POST /recruitment/my-interviews/:id/scorecard — B3.4-ب: بطاقة المحاور نفسه، مرة واحدة
   'PortalController.dismissNotification': 'SELF', // DELETE /notifications/:id
   'PortalController.markNotificationsRead': 'SELF', // PATCH /notifications/read
   'PortalController.notifications': 'SELF', // GET /notifications

@@ -149,10 +149,11 @@ test('MR-03: صاحب مسار الواجهة — أطول نمط بيكسب، �
   demo('/training/my-courses', null)
   demo('/reports/custom', 'reports')
   demo('/recruitment/add', 'recruitment')
-  demo('/recruitment/interviews', 'recruitment')
+  // B3.4-ب: شاشة المقابلات بقت حقيقية (تبع الموديول، مش شاشة عرض)
+  assert.deepEqual(registry.routeOwner('/recruitment/interviews'), registry.routeOwner('/recruitment/jobs'))
   demo('/recruitment/offers', 'recruitment')
   demo('/recruitment/15', 'recruitment')
-  assert.ok(DEMO_ROUTES.length >= 7)
+  assert.ok(DEMO_ROUTES.length >= 6) // B3.4-ب: شاشة المقابلات خرجت من شاشات العرض
 
   // routeAvailable: الموديول مفعّل والميزة (لو فيه) مفعّلة
   const basic = registry.enabledSnapshot(state())

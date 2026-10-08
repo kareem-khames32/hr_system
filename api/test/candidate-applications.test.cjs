@@ -2,6 +2,7 @@
 // B3.3-أ: المرشح على وظيفة شاغرة — فحص من غير قاعدة (الدورة الفعلية في candidate-applications.integration.cjs):
 //  CU-01) القواعد: تطبيع الموبايل والبريد والهوية، ورقم الهوية والمصدر المكتوبين.
 //  CU-02) الربط: الإضافة والتقديم تحت قفل صف الوظيفة والحكم بعده، والتقديم الداخلي بقفل صف الموظف وفرعه الحالي، والمسارات محروسة.
+//  CU-05) (B3.4-ب) المقابلات: قيم المقابلة والبطاقة، وملف الدعوة (.ics)، وترتيب الحكم في التحديد والتسليم، والمسارات.
 //  CU-04) (B3.4-أ) نقل المراحل: القيم، والنقل تحت قفل الصف بترتيب الأرقام وبخانة المرحلة بس، والتعديل القايم بيعدّي عليه.
 //  CU-03) (ب) اللينك العام: قيم المتقدّم والموافقة، وحد المحاولات، والمسارات بميزة مقفولة ومن غير حارس جلسة عن قصد، والتقديم تحت قفل الوظيفة.
 // Run (من api/): node --test test/candidate-applications.test.cjs
@@ -115,4 +116,48 @@ test('CU-04: stage moves — values, rows locked in id order, the stage column o
   const update = candidates.slice(candidates.indexOf("@Patch(':id')"), candidates.indexOf("@Post('stage')"))
   assert.doesNotMatch(update, /Object\.assign\(c, dto\)|\.save\(c\)/, 'التعديل بالخانات المبعوتة بس')
   assert.match(candidates, /await this\.stages\.recordHire\(user, c\.id, previousStage\)/)
+})
+
+test('CU-05: interviews — values, the invite file, the judgment order in scheduling and submitting, and the routes', () => {
+  const rules = require('../src/recruitment/interview-rules')
+  const now = new Date(2026, 9, 8, 14, 0)
+  const time = rules.cleanInterviewTime('2026-10-08T09:30', now)
+  assert.deepEqual([rules.localStamp(time), rules.localStamp(rules.cleanInterviewTime(' 2026-12-31T23:59 ', now))], ['2026-10-08T09:30', '2026-12-31T23:59'], 'النهارده مسموح حتى لو الساعة عدّت')
+  for (const bad of ['2026-10-07T23:59', '2026-02-30T10:00', '2026-10-08 10:00', '2026-10-08T24:00', '2026-10-08T10:60', '2026-10-08', null, 20261008]) refuses(() => rules.cleanInterviewTime(bad, now), 'time ' + String(bad))
+  assert.deepEqual([rules.cleanDuration(15), rules.cleanDuration(480), rules.cleanMode('PHONE'), rules.cleanPanel([7, 3]), rules.cleanRating(5), rules.cleanRecommendation('MAYBE')], [15, 480, 'PHONE', [3, 7], 5, 'MAYBE'])
+  for (const bad of [14, 481, 30.5, '30', null]) refuses(() => rules.cleanDuration(bad), 'duration ' + String(bad))
+  for (const bad of [[], [1, 1], [0], ['2'], 'all', Array.from({ length: 9 }, (_, index) => index + 1)]) refuses(() => rules.cleanPanel(bad), 'panel')
+  for (const bad of [0, 6, 2.5, '3', null]) refuses(() => rules.cleanRating(bad), 'rating ' + String(bad))
+  for (const bad of ['yes', 'GOOD', '', null]) refuses(() => rules.cleanRecommendation(bad), 'recommendation ' + String(bad))
+  assert.deepEqual([rules.cleanOptionalText('  سطر\r\nتاني ', 50, 'x'), rules.cleanOptionalText('   ', 50, 'x'), rules.cleanOptionalText(undefined, 50, 'x')], ['سطر\nتاني', null, null])
+  // ملف الدعوة: سطور CRLF، وقت عائم بساعة التطبيق، معرّف ثابت، ونصوص متهرّبة، وسطور مكسورة على 75 بايت
+  const ics = rules.interviewIcs({ id: 12, scheduledAt: new Date(2026, 9, 9, 10, 30), durationMinutes: 45, summary: 'مقابلة: أحمد, علي; محاسب', location: 'قاعة 2\nالدور الأول',
+    description: 'و'.repeat(80), stampedAt: new Date(Date.UTC(2026, 9, 8, 11, 0, 0)) })
+  const lines = ics.split('\r\n')
+  assert.deepEqual([lines[0], lines.at(-2), lines.at(-1), lines.includes('UID:interview-12@hr-system'), lines.includes('DTSTAMP:20261008T110000Z'), lines.includes('DTSTART:20261009T103000'),
+    lines.includes('DTEND:20261009T111500'), lines.includes('METHOD:PUBLISH'), lines.includes('STATUS:CONFIRMED')], ['BEGIN:VCALENDAR', 'END:VCALENDAR', '', true, true, true, true, true, true])
+  assert.ok(lines.includes('SUMMARY:مقابلة: أحمد\\, علي\\; محاسب') && lines.includes('LOCATION:قاعة 2\\nالدور الأول'))
+  assert.ok(lines.every(line => Buffer.byteLength(line, 'utf8') <= 75), 'كل سطر 75 بايت بالكتير')
+  assert.equal(lines.filter(line => line.startsWith(' ')).join('').replace(/ /g, '').length > 0, true, 'الوصف الطويل اتكسر بسطور تكميلية')
+  assert.equal(ics.replace(/\r\n /g, '').includes('DESCRIPTION:' + 'و'.repeat(80)), true, 'وبيتجمّع من غير ما حرف يتقطع')
+  const cancelled = rules.interviewIcs({ id: 12, scheduledAt: new Date(2026, 9, 9, 10, 30), durationMinutes: 45, summary: 'x', location: null, description: null, cancelled: true })
+  assert.ok(cancelled.includes('METHOD:CANCEL') && cancelled.includes('STATUS:CANCELLED') && cancelled.includes('SEQUENCE:1') && !cancelled.includes('LOCATION'))
+  // الترتيب: التحديد تحت قفل صف المرشح والحكم بعده، والدعوة بعد المعاملة؛ والتسليم تحت قفل صف البطاقة
+  const service = read('api/src/recruitment/interviews.service.ts')
+  const schedule = service.slice(service.indexOf('async schedule('), service.indexOf('async close('))
+  const order = ['cleanInterviewTime(input.scheduledAt)', 'this.ds.transaction(', "lock: { mode: 'pessimistic_write' }", 'if (!this.candidateVisible(user, candidate))', 'CLOSED_STAGES.includes(candidate.stage)',
+    '!inBranchScope(scope, row.branchId)', 'getRepository(CandidateInterview).save(', 'getRepository(InterviewScorecard).insert(', 'await this.sendInvites('].map(part => schedule.indexOf(part))
+  assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), JSON.stringify(order))
+  const transaction = schedule.slice(schedule.indexOf('this.ds.transaction('), schedule.indexOf('await this.sendInvites('))
+  assert.doesNotMatch(transaction, /this\.mail\./, 'مفيش بريد جوه المعاملة')
+  const submit = service.slice(service.indexOf('async submit('), service.indexOf('async ics('))
+  const submitOrder = ['cleanRating(input.rating)', 'await this.myCard(em, user, interviewId, true)', "interview.status === 'CANCELLED'", 'if (card.submittedAt) throw new ConflictException(SCORECARD_SUBMITTED)',
+    'getRepository(InterviewScorecard).update({ id: card.id }'].map(part => submit.indexOf(part))
+  assert.ok(submitOrder.every((at, index) => at > 0 && (index === 0 || at > submitOrder[index - 1])), JSON.stringify(submitOrder))
+  assert.match(service, /const mayReadOthers = cardsFor === 'manager' \|\| !!own\?\.submittedAt/)
+  assert.match(service, /const open = !!card\.submittedAt && \(mine \|\| mayReadOthers\)/)
+  const controller = read('api/src/recruitment/interviews.controller.ts')
+  assert.match(controller, /@RequireModule\('recruitment'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)\n@Perm\('candidates\.manage'\)\n@Controller\('recruitment\/interviews'\)/)
+  assert.match(controller, /@RequireModule\('recruitment'\)\n@UseGuards\(JwtAuthGuard\)\n@Controller\('recruitment\/my-interviews'\)/)
+  assert.deepEqual([MODULES.recruitment.routes.includes('/recruitment/interviews'), MODULES.recruitment.routes.includes('/my/interviews')], [true, true])
 })
