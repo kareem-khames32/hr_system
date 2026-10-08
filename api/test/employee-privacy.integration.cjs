@@ -277,3 +277,60 @@ test('EP-07 (P4B-N01): التصدير اللي SQL اختاره ضحية تعا�
     assert.equal(calls, -7, 'تلات محاولات بس')
   } finally { ds.transaction = original }
 })
+
+test('EP-08 (P4C-B01): نص طلب سري اتنسخ بالتحديث لصف قديم أو لملف الموظف (سبب حذف معال، وصف فقد عهدة، سبب أرشفة) بيطلع محجوب في التصدير — وباقي الصف زي ما هو', async () => {
+  const route = `/employees/${E.target.id}/data-export`
+  const type = await repo('RequestType').findOneByOrFail({ code: 'LEAVE_ANNUAL' })
+  const reason = 'خلاف عائلي خاص لا يجوز تداوله', description = 'العهدة اتفقدت في ظروف شخصية سرية جدًا '.repeat(5).trim(), archive = 'إنهاء لأسباب صحية سرية'
+  const made = await repo('Request').save({ typeCode: 'LEAVE', definitionCode: 'LEAVE_ANNUAL', requesterId: E.target.id, branchId: B.one.id, status: 'COMPLETED',
+    payload: JSON.stringify({ reason, description, archiveReason: archive, newStatus: 'archived', effectiveDate: '2026-10-01' }) })
+  // صفوف قديمة من غير أي ربط بالطلب، اتحدّثت بنصه (زي ما وجهات التنفيذ بتعمل): المعال، والعهدة (أول 100 حرف)، وملف الموظف
+  const child = await repo('Dependent').save({ employeeId: E.target.id, nameAr: 'معال قديم', nameEn: null, relation: 'SON', birthDate: '2015-01-01', nationalId: null, gender: null, isInsured: false, documentId: null,
+    status: 'REMOVED', removeReason: reason, requestId: null, createdByUserId: admin.id, createdAt: new Date(), updatedAt: new Date() })
+  const custody = await repo('CustodyAssignment').save({ assetId: 987654, employeeId: E.target.id, status: 'LOST', condition: description.slice(0, 100), requestId: null, assignedAt: new Date() })
+  await repo('Employee').update({ id: E.target.id }, { archiveReason: archive })
+  const find = (data, key, id) => data.sections.find(row => row.key === key)?.rows.find(row => row.id === id)
+  const MARK = require('../src/employees/confidential-text').CONFIDENTIAL_TEXT_MARK
+  try {
+    // الطلب مش سري: النصوص زي ما هي
+    await repo('RequestType').update({ id: type.id }, { isConfidential: false })
+    const open = ok(await request(U.editor, 'GET', route), 200)
+    assert.deepEqual([find(open, 'dependents', child.id).removeReason, find(open, 'custody', custody.id).condition, open.employee.archiveReason], [reason, description.slice(0, 100), archive])
+    // الطلب سري: التلاتة محجوبين، والصفوف نفسها وباقي خاناتها موجودة، وولا حرف من النص في الرد كله
+    await repo('RequestType').update({ id: type.id }, { isConfidential: true })
+    const hidden = ok(await request(U.editor, 'GET', route), 200)
+    assert.deepEqual([find(hidden, 'dependents', child.id).removeReason, find(hidden, 'custody', custody.id).condition, hidden.employee.archiveReason], [MARK, MARK, MARK])
+    assert.deepEqual([find(hidden, 'dependents', child.id).nameAr, find(hidden, 'dependents', child.id).status, find(hidden, 'custody', custody.id).status, hidden.employee.fullName, hidden.employee.nationalId],
+      ['معال قديم', 'REMOVED', 'LOST', 'موظف الخصوصية', ID])
+    const text = JSON.stringify(hidden)
+    assert.deepEqual([text.includes(reason), text.includes('ظروف شخصية سرية'), text.includes(archive)], [false, false, false])
+    // حتى لمدير النظام (مش طرف في الطلب): التصدير ملف بيتسلّم
+    assert.equal(ok(await request(admin, 'GET', route), 200).employee.archiveReason, MARK)
+  } finally {
+    await repo('RequestType').update({ id: type.id }, { isConfidential: false })
+    await repo('Employee').update({ id: E.target.id }, { archiveReason: null })
+    await repo('CustodyAssignment').delete({ id: custody.id }); await repo('Dependent').delete({ id: child.id }); await repo('Request').delete({ id: made.id })
+  }
+})
+
+test('EP-09 (P4C-N02): أقساط السلف بتتصدّر عن طريق سلفتها — للي معاه البيانات المالية، وقسط سلفة طلبها سري برّه', async () => {
+  const route = `/employees/${E.target.id}/data-export`
+  const type = await repo('RequestType').findOneByOrFail({ code: 'LEAVE_ANNUAL' })
+  const made = await repo('Request').save({ typeCode: 'LEAVE', definitionCode: 'LEAVE_ANNUAL', requesterId: E.target.id, branchId: B.one.id, status: 'COMPLETED', payload: '{"amount":1200}' })
+  const open = await repo('Loan').save({ requestId: null, employeeId: E.target.id, amount: 600, status: 'ACTIVE' }), secret = await repo('Loan').save({ requestId: made.id, employeeId: E.target.id, amount: 1200, status: 'ACTIVE' })
+  const other = await repo('Loan').save({ requestId: null, employeeId: E.other.id, amount: 900, status: 'ACTIVE' })
+  const installment = loan => repo('LoanInstallment').save({ loanId: loan.id, dueDate: '2026-11-30', amount: 300, paid: false })
+  const rows = [await installment(open), await installment(secret), await installment(other)]
+  const ids = async () => (ok(await request(admin, 'GET', route), 200).sections.find(row => row.key === 'loanInstallments')?.rows ?? []).map(row => row.id)
+  try {
+    await repo('RequestType').update({ id: type.id }, { isConfidential: false })
+    assert.deepEqual(await ids(), [rows[0].id, rows[1].id], 'أقساط سلف الموظف بس')
+    await repo('RequestType').update({ id: type.id }, { isConfidential: true })
+    assert.deepEqual(await ids(), [rows[0].id], 'قسط السلفة اللي طلبها سري برّه')
+  } finally {
+    await repo('RequestType').update({ id: type.id }, { isConfidential: false })
+    for (const row of rows) await repo('LoanInstallment').delete({ id: row.id })
+    for (const loan of [open, secret, other]) await repo('Loan').delete({ id: loan.id })
+    await repo('Request').delete({ id: made.id })
+  }
+})
