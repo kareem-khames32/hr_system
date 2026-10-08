@@ -1,10 +1,11 @@
 'use client'
 // «إيقاف مؤقت» عن العمل لفترة (قرار المالك 16 سبتمبر): من تاريخ، إلى تاريخ، والسبب — أو إنهاء إيقاف قائم بدري.
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { localToday } from '@/lib/dates'
 import {
   dayCountText,
   endEmployeeSuspension,
+  fetchSuspensionOptions,
   inclusiveDays,
   isValidDate,
   suspendEmployee,
@@ -18,7 +19,7 @@ import {
 interface Props {
   employee: { id: number; name: string }
   // إيقاف ساري أو قادم = نافذة الإنهاء؛ بدونه = نافذة إيقاف جديد
-  current?: Pick<EmployeeSuspension, 'id' | 'fromDate' | 'toDate' | 'reason' | 'status' | 'state'> | null
+  current?: Pick<EmployeeSuspension, 'id' | 'fromDate' | 'toDate' | 'reason' | 'status' | 'state' | 'paid'> | null
   onClose: () => void
   onSaved: (message: string) => void
 }
@@ -34,6 +35,13 @@ export default function EmployeeSuspensionDialog({ employee, current, onClose, o
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // B4.5 (د): «بأجر» بيظهر بس لما الخادم يقول إنه متاح (إعداده مفتوح)
+  const [paid, setPaid] = useState(false)
+  const [options, setOptions] = useState<{ paidAvailable: boolean; paidMaxDays: number | null }>({ paidAvailable: false, paidMaxDays: null })
+  useEffect(() => {
+    if (ending) return
+    fetchSuspensionOptions(employee.id).then(setOptions).catch(() => { /* من غير الخيارات: إيقاف عادي من غير أجر */ })
+  }, [employee.id, ending])
 
   const days = isValidDate(fromDate) && isValidDate(toDate) && toDate >= fromDate ? inclusiveDays(fromDate, toDate) : 0
   const endPlan = current ? suspensionEndPlan(current, returnDate, today) : null
@@ -55,8 +63,9 @@ export default function EmployeeSuspensionDialog({ employee, current, onClose, o
           : finished && endPlan?.ok ? `اتعدلت نهاية إيقاف ${employee.name} — آخر يوم إيقاف ${endPlan.toDate}`
           : `اتنهى إيقاف ${employee.name} — راجع للعمل من ${returnDate}`)
       } else {
-        await suspendEmployee(employee.id, { fromDate, toDate, reason: reason.trim() })
-        onSaved(`اتسجل إيقاف ${employee.name} ${suspensionPeriodText({ fromDate, toDate })}`)
+        const withPay = options.paidAvailable && paid
+        await suspendEmployee(employee.id, { fromDate, toDate, reason: reason.trim(), ...(withPay ? { paid: true } : {}) })
+        onSaved(`اتسجل إيقاف ${employee.name} ${suspensionPeriodText({ fromDate, toDate, paid: withPay })}`)
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'تعذر حفظ الإيقاف')
@@ -111,9 +120,20 @@ export default function EmployeeSuspensionDialog({ employee, current, onClose, o
               <label className="label" htmlFor="suspension-reason">السبب *</label>
               <textarea id="suspension-reason" className="input" rows={3} maxLength={SUSPENSION_REASON_MAX} value={reason} onChange={event => setReason(event.target.value)} />
             </div>
+            {options.paidAvailable && (
+              <label className="flex items-start gap-2 text-sm text-gray-700">
+                <input type="checkbox" className="mt-1 w-4 h-4 rounded border-gray-300" checked={paid} onChange={event => setPaid(event.target.checked)} />
+                <span>
+                  إيقاف احتياطي بأجر (أثناء التحقيق) — أيامه ماتتخصمش من الراتب
+                  {options.paidMaxDays !== null && <span className="block text-xs text-gray-500">بحد أقصى {dayCountText(options.paidMaxDays)} لدولة فرع الموظف</span>}
+                </span>
+              </label>
+            )}
             <p className="text-xs text-gray-500 leading-5">
-              طول الفترة حالة الموظف «موقوف»، وأيامها مش غياب لكن بتتخصم من الراتب يوم بيوم زي الإجازة بدون راتب.
-              بعد آخر يوم بيرجع «نشط» لوحده، وتقدر تنهي الإيقاف بدري.
+              {options.paidAvailable && paid
+                ? 'طول الفترة حالة الموظف «موقوف»، وأيامها مش غياب ومش بتتخصم من الراتب.'
+                : 'طول الفترة حالة الموظف «موقوف»، وأيامها مش غياب لكن بتتخصم من الراتب يوم بيوم زي الإجازة بدون راتب.'}
+              {' '}بعد آخر يوم بيرجع «نشط» لوحده، وتقدر تنهي الإيقاف بدري.
             </p>
           </div>
         )}

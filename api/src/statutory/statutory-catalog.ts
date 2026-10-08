@@ -26,6 +26,9 @@ const OVERTIME_MINIMUM = 'الحد القانوني لمعامل الإضافي 
 // B4.5 (ج)
 const LEAVE_TIERS = 'اقتراح شرائح الإجازة السنوية في شاشة أنواع الإجازات (للعرض بس — المالك بيراجع ويحفظ)'
 const LEAVE_TYPES = 'أنواع إجازات الفرع غير المفعّلة في شاشة أنواع الإجازات (للعرض بس — المالك بيراجع ويفعّل)'
+// B4.5 (د)
+const PAID_SUSPENSION = 'حد مدة الإيقاف الاحتياطي بأجر لما الصف «اتأكد» — والإيقاف بأجر نفسه ورا إعداد (مقفول افتراضيًا)'
+const FINE_CAP = 'الحد القانوني لغرامات الشهر في لائحة الجزاءات لو إعداده مفتوح (مقفول افتراضيًا)'
 // B4.4 (د)
 const HEALTH_INSURANCE = 'التأمين الصحي الشامل في المسير لو إعداده مفتوح (مقفول افتراضيًا)'
 const TRAINING_FUND = 'تقرير صندوق التدريب السنوي (للعرض بس)'
@@ -59,7 +62,7 @@ export const STATUTORY_CATALOG: readonly StatutoryKeyInfo[] = [
   { country: 'EG', key: 'eg.periodic_raise', label: 'العلاوة الدورية', card: 'C-EG-06', usedBy: null, codes: { min_pct_of_insurance_wage: pct('حد أدنى من أجر التأمين'), min_amount: 'حد أدنى بالمبلغ في الشهر' } },
   { country: 'EG', key: 'eg.deduction_caps', label: 'حدود الخصم من الأجر', card: 'C-EG-07', usedBy: null,
     codes: { loan_installment_pct: pct('قسط سلفة صاحب العمل'), garnishment_pct: pct('الحجز للديون'), alimony_pct: pct('الحجز للنفقة') } },
-  { country: 'EG', key: 'eg.termination', label: 'الإخطار والتجربة والإيقاف', card: 'C-EG-07', usedBy: null,
+  { country: 'EG', key: 'eg.termination', label: 'الإخطار والتجربة والإيقاف', card: 'C-EG-07', usedBy: PAID_SUSPENSION,
     codes: { notice_months: 'الإخطار بالشهور', resignation_reply_days: 'الرد على الاستقالة بالأيام', probation_max_months: 'أقصى تجربة بالشهور', paid_suspension_max_days: 'أقصى إيقاف احتياطي بأجر بالأيام' } },
   // ===== السعودية =====
   { country: 'SA', key: SA_GOSI_NEW_TRACK, label: 'التأمينات — المسار الجديد', card: 'C-SA-01', usedBy: INSURANCE,
@@ -77,7 +80,7 @@ export const STATUTORY_CATALOG: readonly StatutoryKeyInfo[] = [
   { country: 'SA', key: 'sa.end_of_service', label: 'مكافأة نهاية الخدمة', card: 'C-SA-07', usedBy: null,
     codes: { first_tier_months: 'شهور عن كل سنة في الشريحة الأولى', first_tier_years: 'سنين الشريحة الأولى', later_months: 'شهور عن كل سنة بعدها', resignation_min_years: 'الاستقالة: من غير مكافأة تحت كام سنة',
       resignation_low_fraction: 'الاستقالة: كسر الشريحة الأولى', resignation_mid_years: 'الاستقالة: الشريحة التانية من كام سنة', resignation_mid_fraction: 'الاستقالة: كسر الشريحة التانية', resignation_full_years: 'الاستقالة: كاملة من كام سنة' } },
-  { country: 'SA', key: 'sa.deduction_caps', label: 'حدود الخصم من الأجر', card: 'C-SA-07', usedBy: null,
+  { country: 'SA', key: 'sa.deduction_caps', label: 'حدود الخصم من الأجر', card: 'C-SA-07', usedBy: FINE_CAP,
     codes: { loan_installment_pct: pct('قسط سلفة صاحب العمل'), total_pct: pct('مجموع الخصومات'), fine_max_days_per_month: 'الغرامات: أيام أجر في الشهر' } },
   { country: 'SA', key: 'sa.termination', label: 'التجربة والإخطار والاستقالة', card: 'C-SA-06', usedBy: null,
     codes: { probation_max_days: 'أقصى تجربة بالأيام', notice_employee_days: 'إخطار الموظف بالأيام', notice_employer_days: 'إخطار صاحب العمل بالأيام', resignation_silence_days: 'قبول الاستقالة بالسكوت بعد كام يوم' } },

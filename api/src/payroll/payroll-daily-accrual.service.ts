@@ -5,7 +5,7 @@ import { AttendanceService, localDateOf } from '../attendance/attendance.service
 import { AttendanceDay } from '../attendance/attendance.entities'
 import { loadAttendanceExemptions, exemptionPolicyOnDate } from '../attendance/attendance-exemption-resolver'
 import { Employee } from '../employees/employee.entity'
-import { suspendedDatesBetween } from '../employees/employee-suspensions'
+import { paidSuspendedDatesBetween, suspendedDatesBetween } from '../employees/employee-suspensions'
 import { grossMonthlySalary } from '../employees/compensation'
 import { Leave, LeaveType } from '../requests/entities/leave.entities'
 import { OvertimeEntry } from '../requests/entities/attendance.entities'
@@ -246,6 +246,8 @@ export class PayrollDailyAccrualService implements OnModuleInit {
     // مرة واحدة بدل مرة لكل يوم — نفس computeDay بالحرف (AttendanceService.batchScope)
     const attendance = this.attendance.batchScope(em)
     const suspendedDates = await suspendedDatesBetween(em, input.employeeId, start, end)
+    // B4.5 (د): يوم إيقاف بأجر موقوف (من غير حضور ولا غياب) بس من غير خصم إيقاف
+    const paidSuspendedDates = suspendedDates.size ? await paidSuspendedDatesBetween(em, input.employeeId, start, end) : new Set<string>()
     // نفس خطوة تجسيد الغياب بالحرف: غياب محفوظ قديم في يوم إيقاف (اتكتب قبل الإيقاف) يتشال،
     // وإلا المسير يخصم اليوم غياب ويوم إيقاف مع بعض.
     if (suspendedDates.size) {
@@ -286,17 +288,17 @@ export class PayrollDailyAccrualService implements OnModuleInit {
       overlapPolicy: 'CUMULATIVE', dailyCapDays: 0, dayRate, minuteRate, earlyLeaveEnabled: basis.earlyLeaveEnabled }
 
     const dayInputs = (date: string, attendanceRow: AttendanceDay | null) => {
-      const suspended = suspendedDates.has(date)
+      const suspended = suspendedDates.has(date), suspendedPaid = paidSuspendedDates.has(date)
       const exempt = exemptionPolicyOnDate(exemptions, date, { overtimeEligible: false, unpaidLeaveDeductible: true }).isExempt
       const dayLeaves = leaves.filter(row => String(row.fromDate).slice(0, 10) <= date && String(row.toDate).slice(0, 10) >= date)
       const dayOvertime = overtimeByDate.get(date) ?? []
       const hash = payrollAccrualInputsHash({
-        v: 1, attendance: payrollAccrualAttendanceInput(attendanceRow), suspended, exempt,
+        v: 1, attendance: payrollAccrualAttendanceInput(attendanceRow), suspended, exempt, ...(suspendedPaid ? { suspendedPaid } : {}),
         leaves: dayLeaves.map(row => [row.id, row.leaveTypeCode ?? null, row.isUnpaid === true, row.period ?? 'FULL']).sort(),
         overtime: dayOvertime.map(row => [row.id, row.source ?? null, accrualOvertimeHours(row), row.calculationSnapshot ?? null]).sort(),
         gross, monthlyDays: basis.monthlyDays,
       })
-      return { suspended, exempt, dayLeaves, dayOvertime, hash }
+      return { suspended, suspendedPaid, exempt, dayLeaves, dayOvertime, hash }
     }
 
     // (1) أي يوم محتاج إعادة حساب؟ الناقص، المتسخ، اللي بصمة مدخلاته اتغيرت، واليوم اللي لسه ما خلصش
@@ -327,8 +329,8 @@ export class PayrollDailyAccrualService implements OnModuleInit {
     const now = new Date()
     for (const date of pending) {
       const attendanceRow = days.get(date) ?? null
-      const { suspended, exempt, dayLeaves, dayOvertime, hash } = dayInputs(date, attendanceRow)
-      const facts = this.dayFacts({ date, attendanceRow, suspended, exempt, leaves: dayLeaves, sickCodes, overtime: dayOvertime,
+      const { suspended, suspendedPaid, exempt, dayLeaves, dayOvertime, hash } = dayInputs(date, attendanceRow)
+      const facts = this.dayFacts({ date, attendanceRow, suspended, suspendedPaid, exempt, leaves: dayLeaves, sickCodes, overtime: dayOvertime,
         policy, dayRate, absencePenalty: basis.absencePenalty, dailyHours: basis.dailyHours })
       const row = stored.get(date) ?? repo.create({ employeeId: input.employeeId, period: input.period, date })
       Object.assign(row, facts, { components: JSON.stringify(facts.components), runId: input.runId ?? row.runId ?? null,
@@ -341,7 +343,7 @@ export class PayrollDailyAccrualService implements OnModuleInit {
 
   // حقائق اليوم: دقائقه وأعلامه ومبالغه الاسترشادية
   private dayFacts(input: {
-    date: string; attendanceRow: AttendanceDay | null; suspended: boolean; exempt: boolean
+    date: string; attendanceRow: AttendanceDay | null; suspended: boolean; suspendedPaid?: boolean; exempt: boolean
     leaves: Leave[]; sickCodes: Set<string>; overtime: OvertimeEntry[]
     policy: AttendanceDeductionPolicy; dayRate: number; absencePenalty: number; dailyHours: number
   }): PayrollAccrualDayFacts {
@@ -383,7 +385,7 @@ export class PayrollDailyAccrualService implements OnModuleInit {
       shortfallAmount: round2(deduction?.shortfallAmount ?? 0),
       absenceAmount: round2(isAbsent ? input.dayRate * input.absencePenalty : 0),
       leaveAmount: round2(unpaid.length && !input.suspended ? input.dayRate * ((unpaid[0].period ?? 'FULL') === 'FULL' ? 1 : 0.5) : 0),
-      suspensionAmount: round2(input.suspended ? input.dayRate : 0),
+      suspensionAmount: round2(input.suspended && !input.suspendedPaid ? input.dayRate : 0),
       components: {
         v: 1, note: 'مبالغ اليوم استرشادية للعرض؛ المسير بيعيد جمعها من صفوف الحضور بلقطة سياسته',
         attendanceDayId: row?.id ?? null, deduction: deduction ?? null,

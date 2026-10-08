@@ -6,6 +6,7 @@ import { recordAudit } from '../audit/audit'
 import type { JwtPayload } from '../auth/auth.service'
 import { EG_TAX_BRACKETS_KEY, EG_TAX_COUNTRY, EG_TAX_HIGH_INCOME_KEY } from '../payroll/eg-salary-tax'
 import { EG_OVERTIME_KEY, OVERTIME_LEGAL_MINIMUM_KEY, SA_OVERTIME_KEY } from '../attendance/overtime-legal-minimum'
+import { PENALTY_FINE_CAP_KEY, SA_DEDUCTION_CAPS_KEY } from '../cases/penalty-fine-cap'
 import { Branch } from '../org/entities/branch.entity'
 import { branchCountryOf } from '../org/branch-currency'
 import { EG_HEALTH_BRANCHES_KEY, EG_HEALTH_ENABLED_KEY, EG_HEALTH_KEY, EG_MARTYRS_ENABLED_KEY, EG_MARTYRS_FUND_KEY, EG_TAX_ENABLED_KEY, EG_TAX_START_PERIOD_KEY,
@@ -46,6 +47,9 @@ export const STATUTORY_CALCULATORS: readonly StatutoryCalculator[] = [
   // B4.5 (ب): الحد القانوني لمعامل الإضافي — للدولتين، وكل دولة بصفها لو موجود
   { code: 'OVERTIME_LEGAL_MINIMUM', label: 'الحد القانوني لمعامل الإضافي', note: 'تسعير الإضافي الجديد ياخد الأعلى من معامل الشركة والحد القانوني لدولة فرع الموظف (مصر: نهار العمل ويوم الراحة؛ السعودية: أجر الساعة + نسبة من الأساسي). المعتمد والمصروف مابيتغيّرش',
     enabledKey: OVERTIME_LEGAL_MINIMUM_KEY, keys: [{ country: 'EG', key: EG_OVERTIME_KEY, required: false }, { country: 'SA', key: SA_OVERTIME_KEY, required: false }] },
+  // B4.5 (د): الحد القانوني لغرامات الشهر في لائحة الجزاءات (السعودية؛ مصر مالهاش رقم في الحزمة)
+  { code: 'PENALTY_FINE_CAP', label: 'الحد القانوني لغرامات الشهر', note: 'جزاء «خصم أيام» لموظف فرعه في السعودية بيترفض لو أيامه لوحده أو مع غرامات نفس شهر الخصم عدّت الحد. الجزاءات الموقّعة قبل التفعيل زي ما هي',
+    enabledKey: PENALTY_FINE_CAP_KEY, keys: [{ country: 'SA', key: SA_DEDUCTION_CAPS_KEY, required: true }] },
 ]
 /** مفاتيح إعدادات التفعيل — ليها مسارها ده بس (شاشة الإعدادات العامة مابتكتبهاش) */
 export const STATUTORY_CALCULATOR_CONFIG_KEYS: readonly string[] = STATUTORY_CALCULATORS.flatMap((entry) => [entry.enabledKey, ...(entry.startPeriodKey ? [entry.startPeriodKey] : []),

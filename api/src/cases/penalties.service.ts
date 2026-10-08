@@ -9,6 +9,9 @@ import { Employee } from '../employees/employee.entity'
 import { DeductionType } from '../payroll/typed-deductions.entities'
 import { TypedDeductionsService } from '../payroll/typed-deductions.service'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
+import { readStatutoryEntries } from '../statutory/statutory.service'
+import { branchCountryOf } from '../org/branch-currency'
+import { fineCapIssue, legalFineCap, PENALTY_FINE_CAP_KEY, type LegalFineCap } from './penalty-fine-cap'
 import { handlesCase } from './case-access'
 import { HrCase, HrCaseEvent, HrCaseParty } from './case.entities'
 import { casesReady } from './case-rules'
@@ -273,6 +276,24 @@ export class PenaltiesService {
     return { occurrence, step, windowDays }
   }
 
+  /**
+   * B4.5 (د): الحد القانوني لغرامات الشهر لدولة فرع الموظف الحالي — null لو الإعداد مقفول (الافتراضي)، أو الجزاء مش خصم أيام، أو الدولة مالهاش حد.
+   */
+  private async fineCapOf(em: EntityManager, employee: Employee, step: PenaltyStep, incidentDate: string): Promise<LegalFineCap | null> {
+    if (step.action !== 'DEDUCT_DAYS' || employee.branchId == null) return null
+    if ((await em.getRepository(RequestsConfig).findOne({ where: { key: PENALTY_FINE_CAP_KEY } }))?.value !== 'true') return null
+    const [branch]: Array<{ country: string | null }> = await em.query('SELECT [country] FROM [branches] WHERE [id] = @0', [employee.branchId])
+    return legalFineCap(await readStatutoryEntries(em), branchCountryOf(branch?.country), incidentDate)
+  }
+
+  /** أيام غرامات الموظف السارية اللي خصمها على شهر المسير ده (الخصم المرفوض أو المسحوب أو الملغى برّه العدّ) */
+  private async fineDaysIn(em: EntityManager, employeeId: number, period: string): Promise<number> {
+    const [row]: Array<{ days: string | number | null }> = await em.query(
+      `SELECT SUM(p.[days]) AS [days] FROM dbo.employee_penalties p INNER JOIN dbo.deduction_requests d ON d.[id] = p.[deductionRequestId]
+       WHERE p.[employeeId] = @0 AND p.[status] = N'ACTIVE' AND p.[action] = N'DEDUCT_DAYS' AND d.[targetPeriod] = @1 AND d.[status] IN (N'IN_APPROVAL', N'APPROVED')`, [employeeId, period])
+    return Number(row?.days ?? 0)
+  }
+
   /** الموظف (بفرعه الحالي في نطاق الحساب) والمخالفة (متاحة) والتاريخ — وإلا رسالتهم */
   private async target(em: EntityManager, user: JwtPayload, input: ApplyInput) {
     const incidentDate = realDay(input.incidentDate)
@@ -291,8 +312,11 @@ export class PenaltiesService {
     await this.assertReady(em)
     const { employee, violation, incidentDate } = await this.target(em, user, input)
     const { occurrence, step, windowDays } = await this.judge(em, employee.id, violation, incidentDate)
+    // B4.5 (د): الحد القانوني بيتعرض في المعاينة (لو مفعّل وليه رقم لدولة الفرع)؛ وجزاء أكبر منه لوحده متعلّم قبل التوقيع
+    const cap = await this.fineCapOf(em, employee, step, incidentDate)
     return { employeeName: employee.fullName, violationName: violation.name, incidentDate, occurrence, occurrenceLabel: occurrenceLabel(occurrence), action: step.action, days: step.days, label: penaltyLabel(step),
-      windowDays, needsPeriod: step.action === 'DEDUCT_DAYS', fingerprint: penaltyFingerprint(violation, occurrence, step, windowDays) }
+      windowDays, needsPeriod: step.action === 'DEDUCT_DAYS', fingerprint: penaltyFingerprint(violation, occurrence, step, windowDays),
+      ...(cap ? { fineCap: { maxDays: cap.maxDays, exceeded: (step.days ?? 0) > cap.maxDays } } : {}) }
   }
 
   /** قضية الجزاء: الحساب مطّلع عليها، واتقرر فيها بإنذار أو جزاء، والموظف مشكو في حقه فيها — وإلا رسالة واحدة */
@@ -312,8 +336,8 @@ export class PenaltiesService {
    * Codex P3L-B03/B05: الحجز عمره ما ليه خصم (الخصم وتثبيت الجزاء في معاملة واحدة)، فمفيش بحث عن خصمه: قديم = محاولة اتقطعت وبيتشال —
    * وكاتبه لو لسه شغال خصمه بيرجع لأن ربطه مشروط بوجود الحجز؛ ولسه جديد = التوقيع التاني بيستنى (409) بدل ما يحسبه سابقة أو يتجاهله.
    */
-  private async settlePending(em: EntityManager, employeeId: number, violationId: number) {
-    for (const row of await em.getRepository(EmployeePenalty).find({ where: { employeeId, violationId, status: 'PENDING' } })) {
+  private async settlePending(em: EntityManager, employeeId: number, violationId?: number) {
+    for (const row of await em.getRepository(EmployeePenalty).find({ where: { employeeId, ...(violationId === undefined ? {} : { violationId }), status: 'PENDING' } })) {
       if (Date.now() - new Date(row.createdAt).getTime() <= PENALTY_PENDING_MINUTES * 60000) throw new ConflictException(PENALTY_IN_PROGRESS)
       await em.getRepository(EmployeePenalty).createQueryBuilder().delete().where('id = :id AND status = :status', { id: row.id, status: 'PENDING' }).execute()
     }
@@ -337,6 +361,13 @@ export class PenaltiesService {
       if (typeof input.expectedFingerprint !== 'string' || input.expectedFingerprint !== penaltyFingerprint(violation, occurrence, step, windowDays)) throw new ConflictException(PENALTY_CHANGED)
       const targetPeriod = typeof input.targetPeriod === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(input.targetPeriod) ? input.targetPeriod : null
       if (step.action === 'DEDUCT_DAYS' && !targetPeriod) throw new BadRequestException(PENALTY_PERIOD)
+      // B4.5 (د): حد غرامات الشهر — تحت قفل صف الموظف (فرعه الحالي)، وبعد حسم أي حجز لسه بيتسجّل لأي مخالفة ليه (شهره لسه مش معروف)
+      const cap = await this.fineCapOf(em, employee, step, incidentDate)
+      if (cap) {
+        await this.settlePending(em, employee.id)
+        const issue = fineCapIssue(cap, step.days as number, await this.fineDaysIn(em, employee.id, targetPeriod as string), targetPeriod as string)
+        if (issue) throw new BadRequestException(issue)
+      }
       const linked = await this.caseOf(em, user, input.caseId, employee.id)
       const inserted = await em.getRepository(EmployeePenalty).insert({ employeeId: employee.id, violationId: violation.id, occurrence, action: step.action, days: step.days === null ? null : step.days.toFixed(2),
         caseId: linked?.id ?? null, deductionRequestId: null, note, incidentDate, status: step.action === 'DEDUCT_DAYS' ? 'PENDING' : 'ACTIVE', createdByUserId: user.sub, createdAt: new Date(), cancelledByUserId: null, cancelledAt: null, cancelReason: null })

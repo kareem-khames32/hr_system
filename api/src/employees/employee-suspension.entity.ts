@@ -44,4 +44,8 @@ export class EmployeeSuspension {
 
   @CreateDateColumn()
   createdAt: Date
+
+  // B4.5 (ترحيل 137): إيقاف احتياطي بأجر — أيامه ماتتخصمش. برّه الكيان للقراءة والكتابة (الكود بيشتغل قبل الترحيل): employee-suspensions.ts
+  @Column({ type: 'bit', nullable: true, select: false, insert: false, update: false })
+  isPaid?: boolean | null
 }

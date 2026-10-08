@@ -1,7 +1,7 @@
 import { BadRequestException } from '@nestjs/common'
 import { Between, EntityManager, In } from 'typeorm'
 import { MONTHLY_SALARY_COMPONENTS } from '../employees/compensation'
-import { displayEmployeeStatus, payrollSuspensionNote, suspendedWholeRange } from '../employees/employee-suspension-rules'
+import { displayEmployeeStatus, payrollSuspensionNote, suspendedWholeRange, unpaidSuspensions } from '../employees/employee-suspension-rules'
 import { readEmployeeSuspensions } from '../employees/employee-suspensions'
 import { OvertimeEntry } from '../requests/entities/attendance.entities'
 import { overtimeFinancialValue } from './overtime-financial'
@@ -509,7 +509,7 @@ export async function payrollUnassignedReport(em: EntityManager, scope: PayrollR
     if (!coverage && !dataIssue) continue // ليس على رأس العمل في الفترة
     // موقوف بلا أجر: كل أيام تغطيته في الفترة أيام إيقاف ⇒ غير مستحق لأي يوم، فغيابه عن المسيرات مفهوم لا ناقص
     const suspended = !!coverage && !dataIssue &&
-      suspendedWholeRange(suspensionsByEmployee.get(employeeId) ?? [], coverage.coverFrom, coverage.coverTo)
+      suspendedWholeRange(unpaidSuspensions(suspensionsByEmployee.get(employeeId) ?? []), coverage.coverFrom, coverage.coverTo)
 
     const employeeMembers = membersByEmployee.get(employeeId) ?? []
     const rawItems = itemsByEmployee.get(employeeId) ?? []

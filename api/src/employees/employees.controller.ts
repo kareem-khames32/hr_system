@@ -182,6 +182,13 @@ export class EmployeesController {
     return this.employees.listSuspensions(id, branchScopeOf(user))
   }
 
+  // B4.5 (د): خيارات تسجيل الإيقاف (هل «بأجر» متاح وحدّه) — لنفس صلاحية التسجيل
+  @Perm('employees.edit')
+  @Get(':id/suspension-options')
+  suspensionOptions(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: JwtPayload) {
+    return this.employees.suspensionOptions(id, branchScopeOf(user))
+  }
+
   @Perm('employees.edit')
   @Post(':id/suspensions')
   suspend(

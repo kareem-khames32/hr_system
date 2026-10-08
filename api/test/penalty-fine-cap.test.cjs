@@ -1,0 +1,48 @@
+// B4.5 (د) — الحد القانوني لغرامات الشهر: حساب نقي بلا قاعدة بيانات.
+// السعودية: الجزاء لوحده ثم مع غرامات نفس شهر الخصم بحد أيام من حزمة الدولة؛ مصر ومن غير دولة من غير حد؛ والرقم مش ثابت في الكود.
+const { test } = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
+const apiRoot = path.resolve(__dirname, '..')
+require('../node_modules/ts-node').register({ project: path.join(apiRoot, 'tsconfig.json'), transpileOnly: true })
+const cap = require('../src/cases/penalty-fine-cap')
+const { STATUTORY_SEED } = require('../src/statutory/statutory-data')
+const entries = STATUTORY_SEED.map(seed => ({ ...seed, verified: true }))
+
+test('FCU-01: الحد من الحزمة — السعودية 5 أيام، ومصر ومن غير دولة من غير حد، والرقم بيتغيّر مع صف الحزمة', () => {
+  const sa = cap.legalFineCap(entries, 'SA', '2026-10-08')
+  assert.deepEqual([sa.maxDays, sa.country, sa.key], [5, 'SA', 'sa.deduction_caps'])
+  assert.deepEqual([cap.legalFineCap(entries, ' sa ', '2026-10-08').maxDays, cap.legalFineCap(entries, 'EG', '2026-10-08'), cap.legalFineCap(entries, null, '2026-10-08'), cap.legalFineCap([], 'SA', '2026-10-08')], [5, null, null, null])
+  const changed = entries.map(entry => entry.key === 'sa.deduction_caps' ? { ...entry, values: { ...entry.values, fine_max_days_per_month: '3' } } : entry)
+  assert.equal(cap.legalFineCap(changed, 'SA', '2026-10-08').maxDays, 3)
+  const none = entries.map(entry => entry.key === 'sa.deduction_caps' ? { ...entry, values: { loan_installment_pct: '10' } } : entry)
+  assert.equal(cap.legalFineCap(none, 'SA', '2026-10-08'), null)
+})
+
+test('FCU-02: الحكم — من غير حد مفيش رفض؛ الجزاء لوحده أكبر من الحد؛ ومجموع الشهر أكبر من الحد؛ والحد بالظبط مسموح', () => {
+  const sa = cap.legalFineCap(entries, 'SA', '2026-10-08')
+  assert.deepEqual([cap.fineCapIssue(null, 30, 30, '2026-10'), cap.fineCapIssue(sa, 5, 0, '2026-10'), cap.fineCapIssue(sa, 2, 3, '2026-10'), cap.fineCapIssue(sa, 0.25, 4.75, '2026-10')], [null, null, null, null])
+  assert.equal(cap.fineCapIssue(sa, 6, 0, '2026-10'), cap.fineOverCap(6, 5))
+  assert.equal(cap.fineCapIssue(sa, 3, 2.25, '2026-10'), cap.fineMonthOverCap('2026-10', 5.25, 5))
+  assert.match(cap.fineMonthOverCap('2026-10', 5.25, 5), /غرامات شهر 2026-10 للموظف هتبقى 5\.25 يوم — الحد القانوني 5 أيام/)
+})
+
+test('FCU-03: مصدر الكود — ورا إعداده المقفول، وتحت قفل صف الموظف، ومن مسار الحسابات القانونية بس', () => {
+  const read = rel => fs.readFileSync(path.join(apiRoot, 'src', rel), 'utf8').replace(/\r\n/g, '\n')
+  const pure = read('cases/penalty-fine-cap.ts')
+  assert.doesNotMatch(pure, /EntityManager|getRepository|\.query\(/)
+  assert.doesNotMatch(pure.replace(/\/\/.*$/gm, ''), /\b5\b/, 'ولا رقم قانوني في الكود')
+  const service = read('cases/penalties.service.ts')
+  assert.match(service, /if \(\(await em\.getRepository\(RequestsConfig\)\.findOne\(\{ where: \{ key: PENALTY_FINE_CAP_KEY \} \}\)\)\?\.value !== 'true'\) return null/)
+  const apply = service.slice(service.indexOf('  async apply('))
+  assert.ok(apply.indexOf("lock: { mode: 'pessimistic_write' }") < apply.indexOf('const cap = await this.fineCapOf(em, employee, step, incidentDate)'), 'الحكم بعد قفل صف الموظف')
+  assert.ok(apply.indexOf('const cap = await this.fineCapOf(') < apply.indexOf('em.getRepository(EmployeePenalty).insert('), 'الرفض قبل أي كتابة')
+  assert.match(apply, /if \(cap\) \{\n\s+await this\.settlePending\(em, employee\.id\)\n/)
+  // المعاينة من غير خانة الحد لما الإعداد مقفول (الرد زي الأول بالحرف)
+  assert.match(service, /\.\.\.\(cap \? \{ fineCap: \{ maxDays: cap\.maxDays, exceeded: \(step\.days \?\? 0\) > cap\.maxDays \} \} : \{\}\)/)
+  assert.match(read('statutory/statutory-calculators.service.ts'), /code: 'PENALTY_FINE_CAP'[\s\S]{0,400}enabledKey: PENALTY_FINE_CAP_KEY, keys: \[\{ country: 'SA', key: SA_DEDUCTION_CAPS_KEY, required: true \}\]/)
+  const { configSeed } = require('../src/seed/requests-seed.data')
+  assert.equal(configSeed.some(row => row.key === cap.PENALTY_FINE_CAP_KEY), false, 'مش مبذور: مساره حزمة الدولة بس')
+  assert.equal(fs.readFileSync(path.join(apiRoot, '..', 'src', 'app', 'settings', 'policies', 'page.tsx'), 'utf8').includes(cap.PENALTY_FINE_CAP_KEY), false)
+})

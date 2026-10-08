@@ -155,7 +155,14 @@ export default function PenaltiesPage() {
                     <input className="input mt-1 w-full" maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} />
                   </label>
                 </div>
-                <button onClick={confirm} disabled={busy || (preview.needsPeriod && !period)} className="btn-primary text-sm disabled:opacity-50">
+                {preview.fineCap && (
+                  <p className={`text-sm ${preview.fineCap.exceeded ? 'text-red-700' : 'text-gray-600'}`} data-penalty-fine-cap>
+                    {preview.fineCap.exceeded
+                      ? `الجزاء ده أكتر من الحد القانوني للغرامة (${preview.fineCap.maxDays} أيام) لدولة فرع الموظف — مايتوقّعش.`
+                      : `الحد القانوني لغرامات الشهر لدولة فرع الموظف: ${preview.fineCap.maxDays} أيام (مع غرامات نفس شهر الخصم).`}
+                  </p>
+                )}
+                <button onClick={confirm} disabled={busy || (preview.needsPeriod && !period) || !!preview.fineCap?.exceeded} className="btn-primary text-sm disabled:opacity-50">
                   تأكيد توقيع الجزاء
                 </button>
               </div>

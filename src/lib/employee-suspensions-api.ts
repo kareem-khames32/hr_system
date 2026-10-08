@@ -20,12 +20,17 @@ export interface EmployeeSuspension {
   endedByUserId: number | null
   createdByUserId: number | null
   createdAt: string
+  // B4.5 (د): إيقاف احتياطي بأجر — أيامه ماتتخصمش
+  paid?: boolean
 }
+
+export const fetchSuspensionOptions = (employeeId: number) =>
+  apiFetch<{ paidAvailable: boolean; paidMaxDays: number | null }>(`/employees/${employeeId}/suspension-options`)
 
 export const fetchEmployeeSuspensions = (employeeId: number) =>
   apiFetch<EmployeeSuspension[]>(`/employees/${employeeId}/suspensions`)
 
-export const suspendEmployee = (employeeId: number, body: { fromDate: string; toDate: string; reason: string }) =>
+export const suspendEmployee = (employeeId: number, body: { fromDate: string; toDate: string; reason: string; paid?: boolean }) =>
   apiFetch<EmployeeSuspension>(`/employees/${employeeId}/suspensions`, { method: 'POST', body: JSON.stringify(body) })
 
 export const endEmployeeSuspension = (employeeId: number, suspensionId: number, body: { returnDate: string; reason?: string }) =>
@@ -34,8 +39,8 @@ export const endEmployeeSuspension = (employeeId: number, suspensionId: number, 
 export const dayCountText = (days: number) => days === 1 ? 'يوم واحد' : days === 2 ? 'يومين' : days <= 10 ? `${days} أيام` : `${days} يوم`
 
 /** «من 2026-09-20 إلى 2026-09-25 (6 أيام)» */
-export function suspensionPeriodText(period: Pick<EmployeeSuspension, 'fromDate' | 'toDate'>): string {
-  return `من ${period.fromDate} إلى ${period.toDate} (${dayCountText(inclusiveDays(period.fromDate, period.toDate))})`
+export function suspensionPeriodText(period: Pick<EmployeeSuspension, 'fromDate' | 'toDate' | 'paid'>): string {
+  return `من ${period.fromDate} إلى ${period.toDate} (${dayCountText(inclusiveDays(period.fromDate, period.toDate))})${period.paid ? ' — بأجر' : ''}`
 }
 
 /** وصف سطر السجل: الحالة + الإنهاء المبكر أو الإلغاء لو حصل */

@@ -11,7 +11,17 @@ export interface SuspensionPeriod {
   fromDate: string
   toDate: string
   status: SuspensionStatus | string
+  // B4.5 (د): إيقاف احتياطي بأجر — أيامه ماتتخصمش في المسير (وباقي أثر الإيقاف زي ما هو). الفاضي = من غير أجر
+  isPaid?: boolean | null
 }
+
+// B4.5 (د): الإيقاف بأجر متاح بس لما الإعداد ده مفتوح (مقفول افتراضيًا = كل إيقاف بيتخصم زي الأول)
+export const SUSPENSION_PAID_KEY = 'suspension.paid_precautionary.enabled'
+export const SUSPENSION_PAID_CLOSED = 'الإيقاف الاحتياطي بأجر مقفول — يتفتح من «سياسات النظام»'
+export const SUSPENSION_PAID_MIGRATION = 'الإيقاف بأجر محتاج ترحيل 137 على قاعدة البيانات الأول'
+export const suspensionPaidTooLong = (maxDays: number) => `الإيقاف الاحتياطي بأجر بحد أقصى ${maxDays} يوم لدولة فرع الموظف`
+/** الإيقافات من غير أجر بس (اللي أيامها بتتخصم) */
+export const unpaidSuspensions = <T extends SuspensionPeriod>(periods: readonly T[]): T[] => periods.filter(period => period.isPaid !== true)
 
 export const SUSPENSION_REASON_MIN = 3
 export const SUSPENSION_REASON_MAX = 500
@@ -146,8 +156,11 @@ export function suspensionPayrollDays(
   leaveDeductible: (date: string) => boolean = () => true,
 ) {
   const dates = suspendedDatesInRange(periods, from, to)
+  // B4.5 (د): أيام الإيقاف بأجر موقوفة (dates) بس مش مخصومة (days)
+  const paid = new Set(suspendedDatesInRange(periods.filter(period => period.isPaid === true), from, to))
   let days = 0
   for (const date of dates) {
+    if (paid.has(date)) continue
     let leaveFraction = 0
     if (leaveDeductible(date)) {
       for (const leave of unpaidLeaves) {

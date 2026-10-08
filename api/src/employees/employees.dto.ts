@@ -69,6 +69,11 @@ export class CreateEmployeeSuspensionDto {
   @MinLength(SUSPENSION_REASON_MIN, { message: `سبب الإيقاف ${SUSPENSION_REASON_MIN} أحرف على الأقل` })
   @MaxLength(SUSPENSION_REASON_MAX, { message: `سبب الإيقاف بحد أقصى ${SUSPENSION_REASON_MAX} حرف` })
   reason: string
+
+  // B4.5 (د): إيقاف احتياطي بأجر (من غير خصم) — متاح لما إعداده مفتوح بس
+  @IsOptional()
+  @IsBoolean({ message: 'الإيقاف بأجر: نعم أو لا' })
+  paid?: boolean
 }
 
 export class EndEmployeeSuspensionDto {

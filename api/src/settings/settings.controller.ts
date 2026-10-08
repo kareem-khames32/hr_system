@@ -743,6 +743,7 @@ export class SettingsController {
     // القرار ب2: «اقفل طلب السلفة الآن» — مفتاح واحد يعلو أيام الطلب من الشهر
     'loan.request_open': ['true', 'false'],
     // B4.5 (أ): مكافأة نهاية الخدمة مطبّقة لكل دولة
+    'suspension.paid_precautionary.enabled': ['true', 'false'],
     'eos.applies.eg': ['true', 'false'],
     'eos.applies.sa': ['true', 'false'],
     'deductions.manager_creation_enabled': ['true', 'false'],

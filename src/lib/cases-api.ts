@@ -56,6 +56,8 @@ export interface ApiPenaltyPreview {
   employeeName: string; violationName: string; incidentDate: string; occurrence: number; occurrenceLabel: string; action: PenaltyAction; days: number | null; label: string; windowDays: number; needsPeriod: boolean
   /** بصمة اللي اتعرض: التوقيع بيبعتها، ولو اللائحة أو التكرار اتغيّروا الخادم بيرفض */
   fingerprint: string
+  /** B4.5 (د): الحد القانوني لغرامات الشهر لدولة فرع الموظف (لو مفعّل)؛ exceeded = الجزاء ده لوحده أكبر منه */
+  fineCap?: { maxDays: number; exceeded: boolean }
 }
 export interface ApiPenalty {
   id: number; employeeId?: number; employeeName?: string; violationName: string; category: string | null; occurrence: number; occurrenceLabel: string; action: PenaltyAction; days: number | null; label: string

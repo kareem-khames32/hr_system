@@ -373,6 +373,8 @@ export const configSeed: Array<{ key: string; value: string }> = [
   // eos.months_per_year شهر/سنة لأول eos.tier1_years سنة، وبعدها eos.months_per_year_after
   { key: 'eos.months_per_year', value: '0.5' },
   // B4.5 (أ): المكافأة مطبّقة لكل دولة (الافتراضي = زي ما كانت: مطبّقة للكل)
+  // B4.5 (د): الإيقاف الاحتياطي بأجر متاح عند تسجيل الإيقاف — مقفول = كل إيقاف بيتخصم زي الأول
+  { key: 'suspension.paid_precautionary.enabled', value: 'false' },
   { key: 'eos.applies.eg', value: 'true' },
   { key: 'eos.applies.sa', value: 'true' },
   { key: 'eos.tier1_years', value: '5' },

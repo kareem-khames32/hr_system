@@ -62,7 +62,10 @@ import { recordEmployeePaymentChanges } from './employee-payment-changes'
 import { BANK_SECURE_FIELDS, onePersonControlEnabled } from '../payroll/one-person-controls'
 import { CustodyAssignment } from '../requests/entities/custody.entities'
 import { openCustodyStatuses } from '../requests/employment-destinations'
-import { readEmployeeSuspensions, readOpenSuspensions, suspensionTableReady, suspensionView } from './employee-suspensions'
+import { attachSuspensionPaid, markSuspensionPaid, suspensionPaidReady, readEmployeeSuspensions, readOpenSuspensions, suspensionTableReady, suspensionView } from './employee-suspensions'
+import { inclusiveDays, SUSPENSION_PAID_CLOSED, SUSPENSION_PAID_KEY, SUSPENSION_PAID_MIGRATION, suspensionPaidTooLong } from './employee-suspension-rules'
+import { paidSuspensionMaxDays } from './employee-suspension-paid'
+import { readStatutoryEntries } from '../statutory/statutory.service'
 import type { CreateEmployeeSuspensionDto, EndEmployeeSuspensionDto } from './employees.dto'
 import { recordOutboxEvent } from '../queue/outbox'
 import { recordAudit } from '../audit/audit'
@@ -1117,6 +1120,16 @@ export class EmployeesService {
     return (await readEmployeeSuspensions(this.employees.manager, id, undefined, { includeCancelled: true })).map(row => suspensionView(row, today))
   }
 
+  // B4.5 (د): هل «إيقاف احتياطي بأجر» متاح للموظف ده (الإعداد مفتوح والعمود موجود) وحدّه من حزمة دولة فرعه — النافذة بتعرض الاختيار على أساسه
+  async suspensionOptions(id: number, branchScope: BranchScope) {
+    const em = this.employees.manager
+    const employee = await this.scopedEmployee(em, id, branchScope)
+    const open = (await this.config.findOne({ where: { key: SUSPENSION_PAID_KEY } }))?.value === 'true'
+    if (!open || !(await suspensionTableReady(em)) || !(await suspensionPaidReady(em))) return { paidAvailable: false, paidMaxDays: null }
+    const [branch]: Array<{ country: string | null }> = employee.branchId == null ? [] : await em.query('SELECT [country] FROM [branches] WHERE [id] = @0', [employee.branchId])
+    return { paidAvailable: true, paidMaxDays: paidSuspensionMaxDays(await readStatutoryEntries(em), branch?.country, localDateOf(new Date())) }
+  }
+
   async createSuspension(id: number, dto: CreateEmployeeSuspensionDto, branchScope: BranchScope, actorId: number) {
     const issue = suspensionInputIssue(dto)
     if (issue) throw new BadRequestException(issue)
@@ -1140,17 +1153,27 @@ export class EmployeesService {
       await assertAttendanceRulePeriodOpen(em, [id], dto.fromDate, dto.toDate, SUSPENSION_CLOSED_PAYROLL_MESSAGE)
       // إجازة على نفس الأيام: الراتب يتخصم والرصيد يفضل مستهلك — HR يلغي الإجازة أو يقصّرها الأول
       await this.assertNoLeaveOverlap(em, id, dto.fromDate, dto.toDate)
+      // B4.5 (د): «بأجر» متاح لما إعداده مفتوح، وبحد دولة فرع الموظف الحالي من الحزمة (لما صفه «اتأكد») — الحكم تحت قفل صف الموظف
+      const paid = dto.paid === true
+      if (paid) {
+        if ((await em.getRepository(RequestsConfig).findOne({ where: { key: SUSPENSION_PAID_KEY } }))?.value !== 'true') throw new BadRequestException(SUSPENSION_PAID_CLOSED)
+        const [branch]: Array<{ country: string | null }> = employee.branchId == null ? [] : await em.query('SELECT [country] FROM [branches] WHERE [id] = @0', [employee.branchId])
+        const maxDays = paidSuspensionMaxDays(await readStatutoryEntries(em), branch?.country, dto.fromDate)
+        if (maxDays !== null && inclusiveDays(dto.fromDate, dto.toDate) > maxDays) throw new BadRequestException(suspensionPaidTooLong(maxDays))
+      }
       const row = await em.save(EmployeeSuspension, em.create(EmployeeSuspension, {
         employeeId: id, fromDate: dto.fromDate, toDate: dto.toDate, plannedToDate: dto.toDate, reason: dto.reason.trim(),
         status: 'ACTIVE', createdByUserId: actorId ?? null,
       }))
+      if (paid && !(await markSuspensionPaid(em, row.id))) throw new BadRequestException(SUSPENSION_PAID_MIGRATION)
+      row.isPaid = paid
       // أيام فاتت اتسجلت غياب قبل الإيقاف: صف الغياب بلا بصمة تصنيف مؤقت يُشال (اليوم إيقاف مش غياب)
       const lastPast = dto.toDate < today ? dto.toDate : today
       if (dto.fromDate <= lastPast) {
         await em.delete(AttendanceDay, { employeeId: id, date: Between(dto.fromDate, lastPast), status: 'absent', checkIn: IsNull(), checkOut: IsNull() })
       }
       await recordEmployeeChange(em, { employeeId: id, fieldName: 'suspension', oldValue: null,
-        newValue: `إيقاف عن العمل ${dto.fromDate} → ${dto.toDate}`, changedByUserId: actorId, reason: dto.reason.trim() })
+        newValue: `إيقاف عن العمل ${dto.fromDate} → ${dto.toDate}${paid ? ' (احتياطي بأجر)' : ''}`, changedByUserId: actorId, reason: dto.reason.trim() })
       // تراكم المسير: أيام الإيقاف تتحسب من جديد (يوم إيقاف مش غياب ولا تأخير)
       await markPayrollRangeDirty(em, id, dto.fromDate, dto.toDate, 'تسجيل إيقاف عن العمل')
       return row
@@ -1182,6 +1205,7 @@ export class EmployeesService {
       row.endedAt = new Date()
       row.endedByUserId = actorId ?? null
       const result = await em.save(EmployeeSuspension, row)
+      await attachSuspensionPaid(em, [result])
       await recordEmployeeChange(em, { employeeId: id, fieldName: 'suspension', oldValue: `إيقاف عن العمل ${period.fromDate} → ${oldTo}`,
         newValue: plan.status === 'CANCELLED' ? 'إلغاء الإيقاف' : `إنهاء الإيقاف بدري — رجوع للعمل ${returnDate}`, changedByUserId: actorId,
         reason: reason ?? (plan.status === 'CANCELLED' ? 'إلغاء الإيقاف' : 'إنهاء الإيقاف قبل موعده') })

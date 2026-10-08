@@ -104,7 +104,7 @@ test('SK-01: الإقلاع بيحمّل صفوف بطاقات C «محتاج ت
   const TAX_PREVIEW = 'ضريبة كسب العمل: المعاينة، والمسير لو إعدادها مفتوح (مقفول افتراضيًا)'
   assert.deepEqual(pack.keys.filter(row => row.usedBy).map(row => [row.key, row.usedBy]), [['eg.insurance.wage_limits', 'حساب التأمينات الاجتماعية'], ['eg.salary_tax.brackets', TAX_PREVIEW],
     ['eg.salary_tax.high_income', TAX_PREVIEW], ['eg.martyrs_fund', 'صندوق الشهداء في المسير لو إعداده مفتوح (مقفول افتراضيًا)'], ['eg.health_insurance', 'التأمين الصحي الشامل في المسير لو إعداده مفتوح (مقفول افتراضيًا)'],
-    ['eg.training_fund', 'تقرير صندوق التدريب السنوي (للعرض بس)'], ['eg.leave.annual', 'اقتراح شرائح الإجازة السنوية في شاشة أنواع الإجازات (للعرض بس — المالك بيراجع ويحفظ)'], ['eg.leave.other', 'أنواع إجازات الفرع غير المفعّلة في شاشة أنواع الإجازات (للعرض بس — المالك بيراجع ويفعّل)'], ['eg.overtime', 'الحد القانوني لمعامل الإضافي لو إعداده مفتوح (مقفول افتراضيًا)'], ['sa.gosi.new_track', 'حساب التأمينات الاجتماعية'], ['sa.leave.annual', 'اقتراح شرائح الإجازة السنوية في شاشة أنواع الإجازات (للعرض بس — المالك بيراجع ويحفظ)'], ['sa.leave.other', 'أنواع إجازات الفرع غير المفعّلة في شاشة أنواع الإجازات (للعرض بس — المالك بيراجع ويفعّل)'], ['sa.overtime', 'الحد القانوني لمعامل الإضافي لو إعداده مفتوح (مقفول افتراضيًا)']])
+    ['eg.training_fund', 'تقرير صندوق التدريب السنوي (للعرض بس)'], ['eg.leave.annual', 'اقتراح شرائح الإجازة السنوية في شاشة أنواع الإجازات (للعرض بس — المالك بيراجع ويحفظ)'], ['eg.leave.other', 'أنواع إجازات الفرع غير المفعّلة في شاشة أنواع الإجازات (للعرض بس — المالك بيراجع ويفعّل)'], ['eg.overtime', 'الحد القانوني لمعامل الإضافي لو إعداده مفتوح (مقفول افتراضيًا)'], ['eg.termination', 'حد مدة الإيقاف الاحتياطي بأجر لما الصف «اتأكد» — والإيقاف بأجر نفسه ورا إعداد (مقفول افتراضيًا)'], ['sa.gosi.new_track', 'حساب التأمينات الاجتماعية'], ['sa.leave.annual', 'اقتراح شرائح الإجازة السنوية في شاشة أنواع الإجازات (للعرض بس — المالك بيراجع ويحفظ)'], ['sa.leave.other', 'أنواع إجازات الفرع غير المفعّلة في شاشة أنواع الإجازات (للعرض بس — المالك بيراجع ويفعّل)'], ['sa.overtime', 'الحد القانوني لمعامل الإضافي لو إعداده مفتوح (مقفول افتراضيًا)'], ['sa.deduction_caps', 'الحد القانوني لغرامات الشهر في لائحة الجزاءات لو إعداده مفتوح (مقفول افتراضيًا)']])
   assert.ok(pack.keys.every(row => row.rows.length >= 1 && row.rows.every(entry => entry.verified === false && entry.source)))
   // الساري النهارده: صف واحد بالكتير لكل مفتاح — آخر «ساري من» لحد النهارده
   const today = localDateOf(new Date())
@@ -176,7 +176,7 @@ test('SK-03: تفعيل الحسابات القانونية — لمدير ال�
   assert.equal((await request(users.plain, 'GET', C)).status, 403)
   const seen = expectStatus(await request(users.settings, 'GET', C), 200)
   assert.deepEqual([seen.canEdit, seen.calculators.map(row => [row.code, row.enabled, row.needsStartPeriod, row.startPeriod, row.blockers])],
-    [false, [['EG_SALARY_TAX', false, true, null, [calc.CALCULATOR_UNVERIFIED]], ['EG_MARTYRS_FUND', false, false, null, [calc.CALCULATOR_UNVERIFIED]], ['EG_HEALTH_INSURANCE', false, false, null, [calc.CALCULATOR_UNVERIFIED]], ['OVERTIME_LEGAL_MINIMUM', false, false, null, [calc.CALCULATOR_UNVERIFIED]]]])
+    [false, [['EG_SALARY_TAX', false, true, null, [calc.CALCULATOR_UNVERIFIED]], ['EG_MARTYRS_FUND', false, false, null, [calc.CALCULATOR_UNVERIFIED]], ['EG_HEALTH_INSURANCE', false, false, null, [calc.CALCULATOR_UNVERIFIED]], ['OVERTIME_LEGAL_MINIMUM', false, false, null, [calc.CALCULATOR_UNVERIFIED]], ['PENALTY_FINE_CAP', false, false, null, []]]])
   assert.deepEqual(seen.calculators[0].rows.map(row => [row.key, row.verified, row.current]), [['eg.salary_tax.brackets', false, true], ['eg.salary_tax.high_income', false, true]])
   assert.equal(expectStatus(await request(users.admin, 'GET', C), 200).canEdit, true)
   assert.deepEqual(answer(await put(users.settings, 'EG_SALARY_TAX', { enabled: true, startPeriod: '2026-11' })), [403, calc.CALCULATOR_ADMIN_ONLY])
@@ -195,7 +195,7 @@ test('SK-03: تفعيل الحسابات القانونية — لمدير ال�
   // من غير فترة بداية: مرفوض؛ وبيها: اتفعّل، وصندوق الشهداء لسه مقفول (حسابه لوحده)
   assert.deepEqual(answer(await put(users.admin, 'EG_SALARY_TAX', { enabled: true })), [400, calc.CALCULATOR_START_PERIOD])
   const enabled = expectStatus(await put(users.admin, 'EG_SALARY_TAX', { enabled: true, startPeriod: '2026-11' }), 200)
-  assert.deepEqual(enabled.calculators.map(row => [row.code, row.enabled, row.startPeriod, row.blockers.length]), [['EG_SALARY_TAX', true, '2026-11', 0], ['EG_MARTYRS_FUND', false, null, 1], ['EG_HEALTH_INSURANCE', false, null, 1], ['OVERTIME_LEGAL_MINIMUM', false, null, 1]])
+  assert.deepEqual(enabled.calculators.map(row => [row.code, row.enabled, row.startPeriod, row.blockers.length]), [['EG_SALARY_TAX', true, '2026-11', 0], ['EG_MARTYRS_FUND', false, null, 1], ['EG_HEALTH_INSURANCE', false, null, 1], ['OVERTIME_LEGAL_MINIMUM', false, null, 1], ['PENALTY_FINE_CAP', false, null, 0]])
   assert.deepEqual([await config(), await audits('STATUTORY_CALCULATOR_CHANGED')], [{ 'eg.salary_tax.enabled': 'true', 'eg.salary_tax.start_period': '2026-11' }, 1])
   assert.deepEqual(answer(await put(users.admin, 'EG_SALARY_TAX', { enabled: true, startPeriod: '2026-11' })), [400, calc.CALCULATOR_NOTHING])
   // حساب المسير بيقرا نفس المفاتيح
@@ -240,7 +240,7 @@ test('SK-04: تفعيل التأمين الصحي الشامل — بفروعه 
   const riyadh = await repo('Branch').save({ code: 'SK_RUH', name: 'فرع الرياض', country: 'SA' })
   const seen = await health()
   assert.deepEqual([seen.needsBranches, seen.branchIds, seen.branchOptions.map(option => option.name), seen.needsStartPeriod], [true, [], ['فرع القاهرة', 'فرع الجيزة'], false])
-  assert.deepEqual((await expectStatus(await request(users.admin, 'GET', C), 200)).calculators.map(row => row.needsBranches), [false, false, true, false])
+  assert.deepEqual((await expectStatus(await request(users.admin, 'GET', C), 200)).calculators.map(row => row.needsBranches), [false, false, true, false, false])
   // قيم الفروع: قايمة أرقام فروع موجودة ودولتها مصر
   for (const bad of ['1', [0], ['x'], [riyadh.id], [cairo.id, 999999]]) assert.deepEqual(answer(await put({ branchIds: bad })), [400, calc.CALCULATOR_BRANCHES], JSON.stringify(bad))
   assert.deepEqual(answer(await request(users.admin, 'PUT', `${C}/EG_MARTYRS_FUND`, { branchIds: [cairo.id] })), [400, calc.CALCULATOR_BRANCHES], 'حساب مالوش فروع')
