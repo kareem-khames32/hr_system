@@ -168,7 +168,7 @@ test('TU-05: قواعد المالك في الشاشات — الأزرار من
   assert.match(log, /\{line\.mine \? 'أنت' : line\.by \?\? 'حساب'\} · \{formatDateTime\(line\.at\)\}/)
   // رجوع «خلصت» للتعديل بسببه (غير إعادة فتح الملغية)، والمهمة اللي اتقيّمت مالهاش زرار رجوع
   assert.match(card, /if \(panel === 'reopen' && task\.status === 'DONE' && !text\) \{ setError\('اكتب سبب رجوع المهمة للتعديل'\); return \}/)
-  assert.match(card, /\{task\.rating == null && <>\{!open && task\.canManage && <button type="button" className="btn-secondary" disabled=\{busy\} onClick=\{\(\) => setPanel\('reopen'\)\}><RotateCcw size=\{14\} className="inline ml-1" \/>\{task\.status === 'DONE' \? 'رجّعها للتعديل' : 'افتحها تاني'\}<\/button>\}<\/>\}/)
+  assert.match(card, /\{task\.rating == null && <>\{!open && task\.canManage && <button type="button" className="btn-secondary" disabled=\{busy\} onClick=\{\(\) => setPanel\('reopen'\)\}><RotateCcw size=\{14\} className="inline me-1" \/>\{task\.status === 'DONE' \? 'رجّعها للتعديل' : 'افتحها تاني'\}<\/button>\}<\/>\}/)
 
   const form = read('src/components/tasks/TaskFormModal.tsx')
   // «نفسي» في القايمة بمسمّاها، وتلميح المهمة الشخصية، وتلميح «اعمل طلب» للي من غير «إدارة المهام»
@@ -194,7 +194,7 @@ test('TU-05: قواعد المالك في الشاشات — الأزرار من
 
   // «مش بتاعتي» في الحوار بعلامته جنب اسم كاتبه
   const thread = read('src/components/comments/CommentsThread.tsx')
-  assert.match(thread, /\{comment\.eventLabel && <span className="badge bg-gray-100 text-gray-700 mr-2" data-comment-event-label>\{comment\.eventLabel\}<\/span>\}/)
+  assert.match(thread, /\{comment\.eventLabel && <span className="badge bg-gray-100 text-gray-700 ms-2" data-comment-event-label>\{comment\.eventLabel\}<\/span>\}/)
   // والمسمّيات من الخادم نفسه (مفيش نسخة تانية في الواجهة)، ونص المالك بالحرف
   const extras = require('../src/tasks/task-extras')
   assert.deepEqual(Object.keys(extras.TASK_LOG_EVENTS), ['ASSIGNED', 'REASSIGNED', 'DUE_CHANGED', 'EDITED', 'STARTED', 'WAITING', 'DONE', 'CANCELLED', 'REOPENED', 'RETURNED', 'EXTENSION_REQUESTED',

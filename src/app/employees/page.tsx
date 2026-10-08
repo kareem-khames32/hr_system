@@ -291,13 +291,13 @@ export default function EmployeesPage() {
             {/* Search */}
             <div className="flex-1 min-w-[220px]">
               <div className="relative">
-                <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <Search size={18} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   type="text"
                   placeholder="بحث بالاسم، الرقم الوظيفي، البريد..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="input pr-10"
+                  className="input ps-10"
                 />
               </div>
             </div>
@@ -409,13 +409,13 @@ export default function EmployeesPage() {
               <table className="w-full">
                 <thead>
                   <tr className="table-header">
-                    <th className="text-right px-4 py-4">الموظف</th>
-                    <th className="text-right px-4 py-4">الرقم الوظيفي</th>
-                    <th className="text-right px-4 py-4">القسم</th>
-                    <th className="text-right px-4 py-4">المسمى الوظيفي</th>
-                    <th className="text-right px-4 py-4">الفرع</th>
-                    <th className="text-right px-4 py-4">تاريخ التعيين</th>
-                    <th className="text-right px-4 py-4">الحالة</th>
+                    <th className="text-start px-4 py-4">الموظف</th>
+                    <th className="text-start px-4 py-4">الرقم الوظيفي</th>
+                    <th className="text-start px-4 py-4">القسم</th>
+                    <th className="text-start px-4 py-4">المسمى الوظيفي</th>
+                    <th className="text-start px-4 py-4">الفرع</th>
+                    <th className="text-start px-4 py-4">تاريخ التعيين</th>
+                    <th className="text-start px-4 py-4">الحالة</th>
                     <th className="text-center px-4 py-4">الإجراءات</th>
                   </tr>
                 </thead>

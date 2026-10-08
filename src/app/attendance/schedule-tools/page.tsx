@@ -124,7 +124,7 @@ export default function ScheduleToolsPage() {
                     <span className="text-gray-500">{branchName(row.branchId)}</span>
                     <span className="text-gray-700">{row.shiftIds.map(shiftName).join(' ← ')}</span>
                     {!row.isActive && <span className="text-gray-400">مقفول</span>}
-                    <button type="button" className="mr-auto text-primary-600 text-xs" onClick={() => editRotation(row)}>تعديل</button>
+                    <button type="button" className="ms-auto text-primary-600 text-xs" onClick={() => editRotation(row)}>تعديل</button>
                   </li>
                 ))}
               </ul>
@@ -231,10 +231,10 @@ export default function ScheduleToolsPage() {
                   <thead className="bg-gray-50 text-gray-600">
                     <tr>
                       <th className="table-header text-center">الأسبوع</th>
-                      <th className="table-header text-right">الفرع</th>
+                      <th className="table-header text-start">الفرع</th>
                       <th className="table-header text-center">موظفين</th>
-                      <th className="table-header text-right">نشره</th>
-                      <th className="table-header text-right">ملاحظة</th>
+                      <th className="table-header text-start">نشره</th>
+                      <th className="table-header text-start">ملاحظة</th>
                     </tr>
                   </thead>
                   <tbody>

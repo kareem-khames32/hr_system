@@ -136,12 +136,12 @@ export default function OffboardingPage() {
             <div className="relative flex-1 min-w-[220px]">
               <Search
                 size={18}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
+                className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400"
               />
               <input
                 type="text"
                 placeholder="بحث باسم الموظف أو الرقم الوظيفي..."
-                className="input pr-10 w-full"
+                className="input ps-10 w-full"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
@@ -174,7 +174,7 @@ export default function OffboardingPage() {
           <div className="card overflow-hidden">
             <table className="w-full">
               <thead>
-                <tr className="bg-gray-50 text-right">
+                <tr className="bg-gray-50 text-start">
                   <th className="py-3 px-4 text-sm font-medium text-gray-500">الموظف</th>
                   <th className="py-3 px-4 text-sm font-medium text-gray-500">آخر يوم عمل</th>
                   <th className="py-3 px-4 text-sm font-medium text-gray-500">الحالة</th>

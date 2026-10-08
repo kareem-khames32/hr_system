@@ -213,7 +213,7 @@ export default function PayrollBankSheetPage() {
                 <table className="w-full">
                   <thead className="bg-gray-50">
                     <tr>
-                      <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">البنك</th>
+                      <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">البنك</th>
                       {multi && <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">العملة</th>}
                       <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">الموظفين</th>
                       <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">الإجمالي</th>
@@ -239,7 +239,7 @@ export default function PayrollBankSheetPage() {
                   <thead className="bg-gray-50">
                     <tr>
                       {(multi ? HEADER : HEADER.slice(0, -1)).map((title, index) => (
-                        <th key={title} className={`px-4 py-3 ${index >= 5 && index <= 7 ? 'text-center' : 'text-right'} text-sm font-medium text-gray-600 whitespace-nowrap`}>{title}</th>
+                        <th key={title} className={`px-4 py-3 ${index >= 5 && index <= 7 ? 'text-center' : 'text-start'} text-sm font-medium text-gray-600 whitespace-nowrap`}>{title}</th>
                       ))}
                     </tr>
                   </thead>

@@ -29,7 +29,7 @@ export function PayrollInstallmentBreakdown({ item, currency, compact = false }:
       {' '}{plan.policy?.mode === 'SKIP_AND_EXTEND' ? 'عند النقص: تأجيل القسط كاملًا ومد الجدول.' : 'عند النقص: يُخصم المتاح ويُؤجَّل الباقي للشهر التالي.'}</p>
     {excluded > 0 && <p className="text-xs text-amber-700 mb-3">استُبعد {excluded} قسطًا لوجود حجز سابق في مسير معتمد أو تصفية.</p>}
     {undisbursed > 0 && <p className="text-xs text-amber-700 mb-3">{undisbursed} قسط سلفة ماتخصمش لأن صرف السلفة لسه ماتسجلش؛ بيتخصم في أول مسير بعد تسجيل الصرف.</p>}
-    {rows.length > 0 && <div className="overflow-x-auto"><table className="w-full text-sm text-right">
+    {rows.length > 0 && <div className="overflow-x-auto"><table className="w-full text-sm text-start">
       <thead><tr className="bg-gray-50 text-gray-600"><th className="p-2">القسط</th><th className="p-2">أصل الاستحقاق</th>
         <th className="p-2">المستحق</th><th className="p-2">خصم المسير</th><th className="p-2">يُخصم الشهر القادم</th><th className="p-2">الإجراء</th></tr></thead>
       <tbody>{rows.map(row => <tr key={row.installmentRef} className="border-t border-gray-100 align-top">
@@ -41,7 +41,7 @@ export function PayrollInstallmentBreakdown({ item, currency, compact = false }:
     </table></div>}
     <p className="text-xs text-gray-500 mt-2">هذه أقساط السلف المحفوظة مع المسير؛ ما لم يُخصم منها هذا الشهر يُخصم في الشهر التالي.</p>
   </>
-  return compact ? <details className="text-right font-sans mt-2 min-w-40"><summary className="text-xs text-primary-700 cursor-pointer">تفاصيل أقساط السلف</summary>
+  return compact ? <details className="text-start font-sans mt-2 min-w-40"><summary className="text-xs text-primary-700 cursor-pointer">تفاصيل أقساط السلف</summary>
     <div className="min-w-[560px] rounded-lg border p-3 my-2">{content}</div></details>
     : <section className="border border-gray-200 rounded-xl p-4 mb-6 break-inside-avoid"><h3 className="font-bold text-gray-800 mb-3">تفصيل أقساط السلف ({currency})</h3>{content}</section>
 }

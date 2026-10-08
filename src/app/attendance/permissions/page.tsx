@@ -329,13 +329,13 @@ export default function PermissionsPage() {
           <div className="flex flex-wrap items-end gap-4">
             <div className="flex-1 min-w-[16rem]">
               <div className="relative">
-                <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <Search size={18} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   type="text"
                   placeholder="بحث بالاسم أو الرقم الوظيفي..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="input pr-10"
+                  className="input ps-10"
                 />
               </div>
             </div>
@@ -358,13 +358,13 @@ export default function PermissionsPage() {
               <table className="w-full">
                 <thead>
                   <tr className="table-header">
-                    <th className="text-right px-4 py-4">الموظف</th>
+                    <th className="text-start px-4 py-4">الموظف</th>
                     <th className="text-center px-4 py-4">التاريخ</th>
                     <th className="text-center px-4 py-4">من</th>
                     <th className="text-center px-4 py-4">إلى</th>
                     <th className="text-center px-4 py-4">المدة</th>
                     <th className="text-center px-4 py-4">نوع الإذن</th>
-                    <th className="text-right px-4 py-4">السبب والتفاصيل</th>
+                    <th className="text-start px-4 py-4">السبب والتفاصيل</th>
                     <th className="text-center px-4 py-4">الحالة</th>
                     {canAct && <th className="text-center px-4 py-4">الإجراءات</th>}
                   </tr>
@@ -451,7 +451,7 @@ export default function PermissionsPage() {
         )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {permissionTypes.map(type => <div key={type.id} className="card border-r-4 border-primary-500"><h3 className="font-bold text-gray-800 mb-2">{type.nameAr}</h3><p className="text-sm text-gray-500">{type.isDeductible ? 'بخصم وفق السياسة' : 'بدون خصم ضمن الحدود المحددة'}</p><p className="text-xs text-gray-500 mt-2">{type.maxDurationMinutes != null ? `أقصى مدة: ${type.maxDurationMinutes} دقيقة` : 'لا يوجد حد أقصى للمدة'}</p></div>)}
+          {permissionTypes.map(type => <div key={type.id} className="card border-s-4 border-primary-500"><h3 className="font-bold text-gray-800 mb-2">{type.nameAr}</h3><p className="text-sm text-gray-500">{type.isDeductible ? 'بخصم وفق السياسة' : 'بدون خصم ضمن الحدود المحددة'}</p><p className="text-xs text-gray-500 mt-2">{type.maxDurationMinutes != null ? `أقصى مدة: ${type.maxDurationMinutes} دقيقة` : 'لا يوجد حد أقصى للمدة'}</p></div>)}
         </div>
       </div>
       {decision && (

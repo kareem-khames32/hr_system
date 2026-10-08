@@ -10,6 +10,7 @@ import {
   Param,
   ParseIntPipe,
   Post,
+  Put,
   Req,
   Res,
   UseGuards,
@@ -248,6 +249,19 @@ export class AuthController {
   @Get('session')
   session(@CurrentUser() user: JwtPayload) {
     return this.auth.sessionView(user)
+  }
+
+  // ===== B6.2: لغة عرض الواجهة — صاحب الحساب لنفسه (للجلسة الكاملة بس: الجلسات المقيّدة بتفضل بسطحها زي ما هو) =====
+  @UseGuards(JwtAuthGuard)
+  @Get('language')
+  language(@CurrentUser() user: JwtPayload) {
+    return this.auth.language(user)
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Put('language')
+  setLanguage(@CurrentUser() user: JwtPayload, @Body('language') language: unknown) {
+    return this.auth.setLanguage(user, language)
   }
 
   // ===== B2.17-ج: التحقق بتطبيق مصادقة (TOTP) — صاحب الحساب لنفسه =====

@@ -196,7 +196,7 @@ export default function NotificationsPage() {
             >
               {item.label}
               {item.id === 'unread' && unreadCount > 0 && (
-                <span className="mr-1 px-1.5 py-0.5 bg-red-500 text-white text-xs rounded-full">
+                <span className="ms-1 px-1.5 py-0.5 bg-red-500 text-white text-xs rounded-full">
                   {unreadCount}
                 </span>
               )}
@@ -225,7 +225,7 @@ export default function NotificationsPage() {
                   <div
                     key={notification.id}
                     className={`card hover:shadow-lg transition-all cursor-pointer ${
-                      !notification.read ? 'border-r-4 border-r-primary-500 bg-primary-50/30' : ''
+                      !notification.read ? 'border-s-4 border-s-primary-500 bg-primary-50/30' : ''
                     }`}
                     onClick={() => handleClick(notification)}
                   >

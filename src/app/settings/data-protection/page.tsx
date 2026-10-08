@@ -152,7 +152,7 @@ export default function DataProtectionPage() {
                                 {incident.affectedCount !== null ? ` · المتأثرين ${incident.affectedCount}` : ''}
                               </p>
                             </div>
-                            <div className="text-left">
+                            <div className="text-end">
                               <span className="inline-block px-3 py-1 rounded-full text-xs bg-gray-100 text-gray-700">{incident.statusLabel}</span>
                               <p className={`text-xs mt-1 ${incident.overdue || incident.notifiedLate ? 'text-red-700 font-semibold' : 'text-gray-500'}`}>{deadline(incident)}</p>
                             </div>

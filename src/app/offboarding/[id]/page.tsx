@@ -600,7 +600,7 @@ export default function OffboardingCasePage() {
                 </div>
                 <table className="w-full">
                   <thead>
-                    <tr className="bg-gray-50 text-right">
+                    <tr className="bg-gray-50 text-start">
                       <th className="py-3 px-4 text-sm font-medium text-gray-500">البند</th>
                       <th className="py-3 px-4 text-sm font-medium text-gray-500">النوع</th>
                       <th className="py-3 px-4 text-sm font-medium text-gray-500">المبلغ</th>

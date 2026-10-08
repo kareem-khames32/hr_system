@@ -366,7 +366,7 @@ export default function LeaveRequestPage() {
                     key={type.code}
                     type="button"
                     onClick={() => handleChange('leaveType', type.code)}
-                    className={`p-4 rounded-xl border-2 text-right transition-all ${
+                    className={`p-4 rounded-xl border-2 text-start transition-all ${
                       formData.leaveType === type.code
                         ? 'border-primary-500 bg-primary-50'
                         : 'border-gray-200 hover:border-gray-300'

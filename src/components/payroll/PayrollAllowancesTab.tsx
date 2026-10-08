@@ -141,8 +141,8 @@ export function PayrollAllowancesTab({ branches, departments, teams, employees, 
           {periodRange && <span className="text-xs text-gray-500" data-payroll-period-range>{dayRangeLabel(periodRange)}</span>}
         </label>
         <div className="relative flex-1 min-w-[220px]">
-          <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input type="text" className="input w-full pr-9" placeholder="دوّر بالاسم أو الكود..." value={query} onChange={e => setQuery(e.target.value)} />
+          <Search size={16} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input type="text" className="input w-full ps-9" placeholder="دوّر بالاسم أو الكود..." value={query} onChange={e => setQuery(e.target.value)} />
         </div>
         {/* الفرع ← الإدارة ← القسم ← الفريق */}
         {org.element}
@@ -226,7 +226,7 @@ export function PayrollAllowancesTab({ branches, departments, teams, employees, 
               </button>
             ))}
             {cancelledCount > 0 && (
-              <label className="flex items-center gap-1.5 text-xs text-gray-500 mr-auto">
+              <label className="flex items-center gap-1.5 text-xs text-gray-500 ms-auto">
                 <input type="checkbox" checked={showCancelled} onChange={e => setShowCancelled(e.target.checked)} /> اعرض الملغى ({cancelledCount})
               </label>
             )}
@@ -237,9 +237,9 @@ export function PayrollAllowancesTab({ branches, departments, teams, employees, 
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead><tr className="table-header">
-                  <th className="table-cell text-right">الموظف</th><th className="table-cell text-right">الفرع / القسم</th>
-                  <th className="table-cell text-right">البدل</th><th className="table-cell text-center">المبلغ</th>
-                  <th className="table-cell text-center">الحالة</th><th className="table-cell text-right">المسير</th>
+                  <th className="table-cell text-start">الموظف</th><th className="table-cell text-start">الفرع / القسم</th>
+                  <th className="table-cell text-start">البدل</th><th className="table-cell text-center">المبلغ</th>
+                  <th className="table-cell text-center">الحالة</th><th className="table-cell text-start">المسير</th>
                   {canWrite && <th className="table-cell" />}
                 </tr></thead>
                 <tbody>
@@ -340,7 +340,7 @@ function TypesPanel({ types, error, branches, canWrite, onChanged }: {
                   <span className="font-medium">{type.name}</span>
                   <span className="text-xs text-gray-400 mx-2" dir="ltr">{type.code}</span>
                   <span className="text-xs text-gray-500">{type.branchName ?? 'الشركة كلها'}</span>
-                  {!type.isActive && <span className="text-xs mr-2">(موقوف)</span>}
+                  {!type.isActive && <span className="text-xs ms-2">(موقوف)</span>}
                 </div>
               )}
               {canWrite && type.canEdit && editing?.id !== type.id && (

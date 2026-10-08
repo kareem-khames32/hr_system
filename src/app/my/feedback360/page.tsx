@@ -163,8 +163,8 @@ export default function Feedback360Page() {
                 {summary.hidden ? <p className="text-gray-500">الردود أقل من {results.minGroup} — مابتتعرضش حفاظًا على السرية.</p> : (
                   <div className="space-y-1">
                     <p>المتوسط <span dir="ltr">{summary.average}</span> من 5 · {summary.count} رد</p>
-                    {summary.strengths.length > 0 && <div><span className="text-gray-600">نقاط القوة:</span><ul className="list-disc pr-5">{summary.strengths.map((text, index) => <li key={index}>{text}</li>)}</ul></div>}
-                    {summary.improvements.length > 0 && <div><span className="text-gray-600">نقاط التحسين:</span><ul className="list-disc pr-5">{summary.improvements.map((text, index) => <li key={index}>{text}</li>)}</ul></div>}
+                    {summary.strengths.length > 0 && <div><span className="text-gray-600">نقاط القوة:</span><ul className="list-disc ps-5">{summary.strengths.map((text, index) => <li key={index}>{text}</li>)}</ul></div>}
+                    {summary.improvements.length > 0 && <div><span className="text-gray-600">نقاط التحسين:</span><ul className="list-disc ps-5">{summary.improvements.map((text, index) => <li key={index}>{text}</li>)}</ul></div>}
                   </div>
                 )}
               </div>

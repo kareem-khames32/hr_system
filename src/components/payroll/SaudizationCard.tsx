@@ -31,7 +31,7 @@ export default function SaudizationCard() {
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-gray-600">
             <tr>
-              <th className="table-header text-right">المنشأة</th>
+              <th className="table-header text-start">المنشأة</th>
               <th className="table-header text-center">الموظفين</th>
               <th className="table-header text-center">السعوديين</th>
               <th className="table-header text-center">النسبة</th>

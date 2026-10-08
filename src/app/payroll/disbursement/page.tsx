@@ -210,8 +210,8 @@ export default function PayrollDisbursementPage() {
                 <label className="flex flex-col gap-1 text-sm flex-1 min-w-[220px]">
                   <span className="font-medium text-gray-700">بحث</span>
                   <span className="relative block">
-                    <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                    <input type="text" className="input w-full pr-9" placeholder="دوّر بالاسم أو الكود..." value={searchText} onChange={event => setSearchText(event.target.value)} />
+                    <Search size={16} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input type="text" className="input w-full ps-9" placeholder="دوّر بالاسم أو الكود..." value={searchText} onChange={event => setSearchText(event.target.value)} />
                   </span>
                 </label>
                 <div className="flex flex-col gap-1 text-sm min-w-0" data-disbursement-org-filter>

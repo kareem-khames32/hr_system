@@ -87,9 +87,9 @@ export function BrandBackdrop({ patternId, ornamentClassName, className }: Brand
         style={PATTERN_STYLE}
       />
       <div className={ornamentClassName}>
-        <div className="ll-drift absolute -top-28 -right-20 h-72 w-72 rounded-full bg-[#e9b949]/[0.14] blur-3xl" />
-        <div className="ll-drift-slow absolute -bottom-28 -left-10 h-80 w-80 rounded-full bg-emerald-400/20 blur-3xl" />
-        <Rosette className="ll-spin-slow absolute -bottom-44 -left-44 h-[36rem] w-[36rem] text-[#f3d58a]/25" />
+        <div className="ll-drift absolute -top-28 -start-20 h-72 w-72 rounded-full bg-[#e9b949]/[0.14] blur-3xl" />
+        <div className="ll-drift-slow absolute -bottom-28 -end-10 h-80 w-80 rounded-full bg-emerald-400/20 blur-3xl" />
+        <Rosette className="ll-spin-slow absolute -bottom-44 -end-44 h-[36rem] w-[36rem] text-[#f3d58a]/25" />
       </div>
       {/* عمق خفيف تحت عشان الكلام الأبيض يفضل واضح */}
       <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-[#03110f]/60 to-transparent" />

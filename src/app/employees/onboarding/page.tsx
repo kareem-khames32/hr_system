@@ -625,7 +625,7 @@ export default function OnboardingPage() {
                     <div className="w-12 h-12 bg-gradient-to-br from-primary-400 to-primary-600 rounded-xl flex items-center justify-center text-white font-bold">
                       {emp.fullName.charAt(0)}
                     </div>
-                    <div className="text-right">
+                    <div className="text-start">
                       <div className="flex items-center gap-2 flex-wrap">
                         <h3 className="font-bold text-gray-800">{emp.fullName}</h3>
                         <span className="badge text-xs bg-indigo-100 text-indigo-700">
@@ -992,7 +992,7 @@ function TemplateModal({
                 )}
                 <button
                   onClick={() => setShowNew((v) => !v)}
-                  className="btn-secondary text-sm mr-auto flex items-center gap-1"
+                  className="btn-secondary text-sm ms-auto flex items-center gap-1"
                 >
                   <Plus size={14} />
                   قالب جديد
@@ -1088,7 +1088,7 @@ function TemplateModal({
             <button
               onClick={saveWindow}
               disabled={saving === 'window' || windowDraft === windowSaved}
-              className="btn-secondary text-sm mr-auto disabled:opacity-50"
+              className="btn-secondary text-sm ms-auto disabled:opacity-50"
             >
               حفظ
             </button>
@@ -1103,11 +1103,11 @@ function TemplateModal({
               <table className="w-full text-sm">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-3 py-2 text-right font-medium text-gray-600">المهمة</th>
-                    <th className="px-3 py-2 text-right font-medium text-gray-600">
+                    <th className="px-3 py-2 text-start font-medium text-gray-600">المهمة</th>
+                    <th className="px-3 py-2 text-start font-medium text-gray-600">
                       الجهة المسؤولة
                     </th>
-                    <th className="px-3 py-2 text-right font-medium text-gray-600">
+                    <th className="px-3 py-2 text-start font-medium text-gray-600">
                       الموعد (يوم من الالتحاق)
                     </th>
                     <th className="px-3 py-2 text-center font-medium text-gray-600">مفعّل</th>

@@ -31,7 +31,7 @@ export function PayrollObligationBreakdown({ item, currency, details, compact = 
       <p className="text-xs text-gray-500">{error || 'جارٍ تحميل التفاصيل…'}</p>
     ) : (
       <div className="overflow-x-auto">
-        <table className="w-full text-sm text-right">
+        <table className="w-full text-sm text-start">
           <thead><tr className="bg-gray-50 text-gray-600">
             <th className="p-2">البند</th><th className="p-2">السبب</th><th className="p-2">طريقة الحساب</th>
             <th className="p-2">المبلغ</th><th className="p-2">خُصم هذا الشهر</th><th className="p-2">يُخصم الشهر القادم</th>
@@ -72,7 +72,7 @@ export function PayrollObligationBreakdown({ item, currency, details, compact = 
   </>
   if (compact) {
     return (
-      <details className="text-right font-sans mt-2 min-w-40" onToggle={event => {
+      <details className="text-start font-sans mt-2 min-w-40" onToggle={event => {
         if ((event.currentTarget as HTMLDetailsElement).open && !rows) {
           fetchPayslipObligations(item.id).then(setLoaded).catch(err => setError(err instanceof Error ? err.message : 'تعذر تحميل التفاصيل'))
         }

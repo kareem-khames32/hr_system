@@ -9,6 +9,7 @@ import { PREBOARDING_HOME, preboardingPathAllowed, preboardingUntil } from '@/li
 import { fetchPendingPolicies, markPoliciesChecked, policiesCheckedThisSession } from '@/lib/policies-api'
 import { routeAvailable, useModules } from '@/lib/modules'
 import { setHijriDisplay } from '@/lib/dates'
+import { initLang } from '@/lib/i18n'
 import { fetchDisplaySettings } from '@/lib/legal-entities-api'
 import Sidebar from './Sidebar'
 import Header from './Header'
@@ -112,6 +113,9 @@ export function AppShell({ children }: MainLayoutProps) {
   const bare = isBarePath(pathname)
   // الموديولات المفعّلة للمستخدم (الإعدادات ← الموديولات) — بتتقري مرة للجلسة؛ null لحد ما تتقري
   const modules = useModules()
+
+  // B6.2: لغة العرض واتجاه الصفحة من أول رسم (النسخة المحفوظة في المتصفح) — لغة الحساب نفسها بتيجي من الخادم في الهيدر
+  useEffect(() => { initLang() }, [])
 
   // حارس الدخول: كل شاشات النظام تمر من هنا — بلا جلسة → صفحة اللوجين
   useEffect(() => {
@@ -230,7 +234,7 @@ export function AppShell({ children }: MainLayoutProps) {
         <Sidebar open={navOpen} onClose={closeNav} />
         {/* خلفية معتمة ورا الدرج (أقل من lg) — الضغط عليها بيقفله؛ فوق الهيدر (z-40) وتحت الدرج (z-50) */}
         {navOpen && <div aria-hidden="true" onClick={closeNav} className="fixed inset-0 z-[45] bg-gray-900/40 lg:hidden" />}
-        <div className="lg:mr-72">
+        <div className="lg:ms-72">
           <Header onMenuClick={openNav} menuOpen={navOpen} menuButtonRef={menuButtonRef} />
           <main className="p-4 lg:p-8">
             {startsOn && (

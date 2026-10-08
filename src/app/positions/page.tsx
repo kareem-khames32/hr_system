@@ -32,8 +32,8 @@ export default function PositionsPage() {
           <h1 className="text-xl font-bold text-gray-800 flex items-center gap-2"><Briefcase size={22} className="text-primary-600" />الوظائف المعتمدة</h1>
           {data?.available && data.canManage && (
             <div className="flex flex-wrap gap-2">
-              <button type="button" className="btn-secondary" onClick={() => setGenerating(true)} data-positions-generate><Wand2 size={16} className="inline ml-1" />توليد من الموجود</button>
-              <button type="button" className="btn-primary" onClick={() => setForm({ position: null })} data-position-new><Plus size={16} className="inline ml-1" />وظيفة جديدة</button>
+              <button type="button" className="btn-secondary" onClick={() => setGenerating(true)} data-positions-generate><Wand2 size={16} className="inline me-1" />توليد من الموجود</button>
+              <button type="button" className="btn-primary" onClick={() => setForm({ position: null })} data-position-new><Plus size={16} className="inline me-1" />وظيفة جديدة</button>
             </div>
           )}
         </div>
@@ -51,7 +51,7 @@ export default function PositionsPage() {
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
-                      <tr className="text-right text-gray-500 border-b border-gray-200">
+                      <tr className="text-start text-gray-500 border-b border-gray-200">
                         <th className="py-2 px-2 font-medium">الفرع</th>
                         <th className="py-2 px-2 font-medium">القسم</th>
                         <th className="py-2 px-2 font-medium">معتمد</th>
@@ -85,7 +85,7 @@ export default function PositionsPage() {
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
-                      <tr className="text-right text-gray-500 border-b border-gray-200">
+                      <tr className="text-start text-gray-500 border-b border-gray-200">
                         <th className="py-2 px-2 font-medium">الكود</th>
                         <th className="py-2 px-2 font-medium">المسمى</th>
                         <th className="py-2 px-2 font-medium">الوحدة</th>
@@ -106,11 +106,11 @@ export default function PositionsPage() {
                           </td>
                           <td className="py-2 px-2 text-gray-600">{[row.branchName, row.departmentName, row.teamName].filter(Boolean).join(' · ')}</td>
                           <td className="py-2 px-2">{row.headcount}</td>
-                          <td className="py-2 px-2">{row.occupied}{row.over > 0 && <span className="text-red-700 text-xs mr-1">(زيادة {row.over})</span>}</td>
+                          <td className="py-2 px-2">{row.occupied}{row.over > 0 && <span className="text-red-700 text-xs ms-1">(زيادة {row.over})</span>}</td>
                           <td className={`py-2 px-2 ${row.vacant ? 'text-success-700 font-medium' : ''}`}>{row.vacant}</td>
                           <td className="py-2 px-2"><span className={`badge ${STATUS_BADGE[row.status]}`}>{row.statusLabel}</span></td>
                           <td className="py-2 px-2 whitespace-nowrap">
-                            <button type="button" className="text-primary-600 underline text-xs ml-3" onClick={() => setHoldersOf(row.id)} data-position-holders><Users size={13} className="inline ml-1" />الشاغلين</button>
+                            <button type="button" className="text-primary-600 underline text-xs me-3" onClick={() => setHoldersOf(row.id)} data-position-holders><Users size={13} className="inline me-1" />الشاغلين</button>
                             {data.canManage && <button type="button" className="text-primary-600 underline text-xs" onClick={() => setForm({ position: row })} data-position-edit>تعديل</button>}
                           </td>
                         </tr>

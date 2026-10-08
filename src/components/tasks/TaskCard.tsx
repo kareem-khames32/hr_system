@@ -239,7 +239,7 @@ export default function TaskCard({ task, onChanged, onEdit, highlighted }: Props
           {panel === 'done' && (
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <input ref={fileInput} type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx" onChange={event => setFile(event.target.files?.[0] ?? null)} />
-              <button type="button" className="btn-secondary" disabled={busy} onClick={() => fileInput.current?.click()}><Paperclip size={14} className="inline ml-1" />{file ? file.name : 'ملف إثبات'}</button>
+              <button type="button" className="btn-secondary" disabled={busy} onClick={() => fileInput.current?.click()}><Paperclip size={14} className="inline me-1" />{file ? file.name : 'ملف إثبات'}</button>
               {file && <button type="button" className="text-xs text-gray-500 underline" onClick={() => { setFile(null); if (fileInput.current) fileInput.current.value = '' }}>شيل الملف</button>}
             </div>
           )}
@@ -256,13 +256,13 @@ export default function TaskCard({ task, onChanged, onEdit, highlighted }: Props
           {task.canWork && task.status !== 'IN_PROGRESS' && <button type="button" className="btn-secondary" disabled={busy} onClick={() => change('IN_PROGRESS')}>{task.status === 'WAITING' ? 'كمّل' : 'ابدأ'}</button>}
           {task.canWork && task.status !== 'WAITING' && <button type="button" className="btn-secondary" disabled={busy} onClick={() => setPanel('waiting')}>مستنية</button>}
           {open && (task.canWork || task.canManage) && <button type="button" className="btn-primary" disabled={busy} onClick={() => setPanel('done')}>خلصت</button>}
-          {open && task.canManage && onEdit && <button type="button" className="btn-secondary" disabled={busy} onClick={() => onEdit(task)}><Pencil size={14} className="inline ml-1" />تعديل</button>}
-          {open && task.canManage && <button type="button" className="btn-secondary" disabled={busy} onClick={() => setPanel('cancel')}><XCircle size={14} className="inline ml-1" />إلغاء</button>}
+          {open && task.canManage && onEdit && <button type="button" className="btn-secondary" disabled={busy} onClick={() => onEdit(task)}><Pencil size={14} className="inline me-1" />تعديل</button>}
+          {open && task.canManage && <button type="button" className="btn-secondary" disabled={busy} onClick={() => setPanel('cancel')}><XCircle size={14} className="inline me-1" />إلغاء</button>}
           {/* المهمة اللي اتقيّمت اتقبلت: مالهاش رجوع للتعديل */}
-          {task.rating == null && <>{!open && task.canManage && <button type="button" className="btn-secondary" disabled={busy} onClick={() => setPanel('reopen')}><RotateCcw size={14} className="inline ml-1" />{task.status === 'DONE' ? 'رجّعها للتعديل' : 'افتحها تاني'}</button>}</>}
-          {task.canRate && <button type="button" className="btn-primary" disabled={busy} onClick={() => setPanel('rate')} data-task-rate><Star size={14} className="inline ml-1" />قيّم التنفيذ</button>}
-          {task.canRequestExtension && <button type="button" className="btn-secondary" disabled={busy} onClick={() => setPanel('extend')} data-task-extend><CalendarClock size={14} className="inline ml-1" />اطلب تمديد</button>}
-          {task.canNotMine && <button type="button" className="btn-secondary" disabled={busy} onClick={() => setPanel('notMine')} data-task-not-mine><Hand size={14} className="inline ml-1" />مش بتاعتي</button>}
+          {task.rating == null && <>{!open && task.canManage && <button type="button" className="btn-secondary" disabled={busy} onClick={() => setPanel('reopen')}><RotateCcw size={14} className="inline me-1" />{task.status === 'DONE' ? 'رجّعها للتعديل' : 'افتحها تاني'}</button>}</>}
+          {task.canRate && <button type="button" className="btn-primary" disabled={busy} onClick={() => setPanel('rate')} data-task-rate><Star size={14} className="inline me-1" />قيّم التنفيذ</button>}
+          {task.canRequestExtension && <button type="button" className="btn-secondary" disabled={busy} onClick={() => setPanel('extend')} data-task-extend><CalendarClock size={14} className="inline me-1" />اطلب تمديد</button>}
+          {task.canNotMine && <button type="button" className="btn-secondary" disabled={busy} onClick={() => setPanel('notMine')} data-task-not-mine><Hand size={14} className="inline me-1" />مش بتاعتي</button>}
         </div>
       )}
     </div>

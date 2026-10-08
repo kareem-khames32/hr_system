@@ -377,7 +377,7 @@ export default function DocumentTypesPage() {
           <div className="flex items-center gap-4">
             <div className="flex-1 relative">
               <Search
-                className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400"
+                className="absolute start-3 top-1/2 transform -translate-y-1/2 text-gray-400"
                 size={20}
               />
               <input
@@ -385,7 +385,7 @@ export default function DocumentTypesPage() {
                 placeholder="بحث بالاسم أو الكود..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="input pr-10 w-full"
+                className="input ps-10 w-full"
               />
             </div>
             <div className="flex items-center gap-2">
@@ -415,7 +415,7 @@ export default function DocumentTypesPage() {
               <table className="w-full">
                 <thead className="bg-gray-50 border-b">
                   <tr>
-                    <th className="text-right py-3 px-4 font-medium text-gray-700">نوع المستند</th>
+                    <th className="text-start py-3 px-4 font-medium text-gray-700">نوع المستند</th>
                     <th className="text-center py-3 px-4 font-medium text-gray-700">الحالة</th>
                     <th className="text-center py-3 px-4 font-medium text-gray-700">مطلوب للتعيين</th>
                     {canSeeDocs && (

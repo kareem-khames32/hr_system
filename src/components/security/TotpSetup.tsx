@@ -42,7 +42,7 @@ export default function TotpSetup({ onEnabled }: { onEnabled: (user: CurrentUser
         <button type="button" onClick={begin} disabled={busy} className="btn-primary">ابدأ التفعيل</button>
       ) : (
         <>
-          <ol className="list-decimal pr-5 space-y-2 text-sm text-gray-700">
+          <ol className="list-decimal ps-5 space-y-2 text-sm text-gray-700">
             <li>افتح تطبيق مصادقة على موبايلك (Google Authenticator أو Microsoft Authenticator أو أي تطبيق مشابه) وضيف حساب جديد.</li>
             <li>
               اكتب المفتاح ده في التطبيق (أو افتح اللينك من الموبايل نفسه):

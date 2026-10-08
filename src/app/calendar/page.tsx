@@ -335,7 +335,7 @@ export default function CalendarPage() {
                               type="button"
                               key={event.id}
                               onClick={() => setSelectedEvent(event)}
-                              className={`block w-full text-right text-[11px] px-1 sm:px-1.5 py-1 rounded break-words max-sm:truncate text-white ${getEventColor(event.type)}`}
+                              className={`block w-full text-start text-[11px] px-1 sm:px-1.5 py-1 rounded break-words max-sm:truncate text-white ${getEventColor(event.type)}`}
                               title={event.title}
                             >
                               {event.title}

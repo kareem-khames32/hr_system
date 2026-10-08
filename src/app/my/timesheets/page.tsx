@@ -93,8 +93,8 @@ export default function MyTimesheetsPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-600">
                   <tr>
-                    <th className="table-header text-right">اليوم</th>
-                    <th className="table-header text-right">المشروع والمهمة</th>
+                    <th className="table-header text-start">اليوم</th>
+                    <th className="table-header text-start">المشروع والمهمة</th>
                     <th className="table-header text-center">المسجّل</th>
                     <th className="table-header text-center">الحضور</th>
                   </tr>

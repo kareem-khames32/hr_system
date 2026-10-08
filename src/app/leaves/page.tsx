@@ -207,7 +207,7 @@ export default function LeavesPage() {
         <div className="grid grid-cols-4 gap-4">
           <button
             onClick={() => setActiveTab('all')}
-            className={`card text-right transition-all ${
+            className={`card text-start transition-all ${
               activeTab === 'all' ? 'ring-2 ring-primary-500' : ''
             }`}
           >
@@ -224,7 +224,7 @@ export default function LeavesPage() {
 
           <button
             onClick={() => setActiveTab('APPROVED')}
-            className={`card text-right transition-all ${
+            className={`card text-start transition-all ${
               activeTab === 'APPROVED' ? 'ring-2 ring-success-500' : ''
             }`}
           >
@@ -241,7 +241,7 @@ export default function LeavesPage() {
 
           <button
             onClick={() => setActiveTab('CANCELLED')}
-            className={`card text-right transition-all ${
+            className={`card text-start transition-all ${
               activeTab === 'CANCELLED' ? 'ring-2 ring-danger-500' : ''
             }`}
           >
@@ -256,7 +256,7 @@ export default function LeavesPage() {
             </div>
           </button>
 
-          <div className="card text-right">
+          <div className="card text-start">
             <div className="flex items-center justify-between">
               <div className="w-12 h-12 bg-primary-100 rounded-2xl flex items-center justify-center">
                 <Calendar size={24} className="text-primary-600" />
@@ -275,13 +275,13 @@ export default function LeavesPage() {
             {/* Search */}
             <div className="flex-1 min-w-[220px]">
               <div className="relative">
-                <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <Search size={18} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   type="text"
                   placeholder="بحث بالاسم أو الرقم الوظيفي..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="input pr-10"
+                  className="input ps-10"
                 />
               </div>
             </div>
@@ -328,8 +328,8 @@ export default function LeavesPage() {
             <table className="w-full">
               <thead>
                 <tr className="table-header">
-                  <th className="text-right px-4 py-4">الموظف</th>
-                  <th className="text-right px-4 py-4">نوع الإجازة</th>
+                  <th className="text-start px-4 py-4">الموظف</th>
+                  <th className="text-start px-4 py-4">نوع الإجازة</th>
                   <th className="text-center px-4 py-4">من</th>
                   <th className="text-center px-4 py-4">إلى</th>
                   <th className="text-center px-4 py-4">المدة</th>

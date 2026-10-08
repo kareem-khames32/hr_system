@@ -465,6 +465,11 @@ const patch = <T>(path: string, body: unknown) =>
   apiFetch<T>(path, { method: 'PATCH', body: JSON.stringify(body) })
 const del = <T>(path: string) => apiFetch<T>(path, { method: 'DELETE' })
 
+// B6.2: لغة عرض الواجهة لصاحب الحساب — `changeable` = الخادم جاهز لحفظها (ترحيل 182)، وغير كده زرار اللغة مابيظهرش
+export interface AccountLanguage { language: 'ar' | 'en'; available: string[]; changeable: boolean }
+export const fetchAccountLanguage = () => get<AccountLanguage>('/auth/language')
+export const saveAccountLanguage = (language: 'ar' | 'en') => apiFetch<AccountLanguage>('/auth/language', { method: 'PUT', body: JSON.stringify({ language }) })
+
 // ===== أنواع السيرفر الأساسية (مرآة كيانات الباك) =====
 export interface ApiBranch {
   id: number; name: string; nameEn?: string; code: string; city?: string

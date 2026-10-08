@@ -115,7 +115,7 @@ export default function MyPayslipsPage() {
                   <table className="w-full max-sm:whitespace-nowrap">
                     <thead>
                       <tr className="table-header">
-                        <th className="text-right px-4 py-3">الفترة</th>
+                        <th className="text-start px-4 py-3">الفترة</th>
                         <th className="text-center px-4 py-3">حالة المسير</th>
                         <th className="text-center px-4 py-3">الراتب الأساسي</th>
                         <th className="text-center px-4 py-3">العمل الإضافي</th>
@@ -144,7 +144,7 @@ export default function MyPayslipsPage() {
                             </span>
                             {/* تبسيط الرواتب (2026-09-15): علامتا «تكميلي» و«عُكس صرفها» أُخفيتا */}
                             {reversal?.line && reversal.line.status !== 'POSTED' && (
-                              <span className="badge text-xs mr-1 bg-amber-50 text-amber-800">عكس بانتظار التنفيذ</span>
+                              <span className="badge text-xs ms-1 bg-amber-50 text-amber-800">عكس بانتظار التنفيذ</span>
                             )}
                           </td>
                           <td className="table-cell text-center text-gray-600">

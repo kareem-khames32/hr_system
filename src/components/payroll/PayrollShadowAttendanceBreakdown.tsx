@@ -60,16 +60,16 @@ export function PayrollShadowAttendanceBreakdown({ item, currency, compact = fal
   if (!shadow) return null
   const status = STATUS[shadow.status]
   const unprovenCount = new Set((shadow.unprovenDays ?? []).flatMap(row => row.dates)).size
-  const contents = <div className="text-right space-y-3">
+  const contents = <div className="text-start space-y-3">
     <p className="text-xs text-gray-600">المصروف هو الحساب القديم. محرك السياسة يُحسب بجانبه من المصادر المثبتة (وضع الظل) للتأخير ونقص الساعات والغياب.</p>
     <p className="text-xs text-gray-700">{shadow.message}</p>
-    {shadow.totals?.policy && <div className="overflow-x-auto"><table className="w-full text-sm text-right">
+    {shadow.totals?.policy && <div className="overflow-x-auto"><table className="w-full text-sm text-start">
       <thead><tr className="bg-gray-50 text-gray-600"><th className="p-2">البند</th><th className="p-2">الحساب القديم ({currency})</th><th className="p-2">محرك السياسة ({currency})</th></tr></thead>
       <tbody>{(['lateness', 'shortfall', 'absence'] as const).map(key => <tr key={key} className="border-t border-gray-100">
         <td className="p-2">{COMPONENT_NAMES[key]}</td><td className="p-2 font-mono">{exact(shadow.totals!.legacy[key]) ?? '—'}</td><td className="p-2 font-mono">{exact(shadow.totals!.policy![key]) ?? '—'}</td>
       </tr>)}</tbody>
     </table></div>}
-    {!!shadow.days?.length && <div className="overflow-x-auto"><table className="w-full text-sm text-right">
+    {!!shadow.days?.length && <div className="overflow-x-auto"><table className="w-full text-sm text-start">
       <thead><tr className="bg-gray-50 text-gray-600"><th className="p-2">يوم العمل</th><th className="p-2">النافذة</th><th className="p-2">البصمات</th><th className="p-2">تأخير / نقص (دقيقة)</th><th className="p-2">السياسة: تأخير / نقص / غياب</th><th className="p-2">القديم: تأخير / نقص / غياب</th><th className="p-2">التطابق</th></tr></thead>
       <tbody>{shadow.days.map(day => <tr key={day.date} className="border-t border-gray-100 align-top">
         <td className="p-2 whitespace-nowrap">{day.date}</td>
@@ -82,11 +82,11 @@ export function PayrollShadowAttendanceBreakdown({ item, currency, compact = fal
         <td className="p-2">{day.matches ? <span className="badge badge-success">مطابق</span> : <span className="badge badge-warning">مختلف</span>}</td>
       </tr>)}</tbody>
     </table></div>}
-    {!!shadow.differences?.length && <ul className="text-xs text-amber-800 list-disc pr-4">{shadow.differences.slice(0, 20).map((row, index) =>
+    {!!shadow.differences?.length && <ul className="text-xs text-amber-800 list-disc ps-4">{shadow.differences.slice(0, 20).map((row, index) =>
       <li key={index}>{row.date ?? 'مجموع الفترة'} — {COMPONENT_NAMES[row.component]}: القديم {row.legacy ?? '—'} والسياسة {row.policy ?? 'غير محسوب'} ({row.reason})</li>)}</ul>}
     {unprovenCount > 0 && <p className="text-xs text-gray-500" title={(shadow.unprovenDays ?? []).map(row => row.code).join('، ')}>أيام غير مثبتة المصدر لمحرك السياسة: {unprovenCount} (التكافؤ عليها غير محسوم)</p>}
   </div>
   return compact
-    ? <details className="text-right font-sans mt-2 min-w-40"><summary className="text-xs text-primary-700 cursor-pointer">ظل السياسة: <span className={status.className}>{status.label}</span></summary><div className="min-w-[640px] rounded-lg border p-3 my-2">{contents}</div></details>
+    ? <details className="text-start font-sans mt-2 min-w-40"><summary className="text-xs text-primary-700 cursor-pointer">ظل السياسة: <span className={status.className}>{status.label}</span></summary><div className="min-w-[640px] rounded-lg border p-3 my-2">{contents}</div></details>
     : <section className="border border-gray-200 rounded-xl p-4 mb-6 break-inside-avoid"><h3 className="font-bold text-gray-800 mb-3">محرك السياسة بوضع الظل <span className={status.className}>{status.label}</span></h3>{contents}</section>
 }

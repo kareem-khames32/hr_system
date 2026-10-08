@@ -81,7 +81,7 @@ export function PayrollLivePreviewTab() {
           <div className="overflow-auto rounded-xl border border-gray-100">
             <table className="w-full text-sm">
               <thead><tr className="table-header">
-                <th className="text-right px-3 py-2">الفرع</th><th className="text-center px-3 py-2">الموظفين</th><th className="text-center px-3 py-2">الاستحقاق</th>
+                <th className="text-start px-3 py-2">الفرع</th><th className="text-center px-3 py-2">الموظفين</th><th className="text-center px-3 py-2">الاستحقاق</th>
                 <th className="text-center px-3 py-2">الإضافي</th><th className="text-center px-3 py-2">الخصومات</th><th className="text-center px-3 py-2">الصافي التقديري</th>
               </tr></thead>
               <tbody>
@@ -122,7 +122,7 @@ export function PayrollLivePreviewTab() {
         <div className="max-h-[32rem] overflow-auto rounded-xl border border-gray-100">
           <table className="w-full text-sm">
             <thead><tr className="table-header">
-              <th className="text-right px-3 py-2">الموظف</th><th className="text-center px-3 py-2">الأيام</th><th className="text-center px-3 py-2">الاستحقاق</th>
+              <th className="text-start px-3 py-2">الموظف</th><th className="text-center px-3 py-2">الأيام</th><th className="text-center px-3 py-2">الاستحقاق</th>
               <th className="text-center px-3 py-2">الإضافي</th><th className="text-center px-3 py-2">التأخير</th><th className="text-center px-3 py-2">النقص والانصراف المبكر</th>
               <th className="text-center px-3 py-2">الغياب</th><th className="text-center px-3 py-2">بدون راتب</th><th className="text-center px-3 py-2">الإيقاف</th>
               <th className="text-center px-3 py-2">الصافي التقديري</th>

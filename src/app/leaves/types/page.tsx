@@ -360,7 +360,7 @@ export default function LeaveTypesPage() {
                     key={key}
                     type="button"
                     onClick={() => chooseCategory(key)}
-                    className={`text-right rounded-xl border p-3 transition ${form.category === key ? 'border-primary-500 bg-primary-50' : 'border-gray-200 hover:border-gray-300'}`}
+                    className={`text-start rounded-xl border p-3 transition ${form.category === key ? 'border-primary-500 bg-primary-50' : 'border-gray-200 hover:border-gray-300'}`}
                   >
                     <Icon size={20} className={form.category === key ? 'text-primary-600' : 'text-gray-400'} />
                     <p className="font-semibold text-gray-800 mt-2">{label}</p>
@@ -530,9 +530,9 @@ export default function LeaveTypesPage() {
                       <table className="w-full text-sm">
                         <thead>
                           <tr className="text-gray-500 border-b border-gray-100">
-                            <th className="py-2 text-right font-medium">من يوم</th>
-                            <th className="py-2 text-right font-medium">إلى يوم (فاضي = مفتوح)</th>
-                            <th className="py-2 text-right font-medium">نسبة الأجر %</th>
+                            <th className="py-2 text-start font-medium">من يوم</th>
+                            <th className="py-2 text-start font-medium">إلى يوم (فاضي = مفتوح)</th>
+                            <th className="py-2 text-start font-medium">نسبة الأجر %</th>
                             <th />
                           </tr>
                         </thead>
@@ -540,7 +540,7 @@ export default function LeaveTypesPage() {
                           {form.tiers.map((t, i) => (
                             <tr key={i} className="border-b border-gray-50">
                               {(['fromDay', 'toDay', 'payPercent'] as const).map(k => (
-                                <td key={k} className="py-2 pl-2">
+                                <td key={k} className="py-2 pe-2">
                                   <input type="number" min={0} className="input w-full" value={t[k]}
                                     onChange={e => set('tiers', form.tiers.map((row, j) => (j === i ? { ...row, [k]: e.target.value } : row)))} />
                                 </td>
@@ -678,7 +678,7 @@ export default function LeaveTypesPage() {
               <thead>
                 <tr className="table-header">
                   {['الاسم', 'الكود', 'النوع', 'الأيام', 'مدفوعة؟', 'متاح في', 'مفعّل؟', ''].map(h => (
-                    <th key={h} className="table-cell text-right">{h}</th>
+                    <th key={h} className="table-cell text-start">{h}</th>
                   ))}
                 </tr>
               </thead>

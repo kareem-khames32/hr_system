@@ -100,10 +100,10 @@ export default function SurveysPage() {
             <table className="w-full text-sm" data-surveys>
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">الاستبيان</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">النوع</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">الحالة</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">الردود</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">الاستبيان</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">النوع</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">الحالة</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">الردود</th>
                   <th className="px-3 py-2" />
                 </tr>
               </thead>
@@ -116,14 +116,14 @@ export default function SurveysPage() {
                     <td className="px-3 py-2 text-gray-600">{row.kindLabel}</td>
                     <td className="px-3 py-2 text-gray-600">{row.statusLabel}</td>
                     <td className="px-3 py-2 tabular-nums">{row.status === 'DRAFT' ? '—' : `${row.responded} من ${row.invited}`}</td>
-                    <td className="px-3 py-2 text-left whitespace-nowrap">
+                    <td className="px-3 py-2 text-end whitespace-nowrap">
                       {row.status === 'DRAFT' && (
                         <button onClick={() => run(row.id, async () => `الاستبيان اتفتح لـ${(await openSurvey(row.id)).invited} موظف.`)} disabled={busy === row.id} className="text-primary-600 hover:underline text-xs disabled:opacity-50">
                           فتح
                         </button>
                       )}
                       {row.status === 'CLOSED' && (
-                        <button onClick={() => show(row.id)} disabled={busy === row.id} className="text-primary-600 hover:underline text-xs ml-3 disabled:opacity-50">
+                        <button onClick={() => show(row.id)} disabled={busy === row.id} className="text-primary-600 hover:underline text-xs me-3 disabled:opacity-50">
                           النتايج
                         </button>
                       )}

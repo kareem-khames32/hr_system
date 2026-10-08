@@ -505,7 +505,7 @@ export default function ProfilePage() {
                     disabled={!employee || photoUploading}
                     aria-label="تغيير الصورة الشخصية"
                     title="تغيير الصورة الشخصية"
-                    className="absolute -bottom-2 -left-2 w-10 h-10 bg-white rounded-xl shadow-lg flex items-center justify-center hover:bg-gray-50 transition-colors disabled:opacity-60"
+                    className="absolute -bottom-2 -end-2 w-10 h-10 bg-white rounded-xl shadow-lg flex items-center justify-center hover:bg-gray-50 transition-colors disabled:opacity-60"
                   >
                     {photoUploading ? (
                       <span className="w-4 h-4 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />

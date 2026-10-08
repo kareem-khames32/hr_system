@@ -50,7 +50,7 @@ export function DocTypeExpirySettings({ canWrite, refreshKey }: { canWrite: bool
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="text-right text-gray-500 border-b border-gray-100">
+            <tr className="text-start text-gray-500 border-b border-gray-100">
               <th className="py-2 px-2 font-medium">نوع المستند</th>
               <th className="py-2 px-2 font-medium">له تاريخ انتهاء</th>
               <th className="py-2 px-2 font-medium">أيام التنبيه قبل الانتهاء</th>

@@ -71,7 +71,7 @@ export default function ScheduledJobsPage() {
             <table className="w-full text-sm" data-scheduled-jobs-table>
               <thead className="bg-gray-50">
                 <tr>{['المهمة', 'آخر تشغيل', 'آخر فشل', 'آخر 24 ساعة', 'الجاية'].map(title =>
-                  <th key={title} className="px-3 py-2 text-right font-medium text-gray-600 whitespace-nowrap">{title}</th>)}</tr>
+                  <th key={title} className="px-3 py-2 text-start font-medium text-gray-600 whitespace-nowrap">{title}</th>)}</tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {(data?.jobs ?? []).map(job => (
@@ -109,7 +109,7 @@ export default function ScheduledJobsPage() {
                           {job.recent.length === 0 ? <p className="text-xs text-gray-500">مفيش تشغيل متسجل لسه</p> : (
                             <table className="w-full text-xs" data-scheduled-job-runs>
                               <thead><tr>{['البداية', 'النتيجة', 'المدة', 'السيرفر', 'الخطأ'].map(title =>
-                                <th key={title} className="px-2 py-1 text-right font-medium text-gray-500">{title}</th>)}</tr></thead>
+                                <th key={title} className="px-2 py-1 text-start font-medium text-gray-500">{title}</th>)}</tr></thead>
                               <tbody>
                                 {job.recent.map(run => (
                                   <tr key={run.id}>

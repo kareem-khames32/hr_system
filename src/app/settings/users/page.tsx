@@ -705,11 +705,11 @@ export default function UsersPage() {
         <div className="card">
           <div className="flex flex-wrap items-center gap-4 min-w-0">
             <div className="relative flex-1 min-w-[220px]">
-              <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <Search size={18} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
                 type="text"
                 placeholder="بحث عن مستخدم..."
-                className="input pr-10 w-full"
+                className="input ps-10 w-full"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
@@ -779,11 +779,11 @@ export default function UsersPage() {
                       }
                     />
                   </th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">المستخدم</th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">الدور</th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">الفرع</th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">الحالة</th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">آخر دخول</th>
+                  <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">المستخدم</th>
+                  <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">الدور</th>
+                  <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">الفرع</th>
+                  <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">الحالة</th>
+                  <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">آخر دخول</th>
                   <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">إجراءات</th>
                 </tr>
               </thead>
@@ -1225,17 +1225,17 @@ export default function UsersPage() {
                       </div>
 
                       <div className="relative">
-                        <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                        <Search size={16} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
                         <input
                           type="text"
                           placeholder="بحث في الصلاحيات..."
-                          className="input pr-9 w-full text-sm"
+                          className="input ps-9 w-full text-sm"
                           value={permSearch}
                           onChange={(e) => setPermSearch(e.target.value)}
                         />
                       </div>
 
-                      <div className="space-y-3 max-h-[28rem] overflow-y-auto pl-1">
+                      <div className="space-y-3 max-h-[28rem] overflow-y-auto pe-1">
                         {groupedRegistry.length === 0 && (
                           <p className="text-sm text-gray-400 text-center py-6">مفيش صلاحية مطابقة للبحث</p>
                         )}
@@ -1555,7 +1555,7 @@ export default function UsersPage() {
                           <button
                             key={r.reason}
                             onClick={() => setSyncFilter(syncFilter === r.reason ? 'all' : r.reason)}
-                            className={`w-full flex items-center justify-between gap-3 p-3 text-right text-sm hover:bg-gray-50 ${
+                            className={`w-full flex items-center justify-between gap-3 p-3 text-start text-sm hover:bg-gray-50 ${
                               syncFilter === r.reason ? 'bg-gray-50 font-medium' : ''
                             }`}
                           >
@@ -1590,10 +1590,10 @@ export default function UsersPage() {
                         <table className="w-full text-sm">
                           <thead className="bg-gray-50 sticky top-0">
                             <tr className="text-gray-600">
-                              <th className="px-3 py-2 text-right font-medium">حساب المجال</th>
-                              <th className="px-3 py-2 text-right font-medium">الإجراء</th>
-                              <th className="px-3 py-2 text-right font-medium">الموظف</th>
-                              <th className="px-3 py-2 text-right font-medium">التفاصيل</th>
+                              <th className="px-3 py-2 text-start font-medium">حساب المجال</th>
+                              <th className="px-3 py-2 text-start font-medium">الإجراء</th>
+                              <th className="px-3 py-2 text-start font-medium">الموظف</th>
+                              <th className="px-3 py-2 text-start font-medium">التفاصيل</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-gray-100">

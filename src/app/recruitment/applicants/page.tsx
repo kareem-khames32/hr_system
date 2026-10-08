@@ -154,12 +154,12 @@ export default function ApplicantsPage() {
                 <div className="relative flex-1">
                   <Search
                     size={18}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
+                    className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400"
                   />
                   <input
                     type="text"
                     placeholder="بحث عن متقدم..."
-                    className="input pr-10 w-full"
+                    className="input ps-10 w-full"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                   />

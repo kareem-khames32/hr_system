@@ -262,7 +262,7 @@ export default function MyLeavesPage() {
                           <p className="text-xs text-gray-400">فترة {b.period}</p>
                         </div>
                       </div>
-                      <div className="text-left">
+                      <div className="text-end">
                         <p className={`text-3xl font-bold ${remaining < 5 ? 'text-red-600' : 'text-success-600'}`}>
                           {remaining}
                         </p>
@@ -377,7 +377,7 @@ export default function MyLeavesPage() {
                   <table className="w-full max-sm:whitespace-nowrap">
                     <thead>
                       <tr className="table-header">
-                        <th className="text-right px-4 py-3">النوع</th>
+                        <th className="text-start px-4 py-3">النوع</th>
                         <th className="text-center px-4 py-3">من</th>
                         <th className="text-center px-4 py-3">إلى</th>
                         <th className="text-center px-4 py-3">الأيام</th>
@@ -493,7 +493,7 @@ export default function MyLeavesPage() {
               <p className="text-sm font-medium text-gray-800">
                 {leaveTypeLabels[cancelTarget.leaveType] ?? cancelTarget.leaveType}
                 {(cancelTarget.period === 'MORNING' || cancelTarget.period === 'EVENING') && (
-                  <span className="mr-2 badge text-[10px] bg-amber-50 text-amber-700">نصف يوم</span>
+                  <span className="ms-2 badge text-[10px] bg-amber-50 text-amber-700">نصف يوم</span>
                 )}
               </p>
               <p className="text-xs text-gray-500 mt-0.5">

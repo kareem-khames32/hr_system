@@ -39,7 +39,7 @@ export default function SkillMatrix({ rows, levels, canAssess, onChanged }: Prop
             <b className="text-gray-800">{row.fullName}</b>
             {row.employeeCode && <span className="text-xs text-gray-500" dir="ltr">{row.employeeCode}</span>}
             <span className="text-sm text-gray-600">{row.positionTitle ?? 'من غير وظيفة معتمدة'}</span>
-            {row.cells.length > 0 && <span className={`mr-auto text-xs rounded-full px-3 py-1 ${row.gaps ? 'bg-amber-50 text-amber-800' : 'bg-green-50 text-green-700'}`}>{row.gaps ? `${row.gaps} فجوة` : 'مستوفي'}</span>}
+            {row.cells.length > 0 && <span className={`ms-auto text-xs rounded-full px-3 py-1 ${row.gaps ? 'bg-amber-50 text-amber-800' : 'bg-green-50 text-green-700'}`}>{row.gaps ? `${row.gaps} فجوة` : 'مستوفي'}</span>}
           </div>
           {row.cells.length === 0 ? <p className="text-xs text-gray-500">مفيش مهارات مطلوبة متعرّفة لوظيفته.</p> : (
             <div className="flex flex-wrap gap-2">

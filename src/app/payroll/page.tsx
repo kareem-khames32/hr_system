@@ -788,7 +788,7 @@ export default function PayrollPage() {
               </li>)}</ul>}
               {nextPeriodResult.skipped.length > 0 && <ul className="text-sm space-y-1">{nextPeriodResult.skipped.map(row => <li key={row.sourceRunId} className="bg-amber-50 text-amber-900 rounded-lg px-3 py-1.5">
                 {row.name ? `«${row.name}»` : 'مسير بلا اسم'} — {row.reason}
-                {row.existingRunId != null && <button type="button" className="text-primary-700 underline mr-2" onClick={() => loadDetail(row.existingRunId!)}>افتح الموجود</button>}
+                {row.existingRunId != null && <button type="button" className="text-primary-700 underline ms-2" onClick={() => loadDetail(row.existingRunId!)}>افتح الموجود</button>}
               </li>)}</ul>}
               <p className="text-xs text-gray-500">كل مسودة محتاجة «احتساب المسودة» من اختيار المسير.</p>
             </>}
@@ -1191,13 +1191,13 @@ export default function PayrollPage() {
           <div className="flex flex-wrap items-center gap-4 min-w-0">
             <div className="flex-1 min-w-[220px]">
               <div className="relative">
-                <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <Search size={18} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   type="text"
                   placeholder="بحث بالاسم أو الرقم الوظيفي..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="input pr-10"
+                  className="input ps-10"
                 />
               </div>
             </div>
@@ -1218,7 +1218,7 @@ export default function PayrollPage() {
               {/* طلب المالك 19 سبتمبر: مجموعتان — «الاستحقاقات» و«الاستقطاعات» — وكل بند موجود في المسير عمود باسمه */}
               <thead>
                 <tr className="table-header">
-                  <th rowSpan={2} className="text-right px-4 py-4">الموظف</th>
+                  <th rowSpan={2} className="text-start px-4 py-4">الموظف</th>
                   <th colSpan={earningColumns.length + 1} className="text-center px-4 py-2 bg-success-50 text-success-700">{PAYROLL_LINE_GROUP_LABELS.earnings}</th>
                   <th colSpan={deductionColumns.length + 1} className="text-center px-4 py-2 bg-danger-50 text-danger-700">{PAYROLL_LINE_GROUP_LABELS.deductions}</th>
                   <th rowSpan={2} className="text-center px-4 py-4 bg-primary-50 font-bold">{PAYROLL_LINE_TOTAL_LABELS.net}</th>
@@ -1245,7 +1245,7 @@ export default function PayrollPage() {
                   <tr>
                     <td colSpan={tableColumns} className="px-4 py-6 text-center text-sm text-red-700" role="alert">
                       {linesError || 'تعذر تحميل بنود المسير'}
-                      {runDetail && <button type="button" onClick={() => loadDetail(runDetail.id)} className="text-primary-700 underline mr-2">إعادة المحاولة</button>}
+                      {runDetail && <button type="button" onClick={() => loadDetail(runDetail.id)} className="text-primary-700 underline ms-2">إعادة المحاولة</button>}
                     </td>
                   </tr>
                 )}

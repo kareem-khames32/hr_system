@@ -166,11 +166,11 @@ export default function ReviewCyclesPage() {
               <table className="w-full text-sm" data-assignments>
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-3 py-2 text-right font-medium text-gray-600">الموظف</th>
-                    <th className="px-3 py-2 text-right font-medium text-gray-600">المقيِّم</th>
-                    <th className="px-3 py-2 text-right font-medium text-gray-600">الذاتي</th>
-                    <th className="px-3 py-2 text-right font-medium text-gray-600">المدير</th>
-                    <th className="px-3 py-2 text-right font-medium text-gray-600">الحالة</th>
+                    <th className="px-3 py-2 text-start font-medium text-gray-600">الموظف</th>
+                    <th className="px-3 py-2 text-start font-medium text-gray-600">المقيِّم</th>
+                    <th className="px-3 py-2 text-start font-medium text-gray-600">الذاتي</th>
+                    <th className="px-3 py-2 text-start font-medium text-gray-600">المدير</th>
+                    <th className="px-3 py-2 text-start font-medium text-gray-600">الحالة</th>
                     <th className="px-3 py-2" />
                   </tr>
                 </thead>
@@ -182,7 +182,7 @@ export default function ReviewCyclesPage() {
                       <td className="px-3 py-2 tabular-nums">{row.selfScore ?? (row.selfSubmitted ? 'سلّم' : '—')}</td>
                       <td className="px-3 py-2 tabular-nums">{row.managerScore ?? (row.managerSubmitted ? 'سلّم' : '—')}</td>
                       <td className="px-3 py-2 text-gray-600">{row.statusLabel}</td>
-                      <td className="px-3 py-2 text-left">
+                      <td className="px-3 py-2 text-end">
                         <Link href={`/performance/${row.id}`} className="text-primary-600 hover:underline">
                           فتح
                         </Link>

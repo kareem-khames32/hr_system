@@ -120,8 +120,8 @@ export default function SetupImportPage() {
                   <thead className="bg-gray-50 text-gray-600">
                     <tr>
                       <th className="table-header text-center">الصف</th>
-                      <th className="table-header text-right">البيان</th>
-                      <th className="table-header text-right">النتيجة</th>
+                      <th className="table-header text-start">البيان</th>
+                      <th className="table-header text-start">النتيجة</th>
                     </tr>
                   </thead>
                   <tbody>

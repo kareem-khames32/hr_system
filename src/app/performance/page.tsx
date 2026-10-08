@@ -129,7 +129,7 @@ export default function ReviewsPage() {
                     </p>
                     {todo(row) && <p className="text-sm text-amber-700 mt-2">{todo(row)}</p>}
                   </div>
-                  <div className="text-left">
+                  <div className="text-end">
                     <span className={`inline-block px-2 py-0.5 rounded-full text-xs ${statusStyle[row.status]}`}>{row.statusLabel}</span>
                     {row.finalScore !== null && <p className="text-lg font-bold text-gray-800 mt-2 tabular-nums">{row.finalScore} / 100</p>}
                     {row.finalScore === null && row.selfScore !== null && <p className="text-xs text-gray-500 mt-2 tabular-nums">الذاتي: {row.selfScore} / 100</p>}

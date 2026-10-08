@@ -125,7 +125,7 @@ export default function NotificationsAdminPanel() {
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-3" data-notification-counts>
             {STATUS_ORDER.map(key => (
               <button key={key} type="button" onClick={() => setStatus(current => current === key ? '' : key)}
-                className={`rounded-xl p-3 text-right ${status === key ? 'ring-2 ring-primary-500' : ''} ${key === 'FAILED' && (deliveries.counts.FAILED ?? 0) > 0 ? 'bg-red-50' : 'bg-gray-50'}`}>
+                className={`rounded-xl p-3 text-start ${status === key ? 'ring-2 ring-primary-500' : ''} ${key === 'FAILED' && (deliveries.counts.FAILED ?? 0) > 0 ? 'bg-red-50' : 'bg-gray-50'}`}>
                 <span className="block text-xs text-gray-500">بريد: {DELIVERY_STATUS_LABELS[key]} (30 يوم)</span>
                 <span className="text-xl font-bold text-gray-800">{deliveries.counts[key] ?? 0}</span>
               </button>
@@ -135,7 +135,7 @@ export default function NotificationsAdminPanel() {
             <div className="overflow-x-auto">
               <table className="w-full text-sm" data-notification-deliveries>
                 <thead className="bg-gray-50">
-                  <tr>{['الحدث', 'المستلم', 'القناة', 'الحالة', 'السبب', 'إمتى'].map(title => <th key={title} className="px-3 py-2 text-right font-medium text-gray-600 whitespace-nowrap">{title}</th>)}</tr>
+                  <tr>{['الحدث', 'المستلم', 'القناة', 'الحالة', 'السبب', 'إمتى'].map(title => <th key={title} className="px-3 py-2 text-start font-medium text-gray-600 whitespace-nowrap">{title}</th>)}</tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {deliveries.rows.map(row => (
@@ -167,9 +167,9 @@ export default function NotificationsAdminPanel() {
           <p className="text-sm text-gray-500">اضغط على المتغير عشان يتحط في النص. المتغير بيتبدّل بقيمته وقت الإرسال.</p>
           {templates.events.map(event => (
             <div key={event.code} className="rounded-xl bg-gray-50 p-3">
-              <button type="button" className="w-full flex items-center justify-between gap-3 text-right" aria-expanded={openEvent === event.code}
+              <button type="button" className="w-full flex items-center justify-between gap-3 text-start" aria-expanded={openEvent === event.code}
                 onClick={() => setOpenEvent(current => current === event.code ? null : event.code)}>
-                <span className="font-medium text-gray-800">{event.label}<span className="text-xs text-gray-500 mr-2">{event.category}</span></span>
+                <span className="font-medium text-gray-800">{event.label}<span className="text-xs text-gray-500 ms-2">{event.category}</span></span>
                 {CHANNELS.some(channel => event.templates[channel].customized) && <span className="badge bg-amber-50 text-amber-800">معدَّل</span>}
               </button>
               {openEvent === event.code && (

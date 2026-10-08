@@ -138,7 +138,7 @@ export default function MyExpensesPage() {
                     <span className="font-mono text-xs text-gray-500" dir="ltr">{row.code}</span>
                     <span>{row.purpose}</span>
                     <b className="font-mono">{formatMoney(row.amount)}</b> {currency}
-                    <span className="mr-auto text-xs rounded-full px-3 py-1 bg-gray-100 text-gray-700">
+                    <span className="ms-auto text-xs rounded-full px-3 py-1 bg-gray-100 text-gray-700">
                       {row.status === 'OPEN' ? (row.paid ? (row.reportId ? 'مربوطة بتقرير' : 'اتصرفت — مستنية تقرير') : 'معتمدة — لسه مااتصرفتش') : row.statusLabel}
                     </span>
                   </li>
@@ -176,7 +176,7 @@ export default function MyExpensesPage() {
                 <span className="text-xs text-gray-500 font-mono" dir="ltr">{report.code}</span>
                 <span className={`text-xs rounded-full px-3 py-1 ${PHASE_STYLE[report.phase]}`}>{report.phaseLabel}</span>
                 {report.tripFrom && <span className="text-sm text-gray-600">المأمورية: <span dir="ltr">{report.tripFrom} → {report.tripTo}</span></span>}
-                <span className="mr-auto text-sm bg-gray-50 rounded-lg px-3 py-2">الإجمالي: <b className="font-mono">{formatMoney(report.total)}</b> {currency}</span>
+                <span className="ms-auto text-sm bg-gray-50 rounded-lg px-3 py-2">الإجمالي: <b className="font-mono">{formatMoney(report.total)}</b> {currency}</span>
               </div>
 
               {report.lines.length > 0 && (
@@ -184,10 +184,10 @@ export default function MyExpensesPage() {
                   <table className="w-full text-sm">
                     <thead className="bg-gray-50 text-gray-600">
                       <tr>
-                        <th className="table-header text-right">الفئة</th>
+                        <th className="table-header text-start">الفئة</th>
                         <th className="table-header text-center">التاريخ</th>
                         <th className="table-header text-center">المبلغ</th>
-                        <th className="table-header text-right">ملاحظة</th>
+                        <th className="table-header text-start">ملاحظة</th>
                         <th className="table-header text-center">الإيصال</th>
                         <th className="table-header" />
                       </tr>
@@ -206,7 +206,7 @@ export default function MyExpensesPage() {
                           <td className="table-cell text-center">
                             {row.receiptFileId ? <button type="button" className="text-primary-600 underline" onClick={() => openReceipt(row.receiptFileId!)}>عرض</button> : <span className="text-gray-400">من غير</span>}
                           </td>
-                          <td className="table-cell text-left">
+                          <td className="table-cell text-end">
                             {report.editable && <button type="button" className="text-red-600 text-xs disabled:opacity-50" disabled={busy}
                               onClick={() => run(() => removeExpenseLine(report.id, row.id), 'اتشال البند')}>حذف</button>}
                           </td>
@@ -290,7 +290,7 @@ export default function MyExpensesPage() {
                   )}
                   {blocked && <span className="text-xs text-red-700">صلّح البنود المعلّمة بالأحمر قبل التقديم.</span>}
                   {report.phase === 'DRAFT' && report.requestId === null && (
-                    <button type="button" className="text-red-600 text-sm mr-auto disabled:opacity-50" disabled={busy} onClick={() => run(() => removeExpenseReport(report.id), 'اتمسحت المسودة')}>مسح المسودة</button>
+                    <button type="button" className="text-red-600 text-sm ms-auto disabled:opacity-50" disabled={busy} onClick={() => run(() => removeExpenseReport(report.id), 'اتمسحت المسودة')}>مسح المسودة</button>
                   )}
                 </div>
               )}

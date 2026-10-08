@@ -121,7 +121,7 @@ export default function CommentsThread({ kind, id }: Props) {
                 <span className="font-medium text-gray-700" data-comment-author>
                   {label(comment.mine, comment.author)}{comment.author.subject && !comment.mine && subject ? ` — ${subject}` : ''}
                   {/* تعليق مسؤول المهمة «مش بتاعتي»: علامته جنب اسمه */}
-                  {comment.eventLabel && <span className="badge bg-gray-100 text-gray-700 mr-2" data-comment-event-label>{comment.eventLabel}</span>}
+                  {comment.eventLabel && <span className="badge bg-gray-100 text-gray-700 ms-2" data-comment-event-label>{comment.eventLabel}</span>}
                 </span>
                 <span>{formatDateTime(comment.createdAt)}</span>
               </div>
@@ -189,7 +189,7 @@ export default function CommentsThread({ kind, id }: Props) {
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <input ref={fileInput} type="file" multiple className="hidden" onChange={event => pickFiles(event.target.files)} />
           <button type="button" className="btn-secondary text-xs" disabled={sending || files.length >= COMMENT_FILES_MAX} onClick={() => fileInput.current?.click()}>
-            <Paperclip size={14} className="inline ml-1" />مرفق ({files.length} / {COMMENT_FILES_MAX})
+            <Paperclip size={14} className="inline me-1" />مرفق ({files.length} / {COMMENT_FILES_MAX})
           </button>
           {files.map((file, index) => (
             <span key={`${file.name}-${index}`} className="badge bg-gray-100 text-gray-700 flex items-center gap-1">
@@ -200,7 +200,7 @@ export default function CommentsThread({ kind, id }: Props) {
         </div>
         {sendError && <div role="alert" className="bg-red-50 text-red-700 rounded-lg p-2 text-sm" data-comment-error>{sendError}</div>}
         <button type="button" className="btn-primary" disabled={sending || !body.trim()} onClick={() => void send()} data-comment-send>
-          <Send size={14} className="inline ml-1" />{sending ? 'جاري الإرسال…' : 'إرسال'}
+          <Send size={14} className="inline me-1" />{sending ? 'جاري الإرسال…' : 'إرسال'}
         </button>
       </div>
     </section>

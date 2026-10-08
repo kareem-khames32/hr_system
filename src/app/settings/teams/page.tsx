@@ -282,7 +282,7 @@ export default function TeamsPage() {
             <button
               type="button"
               onClick={() => setShowMismatches(!showMismatches)}
-              className="w-full flex items-start justify-between gap-3 text-right"
+              className="w-full flex items-start justify-between gap-3 text-start"
             >
               <span className="flex items-start gap-2">
                 <Info size={18} className="text-amber-600 shrink-0 mt-0.5" />
@@ -303,7 +303,7 @@ export default function TeamsPage() {
               <div className="mt-4 overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="text-right text-gray-500 border-b border-gray-100">
+                    <tr className="text-start text-gray-500 border-b border-gray-100">
                       <th className="py-2 px-2 font-medium">الموظف</th>
                       <th className="py-2 px-2 font-medium">الفريق</th>
                       <th className="py-2 px-2 font-medium">المدير المسجّل</th>
@@ -339,14 +339,14 @@ export default function TeamsPage() {
             <div className="relative flex-1 max-w-md">
               <Search
                 size={20}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
+                className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400"
               />
               <input
                 type="text"
                 placeholder="البحث عن فريق..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="input pr-10 w-full"
+                className="input ps-10 w-full"
               />
             </div>
             <select
@@ -391,14 +391,14 @@ export default function TeamsPage() {
                 </div>
 
                 {/* Teams Grid */}
-                <div className="grid grid-cols-3 gap-4 mr-13">
+                <div className="grid grid-cols-3 gap-4 ms-13">
                   {deptTeams.map((team) => (
                     <div
                       key={team.id}
                       className={`card p-5 relative ${!team.isActive ? 'opacity-60' : ''}`}
                     >
                       {/* Status & Actions */}
-                      <div className="absolute top-3 left-3 flex items-center gap-2">
+                      <div className="absolute top-3 end-3 flex items-center gap-2">
                         <span
                           className={`badge text-xs ${
                             team.isActive ? 'badge-success' : 'badge-danger'
@@ -422,7 +422,7 @@ export default function TeamsPage() {
                                 className="fixed inset-0 z-10"
                                 onClick={() => setActiveMenu(null)}
                               />
-                              <div className="absolute left-0 top-full mt-1 w-40 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
+                              <div className="absolute end-0 top-full mt-1 w-40 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
                                 <button
                                   onClick={() => {
                                     handleOpenModal(team)

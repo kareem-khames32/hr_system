@@ -275,7 +275,7 @@ export default function LeaveBalancesPage() {
           <div className="bg-red-50 text-red-700 rounded-xl p-4 flex items-center gap-2">
             <AlertTriangle size={18} />
             {error}
-            <button type="button" disabled={loading} onClick={refreshBalances} className="mr-auto underline flex items-center gap-1"><RefreshCw size={14} />إعادة المحاولة</button>
+            <button type="button" disabled={loading} onClick={refreshBalances} className="ms-auto underline flex items-center gap-1"><RefreshCw size={14} />إعادة المحاولة</button>
           </div>
         )}
         {/* موظفون تعذّر حساب أرصدتهم على السيرفر — مش «بلا رصيد» */}
@@ -292,12 +292,12 @@ export default function LeaveBalancesPage() {
             <div className="relative flex-1 min-w-[220px]">
               <Search
                 size={18}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
+                className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400"
               />
               <input
                 type="text"
                 placeholder="بحث بالاسم أو الكود..."
-                className="input pr-10 w-full"
+                className="input ps-10 w-full"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
@@ -318,7 +318,7 @@ export default function LeaveBalancesPage() {
             <table className="w-full">
               <thead>
                 <tr className="table-header">
-                  <th className="text-right px-4 py-3">الموظف</th>
+                  <th className="text-start px-4 py-3">الموظف</th>
                   {balanceTypes.map(source => <th key={source} className="text-center px-4 py-3" colSpan={3}>{balanceLabel(source)}<span className="block text-xs font-normal">مستحق السنة | مستهلك | متبقي</span></th>)}
                   <th className="text-center px-4 py-3">مُرحّل سنوي ساري</th>
                 </tr>

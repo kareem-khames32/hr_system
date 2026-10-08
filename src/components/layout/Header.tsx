@@ -8,6 +8,7 @@ import {
   MessageSquare,
   Bell,
   Settings,
+  Languages,
   ChevronDown,
   Calendar,
   Sun,
@@ -16,10 +17,13 @@ import {
 } from 'lucide-react'
 import {
   can,
+  fetchAccountLanguage,
   fetchNotifications,
   markNotificationsRead,
   NOTIFICATIONS_CHANGED,
+  saveAccountLanguage,
 } from '@/lib/api'
+import { getLang, isLang, setLang, useLang, useT } from '@/lib/i18n'
 import { formatDate } from '@/lib/dates'
 import { PRODUCT_NAME } from '@/lib/product'
 import { pageTitleFor } from './pageTitles'
@@ -55,6 +59,24 @@ interface HeaderProps {
 
 export default function Header({ onMenuClick, menuOpen = false, menuButtonRef }: HeaderProps) {
   const pathname = usePathname() ?? ''
+  // B6.2: لغة الحساب من الخادم (مرة لكل ركوب للإطار)، وزرار بيبدّلها — بيظهر بس لو الخادم جاهز يحفظها
+  const lang = useLang(), t = useT()
+  const [languageChangeable, setLanguageChangeable] = useState(false)
+  const [languageBusy, setLanguageBusy] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    fetchAccountLanguage().then((account) => {
+      if (cancelled) return
+      setLanguageChangeable(account.changeable === true)
+      if (isLang(account.language) && account.language !== getLang()) setLang(account.language)
+    }).catch(() => { /* من غير رد: لغة المتصفح المحفوظة زي ما هي */ })
+    return () => { cancelled = true }
+  }, [])
+  const switchLanguage = async () => {
+    const next = lang === 'en' ? 'ar' : 'en'
+    setLanguageBusy(true)
+    try { setLang((await saveAccountLanguage(next)).language) } catch { /* الحفظ اترفض: اللغة زي ما هي */ } finally { setLanguageBusy(false) }
+  }
   const [showNotifications, setShowNotifications] = useState(false)
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [searchQuery, setSearchQuery] = useState('')
@@ -170,7 +192,7 @@ export default function Header({ onMenuClick, menuOpen = false, menuButtonRef }:
               ref={menuButtonRef}
               type="button"
               onClick={onMenuClick}
-              aria-label="فتح القائمة"
+              aria-label={t('فتح القائمة')}
               aria-expanded={menuOpen}
               aria-controls="app-sidebar"
               className="lg:hidden print:hidden shrink-0 p-3 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors"
@@ -179,7 +201,7 @@ export default function Header({ onMenuClick, menuOpen = false, menuButtonRef }:
             </button>
           )}
           <div className="max-lg:min-w-0">
-            <h2 className="text-lg lg:text-xl xl:text-2xl font-bold text-gray-800 max-lg:truncate">{pageTitle}</h2>
+            <h2 className="text-lg lg:text-xl xl:text-2xl font-bold text-gray-800 max-lg:truncate">{t(pageTitle)}</h2>
             <div className="hidden sm:flex items-center gap-2 text-sm text-gray-400 mt-1">
               <Calendar size={14} />
               <span>{formattedDate}</span>
@@ -192,15 +214,24 @@ export default function Header({ onMenuClick, menuOpen = false, menuButtonRef }:
           {canSearch && <form onSubmit={submitSearch} className="relative hidden xl:block">
             <div className="flex items-center gap-2 bg-gray-100 rounded-xl px-4 py-2.5 w-64">
               <Search size={18} className="text-gray-400" />
-              <input ref={searchRef} type="search" aria-label="بحث عن موظف" value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder="بحث عن موظف..." className="bg-transparent border-none outline-none text-sm min-w-0 flex-1 placeholder-gray-400" />
-              <button type="submit" aria-label="تنفيذ البحث" className="text-xs text-primary-600">بحث</button>
+              <input ref={searchRef} type="search" aria-label={t('بحث عن موظف')} value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder={t('بحث عن موظف...')} className="bg-transparent border-none outline-none text-sm min-w-0 flex-1 placeholder-gray-400" />
+              <button type="submit" aria-label={t('تنفيذ البحث')} className="text-xs text-primary-600">{t('بحث')}</button>
             </div>
           </form>}
+
+          {/* B6.2: تبديل لغة العرض للحساب — الزرار بيعرض اللغة التانية */}
+          {languageChangeable && (
+            <button type="button" onClick={switchLanguage} disabled={languageBusy} aria-label={t('لغة عرض الواجهة')} title={t('لغة عرض الواجهة')} data-language-switch
+              className="p-3 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors text-sm font-bold text-gray-600 disabled:opacity-50 flex items-center gap-1">
+              <Languages size={18} />
+              <span>{lang === 'en' ? 'ع' : 'EN'}</span>
+            </button>
+          )}
 
           {/* Notifications — على الموبايل القائمة بتتموضع على عرض الهيدر كله (مش الجرس) فتفضل جوّه الشاشة */}
           <div className="sm:relative">
             <button
-              aria-label="الإشعارات"
+              aria-label={t('الإشعارات')}
               onClick={() => setShowNotifications(!showNotifications)}
               className="relative p-3 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors"
             >
@@ -213,17 +244,17 @@ export default function Header({ onMenuClick, menuOpen = false, menuButtonRef }:
             </button>
 
             {showNotifications && (
-              <div className="absolute left-4 sm:left-0 top-full mt-2 w-[calc(100vw-2rem)] sm:w-96 bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden">
+              <div className="absolute end-4 sm:end-0 top-full mt-2 w-[calc(100vw-2rem)] sm:w-96 bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden">
                 <div className="p-4 border-b border-gray-100 flex items-center justify-between">
-                  <h3 className="font-bold text-gray-800">الإشعارات</h3>
+                  <h3 className="font-bold text-gray-800">{t('الإشعارات')}</h3>
                   <button onClick={markAllRead} disabled={markingRead || unreadCount === 0} className="text-sm text-primary-500 hover:text-primary-600 disabled:opacity-50">
                     تحديد الكل كمقروء
                   </button>
                 </div>
                 <div className="max-h-[50vh] sm:max-h-96 overflow-y-auto">
-                  {notificationError && <div role="alert" className="p-4 text-sm text-red-700">{notificationError} <button className="underline" onClick={loadNotifications}>إعادة المحاولة</button></div>}
+                  {notificationError && <div role="alert" className="p-4 text-sm text-red-700">{notificationError} <button className="underline" onClick={loadNotifications}>{t('إعادة المحاولة')}</button></div>}
                   {!notificationError && notifications.length === 0 && (
-                    <p className="p-4 text-sm text-gray-500 text-center">لا توجد إشعارات</p>
+                    <p className="p-4 text-sm text-gray-500 text-center">{t('لا توجد إشعارات')}</p>
                   )}
                   {notifications.map((notification) => (
                     <div
@@ -275,7 +306,7 @@ export default function Header({ onMenuClick, menuOpen = false, menuButtonRef }:
           </div>
 
           {/* Settings — على الموبايل الترس بيستخبى (الإعدادات في القائمة) والهيدر يفضل فيه الجرس وزرار القائمة */}
-          {can('settings.manage') && <Link href="/settings" aria-label="الإعدادات" className="hidden sm:block p-3 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors"><Settings size={20} className="text-gray-600" /></Link>}
+          {can('settings.manage') && <Link href="/settings" aria-label={t('الإعدادات')} className="hidden sm:block p-3 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors"><Settings size={20} className="text-gray-600" /></Link>}
         </div>
       </div>
     </header>

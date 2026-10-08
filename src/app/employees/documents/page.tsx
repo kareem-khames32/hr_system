@@ -487,11 +487,11 @@ export default function DocumentsPage() {
         <div className="card">
           <div className="flex flex-wrap items-center gap-4 min-w-0">
             <div className="relative flex-1 min-w-[220px]">
-              <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <Search size={18} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
                 type="text"
                 placeholder="بحث عن مستند أو موظف..."
-                className="input pr-10 w-full"
+                className="input ps-10 w-full"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
@@ -601,7 +601,7 @@ export default function DocumentsPage() {
             <table className="w-full">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-4 py-3 text-right">
+                  <th className="px-4 py-3 text-start">
                     <button onClick={selectAll} className="text-gray-400 hover:text-gray-600">
                       {selectedDocs.length === filteredDocs.length && filteredDocs.length > 0 ? (
                         <CheckSquare size={20} className="text-primary-600" />
@@ -610,12 +610,12 @@ export default function DocumentsPage() {
                       )}
                     </button>
                   </th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">المستند</th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">الموظف</th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">التصنيف</th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">تاريخ الإصدار</th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">الانتهاء</th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">الحالة</th>
+                  <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">المستند</th>
+                  <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">الموظف</th>
+                  <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">التصنيف</th>
+                  <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">تاريخ الإصدار</th>
+                  <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">الانتهاء</th>
+                  <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">الحالة</th>
                   <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">إجراءات</th>
                 </tr>
               </thead>
@@ -717,7 +717,7 @@ export default function DocumentsPage() {
                 <div key={doc.id} className="card hover:shadow-lg transition-shadow relative">
                   <button
                     onClick={() => toggleSelectDoc(doc.id)}
-                    className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 z-10"
+                    className="absolute top-4 start-4 text-gray-400 hover:text-gray-600 z-10"
                   >
                     {selectedDocs.includes(doc.id) ? (
                       <CheckSquare size={20} className="text-primary-600" />

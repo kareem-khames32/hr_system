@@ -53,7 +53,7 @@ export default function MyShiftSwapsPage() {
               <b className="text-gray-800">{row.requesterName ?? 'زميل'}</b>
               <span className="text-sm text-gray-600">ورديته يوم <span dir="ltr">{row.date ?? '—'}</span> مقابل ورديتك يوم <span dir="ltr">{row.withDate ?? '—'}</span></span>
               <span className="text-xs text-gray-500" dir="ltr">#{row.requestId}</span>
-              <span className={`mr-auto text-xs rounded-full px-3 py-1 ${row.status === 'ACCEPTED' ? 'bg-green-50 text-green-700' : row.status === 'DECLINED' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-800'}`}>{row.statusLabel}</span>
+              <span className={`ms-auto text-xs rounded-full px-3 py-1 ${row.status === 'ACCEPTED' ? 'bg-green-50 text-green-700' : row.status === 'DECLINED' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-800'}`}>{row.statusLabel}</span>
             </div>
             {row.note && <p className="text-sm text-gray-600">ملاحظتك: {row.note}</p>}
             {row.open && (

@@ -43,7 +43,7 @@ export default function PositionGenerateModal({ onClose, onApplied }: Props) {
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-right text-gray-500 border-b border-gray-200">
+                  <tr className="text-start text-gray-500 border-b border-gray-200">
                     <th className="py-2 px-2 font-medium">الفرع</th>
                     <th className="py-2 px-2 font-medium">القسم</th>
                     <th className="py-2 px-2 font-medium">المسمى</th>

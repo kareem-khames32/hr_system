@@ -38,7 +38,7 @@ const EGYPTIAN_FIELDS: Array<{ key: Field; label: string; pct?: boolean }> = [
 ]
 
 const Th =({ children, center }: { children: React.ReactNode; center?: boolean }) =>
-  <th className={`px-4 py-3 ${center ? 'text-center' : 'text-right'} text-sm font-medium text-gray-600 whitespace-nowrap`}>{children}</th>
+  <th className={`px-4 py-3 ${center ? 'text-center' : 'text-start'} text-sm font-medium text-gray-600 whitespace-nowrap`}>{children}</th>
 
 function reportTable(report: SocialInsuranceReport) {
   const header = ['كود الموظف', 'الموظف', 'الفرع', 'النظام', 'الفئة', 'المسار', 'رقم التأمينات', 'العملة', 'الأجر التأميني', 'نسبة الموظف %', 'حصة الموظف', 'نسبة صاحب العمل %', 'حصة صاحب العمل', 'الإجمالي', 'المصدر']

@@ -177,12 +177,12 @@ export default function MyDocumentsPage() {
                   <table className="w-full">
                     <thead>
                       <tr className="table-header">
-                        <th className="text-right px-4 py-3">المستند</th>
-                        <th className="text-right px-4 py-3">الرقم</th>
+                        <th className="text-start px-4 py-3">المستند</th>
+                        <th className="text-start px-4 py-3">الرقم</th>
                         <th className="text-center px-4 py-3">تاريخ الإصدار</th>
                         <th className="text-center px-4 py-3">تاريخ الانتهاء</th>
                         <th className="text-center px-4 py-3">الحالة</th>
-                        <th className="text-right px-4 py-3">ملاحظات</th>
+                        <th className="text-start px-4 py-3">ملاحظات</th>
                       </tr>
                     </thead>
                     <tbody>

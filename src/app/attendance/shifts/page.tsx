@@ -300,13 +300,13 @@ export default function ShiftsPage() {
         {/* Search */}
         <div className="card">
           <div className="relative w-96">
-            <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <Search size={18} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
               type="text"
               placeholder="بحث عن وردية..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="input pr-10"
+              className="input ps-10"
             />
           </div>
         </div>
@@ -328,7 +328,7 @@ export default function ShiftsPage() {
                   className={`card relative overflow-hidden ${!shift.isActive ? 'opacity-60' : ''}`}
                 >
                   {/* Color Bar */}
-                  <div className={`absolute top-0 right-0 left-0 h-1.5 ${color}`} />
+                  <div className={`absolute top-0 start-0 end-0 h-1.5 ${color}`} />
 
                   {/* Header */}
                   <div className="flex items-start justify-between mt-2">
@@ -487,17 +487,17 @@ export default function ShiftsPage() {
         <div className="card">
           <h3 className="font-bold text-gray-800 mb-4">تعيين الورديات للموظفين</h3>
           <div className="grid grid-cols-3 gap-4">
-            <Link href="/attendance/weekly-schedule" className="p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors text-right">
+            <Link href="/attendance/weekly-schedule" className="p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors text-start">
               <Calendar size={24} className="text-primary-500 mb-2" />
               <p className="font-medium text-gray-800">الجدول الأسبوعي</p>
               <p className="text-sm text-gray-500 mt-1">عرض وتعديل جدول الورديات الأسبوعي</p>
             </Link>
-            <Link href="/attendance/weekly-schedule" className="p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors text-right">
+            <Link href="/attendance/weekly-schedule" className="p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors text-start">
               <Users size={24} className="text-success-500 mb-2" />
               <p className="font-medium text-gray-800">تعيين جماعي</p>
               <p className="text-sm text-gray-500 mt-1">تعيين وردية لمجموعة موظفين</p>
             </Link>
-            <Link href="/attendance/weekly-schedule" className="p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors text-right">
+            <Link href="/attendance/weekly-schedule" className="p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors text-start">
               <Copy size={24} className="text-warning-500 mb-2" />
               <p className="font-medium text-gray-800">نسخ من أسبوع سابق</p>
               <p className="text-sm text-gray-500 mt-1">نسخ جدول الورديات من أسبوع سابق</p>

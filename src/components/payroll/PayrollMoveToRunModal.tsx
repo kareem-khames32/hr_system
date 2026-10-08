@@ -78,7 +78,7 @@ export function PayrollMoveToRunModal({ employees, period, cycleStartDay, today,
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label="نقل لمسير">
-      <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-5 shadow-xl space-y-3 text-right" data-testid="payroll-move-to-run">
+      <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-5 shadow-xl space-y-3 text-start" data-testid="payroll-move-to-run">
         <div className="flex items-center justify-between gap-2">
           <h3 className="font-bold text-gray-800 flex items-center gap-2">
             <ArrowLeftRight size={18} />
@@ -102,8 +102,8 @@ export function PayrollMoveToRunModal({ employees, period, cycleStartDay, today,
             <div className="flex items-center justify-between gap-2">
               <span className="text-sm font-medium text-gray-700">المسير المنقول إليه</span>
               <span className="relative">
-                <Search size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-                <input type="text" className="input w-52 pr-8 text-sm" placeholder="دوّر باسم المسير أو المعادلة" disabled={busy}
+                <Search size={14} className="absolute start-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input type="text" className="input w-52 ps-8 text-sm" placeholder="دوّر باسم المسير أو المعادلة" disabled={busy}
                   value={query} onChange={event => setQuery(event.target.value)} data-move-target-search />
               </span>
             </div>

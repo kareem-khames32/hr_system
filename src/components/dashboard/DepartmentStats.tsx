@@ -61,13 +61,13 @@ export default function DepartmentStats() {
           <table className="w-full">
             <thead>
               <tr className="table-header">
-                <th className="text-right px-4 py-3 rounded-r-xl">القسم</th>
+                <th className="text-start px-4 py-3 rounded-s-xl">القسم</th>
                 <th className="text-center px-4 py-3">الموظفين</th>
                 <th className="text-center px-4 py-3">الحاضرين</th>
                 <th className="text-center px-4 py-3">غائب</th>
                 <th className="text-center px-4 py-3">إجازة</th>
                 <th
-                  className="text-center px-4 py-3 rounded-l-xl"
+                  className="text-center px-4 py-3 rounded-e-xl"
                   title="الحاضرون ÷ (الحاضرون + الغائبون) — من حلّ موعد حضورهم اليوم؛ الإجازات ومن لم تبدأ ورديته خارج الحساب"
                 >
                   نسبة الحضور

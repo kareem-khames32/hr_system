@@ -95,12 +95,12 @@ export default function DependentsCard({ employeeId }: { employeeId?: number }) 
           <table className="w-full text-sm">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-3 py-2 text-right font-medium text-gray-600">الاسم</th>
-                <th className="px-3 py-2 text-right font-medium text-gray-600">القرابة</th>
-                <th className="px-3 py-2 text-right font-medium text-gray-600">تاريخ الميلاد</th>
-                <th className="px-3 py-2 text-right font-medium text-gray-600">رقم الهوية</th>
-                <th className="px-3 py-2 text-right font-medium text-gray-600">انتهاء الهوية</th>
-                <th className="px-3 py-2 text-right font-medium text-gray-600">التأمين</th>
+                <th className="px-3 py-2 text-start font-medium text-gray-600">الاسم</th>
+                <th className="px-3 py-2 text-start font-medium text-gray-600">القرابة</th>
+                <th className="px-3 py-2 text-start font-medium text-gray-600">تاريخ الميلاد</th>
+                <th className="px-3 py-2 text-start font-medium text-gray-600">رقم الهوية</th>
+                <th className="px-3 py-2 text-start font-medium text-gray-600">انتهاء الهوية</th>
+                <th className="px-3 py-2 text-start font-medium text-gray-600">التأمين</th>
                 {manage && <th className="px-3 py-2" />}
               </tr>
             </thead>
@@ -117,8 +117,8 @@ export default function DependentsCard({ employeeId }: { employeeId?: number }) 
                   <td className="px-3 py-2 text-gray-600">{row.idExpiryDate ? formatDate(row.idExpiryDate) : '—'}</td>
                   <td className="px-3 py-2 text-gray-600">{row.isInsured ? 'مشمول' : '—'}</td>
                   {manage && (
-                    <td className="px-3 py-2 text-left whitespace-nowrap">
-                      <button type="button" onClick={() => { setDraft(draftOf(row)); setError(''); setRemoving(null); setEditing(row.id) }} className="text-primary-600 hover:underline text-xs ml-3">تعديل</button>
+                    <td className="px-3 py-2 text-end whitespace-nowrap">
+                      <button type="button" onClick={() => { setDraft(draftOf(row)); setError(''); setRemoving(null); setEditing(row.id) }} className="text-primary-600 hover:underline text-xs me-3">تعديل</button>
                       <button type="button" onClick={() => { setEditing(null); setError(''); setReason(''); setRemoving(row.id) }} className="text-red-600 hover:underline text-xs">حذف</button>
                     </td>
                   )}

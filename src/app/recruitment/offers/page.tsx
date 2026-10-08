@@ -98,10 +98,10 @@ export default function OffersPage() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-4 py-3 text-right font-medium text-gray-600">المرشح</th>
-                  <th className="px-4 py-3 text-right font-medium text-gray-600">الراتب المعروض</th>
-                  <th className="px-4 py-3 text-right font-medium text-gray-600">البدء</th>
-                  <th className="px-4 py-3 text-right font-medium text-gray-600">الحالة</th>
+                  <th className="px-4 py-3 text-start font-medium text-gray-600">المرشح</th>
+                  <th className="px-4 py-3 text-start font-medium text-gray-600">الراتب المعروض</th>
+                  <th className="px-4 py-3 text-start font-medium text-gray-600">البدء</th>
+                  <th className="px-4 py-3 text-start font-medium text-gray-600">الحالة</th>
                   <th className="px-4 py-3" />
                 </tr>
               </thead>

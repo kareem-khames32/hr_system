@@ -114,7 +114,7 @@ function Stat({ label, value, tone = 'text-gray-800' }: { label: string; value: 
 }
 
 function Th({ children, center = false }: { children: ReactNode; center?: boolean }) {
-  return <th className={`px-4 py-3 ${center ? 'text-center' : 'text-right'} text-sm font-medium text-gray-600 whitespace-nowrap`}>{children}</th>
+  return <th className={`px-4 py-3 ${center ? 'text-center' : 'text-start'} text-sm font-medium text-gray-600 whitespace-nowrap`}>{children}</th>
 }
 
 function EmptyRow({ colSpan, text }: { colSpan: number; text: string }) {
@@ -260,7 +260,7 @@ function RunsTab() {
                 <tbody className="divide-y divide-gray-100">
                   {periodRows.map((row) => (
                     <tr key={`${row.period}:${row.currency ?? ''}`}>
-                      <td className="px-4 py-3 font-medium">{row.period}{multi && row.currency && <span className="text-xs text-gray-500 mr-1">({currencyLabel(row.currency)})</span>}</td>
+                      <td className="px-4 py-3 font-medium">{row.period}{multi && row.currency && <span className="text-xs text-gray-500 ms-1">({currencyLabel(row.currency)})</span>}</td>
                       <td className="px-4 py-3 text-center" dir="ltr">{formatReportMoney(row.basic)} + {formatReportMoney(row.allowances)}</td>
                       <td className="px-4 py-3 text-center text-success-600" dir="ltr">{formatReportMoney(row.overtime)}</td>
                       <td className="px-4 py-3 text-center text-red-600" dir="ltr">{formatReportMoney(row.lateness)} / {formatReportMoney(row.shortfall)}</td>
@@ -716,7 +716,7 @@ function VarianceTab() {
                     <td className={`px-4 py-3 text-center font-bold ${row.direction === 'INCREASE' ? 'text-success-600' : row.direction === 'DECREASE' ? 'text-red-600' : ''}`} dir="ltr">{formatReportMoney(row.difference)}</td>
                     <td className="px-4 py-3 text-center" dir="ltr">{row.percent === null ? '—' : `${row.percent}%`}</td>
                     <td className="px-4 py-3 text-xs text-gray-600">
-                      {row.causes.map((cause) => <span key={cause.code} className={`badge ${cause.code === 'UNEXPLAINED' ? 'bg-red-100 text-red-700' : 'badge-primary'} ml-1`}>{cause.label}</span>)}
+                      {row.causes.map((cause) => <span key={cause.code} className={`badge ${cause.code === 'UNEXPLAINED' ? 'bg-red-100 text-red-700' : 'badge-primary'} me-1`}>{cause.label}</span>)}
                       {row.components.map((component) => <p key={component.key} className="mt-1">{component.label}: <span dir="ltr">{formatReportMoney(component.effect)}</span></p>)}
                       {row.unexplained && <p className="mt-1 text-red-600">متبقٍ غير مفسَّر: <span dir="ltr">{formatReportMoney(row.residual)}</span></p>}
                     </td>

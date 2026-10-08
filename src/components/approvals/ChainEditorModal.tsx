@@ -420,7 +420,7 @@ function ChainEditorDialog({
                           الخطوة {index + 1}
                         </span>
                         <label
-                          className={`flex items-center gap-1.5 mr-3 ${index === 0 ? 'opacity-40 cursor-not-allowed' : ''}`}
+                          className={`flex items-center gap-1.5 ms-3 ${index === 0 ? 'opacity-40 cursor-not-allowed' : ''}`}
                           title={
                             index === 0
                               ? 'الخطوة الأولى لا يمكن أن تكون موازية'
@@ -440,7 +440,7 @@ function ChainEditorDialog({
                         </label>
                         {/* B2.6-ب: خطوة باسم موظف بعينه بتتفوّض لبديله طول فترة تفويضه — إلا لو اتقفلت هنا */}
                         {DELEGABLE_ROLES.includes(step.approverRole) && (
-                          <label className="flex items-center gap-1.5 mr-3" title="طول فترة تفويض المعتمد، الخطوة بتظهر عند بديله كمان" data-step-can-delegate>
+                          <label className="flex items-center gap-1.5 ms-3" title="طول فترة تفويض المعتمد، الخطوة بتظهر عند بديله كمان" data-step-can-delegate>
                             <input
                               type="checkbox"
                               checked={step.canDelegate}

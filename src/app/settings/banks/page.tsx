@@ -120,10 +120,10 @@ export default function BanksPage() {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 text-gray-600">
                     <tr>
-                      <th className="table-header text-right">الدولة</th>
+                      <th className="table-header text-start">الدولة</th>
                       <th className="table-header text-center">كود الآيبان</th>
-                      <th className="table-header text-right">البنك</th>
-                      <th className="table-header text-right">بالإنجليزي</th>
+                      <th className="table-header text-start">البنك</th>
+                      <th className="table-header text-start">بالإنجليزي</th>
                       <th className="table-header text-center">السويفت</th>
                       <th className="table-header text-center">الحالة</th>
                     </tr>

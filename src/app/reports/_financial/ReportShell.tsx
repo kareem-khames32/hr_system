@@ -259,7 +259,7 @@ export function StatCard({ label, value }: { label: string; value: ReactNode }) 
 }
 
 export function Th({ children, className = '' }: { children: ReactNode; className?: string }) {
-  return <th className={`text-right p-3 font-medium whitespace-nowrap ${className}`}>{children}</th>
+  return <th className={`text-start p-3 font-medium whitespace-nowrap ${className}`}>{children}</th>
 }
 
 export function EmptyState({ text }: { text: string }) {

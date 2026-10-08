@@ -50,7 +50,7 @@ export default function PolicyReport({ policyId }: { policyId: number }) {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {cards.map(([key, label, count]) => (
           <button key={key} type="button" onClick={() => setFilter(key)} aria-pressed={filter === key}
-            className={`card text-right transition ${filter === key ? 'ring-2 ring-primary-500' : 'hover:bg-gray-50'}`}>
+            className={`card text-start transition ${filter === key ? 'ring-2 ring-primary-500' : 'hover:bg-gray-50'}`}>
             <span className="block text-2xl font-bold text-gray-800">{count}</span>
             <span className="text-sm text-gray-500">{label}</span>
           </button>
@@ -59,7 +59,7 @@ export default function PolicyReport({ policyId }: { policyId: number }) {
       <div className="card overflow-x-auto">
         <table className="w-full text-sm" data-policy-report-table>
           <thead className="bg-gray-50">
-            <tr>{['الموظف', 'الحالة', 'أقرّ بالنسخة', 'وقت الإقرار', 'القفل من يوم'].map(title => <th key={title} className="px-3 py-2 text-right font-medium text-gray-600 whitespace-nowrap">{title}</th>)}</tr>
+            <tr>{['الموظف', 'الحالة', 'أقرّ بالنسخة', 'وقت الإقرار', 'القفل من يوم'].map(title => <th key={title} className="px-3 py-2 text-start font-medium text-gray-600 whitespace-nowrap">{title}</th>)}</tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {rows.map(row => (
@@ -68,7 +68,7 @@ export default function PolicyReport({ policyId }: { policyId: number }) {
                   <span className="text-gray-800">{row.fullName}</span>
                   {row.employeeCode && <span className="text-xs text-gray-400 mr-2" dir="ltr">{row.employeeCode}</span>}
                   {/* من غير حساب مش هيقدر يدخل يقرّ */}
-                  {!row.hasAccount && <span className="badge bg-gray-100 text-gray-600 mr-2">من غير حساب دخول</span>}
+                  {!row.hasAccount && <span className="badge bg-gray-100 text-gray-600 ms-2">من غير حساب دخول</span>}
                 </td>
                 <td className="px-3 py-2"><span className={`badge ${STATE_STYLES[row.state]}`}>{stateLabel(row.state)}</span></td>
                 <td className="px-3 py-2">{row.acknowledgedVersionNo ?? '—'}</td>

@@ -98,11 +98,11 @@ export default function MySafetyPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-600">
                   <tr>
-                    <th className="table-header text-right">الرقم</th>
-                    <th className="table-header text-right">النوع</th>
+                    <th className="table-header text-start">الرقم</th>
+                    <th className="table-header text-start">النوع</th>
                     <th className="table-header text-center">التاريخ</th>
-                    <th className="table-header text-right">المكان</th>
-                    <th className="table-header text-right">الوصف</th>
+                    <th className="table-header text-start">المكان</th>
+                    <th className="table-header text-start">الوصف</th>
                     <th className="table-header text-center">الحالة</th>
                   </tr>
                 </thead>

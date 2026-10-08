@@ -60,7 +60,7 @@ export default function MyRaisesPage() {
             <div className="flex flex-wrap items-center gap-3">
               <h2 className="text-lg font-semibold text-gray-800">{cycle.name}</h2>
               <span className="text-sm text-gray-600">يسري من راتب <span dir="ltr">{cycle.effectivePayrollPeriod}</span></span>
-              <span className="mr-auto text-sm bg-gray-50 rounded-lg px-3 py-2">
+              <span className="ms-auto text-sm bg-gray-50 rounded-lg px-3 py-2">
                 إجمالي اقتراحاتك في الشهر:{' '}
                 {cycle.totals.map((total) => <b key={total.currency} className="font-mono mx-1">{formatMoney(total.amount)} {currencyLabel(total.currency)}</b>)}
               </span>
@@ -69,10 +69,10 @@ export default function MyRaisesPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-600">
                   <tr>
-                    <th className="table-header text-right">الموظف</th>
+                    <th className="table-header text-start">الموظف</th>
                     <th className="table-header text-center">اقتراحك الحالي</th>
                     <th className="table-header text-center">الزيادة الشهرية</th>
-                    <th className="table-header text-right">ملاحظة</th>
+                    <th className="table-header text-start">ملاحظة</th>
                     <th className="table-header" />
                   </tr>
                 </thead>
@@ -94,7 +94,7 @@ export default function MyRaisesPage() {
                         <td className="table-cell">
                           <input className="input w-full" maxLength={500} aria-label={`ملاحظة ${person.fullName}`} value={draft.note} onChange={(event) => change({ note: event.target.value })} />
                         </td>
-                        <td className="table-cell text-left">
+                        <td className="table-cell text-end">
                           <button type="button" className="btn-primary text-xs disabled:opacity-50" disabled={busy || !drafts[key] || amountOf(draft.amount) === null}
                             onClick={() => save(cycle.id, person.employeeId, person.fullName)}>حفظ</button>
                         </td>

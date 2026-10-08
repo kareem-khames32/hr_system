@@ -201,7 +201,7 @@ export default function AnnouncementsPage() {
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="text-right text-gray-500 border-b border-gray-100">
+                    <tr className="text-start text-gray-500 border-b border-gray-100">
                       <th className="py-2 px-2 font-medium">الإعلان</th>
                       <th className="py-2 px-2 font-medium">لمين</th>
                       <th className="py-2 px-2 font-medium">النشر / الانتهاء</th>

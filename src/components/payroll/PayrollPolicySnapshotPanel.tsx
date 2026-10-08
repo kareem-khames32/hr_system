@@ -59,7 +59,7 @@ export function PayrollPolicySnapshotPanel({ runId, runStatus, snapshotVersion, 
         : <div className="space-y-2">
           <p className="text-sm font-medium text-amber-900">{stored ? `${view.differences.length} فرق بين اللقطة المحفوظة والإعدادات الحالية — إعادة الحساب تستخدم المحفوظ ما لم تختر التحديث صراحةً:` : 'القيم الحالية التي ستُلتقط:'}</p>
           <div className="overflow-x-auto"><table className="w-full text-sm">
-            <thead><tr className="table-header"><th className="p-2 text-right">البند</th><th className="p-2 text-right">المحفوظ على المسير</th><th className="p-2 text-right">الحالي</th></tr></thead>
+            <thead><tr className="table-header"><th className="p-2 text-start">البند</th><th className="p-2 text-start">المحفوظ على المسير</th><th className="p-2 text-start">الحالي</th></tr></thead>
             <tbody>{view.differences.map(row => <tr key={row.key} className="border-t border-gray-100 align-top">
               <td className="p-2">{row.label}</td><td className="p-2 text-gray-700">{row.stored}</td><td className="p-2 text-amber-900">{row.current}</td>
             </tr>)}</tbody>

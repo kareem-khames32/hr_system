@@ -18,6 +18,7 @@ import { fetchTeamManager } from '@/lib/manager-api'
 import { fetchMyRaises } from '@/lib/compensation-api'
 import { DEFAULT_MODULES, routeAvailable, useModules } from '@/lib/modules'
 import { useBranding } from '@/lib/branding'
+import { useT } from '@/lib/i18n'
 import { BrandLogo } from '@/components/branding/BrandLogo'
 import { PoweredBy } from '@/components/branding/PoweredBy'
 import { InstallAppButton } from './InstallAppButton'
@@ -392,6 +393,8 @@ interface SidebarProps {
 
 export default function Sidebar({ open = false, onClose }: SidebarProps) {
   const pathname = usePathname() ?? ''
+  // B6.2: بنود القايمة بتتعرض بلغة الحساب (المفتاح هو الاسم العربي)
+  const t = useT()
   // القائمة تُركَّب بعد التحقق من الجلسة على العميل — قراءة التخزين المحلي هنا آمنة وتمنع وميض قائمة فارغة
   // المفتوحة = مجموعة الشاشة الحالية من أول رسم (بلا وميض مجموعة مغلقة)، وإلا آخر مجموعة فتحها المستخدم
   const [openGroup, setOpenGroup] = useState<string | null>(() => {
@@ -637,7 +640,7 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
     <aside
       id="app-sidebar"
       className={clsx(
-        'fixed right-0 top-0 h-screen w-72 bg-white border-l border-gray-100 flex flex-col z-50',
+        'fixed start-0 top-0 h-screen w-72 bg-white border-e border-gray-100 flex flex-col z-50',
         // أقل من lg: درج من اليمين بطول الشاشة الظاهرة، وهو مقفول برّه الشاشة ومخفي عن التركيز (invisible بعد ما يخلص الانزلاق)؛
         // من lg وفوق مفيش ولا كلاس من دول — القائمة ثابتة زي ما هي بالظبط
         'max-lg:bottom-0 max-lg:h-auto max-lg:duration-200 max-lg:ease-out max-lg:motion-reduce:transition-none',
@@ -650,13 +653,13 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
         type="button"
         onClick={onClose}
         aria-label="إغلاق القائمة"
-        className="lg:hidden absolute top-3 left-3 p-2 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+        className="lg:hidden absolute top-3 end-3 p-2 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600"
       >
         <X size={20} />
       </button>
       {/* هوية الشركة لكل المستخدمين: الشعار (أو علامة بالحروف) والاسم — الطويل على سطرين والكامل في التلميح،
           والشعار العريض بينزّل الاسم لسطر تحته (flex-wrap) */}
-      <div className="px-6 py-5 border-b border-gray-100 max-lg:pl-14">
+      <div className="px-6 py-5 border-b border-gray-100 max-lg:pe-14">
         {brand.ready ? (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <BrandLogo brand={brand} size="md" />
@@ -664,7 +667,7 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
               <p title={brand.companyName} className="font-bold text-gray-800 leading-snug line-clamp-2 break-words">
                 <bdi>{brand.companyName}</bdi>
               </p>
-              <p className="text-xs text-gray-400 mt-0.5">الموارد البشرية</p>
+              <p className="text-xs text-gray-400 mt-0.5">{t('الموارد البشرية')}</p>
             </div>
           </div>
         ) : (
@@ -680,7 +683,7 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
 
       {/* Navigation */}
       <nav ref={navRef} onClick={closeOnLink} className="flex-1 overflow-y-auto p-4 space-y-1">
-        {inboxError && <div role="alert" className="text-xs text-amber-700 p-2">تعذر تحديث صندوق الموافقات. <button type="button" className="underline" onClick={() => setInboxRevision(value => value + 1)}>إعادة المحاولة</button></div>}
+        {inboxError && <div role="alert" className="text-xs text-amber-700 p-2">{t('تعذر تحديث صندوق الموافقات. ')}<button type="button" className="underline" onClick={() => setInboxRevision(value => value + 1)}>{t('إعادة المحاولة')}</button></div>}
         {menuItems.map((item) => (
           <div key={item.id}>
             {item.href ? (
@@ -690,11 +693,11 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
                 className={clsx('sidebar-item', isActive(item.href) && 'active')}
               >
                 {item.icon}
-                <span className="font-medium">{item.label}</span>
+                <span className="font-medium">{t(item.label)}</span>
                 {(item.badge ?? 0) > 0 && (
                   <span
                     className={clsx(
-                      'mr-auto text-xs font-bold px-2 py-0.5 rounded-full',
+                      'ms-auto text-xs font-bold px-2 py-0.5 rounded-full',
                       isActive(item.href)
                         ? 'bg-white/20 text-white'
                         : 'bg-primary-500 text-white'
@@ -717,7 +720,7 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
                 >
                   <div className="flex items-center gap-3">
                     {item.icon}
-                    <span className="font-medium">{item.label}</span>
+                    <span className="font-medium">{t(item.label)}</span>
                   </div>
                   <ChevronDown
                     size={18}
@@ -728,7 +731,7 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
                   />
                 </button>
                 {isExpanded(item.id) && item.children && (
-                  <div className="mr-8 mt-1 space-y-1">
+                  <div className="ms-8 mt-1 space-y-1">
                     {item.children.map((child) => (
                       <Link
                         key={child.href}
@@ -741,7 +744,7 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
                             : 'text-gray-500 hover:text-primary-600 hover:bg-primary-50'
                         )}
                       >
-                        {child.label}
+                        {t(child.label)}
                       </Link>
                     ))}
                   </div>

@@ -107,7 +107,7 @@ export default function CaseFilePage() {
                 <h2 className="font-bold text-gray-800">الخط الزمني</h2>
                 {file.events.length === 0 && <p className="text-sm text-gray-500">مفيش أحداث لسه.</p>}
                 {file.events.map((entry) => (
-                  <div key={entry.id} className="border-r-2 border-primary-200 pr-3">
+                  <div key={entry.id} className="border-s-2 border-primary-200 ps-3">
                     <p className="text-xs text-gray-500">
                       {entry.kindLabel}
                       {entry.employeeName ? ` — ${entry.employeeName}` : ''} · {entry.byName ?? 'النظام'} · {formatDate(entry.at)}

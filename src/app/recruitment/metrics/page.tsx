@@ -85,7 +85,7 @@ export default function RecruitmentMetricsPage() {
                       {data.sources.map((row) => (
                         <tr key={row.source}>
                           <td className="py-2 text-gray-700">{row.source}</td>
-                          <td className="py-2 text-left text-gray-800 tabular-nums">{row.count}</td>
+                          <td className="py-2 text-end text-gray-800 tabular-nums">{row.count}</td>
                         </tr>
                       ))}
                     </tbody>

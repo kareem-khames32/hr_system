@@ -124,7 +124,7 @@ export default function EmployeeFieldsPage() {
               <thead className="bg-gray-50 border-b border-gray-100">
                 <tr>
                   {['الحقل', 'النوع', 'إلزامي', 'مين يشوفه', 'الترتيب', 'الحالة', 'إجراءات'].map((title) => (
-                    <th key={title} className="text-right py-4 px-6 text-sm font-bold text-gray-700">{title}</th>
+                    <th key={title} className="text-start py-4 px-6 text-sm font-bold text-gray-700">{title}</th>
                   ))}
                 </tr>
               </thead>

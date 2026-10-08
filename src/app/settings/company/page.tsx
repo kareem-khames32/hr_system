@@ -578,7 +578,7 @@ export default function CompanySettingsPage() {
 
       {/* شريط الحفظ السفلي — يظهر عند وجود تغييرات */}
       {!loading && !readOnly && (dirtyKeys.length > 0 || success) && (
-        <div className="fixed bottom-0 inset-x-0 md:pr-64 z-30">
+        <div className="fixed bottom-0 inset-x-0 md:ps-64 z-30">
           <div className="bg-white border-t border-gray-200 shadow-lg px-6 py-3 flex items-center justify-between">
             {success ? (
               <span className="text-sm text-success-700 flex items-center gap-2">

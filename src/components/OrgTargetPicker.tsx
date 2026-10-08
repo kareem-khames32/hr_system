@@ -292,7 +292,7 @@ export function OrgTargetPicker({
                 onChange={() => onChange({ ...value, departmentIds: toggle(value.departmentIds, d.id) })}
               />
               <span className="text-sm text-gray-700">{d.name}</span>
-              <span className="text-xs text-gray-400 mr-auto">{countIn(d.id)} موظف</span>
+              <span className="text-xs text-gray-400 ms-auto">{countIn(d.id)} موظف</span>
             </label>
           ))}
         </div>
@@ -341,7 +341,7 @@ export function OrgTargetPicker({
                 />
                 <span className="text-sm text-gray-700">{t.name}</span>
                 <span className="text-xs text-gray-400">{departments.find((d) => d.id === t.departmentId)?.name ?? ''}</span>
-                <span className="text-xs text-gray-400 mr-auto">{countInTeam(t.id)} موظف</span>
+                <span className="text-xs text-gray-400 ms-auto">{countInTeam(t.id)} موظف</span>
               </label>
             ))}
           </div>
@@ -353,10 +353,10 @@ export function OrgTargetPicker({
         <div className="space-y-2">
           <div className="flex gap-2 flex-wrap">
             <div className="relative flex-1 min-w-40">
-              <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <Search size={16} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
                 type="text"
-                className="input w-full pr-9"
+                className="input w-full ps-9"
                 placeholder="دوّر بالاسم أو الكود..."
                 value={query}
                 disabled={disabled}
@@ -437,7 +437,7 @@ export function OrgTargetPicker({
                   onChange={() => onChange({ ...value, employeeIds: toggle(value.employeeIds, e.id) })}
                 />
                 <span className="text-sm text-gray-700">{e.fullName}</span>
-                <span className="text-xs text-gray-400 mr-auto">
+                <span className="text-xs text-gray-400 ms-auto">
                   {[departments.find((d) => d.id === e.departmentId)?.name, allTeams.find((t) => t.id === e.teamId)?.name]
                     .filter(Boolean)
                     .join(' — ')}

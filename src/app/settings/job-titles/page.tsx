@@ -217,14 +217,14 @@ export default function JobTitlesPage() {
             <div className="relative flex-1 max-w-md">
               <Search
                 size={20}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
+                className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400"
               />
               <input
                 type="text"
                 placeholder="البحث عن مسمى وظيفي..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="input pr-10 w-full"
+                className="input ps-10 w-full"
               />
             </div>
           </div>
@@ -243,17 +243,17 @@ export default function JobTitlesPage() {
             <table className="w-full">
               <thead className="bg-gray-50 border-b border-gray-100">
                 <tr>
-                  <th className="text-right py-4 px-6 text-sm font-bold text-gray-700">
+                  <th className="text-start py-4 px-6 text-sm font-bold text-gray-700">
                     المسمى الوظيفي
                   </th>
-                  <th className="text-right py-4 px-6 text-sm font-bold text-gray-700">
+                  <th className="text-start py-4 px-6 text-sm font-bold text-gray-700">
                     الرقم
                   </th>
-                  <th className="text-right py-4 px-6 text-sm font-bold text-gray-700">
+                  <th className="text-start py-4 px-6 text-sm font-bold text-gray-700">
                     الحالة
                   </th>
                   {canWrite && (
-                    <th className="text-right py-4 px-6 text-sm font-bold text-gray-700">
+                    <th className="text-start py-4 px-6 text-sm font-bold text-gray-700">
                       إجراءات
                     </th>
                   )}
@@ -306,7 +306,7 @@ export default function JobTitlesPage() {
                               className="fixed inset-0 z-10"
                               onClick={() => setActiveMenu(null)}
                             />
-                            <div className="absolute left-0 top-full mt-1 w-40 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
+                            <div className="absolute end-0 top-full mt-1 w-40 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
                               <button
                                 onClick={() => {
                                   handleOpenModal(job)

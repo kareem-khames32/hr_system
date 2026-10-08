@@ -454,11 +454,11 @@ export default function DevicesPage() {
         <div className="card">
           <div className="flex items-center gap-3">
             <div className="relative flex-1">
-              <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <Search size={18} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
                 type="text"
                 placeholder="بحث عن جهاز..."
-                className="input pr-10 w-full"
+                className="input ps-10 w-full"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
@@ -477,7 +477,7 @@ export default function DevicesPage() {
             </select>
             {/* فاصل المزامنة مفتاح إعدادات (قراءته وحفظه settings.manage) */}
             {canManage && (
-              <div className="flex items-center gap-2 whitespace-nowrap border-r border-gray-100 pr-3">
+              <div className="flex items-center gap-2 whitespace-nowrap border-s border-gray-100 ps-3">
                 <Timer size={18} className="text-gray-400" />
                 <span className="text-sm text-gray-600">
                   فاصل المزامنة التلقائية (دقائق)
@@ -646,12 +646,12 @@ export default function DevicesPage() {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50">
                     <tr>
-                      <th className="px-3 py-2 text-right font-medium text-gray-600">كود الجهاز</th>
-                      <th className="px-3 py-2 text-right font-medium text-gray-600">البصمات</th>
-                      <th className="px-3 py-2 text-right font-medium text-gray-600">أول بصمة</th>
-                      <th className="px-3 py-2 text-right font-medium text-gray-600">آخر بصمة</th>
-                      <th className="px-3 py-2 text-right font-medium text-gray-600">الجهاز</th>
-                      <th className="px-3 py-2 text-right font-medium text-gray-600">ربط بموظف</th>
+                      <th className="px-3 py-2 text-start font-medium text-gray-600">كود الجهاز</th>
+                      <th className="px-3 py-2 text-start font-medium text-gray-600">البصمات</th>
+                      <th className="px-3 py-2 text-start font-medium text-gray-600">أول بصمة</th>
+                      <th className="px-3 py-2 text-start font-medium text-gray-600">آخر بصمة</th>
+                      <th className="px-3 py-2 text-start font-medium text-gray-600">الجهاز</th>
+                      <th className="px-3 py-2 text-start font-medium text-gray-600">ربط بموظف</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">

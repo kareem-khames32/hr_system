@@ -266,7 +266,7 @@ export default function LeaveCalendarPage() {
                     <p className="text-sm text-gray-500">{h.targeted && h.audienceText ? `عطلة رسمية — تسري على: ${h.audienceText}` : 'عطلة رسمية'}</p>
                   </div>
                 </div>
-                <div className="text-left">
+                <div className="text-end">
                   <p className="text-sm font-medium text-gray-800">{h.date}</p>
                   {h.endDate && (
                     <p className="text-xs text-gray-500">إلى {h.endDate}</p>
@@ -302,7 +302,7 @@ export default function LeaveCalendarPage() {
                       </p>
                     </div>
                   </div>
-                  <div className="text-left">
+                  <div className="text-end">
                     <p className="text-sm font-medium text-gray-800">{l.fromDate}</p>
                     {l.fromDate !== l.toDate && (
                       <p className="text-xs text-gray-500">إلى {l.toDate}</p>

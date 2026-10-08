@@ -117,8 +117,8 @@ export function PayrollChainEditor({ steps, roles, disabled, busy, emptyHint, cl
           {mode === 'USER' ? (
             <div className="space-y-2">
               <span className="relative block max-w-md">
-                <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                <input type="text" className="input w-full pr-9" placeholder="دوّر بالاسم أو كود الموظف..." value={search} disabled={locked || full}
+                <Search size={16} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input type="text" className="input w-full ps-9" placeholder="دوّر بالاسم أو كود الموظف..." value={search} disabled={locked || full}
                   onChange={event => setSearch(event.target.value)} data-chain-approver-search />
               </span>
               {searchError && <p role="alert" className="text-sm text-red-700">{searchError}</p>}

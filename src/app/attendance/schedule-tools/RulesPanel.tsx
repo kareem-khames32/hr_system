@@ -64,7 +64,7 @@ export default function RulesPanel({ tools, week, branchId }: { tools: ApiSchedu
                   <span className={row.severity === 'BLOCK' ? 'text-red-700' : 'text-amber-700'}>{severityLabel(row.severity)}</span>
                   <span className="text-gray-500">{branchName(row.branchId)}</span>
                   {!row.isActive && <span className="text-gray-400">مقفولة</span>}
-                  <button type="button" className="mr-auto text-primary-600 text-xs" onClick={() => setRule({ id: row.id, kind: row.kind, limitHours: String(row.limitHours), severity: row.severity, branchId: row.branchId === null ? '' : String(row.branchId), isActive: row.isActive })}>تعديل</button>
+                  <button type="button" className="ms-auto text-primary-600 text-xs" onClick={() => setRule({ id: row.id, kind: row.kind, limitHours: String(row.limitHours), severity: row.severity, branchId: row.branchId === null ? '' : String(row.branchId), isActive: row.isActive })}>تعديل</button>
                 </li>
               ))}
             </ul>

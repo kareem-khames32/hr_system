@@ -175,12 +175,12 @@ export default function PenaltiesPage() {
             <table className="w-full text-sm" data-penalties>
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">الموظف</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">المخالفة</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">التكرار</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">الجزاء</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">الواقعة</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">الحالة</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">الموظف</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">المخالفة</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">التكرار</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">الجزاء</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">الواقعة</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">الحالة</th>
                   <th className="px-3 py-2" />
                 </tr>
               </thead>
@@ -241,7 +241,7 @@ function PenaltyRow({ row, busy, onCancel }: { row: ApiPenalty; busy: boolean; o
         {row.statusLabel}
         {row.cancelReason ? <span className="text-xs text-gray-400"> · {row.cancelReason}</span> : null}
       </td>
-      <td className="px-3 py-2 text-left whitespace-nowrap">
+      <td className="px-3 py-2 text-end whitespace-nowrap">
         {row.status === 'ACTIVE' && reason === null && (
           <button onClick={() => setReason('')} className="text-red-600 hover:underline text-xs">
             إلغاء

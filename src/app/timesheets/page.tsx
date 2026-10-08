@@ -84,10 +84,10 @@ export default function TimesheetsPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-600">
                   <tr>
-                    <th className="table-header text-right">العميل</th>
-                    <th className="table-header text-right">المشروع</th>
-                    <th className="table-header text-right">الفرع</th>
-                    <th className="table-header text-right">المهام</th>
+                    <th className="table-header text-start">العميل</th>
+                    <th className="table-header text-start">المشروع</th>
+                    <th className="table-header text-start">الفرع</th>
+                    <th className="table-header text-start">المهام</th>
                     <th className="table-header text-center">الحالة</th>
                     <th className="table-header" />
                   </tr>
@@ -101,7 +101,7 @@ export default function TimesheetsPage() {
                       <td className="table-cell">{branchName(row.branchId)}</td>
                       <td className="table-cell text-gray-600">{row.tasks.filter((task) => task.isActive).map((task) => task.name).join('، ') || '—'}</td>
                       <td className="table-cell text-center">{row.isActive ? 'مفعّل' : <span className="text-gray-400">مقفول</span>}</td>
-                      <td className="table-cell text-left">{editable(row) && <button type="button" className="text-primary-600 text-xs"
+                      <td className="table-cell text-end">{editable(row) && <button type="button" className="text-primary-600 text-xs"
                         onClick={() => setForm({ id: row.id, clientName: row.clientName, name: row.name, branchId: row.branchId === null ? '' : String(row.branchId), isActive: row.isActive, tasks: row.tasks.map((task) => ({ ...task })), newTask: '' })}>تعديل</button>}</td>
                     </tr>
                   ))}
@@ -161,10 +161,10 @@ export default function TimesheetsPage() {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 text-gray-600">
                     <tr>
-                      <th className="table-header text-right">العميل</th>
-                      <th className="table-header text-right">المشروع</th>
-                      <th className="table-header text-right">المهام</th>
-                      <th className="table-header text-right">الموظفين</th>
+                      <th className="table-header text-start">العميل</th>
+                      <th className="table-header text-start">المشروع</th>
+                      <th className="table-header text-start">المهام</th>
+                      <th className="table-header text-start">الموظفين</th>
                       <th className="table-header text-center">الساعات</th>
                       {report.costShown && <th className="table-header text-center">التكلفة</th>}
                     </tr>

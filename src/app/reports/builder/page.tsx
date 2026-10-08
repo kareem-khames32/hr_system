@@ -191,7 +191,7 @@ export default function ReportBuilderPage() {
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-600">
-                  <tr>{result.headers.map((header) => <th key={header.key} className={`table-header ${header.type === 'text' ? 'text-right' : 'text-center'}`}>{header.label}</th>)}</tr>
+                  <tr>{result.headers.map((header) => <th key={header.key} className={`table-header ${header.type === 'text' ? 'text-start' : 'text-center'}`}>{header.label}</th>)}</tr>
                 </thead>
                 <tbody>
                   {result.rows.map((row, index) => (

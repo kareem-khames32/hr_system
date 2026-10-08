@@ -227,7 +227,7 @@ export default function EmployeeHome() {
             {shiftLine && <p className="text-primary-100 mt-1">{shiftLine}</p>}
           </div>
           {today && (
-            <div className="text-left shrink-0">
+            <div className="text-end shrink-0">
               <div className="flex items-center gap-2 bg-white/15 rounded-xl px-4 py-2">
                 <Fingerprint size={20} />
                 <div>
@@ -438,7 +438,7 @@ export default function EmployeeHome() {
                 {carried && (
                   <div className="mt-4 p-3 bg-amber-50 rounded-xl border border-amber-100">
                     <p className="text-xs text-amber-700">
-                      <Layers size={12} className="inline ml-1" />
+                      <Layers size={12} className="inline me-1" />
                       لديك رصيد مُرحّل <strong>{Number(carried.opening.available)} يوم</strong>
                       {carried.opening.expiry ? (
                         <>

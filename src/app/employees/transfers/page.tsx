@@ -252,7 +252,7 @@ export default function TransfersPage() {
                   </div>
                 </div>
                 {t.status === 'SCHEDULED' && (
-                  <div className="text-left text-xs text-indigo-600 bg-indigo-50 px-3 py-2 rounded-xl">
+                  <div className="text-end text-xs text-indigo-600 bg-indigo-50 px-3 py-2 rounded-xl">
                     في {t.effectiveDate} سيُحدَّث آلياً:
                     <br />
                     الفريق + القسم + المدير المباشر

@@ -62,13 +62,13 @@ export function PayrollMembershipPreviewView({ preview, currency, onExclude, exc
         <table className="w-full text-sm">
           <thead>
             <tr className="table-header">
-              <th className="text-right px-3 py-2">الداخلون ({totals.included})</th>
-              <th className="text-right px-3 py-2">المكان آخر يوم</th>
+              <th className="text-start px-3 py-2">الداخلون ({totals.included})</th>
+              <th className="text-start px-3 py-2">المكان آخر يوم</th>
               <th className="text-center px-3 py-2">التغطية</th>
               <th className="text-center px-3 py-2">الأيام</th>
               <th className="text-center px-3 py-2">راتب الشهر</th>
               <th className="text-center px-3 py-2">المستحق قبل البنود</th>
-              <th className="text-right px-3 py-2">مصدر الراتب</th>
+              <th className="text-start px-3 py-2">مصدر الراتب</th>
             </tr>
           </thead>
           <tbody>
@@ -105,9 +105,9 @@ export function PayrollMembershipPreviewView({ preview, currency, onExclude, exc
         <table className="w-full text-sm">
           <thead>
             <tr className="table-header">
-              <th className="text-right px-3 py-2">المستبعدون ({totals.excluded})</th>
-              <th className="text-right px-3 py-2">السبب</th>
-              <th className="text-right px-3 py-2">التفاصيل</th>
+              <th className="text-start px-3 py-2">المستبعدون ({totals.excluded})</th>
+              <th className="text-start px-3 py-2">السبب</th>
+              <th className="text-start px-3 py-2">التفاصيل</th>
             </tr>
           </thead>
           <tbody>

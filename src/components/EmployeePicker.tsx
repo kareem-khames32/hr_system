@@ -288,7 +288,7 @@ export function EmployeePicker<T extends EmployeePickerOption>({
 
   return (
     <div className={`relative ${className}`}>
-      <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" aria-hidden="true" />
+      <Search size={16} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" aria-hidden="true" />
       <input
         ref={inputRef}
         id={inputId}
@@ -306,7 +306,7 @@ export function EmployeePicker<T extends EmployeePickerOption>({
         disabled={disabled}
         placeholder={placeholder}
         value={editing ? query : selectedLabel}
-        className={`input w-full pr-9 ${showClear ? 'pl-14' : 'pl-9'} disabled:bg-gray-50 disabled:text-gray-500 disabled:cursor-not-allowed ${inputClassName}`}
+        className={`input w-full ps-9 ${showClear ? 'pe-14' : 'pe-9'} disabled:bg-gray-50 disabled:text-gray-500 disabled:cursor-not-allowed ${inputClassName}`}
         onChange={(event) => {
           setQuery(event.target.value)
           setEditing(true)
@@ -334,7 +334,7 @@ export function EmployeePicker<T extends EmployeePickerOption>({
         }}
         onKeyDown={onKeyDown}
       />
-      <div className="absolute left-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 text-gray-400">
+      <div className="absolute end-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 text-gray-400">
         {showClear && (
           <button
             type="button"

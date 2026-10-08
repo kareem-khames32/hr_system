@@ -78,7 +78,7 @@ test('الصرف: كروت لكل عملة، وملخص الشهر سطر لكل
   const run = { id: 7, name: 'مسير الفرعين', period: '2026-08', startDate: '2026-07-23', endDate: '2026-08-22', status: 'APPROVED', runType: 'REGULAR', mode: 'PER_EMPLOYEE',
     marking: 'OPEN', closed: null, unpaidReason: null, ...all, byCurrency }
   const summary = render(PayrollDisbursementSummaryTable, { summary: { period: '2026-08', runId: null, runs: [run], totals: all, byCurrency } })
-  for (const text of ['مسير الفرعين<span class="text-xs text-gray-500 mr-1">(ج.م)</span>', '(ر.س)', 'إجمالي الشهر ج.م', 'إجمالي الشهر ر.س']) assert.ok(summary.includes(text), text)
+  for (const text of ['مسير الفرعين<span class="text-xs text-gray-500 ms-1">(ج.م)</span>', '(ر.س)', 'إجمالي الشهر ج.م', 'إجمالي الشهر ر.س']) assert.ok(summary.includes(text), text)
   assert.ok(!summary.includes('12,150.25'))
   const oneRun = { ...run, ...egp, byCurrency: [byCurrency[0]] }
   const plain = render(PayrollDisbursementSummaryTable, { summary: { period: '2026-08', runId: null, runs: [oneRun], totals: egp, byCurrency: [byCurrency[0]] } })

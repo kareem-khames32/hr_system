@@ -249,7 +249,7 @@ export default function DeductionRequestForm({ onSubmitted }: { onSubmitted?: ()
       <div>
         <label htmlFor="deduction-request-reason" className="block text-sm font-medium text-gray-700 mb-2">
           سبب الخصم <span className="text-red-500">*</span>
-          <span className="text-xs font-normal text-gray-500 mr-2">({creatable.reasonMinLength} حرفًا على الأقل — {form.reason.trim().length})</span>
+          <span className="text-xs font-normal text-gray-500 ms-2">({creatable.reasonMinLength} حرفًا على الأقل — {form.reason.trim().length})</span>
         </label>
         <textarea
           id="deduction-request-reason"

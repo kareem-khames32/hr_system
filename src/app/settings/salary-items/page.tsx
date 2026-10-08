@@ -93,9 +93,9 @@ export default function SalaryItemsPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-600">
                   <tr>
-                    <th className="text-right font-medium px-4 py-3 w-28">الترتيب</th>
-                    <th className="text-right font-medium px-4 py-3">البند</th>
-                    <th className="text-right font-medium px-4 py-3">التناسب</th>
+                    <th className="text-start font-medium px-4 py-3 w-28">الترتيب</th>
+                    <th className="text-start font-medium px-4 py-3">البند</th>
+                    <th className="text-start font-medium px-4 py-3">التناسب</th>
                     <th className="text-center font-medium px-4 py-3">خاضع للتأمين</th>
                     <th className="text-center font-medium px-4 py-3" title={group.taxHint}>خاضع للضريبة</th>
                   </tr>

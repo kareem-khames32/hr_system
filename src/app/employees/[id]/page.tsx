@@ -1066,7 +1066,7 @@ export default function EmployeeProfilePage() {
                       className="fixed inset-0 z-10"
                       onClick={() => setShowActionsMenu(false)}
                     />
-                    <div className="absolute left-0 top-full mt-2 w-56 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
+                    <div className="absolute end-0 top-full mt-2 w-56 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
                       {offboardingOn && <Link
                         href={`/employees/${employee.id}/settlement`}
                         className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 transition-colors"
@@ -1605,10 +1605,10 @@ export default function EmployeeProfilePage() {
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="text-gray-500 border-b border-gray-100">
-                          <th className="py-2 text-right font-medium">يسري من</th>
-                          <th className="py-2 text-right font-medium">جدول العمل</th>
-                          <th className="py-2 text-right font-medium">السبب</th>
-                          <th className="py-2 text-right font-medium">سجّله</th>
+                          <th className="py-2 text-start font-medium">يسري من</th>
+                          <th className="py-2 text-start font-medium">جدول العمل</th>
+                          <th className="py-2 text-start font-medium">السبب</th>
+                          <th className="py-2 text-start font-medium">سجّله</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1795,7 +1795,7 @@ export default function EmployeeProfilePage() {
                     <div>
                       <h3 className="text-md font-bold text-gray-700 border-b border-gray-100 pb-2 mb-3">
                         {title}
-                        <span className="text-xs font-normal text-gray-400 mr-2">
+                        <span className="text-xs font-normal text-gray-400 ms-2">
                           ({rows.length})
                         </span>
                       </h3>
@@ -2025,7 +2025,7 @@ export default function EmployeeProfilePage() {
                             </p>
                           </div>
                         </div>
-                        <div className="text-left">
+                        <div className="text-end">
                           <p className="font-medium text-gray-800">{l.days} يوم</p>
                           <p className="text-sm text-gray-400">{l.status}</p>
                         </div>
@@ -2062,7 +2062,7 @@ export default function EmployeeProfilePage() {
                         <p className="text-sm text-gray-500">{asset.assetCategory}</p>
                       </div>
                     </div>
-                    <div className="text-left">
+                    <div className="text-end">
                       <span
                         className={`badge text-xs ${
                           (CUSTODY_STATUS as Record<string, { label: string; className: string }>)[asset.status]?.className ?? 'bg-gray-100 text-gray-600'
@@ -2101,11 +2101,11 @@ export default function EmployeeProfilePage() {
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="table-header">
-                          <th className="text-right px-4 py-3">الفترة</th>
-                          <th className="text-right px-4 py-3">السبب</th>
-                          <th className="text-right px-4 py-3">الحالة</th>
-                          <th className="text-right px-4 py-3">ملاحظات</th>
-                          {can('employees.edit') && <th className="text-right px-4 py-3">تصحيح</th>}
+                          <th className="text-start px-4 py-3">الفترة</th>
+                          <th className="text-start px-4 py-3">السبب</th>
+                          <th className="text-start px-4 py-3">الحالة</th>
+                          <th className="text-start px-4 py-3">ملاحظات</th>
+                          {can('employees.edit') && <th className="text-start px-4 py-3">تصحيح</th>}
                         </tr>
                       </thead>
                       <tbody>
@@ -2262,7 +2262,7 @@ export default function EmployeeProfilePage() {
                       type="button"
                       aria-pressed={letterTemplate === template.id}
                       onClick={() => pickLetter(template.id)}
-                      className={`p-4 border rounded-xl hover:border-primary-300 hover:bg-primary-50 transition-all text-right group ${letterTemplate === template.id ? 'border-primary-500 bg-primary-50' : 'border-gray-200'}`}
+                      className={`p-4 border rounded-xl hover:border-primary-300 hover:bg-primary-50 transition-all text-start group ${letterTemplate === template.id ? 'border-primary-500 bg-primary-50' : 'border-gray-200'}`}
                     >
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 bg-primary-100 rounded-lg flex items-center justify-center group-hover:bg-primary-200 transition-colors">
@@ -2316,7 +2316,7 @@ export default function EmployeeProfilePage() {
                     type="button"
                     aria-pressed={letterTemplate === template.id}
                     onClick={() => pickLetter(template.id)}
-                    className={`p-4 border rounded-xl hover:border-primary-500 hover:bg-primary-50 transition-all text-right group ${letterTemplate === template.id ? 'border-primary-500 bg-primary-50' : 'border-gray-200'}`}
+                    className={`p-4 border rounded-xl hover:border-primary-500 hover:bg-primary-50 transition-all text-start group ${letterTemplate === template.id ? 'border-primary-500 bg-primary-50' : 'border-gray-200'}`}
                   >
                     <div className="flex items-center gap-4">
                       <div className="w-12 h-12 bg-primary-100 rounded-xl flex items-center justify-center group-hover:bg-primary-200 transition-colors">

@@ -76,9 +76,9 @@ export default function SkillsPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-600">
                   <tr>
-                    <th className="table-header text-right">المهارة</th>
-                    <th className="table-header text-right">التصنيف</th>
-                    <th className="table-header text-right">الوصف</th>
+                    <th className="table-header text-start">المهارة</th>
+                    <th className="table-header text-start">التصنيف</th>
+                    <th className="table-header text-start">الوصف</th>
                     <th className="table-header text-center">الحالة</th>
                     <th className="table-header" />
                   </tr>
@@ -91,7 +91,7 @@ export default function SkillsPage() {
                       <td className="table-cell">{row.category ?? '—'}</td>
                       <td className="table-cell">{row.description ?? '—'}</td>
                       <td className="table-cell text-center">{row.isActive ? 'مفعّلة' : <span className="text-gray-400">مقفولة</span>}</td>
-                      <td className="table-cell text-left">{catalog.canEdit && <button type="button" className="text-primary-600 text-xs" onClick={() => editSkill(row)}>تعديل</button>}</td>
+                      <td className="table-cell text-end">{catalog.canEdit && <button type="button" className="text-primary-600 text-xs" onClick={() => editSkill(row)}>تعديل</button>}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -124,10 +124,10 @@ export default function SkillsPage() {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 text-gray-600">
                     <tr>
-                      <th className="table-header text-right">الوظيفة</th>
-                      <th className="table-header text-right">الفرع / القسم</th>
+                      <th className="table-header text-start">الوظيفة</th>
+                      <th className="table-header text-start">الفرع / القسم</th>
                       <th className="table-header text-center">شاغلين</th>
-                      <th className="table-header text-right">المطلوب</th>
+                      <th className="table-header text-start">المطلوب</th>
                       <th className="table-header" />
                     </tr>
                   </thead>
@@ -138,7 +138,7 @@ export default function SkillsPage() {
                         <td className="table-cell">{row.branchName ?? '—'}{row.departmentName ? ` / ${row.departmentName}` : ''}</td>
                         <td className="table-cell text-center">{row.holders}</td>
                         <td className="table-cell">{row.requirements.length === 0 ? <span className="text-gray-400">مش متحدد</span> : row.requirements.map((item) => `${skillName(item.skillId)} (${levelLabel(item.level)})`).join('، ')}</td>
-                        <td className="table-cell text-left">
+                        <td className="table-cell text-end">
                           <button type="button" className="text-primary-600 text-xs" onClick={() => setEditing({ positionId: row.id, requirements: row.requirements.map((item) => ({ skillId: String(item.skillId), level: item.level })) })}>تحديد</button>
                         </td>
                       </tr>

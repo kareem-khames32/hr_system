@@ -15,6 +15,10 @@ export class User {
   @Column({ length: 200 })
   email: string
 
+  // B6.2 (ترحيل 182): لغة عرض الواجهة (ar / en؛ الفاضي = عربي) — برّه قراءة وكتابة الكيان (الكود قبل الترحيل)، بتتقري وتتكتب بـSQL صريح في user-language.ts
+  @Column({ type: 'nvarchar', length: 5, nullable: true, select: false, insert: false, update: false })
+  language: string | null
+
   @Column({ length: 200 })
   passwordHash: string
 

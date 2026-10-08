@@ -46,7 +46,7 @@ export function PayrollApprovalReviewTable({ rows, initialOpenItemId = null }: {
         <thead className="bg-gray-50 sticky top-0">
           <tr>
             {['الرقم الوظيفي', 'الموظف', 'القسم', 'الاستحقاقات', 'الاستقطاعات', 'الصافي', ''].map((title, index) => (
-              <th key={index} className={`px-3 py-2 ${index >= 3 && index <= 5 ? 'text-center' : 'text-right'} font-medium text-gray-600 whitespace-nowrap`}>{title}</th>
+              <th key={index} className={`px-3 py-2 ${index >= 3 && index <= 5 ? 'text-center' : 'text-start'} font-medium text-gray-600 whitespace-nowrap`}>{title}</th>
             ))}
           </tr>
         </thead>
@@ -60,7 +60,7 @@ export function PayrollApprovalReviewTable({ rows, initialOpenItemId = null }: {
                 <td className="px-3 py-2 text-center" dir="ltr">{formatMoney(row.earnings)}</td>
                 <td className="px-3 py-2 text-center text-danger-600" dir="ltr">{formatMoney(row.deductions)}</td>
                 <td className="px-3 py-2 text-center font-bold text-gray-800" dir="ltr">{formatMoney(row.net)}{multi && row.currency ? <span className="text-xs font-normal text-gray-400"> {currencyLabel(row.currency)}</span> : null}</td>
-                <td className="px-3 py-2 text-left">
+                <td className="px-3 py-2 text-end">
                   <button type="button" className="text-xs text-primary-700 underline" onClick={() => setDetailOf(detailOf === row.itemId ? null : row.itemId)}>
                     {detailOf === row.itemId ? 'اقفل البنود' : 'البنود'}
                   </button>
@@ -71,7 +71,7 @@ export function PayrollApprovalReviewTable({ rows, initialOpenItemId = null }: {
                   <td colSpan={7} className="px-3 py-2 text-xs text-gray-700">
                     <span className="font-medium text-gray-800">الاستحقاقات: </span>
                     {row.earningLines.map(line => `${line.name} ${formatMoney(line.amount)}`).join(' • ') || '—'}
-                    <span className="font-medium text-gray-800 mr-4">الاستقطاعات: </span>
+                    <span className="font-medium text-gray-800 ms-4">الاستقطاعات: </span>
                     {row.deductionLines.map(line => `${line.name} ${formatMoney(line.amount)}`).join(' • ') || '—'}
                   </td>
                 </tr>

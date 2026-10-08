@@ -1,8 +1,8 @@
 'use strict'
 // خط الموبايل (30 سبتمبر): النظام يتفتح ويتستخدم على موبايل (~390px).
 // الإطار: تحت lg القائمة الجانبية درج من اليمين — زرار قائمة في الهيدر، خلفية معتمة بتقفله بالضغط، وEsc والانتقال
-// بيقفلوه، وتمرير الصفحة مقفول وهو مفتوح؛ والمحتوى lg:mr-72 وp-4 lg:p-8. من lg وفوق مفيش كلاس جديد بيتطبّق.
-// شاشات البوابة: مفيش mr-72 ثابت ولا grid-cols-3+ من غير بديل للشاشة الصغيرة ولا col-span بيعمل عمود ضمني،
+// بيقفلوه، وتمرير الصفحة مقفول وهو مفتوح؛ والمحتوى lg:ms-72 وp-4 lg:p-8. من lg وفوق مفيش كلاس جديد بيتطبّق.
+// شاشات البوابة: مفيش ms-72 ثابت ولا grid-cols-3+ من غير بديل للشاشة الصغيرة ولا col-span بيعمل عمود ضمني،
 // والجداول جوّه overflow-x-auto، والنوافذ جوّه الشاشة بـmax-h وتمرير داخلي.
 // فحص نصي للمصدر + React SSR للهيدر والقائمة + CSS المشروع مبني بـTailwind؛ لا SQL ولا خدمة.
 // Run: node --test api/test/mobile-shell-ui.test.cjs
@@ -37,7 +37,7 @@ const tagWith = (html, marker) => {
 const classesOf = tag => (/class="([^"]*)"/.exec(tag)?.[1] ?? '').split(/\s+/).filter(Boolean)
 
 // كلاسات القائمة الجانبية على الديسكتوب زي ما كانت بالظبط قبل الخط ده
-const DESKTOP_ASIDE = 'fixed right-0 top-0 h-screen w-72 bg-white border-l border-gray-100 flex flex-col z-50'.split(' ')
+const DESKTOP_ASIDE = 'fixed start-0 top-0 h-screen w-72 bg-white border-e border-gray-100 flex flex-col z-50'.split(' ')
 
 test('MOB-UI-01: زرار القائمة في الهيدر (أقل من lg بس) بـaria-label وaria-expanded وبيتحكم في القائمة، والعنوان سطر واحد على الموبايل', () => {
   const html = render(Header, { onMenuClick() {}, menuOpen: false })
@@ -86,11 +86,11 @@ test('MOB-UI-02: القائمة الجانبية درج تحت lg — مقفول
   assert.match(source, /if \(\(event\.target as HTMLElement\)\.closest\('a'\)\) onClose\?\.\(\)/)
 })
 
-test('MOB-UI-03: AppShell — المحتوى lg:mr-72 وp-4 lg:p-8، خلفية معتمة بتقفل، Esc والانتقال بيقفلوا، وقفل تمرير الصفحة', () => {
+test('MOB-UI-03: AppShell — المحتوى lg:ms-72 وp-4 lg:p-8، خلفية معتمة بتقفل، Esc والانتقال بيقفلوا، وقفل تمرير الصفحة', () => {
   const layout = read('src/components/layout/MainLayout.tsx')
-  assert.ok(layout.includes('<div className="lg:mr-72">'))
+  assert.ok(layout.includes('<div className="lg:ms-72">'))
   assert.ok(layout.includes('<main className="p-4 lg:p-8">'))
-  assert.doesNotMatch(layout, /["\s]mr-72["\s]/, 'مفيش mr-72 ثابت')
+  assert.doesNotMatch(layout, /["\s]ms-72["\s]/, 'مفيش ms-72 ثابت')
   assert.doesNotMatch(layout, /className="p-8"/)
   assert.ok(layout.includes('<Sidebar open={navOpen} onClose={closeNav} />'))
   assert.ok(layout.includes('<Header onMenuClick={openNav} menuOpen={navOpen} menuButtonRef={menuButtonRef} />'))
@@ -107,7 +107,7 @@ test('MOB-UI-03: AppShell — المحتوى lg:mr-72 وp-4 lg:p-8، خلفية 
   assert.match(effect, /menuButtonRef\.current\?\.focus\(\{ preventScroll: true \}\)/, 'التركيز بيرجع لزرار القائمة')
 })
 
-test('MOB-UI-04: CSS المشروع — كل max-lg: جوّه (أقل من 1024px) بس، وlg:mr-72 من 1024 وفوق، وclip للهيدر الثابت على الموبايل بس', async () => {
+test('MOB-UI-04: CSS المشروع — كل max-lg: جوّه (أقل من 1024px) بس، وlg:ms-72 من 1024 وفوق، وclip للهيدر الثابت على الموبايل بس', async () => {
   const postcss = require('../../node_modules/postcss'), tailwind = require('../../node_modules/tailwindcss')
   const files = ['src/components/layout/MainLayout.tsx', 'src/components/layout/Sidebar.tsx', 'src/components/layout/Header.tsx'].map(file => path.join(root, file))
   const globals = read('src/app/globals.css')
@@ -120,7 +120,7 @@ test('MOB-UI-04: CSS المشروع — كل max-lg: جوّه (أقل من 1024p
   const maxLg = rules.filter(rule => rule.selector.includes('.max-lg\\:'))
   assert.ok(maxLg.length >= 10, `${maxLg.length}`)
   for (const rule of maxLg) assert.ok(mediaOf(rule).includes('not all and (min-width: 1024px)'), rule.selector)
-  for (const selector of ['.lg\\:mr-72', '.lg\\:p-8', '.lg\\:hidden']) {
+  for (const selector of ['.lg\\:ms-72', '.lg\\:p-8', '.lg\\:hidden']) {
     const rule = rules.find(item => item.selector === selector)
     assert.ok(rule, selector)
     assert.deepEqual(mediaOf(rule), ['(min-width: 1024px)'], selector)
@@ -177,10 +177,10 @@ const FIXED_GRIDS = new Map([
 const NARROW_TABLES = new Map([['src/app/payroll/payslip/[id]/page.tsx', 2]])
 const classStrings = source => [...source.matchAll(/className=(?:"([^"]*)"|\{`([^`]*)`\}|\{'([^']*)'\})|'([^'\n]*\bgrid-cols-[^'\n]*)'/g)].map(m => m[1] ?? m[2] ?? m[3] ?? m[4])
 
-test('MOB-UI-06: شاشات البوابة — مفيش mr-72 ثابت، ولا grid-cols-3+ من غير بديل للشاشة الصغيرة، ولا col-span بيعمل عمود ضمني', () => {
+test('MOB-UI-06: شاشات البوابة — مفيش ms-72 ثابت، ولا grid-cols-3+ من غير بديل للشاشة الصغيرة، ولا col-span بيعمل عمود ضمني', () => {
   for (const file of PORTAL) {
     const source = read(file)
-    assert.doesNotMatch(source, /(^|["'`\s])mr-72(?=["'`\s])/m, `${file}: mr-72 ثابت`)
+    assert.doesNotMatch(source, /(^|["'`\s])ms-72(?=["'`\s])/m, `${file}: ms-72 ثابت`)
     for (const cls of classStrings(source)) {
       const tokens = cls.split(/\s+/)
       const wide = tokens.filter(token => /^grid-cols-(\d+)$/.test(token) && Number(token.slice(10)) >= 3)
@@ -238,7 +238,7 @@ test('MOB-UI-07: الجداول جوّه overflow-x-auto، والنوافذ جو
 test('MOB-UI-08: لوحة الإشعارات جوّه الشاشة على الموبايل، ومنتقي الموظف قايمته مقصوصة على عرض الشاشة', () => {
   const header = read('src/components/layout/Header.tsx')
   assert.ok(header.includes('<div className="sm:relative">'), 'على الموبايل اللوحة بتتموضع على الهيدر كله')
-  assert.ok(header.includes('className="absolute left-4 sm:left-0 top-full mt-2 w-[calc(100vw-2rem)] sm:w-96 '))
+  assert.ok(header.includes('className="absolute end-4 sm:end-0 top-full mt-2 w-[calc(100vw-2rem)] sm:w-96 '))
   assert.ok(header.includes('max-h-[50vh] sm:max-h-96 overflow-y-auto'))
   assert.ok(header.includes('className="hidden sm:block p-3 bg-gray-100'), 'الترس بيستخبى على الموبايل (الإعدادات في القائمة)')
   const picker = read('src/components/EmployeePicker.tsx')
@@ -246,10 +246,10 @@ test('MOB-UI-08: لوحة الإشعارات جوّه الشاشة على الم
   assert.match(picker, /const left = Math\.max\(8, Math\.min\(rect\.right - width, window\.innerWidth - width - 8\)\)/)
 })
 
-test('MOB-UI-09: الطباعة — زرار القائمة مابيتطبعش، وطباعة الهيكل التنظيمي بتلغي هامش القائمة الجديد (lg:mr-72)', () => {
+test('MOB-UI-09: الطباعة — زرار القائمة مابيتطبعش، وطباعة الهيكل التنظيمي بتلغي هامش القائمة الجديد (lg:ms-72)', () => {
   assert.ok(read('src/components/layout/Header.tsx').includes('lg:hidden print:hidden shrink-0'))
   const { ORG_CHART_CSS } = require('../../src/components/org-chart/OrgChartView')
   const print = ORG_CHART_CSS.slice(ORG_CHART_CSS.indexOf('@media print'))
-  assert.ok(print.includes('.lg\\:mr-72 { margin-right: 0 !important; }'), 'اسم الكلاس الجديد متهرّب صح في CSS الطباعة')
-  assert.ok(!/\.mr-72\b/.test(print.replace('.lg\\:mr-72', '')), 'مفيش إشارة للكلاس القديم')
+  assert.ok(print.includes('.lg\\:ms-72 { margin-inline-start: 0 !important; }'), 'اسم الكلاس الجديد متهرّب صح في CSS الطباعة')
+  assert.ok(!/\.ms-72\b/.test(print.replace('.lg\\:ms-72', '')), 'مفيش إشارة للكلاس القديم')
 })

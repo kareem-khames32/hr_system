@@ -378,11 +378,11 @@ export default function RolesPage() {
           <>
             <div className="card">
               <div className="relative">
-                <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <Search size={18} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   type="text"
                   placeholder="بحث عن دور..."
-                  className="input pr-10 w-full"
+                  className="input ps-10 w-full"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
@@ -505,11 +505,11 @@ export default function RolesPage() {
           <>
             <div className="card flex flex-wrap items-center gap-4">
               <div className="relative flex-1 min-w-[16rem]">
-                <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <Search size={18} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   type="text"
                   placeholder="بحث في الصلاحيات: بالاسم أو الشرح أو الوحدة أو المفتاح..."
-                  className="input pr-10 w-full"
+                  className="input ps-10 w-full"
                   value={permSearch}
                   onChange={(e) => setPermSearch(e.target.value)}
                 />
@@ -664,11 +664,11 @@ export default function RolesPage() {
                         الصلاحيات ({form.permissions.filter((p) => registryKeys.has(p)).length} من {registry.length})
                       </label>
                       <div className="relative w-72">
-                        <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                        <Search size={16} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
                         <input
                           type="text"
                           placeholder="بحث في الصلاحيات..."
-                          className="input pr-9 w-full text-sm"
+                          className="input ps-9 w-full text-sm"
                           value={modalSearch}
                           onChange={(e) => setModalSearch(e.target.value)}
                         />

@@ -104,12 +104,12 @@ export default function ChangePasswordPage() {
         {label}
       </label>
       <div className="relative">
-        <Lock size={18} className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
+        <Lock size={18} className="pointer-events-none absolute start-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
         <input
           id={id}
           type={show ? 'text' : 'password'}
           autoComplete={autoComplete}
-          className="w-full pr-11 pl-4 py-3 rounded-xl border border-gray-200 bg-gray-50/70 text-gray-900 transition focus:border-teal-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-teal-600/15"
+          className="w-full ps-11 pe-4 py-3 rounded-xl border border-gray-200 bg-gray-50/70 text-gray-900 transition focus:border-teal-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-teal-600/15"
           value={value}
           onChange={(e) => set(e.target.value)}
           required

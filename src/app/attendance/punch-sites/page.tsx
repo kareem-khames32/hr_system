@@ -68,8 +68,8 @@ export default function PunchSitesPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-600">
                   <tr>
-                    <th className="table-header text-right">الموقع</th>
-                    <th className="table-header text-right">الفرع</th>
+                    <th className="table-header text-start">الموقع</th>
+                    <th className="table-header text-start">الفرع</th>
                     <th className="table-header text-center">الإحداثيات</th>
                     <th className="table-header text-center">نصف القطر</th>
                     <th className="table-header text-center">الحالة</th>
@@ -85,7 +85,7 @@ export default function PunchSitesPage() {
                       <td className="table-cell text-center font-mono" dir="ltr">{row.latitude}, {row.longitude}</td>
                       <td className="table-cell text-center">{row.radiusMeters} متر</td>
                       <td className="table-cell text-center">{row.isActive ? 'مفعّل' : <span className="text-gray-400">مقفول</span>}</td>
-                      <td className="table-cell text-left"><button type="button" className="text-primary-600 text-xs"
+                      <td className="table-cell text-end"><button type="button" className="text-primary-600 text-xs"
                         onClick={() => setForm({ id: row.id, name: row.name, branchId: String(row.branchId), latitude: String(row.latitude), longitude: String(row.longitude), radiusMeters: String(row.radiusMeters), isActive: row.isActive })}>تعديل</button></td>
                     </tr>
                   ))}
@@ -125,10 +125,10 @@ export default function PunchSitesPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-600">
                   <tr>
-                    <th className="table-header text-right">الموظف</th>
+                    <th className="table-header text-start">الموظف</th>
                     <th className="table-header text-center">الوقت</th>
                     <th className="table-header text-center">النتيجة</th>
-                    <th className="table-header text-right">الموقع</th>
+                    <th className="table-header text-start">الموقع</th>
                     <th className="table-header text-center">المسافة</th>
                     <th className="table-header text-center">الدقة</th>
                   </tr>

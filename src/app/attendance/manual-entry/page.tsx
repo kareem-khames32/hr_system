@@ -361,11 +361,11 @@ export default function ManualEntryPage() {
         <div className="card">
           <div className="flex flex-wrap items-end gap-3">
             <div className="relative flex-1 min-w-[16rem]">
-              <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <Search size={18} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
                 type="text"
                 placeholder="بحث عن موظف..."
-                className="input pr-10 w-full"
+                className="input ps-10 w-full"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
@@ -387,12 +387,12 @@ export default function ManualEntryPage() {
           <table className="w-full">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">الموظف</th>
-                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">التاريخ</th>
-                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">وقت البصمة</th>
-                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">السبب</th>
-                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">حالة اليوم</th>
-                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">أدخلها</th>
+                <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">الموظف</th>
+                <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">التاريخ</th>
+                <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">وقت البصمة</th>
+                <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">السبب</th>
+                <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">حالة اليوم</th>
+                <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">أدخلها</th>
                 <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">إجراءات</th>
               </tr>
             </thead>

@@ -160,14 +160,14 @@ export default function HelpdeskPage() {
             <table className="w-full text-sm" data-helpdesk-report>
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">النوع</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">العدد</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">مفتوح</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">متوسط أول رد</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">متوسط الحل</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">عدّى مهلة الرد</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">عدّى مهلة الحل</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">الرضا</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">النوع</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">العدد</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">مفتوح</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">متوسط أول رد</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">متوسط الحل</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">عدّى مهلة الرد</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">عدّى مهلة الحل</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">الرضا</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">

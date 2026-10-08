@@ -325,15 +325,15 @@ function HolidayWorkContent() {
           <table className="w-full min-w-[960px]">
             <thead>
               <tr className="table-header">
-                <th className="table-cell text-right">الأمر</th>
-                <th className="table-cell text-right">على مين</th>
-                <th className="table-cell text-right">الأيام</th>
-                <th className="table-cell text-right">المضاعف</th>
-                <th className="table-cell text-right">اللي جم</th>
-                <th className="table-cell text-right">الساعات</th>
-                {canSeeAmounts && <th className="table-cell text-right">المبلغ</th>}
-                <th className="table-cell text-right">الحالة</th>
-                <th className="table-cell text-right">الإجراءات</th>
+                <th className="table-cell text-start">الأمر</th>
+                <th className="table-cell text-start">على مين</th>
+                <th className="table-cell text-start">الأيام</th>
+                <th className="table-cell text-start">المضاعف</th>
+                <th className="table-cell text-start">اللي جم</th>
+                <th className="table-cell text-start">الساعات</th>
+                {canSeeAmounts && <th className="table-cell text-start">المبلغ</th>}
+                <th className="table-cell text-start">الحالة</th>
+                <th className="table-cell text-start">الإجراءات</th>
               </tr>
             </thead>
             <tbody>
@@ -403,13 +403,13 @@ function HolidayWorkContent() {
             <table className="w-full min-w-[820px]">
               <thead>
                 <tr className="table-header">
-                  <th className="table-cell text-right">الموظف</th>
-                  <th className="table-cell text-right">اليوم</th>
-                  <th className="table-cell text-right">أول دخول</th>
-                  <th className="table-cell text-right">آخر خروج</th>
-                  <th className="table-cell text-right">الساعات</th>
-                  {canSeeAmounts && <th className="table-cell text-right">المبلغ</th>}
-                  <th className="table-cell text-right">ملاحظة</th>
+                  <th className="table-cell text-start">الموظف</th>
+                  <th className="table-cell text-start">اليوم</th>
+                  <th className="table-cell text-start">أول دخول</th>
+                  <th className="table-cell text-start">آخر خروج</th>
+                  <th className="table-cell text-start">الساعات</th>
+                  {canSeeAmounts && <th className="table-cell text-start">المبلغ</th>}
+                  <th className="table-cell text-start">ملاحظة</th>
                 </tr>
               </thead>
               <tbody>

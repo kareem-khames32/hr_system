@@ -75,14 +75,14 @@ export function PayrollRunEnginePanel({ run, employeeName, onChanged }: { run: u
         {report.sourceReadiness && report.sourceReadiness.length > 0 && <div className="space-y-1">
           <p className="text-sm font-medium text-gray-800">خطة المصادر: لماذا غابت قيم محرك السياسة وكيف تُستكمل</p>
           <div className="overflow-x-auto"><table className="w-full text-xs">
-            <thead><tr className="table-header"><th className="p-2 text-right">رمز المصدر</th><th className="p-2 text-center">الموظفون</th><th className="p-2 text-right">طريق الإصلاح</th></tr></thead>
+            <thead><tr className="table-header"><th className="p-2 text-start">رمز المصدر</th><th className="p-2 text-center">الموظفون</th><th className="p-2 text-start">طريق الإصلاح</th></tr></thead>
             <tbody>{report.sourceReadiness.map(row => <tr key={row.code} className="border-t border-gray-100 align-top">
               <td className="p-2 font-mono" dir="ltr">{row.code}</td><td className="p-2 text-center font-mono">{row.employees}</td><td className="p-2 text-gray-700">{row.remedy}</td>
             </tr>)}</tbody>
           </table></div>
         </div>}
         {differences.length > 0 && <div className="overflow-x-auto"><table className="w-full text-sm">
-          <thead><tr className="table-header"><th className="p-2 text-right">الموظف</th><th className="p-2 text-right">البند</th><th className="p-2 text-center">القديم</th><th className="p-2 text-center">محرك السياسة</th><th className="p-2 text-center">الفرق</th><th className="p-2 text-right">سبب النظام</th><th className="p-2 text-right">السبب المكتوب</th></tr></thead>
+          <thead><tr className="table-header"><th className="p-2 text-start">الموظف</th><th className="p-2 text-start">البند</th><th className="p-2 text-center">القديم</th><th className="p-2 text-center">محرك السياسة</th><th className="p-2 text-center">الفرق</th><th className="p-2 text-start">سبب النظام</th><th className="p-2 text-start">السبب المكتوب</th></tr></thead>
           <tbody>{differences.slice(0, VISIBLE_ROWS).map(row => <tr key={row.differenceKey!} className="border-t border-gray-100 align-top">
             <td className="p-2">{employeeName(row.employeeId)}</td>
             <td className="p-2">{row.label}</td>
@@ -100,7 +100,7 @@ export function PayrollRunEnginePanel({ run, employeeName, onChanged }: { run: u
         </div>}
         <button type="button" onClick={() => setShowMatched(value => !value)} className="text-xs text-primary-700 underline">{showMatched ? 'إخفاء' : 'عرض'} تقرير كل موظف</button>
         {showMatched && <div className="overflow-x-auto"><table className="w-full text-xs">
-          <thead><tr className="table-header"><th className="p-2 text-right">الموظف</th><th className="p-2">الحالة</th><th className="p-2 text-right">البنود (القديم / السياسة)</th></tr></thead>
+          <thead><tr className="table-header"><th className="p-2 text-start">الموظف</th><th className="p-2">الحالة</th><th className="p-2 text-start">البنود (القديم / السياسة)</th></tr></thead>
           <tbody>{report.rows.map(row => <tr key={row.employeeId} className="border-t border-gray-100 align-top">
             <td className="p-2">{employeeName(row.employeeId)}</td>
             <td className="p-2 text-center"><span className={STATUS_LABELS[row.status]?.className}>{STATUS_LABELS[row.status]?.label ?? row.status}</span></td>

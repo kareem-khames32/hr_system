@@ -66,7 +66,7 @@ export default function SuccessionPage() {
                 <h2 className="text-lg font-semibold text-gray-800">{row.title}</h2>
                 <span className="text-xs text-gray-500 font-mono" dir="ltr">{row.code}</span>
                 <span className="text-sm text-gray-600">{row.branchName ?? '—'}{row.departmentName ? ` / ${row.departmentName}` : ''}</span>
-                <button type="button" className="mr-auto text-red-600 text-xs disabled:opacity-50" disabled={busy} onClick={() => run(() => setCriticalPosition(row.id, false), 'اتشالت علامة «حرجة»')}>شيل علامة «حرجة»</button>
+                <button type="button" className="ms-auto text-red-600 text-xs disabled:opacity-50" disabled={busy} onClick={() => run(() => setCriticalPosition(row.id, false), 'اتشالت علامة «حرجة»')}>شيل علامة «حرجة»</button>
               </div>
               <p className="text-sm text-gray-600">السبب: {row.reason ?? '—'} · الشاغل: {row.holders.length ? row.holders.join('، ') : 'شاغرة'}{row.hiddenHolders ? ` (+${row.hiddenHolders} خارج نطاقك)` : ''} · مهارات مطلوبة: {row.requirements}</p>
               {row.nominations.length === 0 ? <p className="text-amber-700 text-sm">مفيش خلفاء مرشحين للوظيفة دي.</p> : (
@@ -75,11 +75,11 @@ export default function SuccessionPage() {
                     <thead className="bg-gray-50 text-gray-600">
                       <tr>
                         <th className="table-header text-center">الترتيب</th>
-                        <th className="table-header text-right">المرشح</th>
+                        <th className="table-header text-start">المرشح</th>
                         <th className="table-header text-center">الجاهزية</th>
                         <th className="table-header text-center">فجوة المهارات</th>
-                        <th className="table-header text-right">ملاحظة</th>
-                        <th className="table-header text-right">رشّحه</th>
+                        <th className="table-header text-start">ملاحظة</th>
+                        <th className="table-header text-start">رشّحه</th>
                         <th className="table-header" />
                       </tr>
                     </thead>
@@ -97,7 +97,7 @@ export default function SuccessionPage() {
                           <td className="table-cell text-center">{item.gaps === null ? '—' : item.gaps === 0 ? <span className="text-green-700">مستوفي</span> : <span className="text-amber-700">{item.gaps} من {row.requirements}</span>}</td>
                           <td className="table-cell">{item.note ?? '—'}</td>
                           <td className="table-cell text-xs text-gray-500">{item.nominatedByName ?? '—'} · <span dir="ltr">{String(item.nominatedAt).slice(0, 10)}</span></td>
-                          <td className="table-cell text-left"><button type="button" className="text-red-600 text-xs disabled:opacity-50" disabled={busy} onClick={() => run(() => removeSuccessor(item.id), 'اتشال المرشح')}>شيل</button></td>
+                          <td className="table-cell text-end"><button type="button" className="text-red-600 text-xs disabled:opacity-50" disabled={busy} onClick={() => run(() => removeSuccessor(item.id), 'اتشال المرشح')}>شيل</button></td>
                         </tr>
                       ))}
                     </tbody>

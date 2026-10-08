@@ -121,11 +121,11 @@ export default function TrainingSessionPage() {
             <table className="w-full text-sm" data-enrollments>
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">الموظف</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">الحالة</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">النتيجة</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">الشهادة</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">تقييمه</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">الموظف</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">الحالة</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">النتيجة</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">الشهادة</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">تقييمه</th>
                   <th className="px-3 py-2" />
                 </tr>
               </thead>
@@ -146,7 +146,7 @@ export default function TrainingSessionPage() {
                     </td>
                     <td className="px-3 py-2 text-gray-600">{row.certificate ? (row.certificate.expiryDate ? `لحد ${formatDate(row.certificate.expiryDate)}` : 'من غير انتهاء') : '—'}</td>
                     <td className="px-3 py-2 tabular-nums">{row.rating !== null ? `${row.rating} / 5` : '—'}</td>
-                    <td className="px-3 py-2 text-left whitespace-nowrap">
+                    <td className="px-3 py-2 text-end whitespace-nowrap">
                       {OPEN.includes(row.status) && session?.status !== 'CANCELLED' && (
                         <span className="inline-flex items-center gap-2 text-xs">
                           {row.status !== 'ATTENDED' && (

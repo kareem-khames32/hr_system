@@ -55,7 +55,7 @@ export default function CompensationPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-600">
                   <tr>
-                    <th className="table-header text-right">الدرجة</th>
+                    <th className="table-header text-start">الدرجة</th>
                     <th className="table-header text-center">الأدنى</th>
                     <th className="table-header text-center">المنتصف</th>
                     <th className="table-header text-center">الأقصى</th>
@@ -104,8 +104,8 @@ export default function CompensationPage() {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 text-gray-600">
                     <tr>
-                      <th className="table-header text-right">الموظف</th>
-                      <th className="table-header text-right">الدرجة</th>
+                      <th className="table-header text-start">الموظف</th>
+                      <th className="table-header text-start">الدرجة</th>
                       <th className="table-header text-center">{data.basisLabel}</th>
                       <th className="table-header text-center">نسبة المقارنة</th>
                       <th className="table-header text-center">الموقع من النطاق</th>

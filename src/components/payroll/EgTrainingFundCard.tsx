@@ -41,7 +41,7 @@ export default function EgTrainingFundCard() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-gray-600">
                 <tr>
-                  <th className="table-header text-right">المنشأة</th>
+                  <th className="table-header text-start">المنشأة</th>
                   <th className="table-header text-center">عدد الموظفين</th>
                   <th className="table-header text-center">ينطبق؟</th>
                   <th className="table-header text-center">المبلغ السنوي</th>

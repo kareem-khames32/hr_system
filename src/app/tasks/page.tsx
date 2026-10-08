@@ -73,9 +73,9 @@ export default function TasksPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-xl font-bold text-gray-800 flex items-center gap-2"><ListChecks size={22} className="text-primary-600" />المهام</h1>
           <div className="flex flex-wrap gap-2">
-            <button type="button" className="btn-secondary" disabled={!tasks.length} onClick={exportRows} data-export-tasks><Download size={16} className="inline ml-1" />تصدير</button>
+            <button type="button" className="btn-secondary" disabled={!tasks.length} onClick={exportRows} data-export-tasks><Download size={16} className="inline me-1" />تصدير</button>
             {assignees?.canManage && available && (
-              <button type="button" className="btn-primary" onClick={() => setForm({ task: null })}><Plus size={16} className="inline ml-1" />مهمة جديدة</button>
+              <button type="button" className="btn-primary" onClick={() => setForm({ task: null })}><Plus size={16} className="inline me-1" />مهمة جديدة</button>
             )}
           </div>
         </div>

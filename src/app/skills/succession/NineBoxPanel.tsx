@@ -45,7 +45,7 @@ export default function NineBoxPanel() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-gray-600">
                 <tr>
-                  <th className="table-header text-right">الموظف</th>
+                  <th className="table-header text-start">الموظف</th>
                   <th className="table-header text-center">درجة آخر تقييم</th>
                   <th className="table-header text-center">الأداء</th>
                   <th className="table-header text-center">الإمكانات</th>

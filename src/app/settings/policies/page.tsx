@@ -505,9 +505,9 @@ function TerminationReasonsBlock({ onSaveConfig, pendingConfigCount }: { onSaveC
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-50 text-gray-600">
-                <th className="text-right p-2 font-medium">السبب</th>
-                <th className="text-right p-2 font-medium">النسبة من المكافأة</th>
-                <th className="text-right p-2 font-medium">الحالة</th>
+                <th className="text-start p-2 font-medium">السبب</th>
+                <th className="text-start p-2 font-medium">النسبة من المكافأة</th>
+                <th className="text-start p-2 font-medium">الحالة</th>
                 <th className="p-2"><span className="sr-only">حذف</span></th>
               </tr>
             </thead>
@@ -535,12 +535,12 @@ function TerminationReasonsBlock({ onSaveConfig, pendingConfigCount }: { onSaveC
                       <button type="button" aria-pressed={row.active} aria-label={`تفعيل «${row.label || 'سبب جديد'}»`} disabled={locked}
                         onClick={() => update(row.key, { active: !row.active })}
                         className={`relative w-12 h-6 rounded-full transition-colors ${row.active ? 'bg-primary-500' : 'bg-gray-300'}${!canEdit ? ' opacity-50 cursor-not-allowed' : ''}`}>
-                        <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${row.active ? 'right-0.5' : 'right-6'}`} />
+                        <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${row.active ? 'start-0.5' : 'start-6'}`} />
                       </button>
                       <span className="text-xs text-gray-500">{row.active ? 'مفعّل' : 'موقوف'}</span>
                     </div>
                   </td>
-                  <td className="p-2 text-left whitespace-nowrap">
+                  <td className="p-2 text-end whitespace-nowrap">
                     {row.usedByCases > 0
                       ? <span className="text-xs text-gray-500" title="السبب المستخدم مايتشالش — عطّله بس">عليه {row.usedByCases} ملف</span>
                       : canEdit && <button type="button" className="text-xs text-red-600 hover:underline disabled:opacity-50" disabled={busy} onClick={() => removeRow(row.key)}>حذف</button>}
@@ -979,7 +979,7 @@ export default function PoliciesPage() {
         >
           <span
             className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${
-              on ? 'right-0.5' : 'right-6'
+              on ? 'start-0.5' : 'start-6'
             }`}
           />
         </button>
@@ -1138,7 +1138,7 @@ export default function PoliciesPage() {
 
       {/* شريط الحفظ السفلي — يظهر عند وجود تغييرات */}
       {!loading && (dirtyKeys.length > 0 || success) && (
-        <div className="fixed bottom-0 inset-x-0 md:pr-64 z-30">
+        <div className="fixed bottom-0 inset-x-0 md:ps-64 z-30">
           <div className="bg-white border-t border-gray-200 shadow-lg px-6 py-3 flex items-center justify-between">
             {success ? (
               <span className="text-sm text-success-700 flex items-center gap-2">

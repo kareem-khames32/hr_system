@@ -73,7 +73,7 @@ export function PayrollDisbursementTable({ rows, canMark, disabled, onToggle }: 
       <thead className="bg-gray-50">
         <tr>
           {['تم الصرف', 'الرقم الوظيفي', 'الموظف', 'القسم / الفريق', 'طريقة الصرف', 'الصافي', 'تحويل بنكي', 'نقدي', 'من علّم ومتى'].map((title, index) => (
-            <th key={title} className={`px-3 py-3 ${index >= 5 && index <= 7 ? 'text-center' : 'text-right'} font-medium text-gray-600 whitespace-nowrap`}>{title}</th>
+            <th key={title} className={`px-3 py-3 ${index >= 5 && index <= 7 ? 'text-center' : 'text-start'} font-medium text-gray-600 whitespace-nowrap`}>{title}</th>
           ))}
         </tr>
       </thead>
@@ -124,12 +124,12 @@ export function PayrollDisbursementSummaryTable({ summary }: { summary: PayrollD
     <table className="w-full text-sm" data-disbursement-summary-table>
       <thead className="bg-gray-50">
         <tr>{['المسير', 'الحالة', 'تم الصرف', 'لم يتم', 'بنك (تم / لم يتم)', 'نقدي (تم / لم يتم)', 'سبب الباقي'].map(title =>
-          <th key={title} className="px-3 py-2 text-right font-medium text-gray-600 whitespace-nowrap">{title}</th>)}</tr>
+          <th key={title} className="px-3 py-2 text-start font-medium text-gray-600 whitespace-nowrap">{title}</th>)}</tr>
       </thead>
       <tbody className="divide-y divide-gray-100">
         {lines.map(({ key, run, totals, currency }) => (
           <tr key={key}>
-            <td className="px-3 py-2 font-medium text-gray-800">{runLabel(run)}{currency && <span className="text-xs text-gray-500 mr-1">({currencyLabel(currency)})</span>}</td>
+            <td className="px-3 py-2 font-medium text-gray-800">{runLabel(run)}{currency && <span className="text-xs text-gray-500 ms-1">({currencyLabel(currency)})</span>}</td>
             <td className="px-3 py-2 text-gray-600">{RUN_STATUS[run.status] ?? run.status} — {DISBURSEMENT_MODE_LABELS[run.mode]}</td>
             <td className="px-3 py-2 text-success-700"><span dir="ltr" className="font-bold">{formatMoney(totals.paid.total)}</span> ({totals.paid.count})</td>
             <td className="px-3 py-2 text-amber-700"><span dir="ltr" className="font-bold">{formatMoney(totals.unpaid.total)}</span> ({totals.unpaid.count})</td>

@@ -225,12 +225,12 @@ function DeductionList({ rows, truncated, loading, filters, setFilters, reload, 
           <table className="w-full">
             <thead>
               <tr className="table-header">
-                <th className="text-right px-3 py-3">#</th>
-                <th className="text-right px-3 py-3">الموظف</th>
-                <th className="text-right px-3 py-3">النوع</th>
+                <th className="text-start px-3 py-3">#</th>
+                <th className="text-start px-3 py-3">الموظف</th>
+                <th className="text-start px-3 py-3">النوع</th>
                 <th className="text-center px-3 py-3">المبلغ ({currency})</th>
                 <th className="text-center px-3 py-3">الشهر المستهدف</th>
-                <th className="text-right px-3 py-3">المُنشئ</th>
+                <th className="text-start px-3 py-3">المُنشئ</th>
                 <th className="text-center px-3 py-3">الحالة</th>
                 <th className="text-center px-3 py-3">إجراءات</th>
               </tr>
@@ -592,11 +592,11 @@ function DeductionCreator({ creatable, currency, onCreated }: { creatable: Deduc
             <table className="w-full">
               <thead>
                 <tr className="table-header">
-                  <th className="text-right px-3 py-2">الموظف</th>
+                  <th className="text-start px-3 py-2">الموظف</th>
                   <th className="text-center px-3 py-2">النتيجة</th>
                   <th className="text-center px-3 py-2">المبلغ</th>
-                  <th className="text-right px-3 py-2">الحساب</th>
-                  <th className="text-right px-3 py-2">السلسلة</th>
+                  <th className="text-start px-3 py-2">الحساب</th>
+                  <th className="text-start px-3 py-2">السلسلة</th>
                   <th className="text-center px-3 py-2"></th>
                 </tr>
               </thead>
@@ -716,8 +716,8 @@ function DeductionTypesPanel({ onChanged }: { onChanged: () => void }) {
           <table className="w-full">
             <thead>
               <tr className="table-header">
-                <th className="text-right px-3 py-2">الاسم</th><th className="text-right px-3 py-2">الفئة والطريقة</th>
-                <th className="text-right px-3 py-2">الحدود</th><th className="text-right px-3 py-2">المُنشئ والجهة</th><th className="text-right px-3 py-2">السلسلة</th>
+                <th className="text-start px-3 py-2">الاسم</th><th className="text-start px-3 py-2">الفئة والطريقة</th>
+                <th className="text-start px-3 py-2">الحدود</th><th className="text-start px-3 py-2">المُنشئ والجهة</th><th className="text-start px-3 py-2">السلسلة</th>
                 <th className="text-center px-3 py-2">الحالة</th><th className="text-center px-3 py-2"></th>
               </tr>
             </thead>

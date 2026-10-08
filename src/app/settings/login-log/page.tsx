@@ -71,7 +71,7 @@ export default function LoginLogPage() {
           {loading ? <p className="text-sm text-gray-400">جارٍ التحميل…</p> : (
             <table className="w-full text-sm" data-login-log-table>
               <thead className="bg-gray-50">
-                <tr>{['الوقت', 'الحساب', 'الطريقة', 'النتيجة', 'الـIP', 'الجهاز'].map(title => <th key={title} className="px-3 py-2 text-right font-medium text-gray-600 whitespace-nowrap">{title}</th>)}</tr>
+                <tr>{['الوقت', 'الحساب', 'الطريقة', 'النتيجة', 'الـIP', 'الجهاز'].map(title => <th key={title} className="px-3 py-2 text-start font-medium text-gray-600 whitespace-nowrap">{title}</th>)}</tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {rows.map(row => (

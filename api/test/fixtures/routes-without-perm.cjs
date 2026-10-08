@@ -38,6 +38,7 @@ const EXCEPTIONS = {
   'AuthController.changePassword': 'SELF', // POST /auth/change-password
   'AuthController.endOtherSessions': 'SELF', // POST /auth/sessions/end-others — B2.17-ب: جلسات صاحب الحساب نفسه
   'AuthController.endSession': 'SELF', // DELETE /auth/sessions/:id
+  'AuthController.language': 'SELF', // GET /auth/language — B6.2: لغة عرض الواجهة لصاحب الحساب
   'AuthController.me': 'SELF', // GET /auth/me
   'AuthController.mySessions': 'SELF', // GET /auth/sessions
   'AuthController.totpConfirm': 'SELF', // POST /auth/totp/confirm — B2.17-ج: تطبيق المصادقة لصاحب الحساب نفسه
@@ -45,6 +46,7 @@ const EXCEPTIONS = {
   'AuthController.totpSetup': 'SELF', // POST /auth/totp/setup
   'AuthController.totpStatus': 'SELF', // GET /auth/totp
   'AuthController.session': 'SELF', // GET /auth/session — B2.17: بيانات الحساب ورمز CSRF للجلسة الحالية
+  'AuthController.setLanguage': 'SELF', // PUT /auth/language — B6.2: صاحب الحساب بيغيّر لغته
   'BonusesController.mine': 'SELF', // GET /bonuses/mine
   'EmployeeSelfPhotoController.setOwnPhoto': 'SELF', // PUT /employees/me/photo
   'FinancialExemptionsController.mine': 'SELF', // GET /payroll/exemptions/mine

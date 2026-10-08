@@ -404,7 +404,7 @@ export default function EmployeesBulkUpdatePage() {
                   ['error', 'فيه أخطاء', preview.summary.error, 'text-red-600'], ['unchanged', 'من غير تغيير', preview.summary.unchanged, 'text-gray-500']] as const)
                   .map(([key, label, value, color]) => (
                     <button key={key} type="button" onClick={() => { setFilter(key); setShown(PAGE) }}
-                      className={`card p-3 text-right transition-colors ${filter === key ? 'ring-2 ring-primary-400' : 'hover:bg-gray-50'}`}>
+                      className={`card p-3 text-start transition-colors ${filter === key ? 'ring-2 ring-primary-400' : 'hover:bg-gray-50'}`}>
                       <p className="text-xs text-gray-500">{label}</p>
                       <p className={`text-2xl font-bold ${color}`}>{value}</p>
                     </button>
@@ -471,10 +471,10 @@ export default function EmployeesBulkUpdatePage() {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 text-gray-600">
                     <tr>
-                      <th className="p-2 text-right w-14">الصف</th>
-                      <th className="p-2 text-right">الموظف</th>
-                      <th className="p-2 text-right">التغييرات (القديم ← الجديد)</th>
-                      <th className="p-2 text-right">ملاحظات</th>
+                      <th className="p-2 text-start w-14">الصف</th>
+                      <th className="p-2 text-start">الموظف</th>
+                      <th className="p-2 text-start">التغييرات (القديم ← الجديد)</th>
+                      <th className="p-2 text-start">ملاحظات</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -552,7 +552,7 @@ export default function EmployeesBulkUpdatePage() {
               <div className="overflow-x-auto border border-gray-200 rounded-xl">
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 text-gray-600">
-                    <tr><th className="p-2 text-right w-14">الصف</th><th className="p-2 text-right">الموظف</th><th className="p-2 text-right">السبب</th></tr>
+                    <tr><th className="p-2 text-start w-14">الصف</th><th className="p-2 text-start">الموظف</th><th className="p-2 text-start">السبب</th></tr>
                   </thead>
                   <tbody>
                     {results.filter(row => row.status === 'failed').map(row => (

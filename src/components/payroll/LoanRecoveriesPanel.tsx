@@ -50,7 +50,7 @@ export function LoanRecoveriesPanel({ currency }: { currency: string }) {
           <table className="w-full">
             <thead>
               <tr className="table-header">
-                <th className="text-right px-4 py-3">الموظف</th>
+                <th className="text-start px-4 py-3">الموظف</th>
                 <th className="text-center px-4 py-3">رصيد السلف</th>
                 <th className="text-center px-4 py-3">المُقاصّ</th>
                 <th className="text-center px-4 py-3">المدين المتبقي</th>

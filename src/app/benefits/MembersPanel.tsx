@@ -74,7 +74,7 @@ export function MembersPanel() {
             <input type="checkbox" checked={onlyOpen} onChange={(event) => setOnlyOpen(event.target.checked)} />
             المفتوحة بس
           </label>
-          <span className="mr-auto inline-flex gap-2">
+          <span className="ms-auto inline-flex gap-2">
             <button type="button" className="btn-secondary text-sm disabled:opacity-50" disabled={pending === 0} onClick={() => sheet('PENDING')}>تنزيل كشف المستنية ({pending})</button>
             <button type="button" className="btn-secondary text-sm" onClick={() => sheet('SENT')}>كشف اللي اتبعتت</button>
           </span>
@@ -109,11 +109,11 @@ export function MembersPanel() {
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-gray-600">
               <tr>
-                <th className="table-header text-right">العضو</th>
+                <th className="table-header text-start">العضو</th>
                 <th className="table-header text-center">الطلب</th>
                 <th className="table-header text-center">الحالة</th>
-                <th className="table-header text-right">الفئة</th>
-                <th className="table-header text-right">ملاحظات</th>
+                <th className="table-header text-start">الفئة</th>
+                <th className="table-header text-start">ملاحظات</th>
                 <th className="table-header" />
               </tr>
             </thead>
@@ -130,7 +130,7 @@ export function MembersPanel() {
                     {row.reason}
                     {row.status === 'DONE' && row.effectiveDate ? <span className="block">{formatDate(row.effectiveDate)}{row.cardNumber ? <span dir="ltr"> · {row.cardNumber}</span> : null}</span> : null}
                   </td>
-                  <td className="table-cell text-left">
+                  <td className="table-cell text-end">
                     {(row.status === 'PENDING' || row.status === 'SENT') && (
                       <span className="inline-flex gap-2">
                         {row.status === 'PENDING' && <button type="button" className="btn-secondary text-xs disabled:opacity-50" disabled={busy} onClick={() => run(() => sendInsuranceRequest(row.id), 'اتعلّم «اتبعت»')}>اتبعت</button>}
@@ -154,8 +154,8 @@ export function MembersPanel() {
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-gray-600">
               <tr>
-                <th className="table-header text-right">العضو</th>
-                <th className="table-header text-right">الاشتراك</th>
+                <th className="table-header text-start">العضو</th>
+                <th className="table-header text-start">الاشتراك</th>
                 <th className="table-header text-center">رقم البطاقة</th>
                 <th className="table-header text-center">طلب مفتوح</th>
                 <th className="table-header" />
@@ -164,7 +164,7 @@ export function MembersPanel() {
             <tbody>
               {data.members.map((member) => (
                 <tr key={`${member.employeeId}:${member.dependentId ?? 0}`} className="border-t border-gray-100">
-                  <td className={`table-cell ${member.dependentId === null ? 'font-semibold' : 'pr-6'}`}>
+                  <td className={`table-cell ${member.dependentId === null ? 'font-semibold' : 'ps-6'}`}>
                     {member.memberName}
                     {member.dependentId === null
                       ? member.employeeCode ? <span className="text-xs text-gray-500 font-normal" dir="ltr"> · {member.employeeCode}</span> : null
@@ -175,7 +175,7 @@ export function MembersPanel() {
                   </td>
                   <td className="table-cell text-center font-mono" dir="ltr">{member.enrollment?.cardNumber ?? '—'}</td>
                   <td className="table-cell text-center">{member.openRequest ? `${member.openRequest.kindLabel} — ${member.openRequest.statusLabel}` : '—'}</td>
-                  <td className="table-cell text-left">
+                  <td className="table-cell text-end">
                     {!member.openRequest && (member.enrollment
                       ? <button type="button" className="btn-secondary text-xs" onClick={() => setForm({ kind: 'remove', enrollmentId: member.enrollment!.id, reason: '' })}>طلب حذف</button>
                       : <button type="button" className="btn-secondary text-xs disabled:opacity-50" disabled={busy} onClick={() => add(member)}>طلب إضافة</button>)}

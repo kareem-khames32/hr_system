@@ -991,7 +991,7 @@ export default function WorkDaysSettingsPage() {
                   <div>
                     <h3 className="text-sm font-medium text-gray-600 mb-3">
                       أيام العمل
-                      <span className="text-xs text-gray-400 mr-2">
+                      <span className="text-xs text-gray-400 ms-2">
                         (تُطبق بعد الحفظ على حساب الحضور)
                       </span>
                     </h3>
@@ -1440,7 +1440,7 @@ function AddScheduleRuleModal({
                     key={ef.value}
                     type="button"
                     onClick={() => setEffect(ef.value)}
-                    className={`p-4 rounded-xl border-2 text-right transition-all ${
+                    className={`p-4 rounded-xl border-2 text-start transition-all ${
                       active ? 'border-primary-500 bg-primary-50' : 'border-gray-200 hover:border-gray-300'
                     }`}
                   >
@@ -1616,7 +1616,7 @@ function ScheduleExceptionsEditor({ offDays, currentOffDays, value, dirty, daysD
     <div className="mt-6 border-t border-gray-100 pt-4">
       <h3 className="text-sm font-medium text-gray-600 mb-1">
         استثناءات أيام الراحة
-        <span className="text-xs text-gray-400 mr-2">(لموظفي الجدول ده بس)</span>
+        <span className="text-xs text-gray-400 ms-2">(لموظفي الجدول ده بس)</span>
       </h3>
       <p className="text-xs text-gray-500 mb-3">
         مثلًا: الجمعة والسبت راحة ماعدا آخر سبت في الشهر المالي دوام — اليوم ده بيبقى يوم شغل لموظفي الجدول:

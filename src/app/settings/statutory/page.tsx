@@ -94,8 +94,8 @@ export default function StatutoryPackPage() {
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <p className="text-sm text-gray-700">
                     ساري من <span className="font-medium">{formatDate(row.effectiveFrom)}</span>
-                    {row.current && <span className="badge badge-success mr-2">الساري النهارده</span>}
-                    <span className={`badge mr-2 ${row.verified ? 'badge-success' : 'badge-warning'}`}>{row.verified ? 'اتأكد' : 'محتاج تحقق'}</span>
+                    {row.current && <span className="badge badge-success ms-2">الساري النهارده</span>}
+                    <span className={`badge ms-2 ${row.verified ? 'badge-success' : 'badge-warning'}`}>{row.verified ? 'اتأكد' : 'محتاج تحقق'}</span>
                   </p>
                   {data.canEdit && (
                     <button onClick={() => setEditing({ item, row })} className="text-primary-600 hover:underline text-xs">

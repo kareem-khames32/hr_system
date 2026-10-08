@@ -415,13 +415,13 @@ export default function ContractsPage() {
         <div className="card p-4">
           <div className="flex flex-wrap items-center gap-4 min-w-0">
             <div className="flex-1 min-w-[220px] relative">
-              <Search className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
+              <Search className="absolute start-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
               <input
                 type="text"
                 placeholder="بحث بالاسم أو الرقم الوظيفي أو رقم العقد أو نوع العقد..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="input pr-10 w-full"
+                className="input ps-10 w-full"
               />
             </div>
             {/* الفرع ← الإدارة ← القسم ← الفريق */}
@@ -466,14 +466,14 @@ export default function ContractsPage() {
           <table className="w-full">
             <thead className="bg-gray-50 border-b">
               <tr>
-                <th className="text-right py-3 px-4 font-medium text-gray-700">الموظف</th>
-                <th className="text-right py-3 px-4 font-medium text-gray-700 whitespace-nowrap">رقم العقد</th>
-                <th className="text-right py-3 px-4 font-medium text-gray-700">نوع العقد</th>
-                <th className="text-right py-3 px-4 font-medium text-gray-700 whitespace-nowrap">تاريخ البداية</th>
-                <th className="text-right py-3 px-4 font-medium text-gray-700 whitespace-nowrap">تاريخ الانتهاء</th>
-                <th className="text-right py-3 px-4 font-medium text-gray-700">المدة</th>
-                <th className="text-right py-3 px-4 font-medium text-gray-700 whitespace-nowrap">فترة الإشعار</th>
-                <th className="text-right py-3 px-4 font-medium text-gray-700 whitespace-nowrap">المتبقي (يوم)</th>
+                <th className="text-start py-3 px-4 font-medium text-gray-700">الموظف</th>
+                <th className="text-start py-3 px-4 font-medium text-gray-700 whitespace-nowrap">رقم العقد</th>
+                <th className="text-start py-3 px-4 font-medium text-gray-700">نوع العقد</th>
+                <th className="text-start py-3 px-4 font-medium text-gray-700 whitespace-nowrap">تاريخ البداية</th>
+                <th className="text-start py-3 px-4 font-medium text-gray-700 whitespace-nowrap">تاريخ الانتهاء</th>
+                <th className="text-start py-3 px-4 font-medium text-gray-700">المدة</th>
+                <th className="text-start py-3 px-4 font-medium text-gray-700 whitespace-nowrap">فترة الإشعار</th>
+                <th className="text-start py-3 px-4 font-medium text-gray-700 whitespace-nowrap">المتبقي (يوم)</th>
                 <th className="text-center py-3 px-4 font-medium text-gray-700">الحالة</th>
                 <th className="text-center py-3 px-4 font-medium text-gray-700">الإجراءات</th>
               </tr>

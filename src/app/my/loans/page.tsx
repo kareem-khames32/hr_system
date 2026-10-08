@@ -151,7 +151,7 @@ export default function MyLoansPage() {
               <table className="w-full">
                 <thead>
                   <tr className="table-header">
-                    <th className="text-right px-4 py-4">السلفة</th>
+                    <th className="text-start px-4 py-4">السلفة</th>
                     <th className="text-center px-4 py-4">المعتمد</th>
                     <th className="text-center px-4 py-4">المسدد</th>
                     <th className="text-center px-4 py-4">المتبقي</th>
@@ -188,7 +188,7 @@ export default function MyLoansPage() {
                               <table className="w-full">
                                 <thead>
                                   <tr className="table-header">
-                                    <th className="text-right px-4 py-2">#</th>
+                                    <th className="text-start px-4 py-2">#</th>
                                     <th className="text-center px-4 py-2">الاستحقاق</th>
                                     <th className="text-center px-4 py-2">المبلغ</th>
                                     <th className="text-center px-4 py-2">المدفوع</th>

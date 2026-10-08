@@ -223,12 +223,12 @@ function BonusList({ rows, truncated, loading, filters, setFilters, reload, curr
           <table className="w-full">
             <thead>
               <tr className="table-header">
-                <th className="text-right px-3 py-3">#</th>
-                <th className="text-right px-3 py-3">المستفيد</th>
-                <th className="text-right px-3 py-3">النوع</th>
+                <th className="text-start px-3 py-3">#</th>
+                <th className="text-start px-3 py-3">المستفيد</th>
+                <th className="text-start px-3 py-3">النوع</th>
                 <th className="text-center px-3 py-3">المبلغ ({currency})</th>
                 <th className="text-center px-3 py-3">الشهر المستهدف</th>
-                <th className="text-right px-3 py-3">المُقترِح</th>
+                <th className="text-start px-3 py-3">المُقترِح</th>
                 <th className="text-center px-3 py-3">الحالة</th>
                 <th className="text-center px-3 py-3">إجراءات</th>
               </tr>
@@ -555,11 +555,11 @@ function BonusCreator({ creatable, currency, onCreated, initialEmployeeId = null
             <table className="w-full">
               <thead>
                 <tr className="table-header">
-                  <th className="text-right px-3 py-2">الموظف</th>
+                  <th className="text-start px-3 py-2">الموظف</th>
                   <th className="text-center px-3 py-2">النتيجة</th>
                   <th className="text-center px-3 py-2">المبلغ</th>
-                  <th className="text-right px-3 py-2">الحساب</th>
-                  <th className="text-right px-3 py-2">السلسلة</th>
+                  <th className="text-start px-3 py-2">الحساب</th>
+                  <th className="text-start px-3 py-2">السلسلة</th>
                   <th className="text-center px-3 py-2"></th>
                 </tr>
               </thead>
@@ -653,8 +653,8 @@ function BonusTypesPanel({ onChanged }: { onChanged: () => void }) {
           <table className="w-full">
             <thead>
               <tr className="table-header">
-                <th className="text-right px-3 py-2">الاسم</th><th className="text-right px-3 py-2">الحساب</th>
-                <th className="text-center px-3 py-2">السقف</th><th className="text-right px-3 py-2">النطاق والسلسلة</th><th className="text-center px-3 py-2"></th>
+                <th className="text-start px-3 py-2">الاسم</th><th className="text-start px-3 py-2">الحساب</th>
+                <th className="text-center px-3 py-2">السقف</th><th className="text-start px-3 py-2">النطاق والسلسلة</th><th className="text-center px-3 py-2"></th>
               </tr>
             </thead>
             <tbody>

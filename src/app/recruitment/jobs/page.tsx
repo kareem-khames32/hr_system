@@ -121,13 +121,13 @@ export default function RecruitmentJobsPage() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-4 py-3 text-right font-medium text-gray-600">الوظيفة</th>
-                  <th className="px-4 py-3 text-right font-medium text-gray-600">الفرع والقسم</th>
-                  <th className="px-4 py-3 text-right font-medium text-gray-600">العدد</th>
-                  <th className="px-4 py-3 text-right font-medium text-gray-600">المتقدمين</th>
-                  <th className="px-4 py-3 text-right font-medium text-gray-600">نطاق الراتب</th>
-                  <th className="px-4 py-3 text-right font-medium text-gray-600">النشر</th>
-                  <th className="px-4 py-3 text-right font-medium text-gray-600">الحالة</th>
+                  <th className="px-4 py-3 text-start font-medium text-gray-600">الوظيفة</th>
+                  <th className="px-4 py-3 text-start font-medium text-gray-600">الفرع والقسم</th>
+                  <th className="px-4 py-3 text-start font-medium text-gray-600">العدد</th>
+                  <th className="px-4 py-3 text-start font-medium text-gray-600">المتقدمين</th>
+                  <th className="px-4 py-3 text-start font-medium text-gray-600">نطاق الراتب</th>
+                  <th className="px-4 py-3 text-start font-medium text-gray-600">النشر</th>
+                  <th className="px-4 py-3 text-start font-medium text-gray-600">الحالة</th>
                   <th className="px-4 py-3" />
                 </tr>
               </thead>

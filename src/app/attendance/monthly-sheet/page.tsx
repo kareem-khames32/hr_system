@@ -291,9 +291,9 @@ export default function MonthlySheetPage() {
               <table className="w-full">
                 <thead>
                   <tr className="table-header">
-                    <th className="text-right px-4 py-3">اليوم</th>
-                    <th className="text-right px-4 py-3">التاريخ</th>
-                    <th className="text-right px-4 py-3">وردية اليوم</th>
+                    <th className="text-start px-4 py-3">اليوم</th>
+                    <th className="text-start px-4 py-3">التاريخ</th>
+                    <th className="text-start px-4 py-3">وردية اليوم</th>
                     <th className="text-center px-4 py-3">الحضور</th>
                     <th className="text-center px-4 py-3">الانصراف</th>
                     <th className="text-center px-4 py-3">ساعات العمل</th>

@@ -211,7 +211,7 @@ export default function ModulesSettingsPage() {
                     type="button"
                     disabled={!canWrite || busy !== null}
                     onClick={() => openPreset(item.key)}
-                    className="text-right rounded-xl border border-gray-200 p-4 hover:border-primary-300 hover:bg-primary-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="text-start rounded-xl border border-gray-200 p-4 hover:border-primary-300 hover:bg-primary-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <p className="font-bold text-gray-800">الباقة {item.nameAr}</p>
                     <p className="text-sm text-gray-500 mt-1">{item.description}</p>

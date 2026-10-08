@@ -99,8 +99,8 @@ export function LoanCapPoliciesPanel({ currency }: { currency: string }) {
           <table className="w-full">
             <thead>
               <tr className="table-header">
-                <th className="text-right px-4 py-3">السياسة</th>
-                <th className="text-right px-4 py-3">النطاق</th>
+                <th className="text-start px-4 py-3">السياسة</th>
+                <th className="text-start px-4 py-3">النطاق</th>
                 <th className="text-center px-4 py-3">النسبة</th>
                 <th className="text-center px-4 py-3">المقطوع</th>
                 <th className="text-center px-4 py-3">السريان</th>

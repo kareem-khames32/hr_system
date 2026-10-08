@@ -907,13 +907,13 @@ export default function WeeklySchedulePage() {
             <div className="flex items-center gap-4 flex-wrap">
               {/* Search */}
               <div className="relative">
-                <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <Search size={18} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   type="text"
                   placeholder="بحث عن موظف..."
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
-                  className="input pr-10 w-64"
+                  className="input ps-10 w-64"
                 />
               </div>
 
@@ -1043,7 +1043,7 @@ export default function WeeklySchedulePage() {
                       />
                     </th>
                   )}
-                  <th className="text-right p-4 font-medium text-gray-600 min-w-[200px] sticky right-0 bg-gray-50 z-10">
+                  <th className="text-start p-4 font-medium text-gray-600 min-w-[200px] sticky start-0 bg-gray-50 z-10">
                     الموظف
                   </th>
                   {weekDays.map((day, index) => (
@@ -1071,7 +1071,7 @@ export default function WeeklySchedulePage() {
                       </td>
                     )}
                     {/* Employee Info */}
-                    <td className="p-3 sticky right-0 bg-white z-10">
+                    <td className="p-3 sticky start-0 bg-white z-10">
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 bg-primary-100 rounded-full flex items-center justify-center flex-shrink-0">
                           <span className="text-primary-600 font-medium">{employee.avatar}</span>
@@ -1206,7 +1206,7 @@ export default function WeeklySchedulePage() {
                                     dayName: day.name,
                                   })
                                 }}
-                                className={`absolute -top-1.5 -left-1.5 w-5 h-5 rounded-full flex items-center justify-center shadow border z-10 transition-opacity ${
+                                className={`absolute -top-1.5 -end-1.5 w-5 h-5 rounded-full flex items-center justify-center shadow border z-10 transition-opacity ${
                                   override || isExceptionalWork
                                     ? 'bg-amber-400 text-white border-amber-500 opacity-100'
                                     : 'bg-white text-gray-400 border-gray-200 opacity-0 group-hover:opacity-100 hover:text-amber-500'
@@ -1236,7 +1236,7 @@ export default function WeeklySchedulePage() {
                                   <button
                                     key={s.id}
                                     onClick={() => changeShift(employee.id, s.id)}
-                                    className={`w-full px-3 py-2 text-right hover:bg-gray-50 flex items-center gap-2 ${
+                                    className={`w-full px-3 py-2 text-start hover:bg-gray-50 flex items-center gap-2 ${
                                       s.id === shift.id ? 'bg-primary-50' : ''
                                     }`}
                                   >
@@ -1248,12 +1248,12 @@ export default function WeeklySchedulePage() {
                                       {s.startTime}–{s.endTime}
                                     </span>
                                     {s.id === shift.id && (
-                                      <CheckCircle size={14} className="text-primary-500 mr-auto" />
+                                      <CheckCircle size={14} className="text-primary-500 ms-auto" />
                                     )}
                                   </button>
                                 ))}
                                 {assignments[employee.id] && (
-                                  <button disabled={saving} onClick={() => clearAssignment(employee.id)} className="w-full px-3 py-2 text-right text-sm text-red-600 hover:bg-red-50">إلغاء تعيين الأسبوع</button>
+                                  <button disabled={saving} onClick={() => clearAssignment(employee.id)} className="w-full px-3 py-2 text-start text-sm text-red-600 hover:bg-red-50">إلغاء تعيين الأسبوع</button>
                                 )}
                               </div>
                             )}
@@ -1344,7 +1344,7 @@ export default function WeeklySchedulePage() {
                     <button
                       key={s.id}
                       onClick={() => applyTemplate(s.id)}
-                      className="w-full p-4 bg-gray-50 hover:bg-gray-100 rounded-xl text-right transition-colors flex items-center gap-4"
+                      className="w-full p-4 bg-gray-50 hover:bg-gray-100 rounded-xl text-start transition-colors flex items-center gap-4"
                     >
                       <div className={`w-12 h-12 ${s.bgColor} rounded-xl flex items-center justify-center shadow-sm flex-shrink-0`}>
                         <Icon size={24} className={s.color} />

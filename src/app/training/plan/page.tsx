@@ -98,11 +98,11 @@ export default function TrainingPlanPage() {
             <table className="w-full text-sm" data-budget>
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">القسم</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">الميزانية</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">التكلفة الفعلية</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">الباقي</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">المقاعد</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">القسم</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">الميزانية</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">التكلفة الفعلية</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">الباقي</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">المقاعد</th>
                   <th className="px-3 py-2" />
                 </tr>
               </thead>
@@ -124,7 +124,7 @@ export default function TrainingPlanPage() {
                     <td className="px-3 py-2 tabular-nums">{row.spent}</td>
                     <td className={`px-3 py-2 tabular-nums ${row.over ? 'text-red-600 font-medium' : ''}`}>{row.hasBudget ? row.remaining : '—'}</td>
                     <td className="px-3 py-2 tabular-nums">{row.seats}</td>
-                    <td className="px-3 py-2 text-left">
+                    <td className="px-3 py-2 text-end">
                       {row.departmentId > 0 && draft[row.departmentId] !== undefined && draft[row.departmentId].trim() !== '' && (
                         <button onClick={() => saveBudget(row.departmentId, row.departmentName)} disabled={busy} className="btn-secondary text-xs disabled:opacity-50">
                           حفظ

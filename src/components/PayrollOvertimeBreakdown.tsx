@@ -27,7 +27,7 @@ export function PayrollOvertimeBreakdown({ item, currency, compact = false }: { 
   if (!rows) return Number(item.overtimeAmount) > 0 ? <p className="text-xs text-gray-500 my-2">القيمة الإجمالية محفوظة بلا تفصيل لأيامها في هذا البند.</p> : null
   const dayNames = { WEEKDAY: 'عمل', WEEKEND: 'راحة أسبوعية', HOLIDAY: 'عطلة رسمية' }
   const contents = <div className="overflow-x-auto">
-    <table className="w-full text-sm text-right">
+    <table className="w-full text-sm text-start">
       <thead><tr className="bg-gray-50 text-gray-600"><th className="p-2">اليوم</th><th className="p-2">نوع اليوم</th><th className="p-2">الساعات</th><th className="p-2">أجر الساعة</th><th className="p-2">مضاعف الأجر</th><th className="p-2">القيمة ({currency})</th></tr></thead>
       <tbody>{rows.map(row => <tr key={row.id} className="border-t border-gray-100 align-top">
         <td className="p-2 whitespace-nowrap">{row.date}{row.retroactive && <p className="text-xs text-amber-700">بأثر رجعي عن {row.originalPeriod}</p>}</td>
@@ -39,5 +39,5 @@ export function PayrollOvertimeBreakdown({ item, currency, compact = false }: { 
     </table>
     <p className="text-xs text-gray-500 mt-2">{rows.some(row => row.provenance === 'LEGACY') ? 'يتضمن سجلات قديمة محفوظة وقت حساب المسير.' : 'الأرقام مثبتة وقت اعتماد الإضافي ولا تتغير بعده.'}</p>
   </div>
-  return compact ? <details className="text-right font-sans mt-2 min-w-40"><summary className="text-xs text-primary-700 cursor-pointer">تفاصيل الإضافي</summary><div className="min-w-[560px] rounded-lg border p-3 my-2">{contents}</div></details> : <section className="border border-gray-200 rounded-xl p-4 mb-6 break-inside-avoid"><h3 className="font-bold text-gray-800 mb-3">تفصيل العمل الإضافي</h3>{contents}</section>
+  return compact ? <details className="text-start font-sans mt-2 min-w-40"><summary className="text-xs text-primary-700 cursor-pointer">تفاصيل الإضافي</summary><div className="min-w-[560px] rounded-lg border p-3 my-2">{contents}</div></details> : <section className="border border-gray-200 rounded-xl p-4 mb-6 break-inside-avoid"><h3 className="font-bold text-gray-800 mb-3">تفصيل العمل الإضافي</h3>{contents}</section>
 }

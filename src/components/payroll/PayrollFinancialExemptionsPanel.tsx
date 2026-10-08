@@ -182,7 +182,7 @@ export function PayrollRemoveDeductionModal({ runId, period, employeeId, employe
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label={`شيل خصم — ${employeeName}`}>
-      <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl space-y-3 text-right" data-testid="payroll-remove-deduction">
+      <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl space-y-3 text-start" data-testid="payroll-remove-deduction">
         <div className="flex items-center justify-between gap-2">
           <h3 className="font-bold text-gray-800 flex items-center gap-2"><ShieldOff size={18} /> شيل خصم — {employeeName}</h3>
           <button type="button" onClick={onClose} disabled={busyKey !== null} className="text-sm text-gray-500 disabled:opacity-50">إغلاق</button>
@@ -346,7 +346,7 @@ export function PayrollFinancialExemptionsPanel({ runId, runStatus, snapshotVers
 
       {rows.length === 0 ? <p className="text-sm text-gray-400">لا إعفاءات مالية على هذا المسير.</p> : (
         <div className="overflow-x-auto">
-          <table className="w-full text-sm text-right">
+          <table className="w-full text-sm text-start">
             <thead><tr className="bg-gray-50 text-gray-600">
               <th className="p-2">#</th><th className="p-2">الموظف</th><th className="p-2">الهدف والمصير</th><th className="p-2">المبلغ</th><th className="p-2">الحالة</th><th className="p-2">المانح والسبب</th><th className="p-2">إجراء</th>
             </tr></thead>
@@ -421,7 +421,7 @@ export function PayrollFinancialExemptionsPanel({ runId, runStatus, snapshotVers
             )}
             {loanTarget && entries.installments.length > 0 && <p className="p-2 bg-amber-50 text-amber-900 rounded-lg text-sm">سيُؤجَّل القسط لا يُسقط: عند صرف المسير يُنشأ قسط جديد مستحق في الشهر التالي بمرجع الإعفاء.</p>}
             {(entries.recoveries.length > 0 || entries.typedObligations.some(row => !row.exemptable) || Number(entries.unpaidLeave) > 0) && (
-              <div className="text-xs text-gray-600"><p className="font-medium">بنود غير قابلة للإعفاء تبقى:</p><ul className="list-disc pr-5">
+              <div className="text-xs text-gray-600"><p className="font-medium">بنود غير قابلة للإعفاء تبقى:</p><ul className="list-disc ps-5">
                 {entries.typedObligations.filter(row => !row.exemptable).map(row => <li key={row.obligationId}>{row.typeName ?? 'خصم'} #{row.obligationId} — {formatMoney(row.amount)}: {row.protectedReason}</li>)}
                 {entries.recoveries.map(row => <li key={row.obligationId}>{row.label} #{row.obligationId} — {formatMoney(row.amount)}: {row.protectedReason}</li>)}
                 {Number(entries.unpaidLeave) > 0 && <li>إجازة بدون راتب — {formatMoney(entries.unpaidLeave)}: عدم استحقاق لا خصم</li>}
@@ -447,11 +447,11 @@ export function PayrollFinancialExemptionsPanel({ runId, runStatus, snapshotVers
           {preview && (
             <div className="p-3 bg-gray-50 rounded-xl text-sm space-y-2">
               <p className="font-medium">المبلغ المُعفى المقدر: {formatMoney(preview.estimatedAmount)} — {preview.statusLabel} ({preview.basisLabel})</p>
-              <div className="overflow-x-auto"><table className="w-full text-xs text-right">
+              <div className="overflow-x-auto"><table className="w-full text-xs text-start">
                 <thead><tr className="text-gray-500"><th className="p-1">البند</th><th className="p-1">الأصل</th><th className="p-1">المُعفى</th><th className="p-1">بعد الإعفاء</th></tr></thead>
                 <tbody>{preview.lines.map((line, index) => <tr key={index} className="border-t"><td className="p-1">{line.label}{line.note ? ` — ${line.note}` : ''}</td><td className="p-1 font-mono">{formatMoney(line.originalAmount)}</td><td className="p-1 font-mono">{formatMoney(line.exemptedAmount)}</td><td className="p-1 font-mono">{formatMoney(line.afterAmount)}</td></tr>)}</tbody>
               </table></div>
-              <ul className="list-disc pr-5 text-xs text-gray-700">{preview.warnings.map(warning => <li key={warning.code}>{warning.message}</li>)}</ul>
+              <ul className="list-disc ps-5 text-xs text-gray-700">{preview.warnings.map(warning => <li key={warning.code}>{warning.message}</li>)}</ul>
             </div>
           )}
         </div>

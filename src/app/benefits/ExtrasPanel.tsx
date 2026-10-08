@@ -26,7 +26,7 @@ function SharesCard() {
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-gray-600">
             <tr>
-              <th className="table-header text-right">الموظف</th>
+              <th className="table-header text-start">الموظف</th>
               <th className="table-header text-center">الأعضاء</th>
               <th className="table-header text-center">الحصة الشهرية</th>
             </tr>
@@ -81,11 +81,11 @@ function TicketsCard() {
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-gray-600">
               <tr>
-                <th className="table-header text-right">الدرجة</th>
+                <th className="table-header text-start">الدرجة</th>
                 <th className="table-header text-center">الموظفين</th>
                 <th className="table-header text-center">تذاكر في السنة</th>
                 <th className="table-header text-center">للمعالين</th>
-                <th className="table-header text-right">ملاحظة</th>
+                <th className="table-header text-start">ملاحظة</th>
                 <th className="table-header" />
               </tr>
             </thead>
@@ -97,7 +97,7 @@ function TicketsCard() {
                   <td className="table-cell text-center"><input className="input w-20 text-center" dir="ltr" inputMode="numeric" value={edit.tickets} onChange={(event) => setEdit({ ...edit, tickets: event.target.value })} /></td>
                   <td className="table-cell text-center"><input type="checkbox" checked={edit.dependents} onChange={(event) => setEdit({ ...edit, dependents: event.target.checked })} aria-label="تشمل المعالين" /></td>
                   <td className="table-cell"><input className="input w-full" maxLength={300} value={edit.note} onChange={(event) => setEdit({ ...edit, note: event.target.value })} /></td>
-                  <td className="table-cell text-left">
+                  <td className="table-cell text-end">
                     <span className="inline-flex gap-2">
                       <button type="button" className="btn-primary text-xs disabled:opacity-50" disabled={busy} onClick={save}>حفظ</button>
                       <button type="button" className="btn-secondary text-xs" onClick={() => setEdit(null)}>إلغاء</button>
@@ -111,7 +111,7 @@ function TicketsCard() {
                   <td className="table-cell text-center font-mono">{row.ticketsPerYear || '—'}</td>
                   <td className="table-cell text-center">{row.ticketsPerYear ? (row.includesDependents ? 'أيوه' : 'لأ') : '—'}</td>
                   <td className="table-cell text-xs text-gray-600">{row.note}</td>
-                  <td className="table-cell text-left">
+                  <td className="table-cell text-end">
                     {data.canEdit && <button type="button" className="btn-secondary text-xs" onClick={() => setEdit({ gradeId: row.gradeId, tickets: String(row.ticketsPerYear), dependents: row.includesDependents, note: row.note ?? '' })}>تعديل</button>}
                   </td>
                 </tr>

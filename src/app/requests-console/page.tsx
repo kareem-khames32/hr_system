@@ -394,12 +394,12 @@ export default function RequestsConsolePage() {
                 <div className="relative flex-1 min-w-[220px]">
                   <Search
                     size={18}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
+                    className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400"
                   />
                   <input
                     type="text"
                     placeholder="بحث برقم الطلب / الموظف / النوع..."
-                    className="input pr-10 w-full"
+                    className="input ps-10 w-full"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                   />
@@ -443,13 +443,13 @@ export default function RequestsConsolePage() {
                 <table className="w-full">
                   <thead>
                     <tr className="table-header">
-                      <th className="text-right px-4 py-3">الطلب</th>
-                      <th className="text-right px-4 py-3">مقدّمه</th>
+                      <th className="text-start px-4 py-3">الطلب</th>
+                      <th className="text-start px-4 py-3">مقدّمه</th>
                       <th className="text-center px-4 py-3">الفرع</th>
                       <th className="text-center px-4 py-3">التقديم</th>
                       <th className="text-center px-4 py-3">الحالة</th>
-                      <th className="text-right px-4 py-3">الخطوة الحالية</th>
-                      <th className="text-right px-4 py-3">الوجهة (السجل الدائم)</th>
+                      <th className="text-start px-4 py-3">الخطوة الحالية</th>
+                      <th className="text-start px-4 py-3">الوجهة (السجل الدائم)</th>
                     </tr>
                   </thead>
                   <tbody>

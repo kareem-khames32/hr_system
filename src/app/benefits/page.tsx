@@ -106,7 +106,7 @@ export default function BenefitsPage() {
                   <span className={`text-sm font-semibold ${STATE_CLASS[row.state]}`}>
                     {row.stateLabel}{row.state === 'EXPIRING' && row.daysLeft !== null ? ` (باقي ${row.daysLeft} يوم)` : ''}
                   </span>
-                  <span className="mr-auto inline-flex gap-2">
+                  <span className="ms-auto inline-flex gap-2">
                     <button type="button" className="btn-secondary text-xs" onClick={() => { setOpenPolicy(openPolicy === row.id ? null : row.id); startClass(null) }}>
                       {openPolicy === row.id ? 'إخفاء الفئات' : `الفئات (${row.classes.length})`}
                     </button>
@@ -120,9 +120,9 @@ export default function BenefitsPage() {
                       <table className="w-full text-sm">
                         <thead className="bg-gray-50 text-gray-600">
                           <tr>
-                            <th className="table-header text-right">الفئة</th>
+                            <th className="table-header text-start">الفئة</th>
                             <th className="table-header text-center">حصة الموظف الشهرية</th>
-                            <th className="table-header text-right">الدرجات</th>
+                            <th className="table-header text-start">الدرجات</th>
                             <th className="table-header" />
                           </tr>
                         </thead>
@@ -132,7 +132,7 @@ export default function BenefitsPage() {
                               <td className="table-cell">{item.name}{item.isDefault && <span className="text-xs text-primary-600"> (الافتراضية)</span>}</td>
                               <td className="table-cell text-center font-mono">{item.employeeShareMonthly > 0 ? formatMoney(item.employeeShareMonthly) : '—'}</td>
                               <td className="table-cell">{item.gradeIds.length ? item.gradeIds.map(gradeName).join('، ') : '—'}</td>
-                              <td className="table-cell text-left">
+                              <td className="table-cell text-end">
                                 {canEdit && (
                                   <span className="inline-flex gap-2">
                                     <button type="button" className="btn-secondary text-xs" onClick={() => startClass(item)}>تعديل</button>
@@ -239,10 +239,10 @@ export default function BenefitsPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-600">
                   <tr>
-                    <th className="table-header text-right">الموظف</th>
-                    <th className="table-header text-right">الدرجة</th>
-                    <th className="table-header text-right">الوثيقة</th>
-                    <th className="table-header text-right">الفئة</th>
+                    <th className="table-header text-start">الموظف</th>
+                    <th className="table-header text-start">الدرجة</th>
+                    <th className="table-header text-start">الوثيقة</th>
+                    <th className="table-header text-start">الفئة</th>
                   </tr>
                 </thead>
                 <tbody>

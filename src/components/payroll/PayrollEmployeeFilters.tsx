@@ -67,8 +67,8 @@ export function PayrollEmployeeFilters({
         <label className="flex flex-col gap-1 text-sm flex-1 min-w-[220px]">
           <span className="font-medium text-gray-700">بحث</span>
           <span className="relative block">
-            <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input id={`${idPrefix}-search`} type="text" className="input w-full pr-9" placeholder="دوّر بالاسم أو الكود..."
+            <Search size={16} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input id={`${idPrefix}-search`} type="text" className="input w-full ps-9" placeholder="دوّر بالاسم أو الكود..."
               disabled={disabled} value={value.search} onChange={event => set({ search: event.target.value })} />
           </span>
         </label>

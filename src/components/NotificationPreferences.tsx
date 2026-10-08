@@ -34,7 +34,7 @@ export default function NotificationPreferences() {
 
   return (
     <div className="card" data-notification-preferences>
-      <button type="button" className="w-full flex items-center justify-between gap-3 text-right" aria-expanded={open} onClick={() => setOpen(current => !current)}>
+      <button type="button" className="w-full flex items-center justify-between gap-3 text-start" aria-expanded={open} onClick={() => setOpen(current => !current)}>
         <span className="flex items-center gap-2 font-semibold text-gray-800"><SlidersHorizontal size={18} className="text-primary-600" />اختيارات الإشعارات</span>
         <ChevronDown size={18} className={`text-gray-500 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -55,7 +55,7 @@ export default function NotificationPreferences() {
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50">
-                    <tr>{['الفئة', 'داخل النظام', 'البريد'].map(title => <th key={title} className="px-3 py-2 text-right font-medium text-gray-600 whitespace-nowrap">{title}</th>)}</tr>
+                    <tr>{['الفئة', 'داخل النظام', 'البريد'].map(title => <th key={title} className="px-3 py-2 text-start font-medium text-gray-600 whitespace-nowrap">{title}</th>)}</tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {data.categories.map(category => (

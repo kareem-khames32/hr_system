@@ -492,7 +492,7 @@ export default function CustodyPage() {
             </div>
             <div className="max-h-64 overflow-y-auto border border-gray-100 rounded-xl">
               <table className="w-full text-sm">
-                <thead className="bg-gray-50 text-right sticky top-0">
+                <thead className="bg-gray-50 text-start sticky top-0">
                   <tr>
                     <th className="py-2 px-3 w-10">
                       <input
@@ -577,12 +577,12 @@ export default function CustodyPage() {
             <div className="relative flex-1 min-w-[220px]">
               <Search
                 size={18}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
+                className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400"
               />
               <input
                 type="text"
                 placeholder="بحث بالموظف أو العهدة أو الرقم التسلسلي..."
-                className="input pr-10 w-full"
+                className="input ps-10 w-full"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
@@ -615,7 +615,7 @@ export default function CustodyPage() {
         <div className="card overflow-hidden">
           <table className="w-full">
             <thead>
-              <tr className="bg-gray-50 text-right">
+              <tr className="bg-gray-50 text-start">
                 <th className="py-3 px-4 text-sm font-medium text-gray-500">الموظف</th>
                 <th className="py-3 px-4 text-sm font-medium text-gray-500">الفرع</th>
                 <th className="py-3 px-4 text-sm font-medium text-gray-500">العهدة</th>

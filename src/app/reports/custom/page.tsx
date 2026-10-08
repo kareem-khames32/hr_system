@@ -327,16 +327,16 @@ export default function CustomReportsPage() {
             <div className="card">
               <h3 className="font-bold text-gray-800 mb-4">تقارير سريعة</h3>
               <div className="space-y-2">
-                <button className="w-full text-right p-3 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors text-gray-700">
+                <button className="w-full text-start p-3 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors text-gray-700">
                   تقرير الحضور اليومي
                 </button>
-                <button className="w-full text-right p-3 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors text-gray-700">
+                <button className="w-full text-start p-3 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors text-gray-700">
                   تقرير الإجازات المعلقة
                 </button>
-                <button className="w-full text-right p-3 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors text-gray-700">
+                <button className="w-full text-start p-3 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors text-gray-700">
                   تقرير الموظفين الجدد
                 </button>
-                <button className="w-full text-right p-3 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors text-gray-700">
+                <button className="w-full text-start p-3 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors text-gray-700">
                   تقرير مستحقات الرواتب
                 </button>
               </div>

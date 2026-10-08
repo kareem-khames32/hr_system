@@ -92,7 +92,7 @@ export default function ExpensesPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-600">
                   <tr>
-                    <th className="table-header text-right">الفئة</th>
+                    <th className="table-header text-start">الفئة</th>
                     <th className="table-header text-center">حد البند</th>
                     <th className="table-header text-center">لو اتعدّى الحد</th>
                     <th className="table-header text-center">الإيصال</th>
@@ -111,7 +111,7 @@ export default function ExpensesPage() {
                       <td className="table-cell text-center">{row.limitPerLine === null ? '—' : row.limitMode === 'BLOCK' ? 'منع' : 'تحذير'}</td>
                       <td className="table-cell text-center">{row.receiptRequired ? 'إجباري' : 'اختياري'}</td>
                       <td className="table-cell text-center">{row.isActive ? 'مفعّلة' : <span className="text-gray-400">مقفولة</span>}</td>
-                      <td className="table-cell text-left">{data.canEdit && <button type="button" className="text-primary-600 text-xs" onClick={() => edit(row)}>تعديل</button>}</td>
+                      <td className="table-cell text-end">{data.canEdit && <button type="button" className="text-primary-600 text-xs" onClick={() => edit(row)}>تعديل</button>}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -163,9 +163,9 @@ export default function ExpensesPage() {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 text-gray-600">
                     <tr>
-                      <th className="table-header text-right">الوجهة</th>
-                      <th className="table-header text-right">الدرجة</th>
-                      <th className="table-header text-right">الفئة</th>
+                      <th className="table-header text-start">الوجهة</th>
+                      <th className="table-header text-start">الدرجة</th>
+                      <th className="table-header text-start">الفئة</th>
                       <th className="table-header text-center">سعر اليوم</th>
                       <th className="table-header text-center">الحالة</th>
                       <th className="table-header" />
@@ -179,7 +179,7 @@ export default function ExpensesPage() {
                         <td className="table-cell">{data.categories.find((category) => category.id === row.categoryId)?.name ?? '—'}</td>
                         <td className="table-cell text-center font-mono">{formatMoney(row.dailyAmount)}</td>
                         <td className="table-cell text-center">{row.isActive ? 'مفعّل' : <span className="text-gray-400">مقفول</span>}</td>
-                        <td className="table-cell text-left">{data.canEdit && <button type="button" className="text-primary-600 text-xs" onClick={() => editRate(row)}>تعديل</button>}</td>
+                        <td className="table-cell text-end">{data.canEdit && <button type="button" className="text-primary-600 text-xs" onClick={() => editRate(row)}>تعديل</button>}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -222,8 +222,8 @@ export default function ExpensesPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-600">
                   <tr>
-                    <th className="table-header text-right">السلفة</th>
-                    <th className="table-header text-right">الموظف</th>
+                    <th className="table-header text-start">السلفة</th>
+                    <th className="table-header text-start">الموظف</th>
                     <th className="table-header text-center">المبلغ</th>
                     <th className="table-header text-center">الحالة</th>
                     <th className="table-header" />
@@ -239,7 +239,7 @@ export default function ExpensesPage() {
                         {row.status === 'OPEN' ? (row.paid ? (row.reportId ? 'مربوطة بتقرير' : 'اتصرفت — مستنية تقرير') : 'لسه مااتصرفتش') : row.statusLabel}
                         {row.closeNote && <span className="block text-xs text-gray-500">{row.closeNote}</span>}
                       </td>
-                      <td className="table-cell text-left">
+                      <td className="table-cell text-end">
                         {row.status === 'OPEN' && !row.paid && <button type="button" className="btn-primary text-xs disabled:opacity-50" disabled={busy} onClick={() => advanceStep(row.id, 'paid')}>اتصرفت</button>}
                         {row.status === 'OPEN' && row.paid && row.reportId === null && (
                           <span className="inline-flex items-center gap-2">
@@ -264,8 +264,8 @@ export default function ExpensesPage() {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 text-gray-600">
                     <tr>
-                      <th className="table-header text-right">التقرير</th>
-                      <th className="table-header text-right">الموظف</th>
+                      <th className="table-header text-start">التقرير</th>
+                      <th className="table-header text-start">الموظف</th>
                       <th className="table-header text-center">البنود</th>
                       <th className="table-header text-center">الإجمالي</th>
                       <th className="table-header text-center">الحالة</th>

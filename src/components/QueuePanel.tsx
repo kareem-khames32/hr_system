@@ -54,7 +54,7 @@ export default function QueuePanel() {
             <div className="overflow-x-auto">
               <table className="w-full text-sm" data-queue-dead>
                 <thead className="bg-gray-50">
-                  <tr>{['المهمة', 'المحاولات', 'آخر خطأ', 'إمتى', ''].map(title => <th key={title} className="px-3 py-2 text-right font-medium text-gray-600 whitespace-nowrap">{title}</th>)}</tr>
+                  <tr>{['المهمة', 'المحاولات', 'آخر خطأ', 'إمتى', ''].map(title => <th key={title} className="px-3 py-2 text-start font-medium text-gray-600 whitespace-nowrap">{title}</th>)}</tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {data.dead.map(job => (

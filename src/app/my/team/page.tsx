@@ -111,7 +111,7 @@ export default function MyTeamPage() {
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="text-right text-gray-500 border-b border-gray-100">
+                    <tr className="text-start text-gray-500 border-b border-gray-100">
                       <th className="py-2 px-2 font-medium">الموظف</th>
                       <th className="py-2 px-2 font-medium">المسمى</th>
                       <th className="py-2 px-2 font-medium">القسم / الفريق</th>

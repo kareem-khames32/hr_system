@@ -74,7 +74,7 @@ export default function ProbationPage() {
             <button
               onClick={saveSettings}
               disabled={savingSettings || !validDays(notice) || !validDays(duration) || (Number(notice) === data.noticeDays && Number(duration) === data.defaultDays)}
-              className="btn-secondary text-sm mr-auto disabled:opacity-50"
+              className="btn-secondary text-sm ms-auto disabled:opacity-50"
             >
               حفظ
             </button>
@@ -86,10 +86,10 @@ export default function ProbationPage() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-4 py-3 text-right font-medium text-gray-600">الموظف</th>
-                  <th className="px-4 py-3 text-right font-medium text-gray-600">الفرع</th>
-                  <th className="px-4 py-3 text-right font-medium text-gray-600">الالتحاق</th>
-                  <th className="px-4 py-3 text-right font-medium text-gray-600">نهاية التجربة</th>
+                  <th className="px-4 py-3 text-start font-medium text-gray-600">الموظف</th>
+                  <th className="px-4 py-3 text-start font-medium text-gray-600">الفرع</th>
+                  <th className="px-4 py-3 text-start font-medium text-gray-600">الالتحاق</th>
+                  <th className="px-4 py-3 text-start font-medium text-gray-600">نهاية التجربة</th>
                   <th className="px-4 py-3" />
                 </tr>
               </thead>
@@ -112,7 +112,7 @@ export default function ProbationPage() {
                       </div>
                       <span className={`inline-block mt-1 px-2 py-0.5 rounded-full text-xs ${leftStyle(row.daysLeft, data.noticeDays)}`}>{leftText(row.daysLeft)}</span>
                     </td>
-                    <td className="px-4 py-3 text-left">
+                    <td className="px-4 py-3 text-end">
                       {row.canDecide && (
                         <button onClick={() => setOpen(row)} className="btn-primary text-sm">
                           القرار

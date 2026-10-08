@@ -348,14 +348,14 @@ export default function ApprovalsPage() {
             <div className="relative flex-1 max-w-md">
               <Search
                 size={20}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
+                className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400"
               />
               <input
                 type="text"
                 placeholder="البحث عن مسار اعتماد..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="input pr-10 w-full"
+                className="input ps-10 w-full"
               />
             </div>
             <select
@@ -399,7 +399,7 @@ export default function ApprovalsPage() {
             </div>
 
             {/* Chains */}
-            <div className="grid grid-cols-1 gap-4 mr-13">
+            <div className="grid grid-cols-1 gap-4 ms-13">
               {filteredChains.map((chain) => {
                 const thresholdSteps = chain.steps.filter((s) => s.thresholdField)
                 const chainCategories = chain.branchId === null ? categoriesOf(chain) : []
@@ -490,7 +490,7 @@ export default function ApprovalsPage() {
                               className="fixed inset-0 z-10"
                               onClick={() => setActiveMenu(null)}
                             />
-                            <div className="absolute left-0 top-full mt-1 w-56 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
+                            <div className="absolute end-0 top-full mt-1 w-56 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
                               <button
                                 onClick={() => {
                                   handleOpenModal(chain)
@@ -553,7 +553,7 @@ export default function ApprovalsPage() {
                                     ? 'إيقاف التنفيذ الفوري'
                                     : 'تنفيذ فوري بلا اعتمادات'}
                                 </span>
-                                <span className="text-[10px] text-gray-400 pr-6">
+                                <span className="text-[10px] text-gray-400 ps-6">
                                   (للسلاسل الفاضية فقط)
                                 </span>
                               </button>

@@ -38,8 +38,8 @@ export default function KnowledgePanel() {
       </h2>
       <div className="flex items-center gap-2 flex-wrap">
         <div className="relative flex-1 min-w-48">
-          <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input className="input w-full pr-9" maxLength={100} placeholder="اكتب سؤالك أو كلمة منه" value={term} onChange={(e) => setTerm(e.target.value)} />
+          <Search size={16} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input className="input w-full ps-9" maxLength={100} placeholder="اكتب سؤالك أو كلمة منه" value={term} onChange={(e) => setTerm(e.target.value)} />
         </div>
         <select className="input" value={typeCode} onChange={(e) => setTypeCode(e.target.value)} aria-label="نوع الاستفسار">
           <option value="">كل الأنواع</option>
@@ -59,7 +59,7 @@ export default function KnowledgePanel() {
       <ul className="divide-y divide-gray-100">
         {rows.map((row) => (
           <li key={row.id} className="py-2">
-            <button onClick={() => read(row.id)} className="text-right w-full">
+            <button onClick={() => read(row.id)} className="text-start w-full">
               <span className="font-medium text-gray-800">{row.title}</span>
               {row.typeName && <span className="text-xs text-gray-400"> · {row.typeName}</span>}
               {open?.id !== row.id && <p className="text-xs text-gray-500 mt-1">{row.excerpt}</p>}

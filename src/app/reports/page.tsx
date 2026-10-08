@@ -965,22 +965,22 @@ export default function ReportsPage() {
               <table className="w-full">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">
+                    <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">
                       الفئة
                     </th>
-                    <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">
+                    <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">
                       مكتملة
                     </th>
-                    <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">
+                    <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">
                       قيد المراجعة
                     </th>
-                    <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">
+                    <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">
                       مرفوضة
                     </th>
-                    <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">
+                    <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">
                       أخرى
                     </th>
-                    <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">
+                    <th className="px-4 py-3 text-start text-sm font-medium text-gray-600">
                       الإجمالي
                     </th>
                   </tr>

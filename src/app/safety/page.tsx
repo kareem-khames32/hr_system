@@ -103,11 +103,11 @@ export default function SafetyPage() {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 text-gray-600">
                     <tr>
-                      <th className="table-header text-right">الرقم</th>
-                      <th className="table-header text-right">النوع</th>
+                      <th className="table-header text-start">الرقم</th>
+                      <th className="table-header text-start">النوع</th>
                       <th className="table-header text-center">التاريخ</th>
-                      <th className="table-header text-right">المكان</th>
-                      <th className="table-header text-right">المصاب</th>
+                      <th className="table-header text-start">المكان</th>
+                      <th className="table-header text-start">المصاب</th>
                       <th className="table-header text-center">الشدة</th>
                       <th className="table-header text-center">الحالة</th>
                       <th className="table-header" />
@@ -123,7 +123,7 @@ export default function SafetyPage() {
                         <td className="table-cell">{nameOf(row.injured, row.injuredNote)}</td>
                         <td className="table-cell text-center">{row.severityLabel ?? '—'}</td>
                         <td className={`table-cell text-center ${row.status === 'CLOSED' ? 'text-gray-500' : 'text-amber-700'}`}>{row.statusLabel}</td>
-                        <td className="table-cell text-left"><button type="button" className="text-primary-600 text-xs" onClick={() => open(row.id)}>فتح</button></td>
+                        <td className="table-cell text-end"><button type="button" className="text-primary-600 text-xs" onClick={() => open(row.id)}>فتح</button></td>
                       </tr>
                     ))}
                   </tbody>
@@ -226,7 +226,7 @@ export default function SafetyPage() {
               {detail.leave ? (
                 <p className="text-sm">
                   مربوط بإجازة <span dir="ltr">{detail.leave.fromDate} ← {detail.leave.toDate}</span> ({detail.leave.days} يوم){detail.leave.status !== 'APPROVED' ? ' — الإجازة اتلغت' : ''}
-                  {!closed && <button type="button" className="text-red-600 text-xs mr-3" disabled={busy} onClick={() => linkLeave(null)}>فك الربط</button>}
+                  {!closed && <button type="button" className="text-red-600 text-xs ms-3" disabled={busy} onClick={() => linkLeave(null)}>فك الربط</button>}
                 </p>
               ) : detail.leaveOptions.length === 0 ? <p className="text-sm text-gray-500">مفيش إجازة معتمدة للمصاب من يوم الحادث.</p> : !closed && (
                 <ul className="text-sm space-y-1">

@@ -38,8 +38,8 @@ export default function MinimumWageAlertCard() {
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-gray-600">
             <tr>
-              <th className="table-header text-right">الموظف</th>
-              <th className="table-header text-right">الفرع</th>
+              <th className="table-header text-start">الموظف</th>
+              <th className="table-header text-start">الفرع</th>
               <th className="table-header text-center">الإجمالي الشهري</th>
               <th className="table-header text-center">الحد الأدنى</th>
               <th className="table-header text-center">الفرق</th>

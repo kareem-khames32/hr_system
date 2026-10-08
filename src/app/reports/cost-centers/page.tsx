@@ -152,13 +152,13 @@ export default function CostCenterReportPage() {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 text-gray-600">
                     <tr>
-                      <th className="text-right p-3 font-medium">مركز التكلفة</th>
-                      {perCurrency.length > 0 && <th className="text-right p-3 font-medium">العملة</th>}
-                      <th className="text-right p-3 font-medium">الموظفين</th>
-                      <th className="text-right p-3 font-medium">الإجمالي</th>
-                      <th className="text-right p-3 font-medium">الخصومات</th>
-                      <th className="text-right p-3 font-medium">الصافي</th>
-                      <th className="text-right p-3 font-medium">حصة صاحب العمل في التأمينات</th>
+                      <th className="text-start p-3 font-medium">مركز التكلفة</th>
+                      {perCurrency.length > 0 && <th className="text-start p-3 font-medium">العملة</th>}
+                      <th className="text-start p-3 font-medium">الموظفين</th>
+                      <th className="text-start p-3 font-medium">الإجمالي</th>
+                      <th className="text-start p-3 font-medium">الخصومات</th>
+                      <th className="text-start p-3 font-medium">الصافي</th>
+                      <th className="text-start p-3 font-medium">حصة صاحب العمل في التأمينات</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -195,13 +195,13 @@ export default function CostCenterReportPage() {
                                 <table className="w-full text-xs">
                                   <thead className="text-gray-500">
                                     <tr>
-                                      <th className="text-right p-2 font-medium">الموظف</th>
-                                      <th className="text-right p-2 font-medium">الفرع</th>
-                                      <th className="text-right p-2 font-medium">المسير</th>
-                                      <th className="text-right p-2 font-medium">الإجمالي</th>
-                                      <th className="text-right p-2 font-medium">الخصومات</th>
-                                      <th className="text-right p-2 font-medium">الصافي</th>
-                                      <th className="text-right p-2 font-medium">التأمينات (صاحب العمل)</th>
+                                      <th className="text-start p-2 font-medium">الموظف</th>
+                                      <th className="text-start p-2 font-medium">الفرع</th>
+                                      <th className="text-start p-2 font-medium">المسير</th>
+                                      <th className="text-start p-2 font-medium">الإجمالي</th>
+                                      <th className="text-start p-2 font-medium">الخصومات</th>
+                                      <th className="text-start p-2 font-medium">الصافي</th>
+                                      <th className="text-start p-2 font-medium">التأمينات (صاحب العمل)</th>
                                     </tr>
                                   </thead>
                                   <tbody>
@@ -217,10 +217,10 @@ export default function CostCenterReportPage() {
                                             </span>
                                           )}
                                         </td>
-                                        <td className="p-2">{employee.branchName ?? '—'}{perCurrency.length > 0 && <span className="text-gray-400 mr-1">({currencyLabel(employee.currency)})</span>}</td>
+                                        <td className="p-2">{employee.branchName ?? '—'}{perCurrency.length > 0 && <span className="text-gray-400 ms-1">({currencyLabel(employee.currency)})</span>}</td>
                                         <td className="p-2">
                                           {employee.runName || `مسير #${employee.runId}`}
-                                          <span className="text-gray-400 mr-1">
+                                          <span className="text-gray-400 ms-1">
                                             ({RUN_STATUS_LABELS[employee.runStatus] ?? employee.runStatus})
                                           </span>
                                         </td>

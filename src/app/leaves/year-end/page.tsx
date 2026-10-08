@@ -149,8 +149,8 @@ export default function LeaveYearEndPage() {
               </select>
             </div>
             <div className="relative flex-1 min-w-[220px]">
-              <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input className="input pr-10 w-full" placeholder="بحث بالاسم أو الكود..." value={query} onChange={(e) => setQuery(e.target.value)} />
+              <Search size={18} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input className="input ps-10 w-full" placeholder="بحث بالاسم أو الكود..." value={query} onChange={(e) => setQuery(e.target.value)} />
             </div>
             <label className="flex items-center gap-2 text-sm text-gray-700 pb-2">
               <input type="checkbox" className="w-4 h-4 rounded border-gray-300" checked={onlyOpen} onChange={(e) => setOnlyOpen(e.target.checked)} />
@@ -174,7 +174,7 @@ export default function LeaveYearEndPage() {
               الترحيل: {s.carryOverEnabled ? (s.carryOverMaxDays == null ? 'المتبقي كله من غير حد' : `لحد ${Number(s.carryOverMaxDays)} يوم والباقي يسقط`) : 'مقفول — المتبقي كله يسقط'}
               {' · '}الموظف الجديد يستحق سنوي {Number(s.entitlementStartMonths) > 0 ? `بعد ${Number(s.entitlementStartMonths)} شهر من التعيين` : 'من يوم التعيين'}
               {' · '}أول سنة {s.firstYearProrated ? 'بالنسبة والتناسب' : 'كاملة'}
-              {can('settings.manage') && <Link href="/leaves/types" className="text-primary-700 hover:underline mr-2">تعديل من أنواع الإجازات</Link>}
+              {can('settings.manage') && <Link href="/leaves/types" className="text-primary-700 hover:underline ms-2">تعديل من أنواع الإجازات</Link>}
             </p>
           )}
         </div>
@@ -189,7 +189,7 @@ export default function LeaveYearEndPage() {
           <div className="bg-success-50 text-success-700 rounded-xl p-4 flex items-center gap-2">
             <CheckCircle2 size={18} />
             {notice}
-            <button type="button" className="mr-auto" aria-label="إخفاء" onClick={() => setNotice('')}><X size={16} /></button>
+            <button type="button" className="ms-auto" aria-label="إخفاء" onClick={() => setNotice('')}><X size={16} /></button>
           </div>
         )}
 
@@ -238,7 +238,7 @@ export default function LeaveYearEndPage() {
                 <thead>
                   <tr className="table-header">
                     {['الموظف', 'سنة الرصيد', 'المستحق', 'المستخدم', 'اتسوّى', 'المتبقي', 'يترحّل', 'يسقط', 'الحالة', ''].map((h, i) => (
-                      <th key={i} className="table-cell text-right">{h}</th>
+                      <th key={i} className="table-cell text-start">{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -300,7 +300,7 @@ export default function LeaveYearEndPage() {
               <table className="w-full text-sm mt-2">
                 <thead>
                   <tr className="table-header">
-                    {['الموظف', 'الأيام', 'التسوية', 'المبلغ', 'شهر المسير', 'السبب', 'بواسطة', 'التاريخ'].map((h) => <th key={h} className="table-cell text-right">{h}</th>)}
+                    {['الموظف', 'الأيام', 'التسوية', 'المبلغ', 'شهر المسير', 'السبب', 'بواسطة', 'التاريخ'].map((h) => <th key={h} className="table-cell text-start">{h}</th>)}
                   </tr>
                 </thead>
                 <tbody>

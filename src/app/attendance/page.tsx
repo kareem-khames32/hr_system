@@ -436,12 +436,12 @@ export default function AttendancePage() {
                 <ChevronRight size={18} />
               </button>
               <div className="relative">
-                <Calendar size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <Calendar size={18} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   type="date"
                   value={selectedDate}
                   onChange={(e) => setSelectedDate(e.target.value)}
-                  className="input pr-10 w-44"
+                  className="input ps-10 w-44"
                 />
               </div>
               <button
@@ -458,13 +458,13 @@ export default function AttendancePage() {
             {/* Search */}
             <div className="flex-1 min-w-[220px]">
               <div className="relative">
-                <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <Search size={18} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   type="text"
                   placeholder="بحث بالاسم أو الرقم الوظيفي..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="input pr-10"
+                  className="input ps-10"
                 />
               </div>
             </div>
@@ -531,8 +531,8 @@ export default function AttendancePage() {
               <table className="w-full">
                 <thead>
                   <tr className="table-header">
-                    <th className="text-right px-4 py-4">الموظف</th>
-                    <th className="text-right px-4 py-4">القسم</th>
+                    <th className="text-start px-4 py-4">الموظف</th>
+                    <th className="text-start px-4 py-4">القسم</th>
                     <th className="text-center px-4 py-4">وردية اليوم</th>
                     <th className="text-center px-4 py-4">الحضور</th>
                     <th className="text-center px-4 py-4">الانصراف</th>

@@ -58,14 +58,14 @@ export default function MyDeductionsPage() {
               <table className="w-full">
                 <thead>
                   <tr className="table-header">
-                    <th className="text-right px-3 py-3">النوع</th>
-                    <th className="text-right px-3 py-3">الواقعة والسبب</th>
+                    <th className="text-start px-3 py-3">النوع</th>
+                    <th className="text-start px-3 py-3">الواقعة والسبب</th>
                     <th className="text-center px-3 py-3">المبلغ ({currency})</th>
                     <th className="text-center px-3 py-3">شهر المسير</th>
-                    <th className="text-right px-3 py-3">الجهة المُنزِلة</th>
+                    <th className="text-start px-3 py-3">الجهة المُنزِلة</th>
                     <th className="text-center px-3 py-3">الحالة</th>
-                    <th className="text-right px-3 py-3">في المسير</th>
-                    <th className="text-right px-3 py-3">الاعتراض</th>
+                    <th className="text-start px-3 py-3">في المسير</th>
+                    <th className="text-start px-3 py-3">الاعتراض</th>
                   </tr>
                 </thead>
                 <tbody>

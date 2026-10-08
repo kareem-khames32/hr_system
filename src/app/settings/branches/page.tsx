@@ -382,14 +382,14 @@ export default function BranchesPage() {
           <div className="relative">
             <Search
               size={20}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
+              className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400"
             />
             <input
               type="text"
               placeholder="البحث عن فرع..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="input pr-10 w-full md:w-96"
+              className="input ps-10 w-full md:w-96"
             />
           </div>
         </div>
@@ -412,7 +412,7 @@ export default function BranchesPage() {
                 }`}
               >
                 {/* Status Badge */}
-                <div className="absolute top-4 left-4 flex items-center gap-2">
+                <div className="absolute top-4 end-4 flex items-center gap-2">
                   {branch.isHeadquarters && (
                     <span className="badge badge-primary">المقر الرئيسي</span>
                   )}
@@ -429,7 +429,7 @@ export default function BranchesPage() {
                 </div>
 
                 {/* Actions Menu */}
-                <div className="absolute top-4 left-32">
+                <div className="absolute top-4 end-32">
                   <button
                     onClick={() =>
                       setActiveMenu(activeMenu === branch.id ? null : branch.id)
@@ -445,7 +445,7 @@ export default function BranchesPage() {
                         className="fixed inset-0 z-10"
                         onClick={() => setActiveMenu(null)}
                       />
-                      <div className="absolute left-0 top-full mt-1 w-48 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
+                      <div className="absolute end-0 top-full mt-1 w-48 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
                         <button
                           onClick={() => {
                             handleOpenModal(branch)

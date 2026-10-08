@@ -317,8 +317,8 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
         <table className="w-full">
           <thead className="bg-gray-50">
             <tr>
-              <th className="text-right px-4 py-3 text-sm font-medium text-gray-600">البند</th>
-              <th className="text-left px-4 py-3 text-sm font-medium text-gray-600">المبلغ</th>
+              <th className="text-start px-4 py-3 text-sm font-medium text-gray-600">البند</th>
+              <th className="text-end px-4 py-3 text-sm font-medium text-gray-600">المبلغ</th>
               {isEditable && <th className="w-20"></th>}
             </tr>
           </thead>
@@ -333,7 +333,7 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
                     )}
                   </div>
                 </td>
-                <td className="px-4 py-3 text-left">
+                <td className="px-4 py-3 text-end">
                   <span className={`font-bold ${isCredit ? 'text-success-600' : 'text-red-600'}`}>
                     {isCredit ? '+' : '-'}
                     {Number(line.amount).toLocaleString('en-US')} {currency}
@@ -385,7 +385,7 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
                 {isCredit ? 'إجمالي الاستحقاقات' : 'إجمالي الخصومات'}
               </td>
               <td
-                className={`px-4 py-3 text-left font-bold ${
+                className={`px-4 py-3 text-end font-bold ${
                   isCredit ? 'text-success-600' : 'text-red-600'
                 }`}
                 colSpan={isEditable ? 2 : 1}
@@ -762,7 +762,7 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
                           </p>
                         </div>
                       </div>
-                      <div className="text-left">
+                      <div className="text-end">
                         <p
                           className={`text-4xl font-bold ${
                             Number(net) >= 0 ? 'text-primary-600' : 'text-red-600'
@@ -786,7 +786,7 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
               {/* Approve */}
               {canApprove && (
                 <div className="flex items-center justify-between">
-                  <div className="p-4 bg-yellow-50 rounded-xl flex items-start gap-3 flex-1 ml-4">
+                  <div className="p-4 bg-yellow-50 rounded-xl flex items-start gap-3 flex-1 me-4">
                     <AlertTriangle size={20} className="text-yellow-600 mt-0.5" />
                     <div className="text-sm text-yellow-700">
                       <p className="font-medium">ملاحظة:</p>

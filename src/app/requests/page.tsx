@@ -1345,7 +1345,7 @@ export default function MyRequestsPage() {
                 >
                   {label}
                   <span
-                    className={`mr-1.5 px-1.5 py-0.5 text-xs rounded-full ${
+                    className={`ms-1.5 px-1.5 py-0.5 text-xs rounded-full ${
                       filter === id ? 'bg-white/20' : 'bg-white'
                     }`}
                   >
@@ -1353,15 +1353,15 @@ export default function MyRequestsPage() {
                   </span>
                 </button>
               ))}
-              <div className="relative flex-1 max-w-xs mr-auto max-lg:basis-full max-lg:max-w-none">
+              <div className="relative flex-1 max-w-xs ms-auto max-lg:basis-full max-lg:max-w-none">
                 <Search
                   size={18}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
+                  className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400"
                 />
                 <input
                   type="text"
                   placeholder="بحث برقم الطلب أو النوع..."
-                  className="input pr-10 w-full"
+                  className="input ps-10 w-full"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
@@ -1612,7 +1612,7 @@ export default function MyRequestsPage() {
                                     resetHolidayPicker()
                                     setSubmitError(null)
                                   }}
-                                  className={`p-4 rounded-xl border-2 text-right transition-all flex items-center justify-between ${
+                                  className={`p-4 rounded-xl border-2 text-start transition-all flex items-center justify-between ${
                                     selectedType === t.code
                                       ? 'border-primary-500 bg-primary-50'
                                       : 'border-gray-100 hover:border-gray-200'
@@ -1629,17 +1629,17 @@ export default function MyRequestsPage() {
                                       <p className="font-bold text-gray-800 text-sm">
                                         {t.nameAr}
                                         {t.autoGeneratesPdf && (
-                                          <span className="mr-2 badge text-[10px] bg-teal-50 text-teal-700">PDF آلي</span>
+                                          <span className="ms-2 badge text-[10px] bg-teal-50 text-teal-700">PDF آلي</span>
                                         )}
                                         {/* D12: الطلب المعتمد هو السجل — بلا أثر آلي على الملف أو الراتب */}
                                         {t.executionMode === 'RECORD_ONLY' && (
-                                          <span className="mr-2 badge text-[10px] bg-amber-50 text-amber-700" title="الطلب المعتمد هو السجل — لا يُنفَّذ أثر آلي">
+                                          <span className="ms-2 badge text-[10px] bg-amber-50 text-amber-700" title="الطلب المعتمد هو السجل — لا يُنفَّذ أثر آلي">
                                             {t.executionLabel ?? 'تسجيل فقط'}
                                           </span>
                                         )}
                                         {t.isConfidential && (
-                                          <span className="mr-2 badge text-[10px] bg-gray-800 text-white">
-                                            <EyeOff size={9} className="inline ml-0.5" />
+                                          <span className="ms-2 badge text-[10px] bg-gray-800 text-white">
+                                            <EyeOff size={9} className="inline me-0.5" />
                                             سرّي
                                           </span>
                                         )}
@@ -1837,16 +1837,16 @@ export default function MyRequestsPage() {
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
                         الأصول المطلوبة
-                        <span className="text-red-500 mr-1">*</span>
+                        <span className="text-red-500 ms-1">*</span>
                       </label>
                       <div className="relative mb-2">
                         <Search
                           size={16}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
+                          className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400"
                         />
                         <input
                           type="text"
-                          className="input pr-9 w-full"
+                          className="input ps-9 w-full"
                           placeholder="ابحث بالاسم أو الفئة أو الرقم التسلسلي..."
                           value={assetSearch}
                           onChange={(e) => setAssetSearch(e.target.value)}
@@ -1932,7 +1932,7 @@ export default function MyRequestsPage() {
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
                         الإجازة المراد إلغاؤها
-                        <span className="text-red-500 mr-1">*</span>
+                        <span className="text-red-500 ms-1">*</span>
                       </label>
                       {myLeavesLoading ? (
                         <div className="flex justify-center py-6">
@@ -1967,7 +1967,7 @@ export default function MyRequestsPage() {
                                 <p className="text-sm font-medium text-gray-800">
                                   {leaveTypeLabel(l.leaveType)}
                                   {(l.period === 'MORNING' || l.period === 'EVENING') && (
-                                    <span className="mr-2 badge text-[10px] bg-amber-50 text-amber-700">
+                                    <span className="ms-2 badge text-[10px] bg-amber-50 text-amber-700">
                                       نصف يوم — {periodLabels[l.period]}
                                     </span>
                                   )}
@@ -2002,7 +2002,7 @@ export default function MyRequestsPage() {
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       نوع الإذن
-                      <span className="text-red-500 mr-1">*</span>
+                      <span className="text-red-500 ms-1">*</span>
                     </label>
                     <select
                       className="input w-full"
@@ -2051,7 +2051,7 @@ export default function MyRequestsPage() {
                       <div key={f.key} className={f.type === 'file' || fieldKindOf(f.key, f.type) === 'textarea' ? 'sm:col-span-2' : ''}>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
                           {customFieldLabel(f)}
-                          {f.required && <span className="text-red-500 mr-1">*</span>}
+                          {f.required && <span className="text-red-500 ms-1">*</span>}
                         </label>
                         {renderSmartField(f.key) ??
                         (f.type === 'select' ? (

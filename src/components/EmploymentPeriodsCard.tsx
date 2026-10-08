@@ -24,7 +24,7 @@ export default function EmploymentPeriodsCard({ employeeId }: { employeeId: numb
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="text-right text-gray-500 border-b border-gray-100">
+            <tr className="text-start text-gray-500 border-b border-gray-100">
               <th className="py-2 font-medium">الفترة</th>
               <th className="py-2 font-medium">من</th>
               <th className="py-2 font-medium">إلى</th>

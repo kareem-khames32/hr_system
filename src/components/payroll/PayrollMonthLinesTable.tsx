@@ -68,10 +68,10 @@ export function PayrollMonthLinesTable({ side, period, matches, onOpenRun, versi
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead><tr className="table-header">
-              <th className="table-cell text-right">الموظف</th><th className="table-cell text-right">الفرع / القسم</th>
+              <th className="table-cell text-start">الموظف</th><th className="table-cell text-start">الفرع / القسم</th>
               {columns.map(column => <th key={column.key} className="table-cell text-center whitespace-nowrap">{column.name}</th>)}
               <th className="table-cell text-center whitespace-nowrap">{PAYROLL_LINE_TOTAL_LABELS[side]}</th>
-              <th className="table-cell text-right">المسير</th>
+              <th className="table-cell text-start">المسير</th>
             </tr></thead>
             <tbody>
               {rows.map(row => (
@@ -82,7 +82,7 @@ export function PayrollMonthLinesTable({ side, period, matches, onOpenRun, versi
                   <td className={`table-cell text-center font-mono font-bold ${tone}`}>{formatMoney(row.totals[side])}</td>
                   <td className="table-cell">
                     <button type="button" className="text-primary-600 hover:underline" onClick={() => onOpenRun(row.runId)}>{runLabel(row.runId, row.runName)}</button>
-                    <span className="text-xs text-gray-500 mr-1">({RUN_STATUS[row.runStatus] ?? row.runStatus})</span>
+                    <span className="text-xs text-gray-500 ms-1">({RUN_STATUS[row.runStatus] ?? row.runStatus})</span>
                   </td>
                 </tr>
               ))}

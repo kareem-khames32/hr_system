@@ -72,7 +72,7 @@ export default function MyTasksPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-xl font-bold text-gray-800 flex items-center gap-2"><ListChecks size={22} className="text-primary-600" />مهامي</h1>
           {assignees?.canAssign && assignees.available && (
-            <button type="button" className="btn-primary" onClick={() => setForm({ task: null })} data-new-task><Plus size={16} className="inline ml-1" />مهمة جديدة</button>
+            <button type="button" className="btn-primary" onClick={() => setForm({ task: null })} data-new-task><Plus size={16} className="inline me-1" />مهمة جديدة</button>
           )}
         </div>
         {error && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 text-sm">{error}</div>}
@@ -88,7 +88,7 @@ export default function MyTasksPage() {
               عليّ{mine ? ` (${mine.counts.open})` : ''}
             </button>
             <button type="button" role="tab" aria-selected={tab === 'team'} className={tab === 'team' ? 'btn-primary' : 'btn-secondary'} onClick={() => setTab('team')}>
-              <Users size={16} className="inline ml-1" />فريقي ({team.tasks.filter(row => ['OPEN', 'IN_PROGRESS', 'WAITING'].includes(row.status)).length})
+              <Users size={16} className="inline me-1" />فريقي ({team.tasks.filter(row => ['OPEN', 'IN_PROGRESS', 'WAITING'].includes(row.status)).length})
             </button>
           </div>
         )}

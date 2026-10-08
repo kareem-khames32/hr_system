@@ -127,8 +127,8 @@ export function PayrollOverviewTabs({ tab, branches, departments, teams, employe
         </label>
         {!PAYROLL_FILTERED_TABS.includes(tab) && (
           <div className="relative flex-1 min-w-[220px]">
-            <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input type="text" className="input w-full pr-9" placeholder="دوّر بالاسم أو الكود..." value={query} onChange={e => setQuery(e.target.value)} />
+            <Search size={16} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input type="text" className="input w-full ps-9" placeholder="دوّر بالاسم أو الكود..." value={query} onChange={e => setQuery(e.target.value)} />
           </div>
         )}
         {/* الفرع ← الإدارة ← القسم ← الفريق (التبويبات التلاتة التانية جوه شريط فلاترها) */}
@@ -175,10 +175,10 @@ function IncludedTab({ period, filters, onFilters, onOpenRun, org, cycleStartDay
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead><tr className="table-header">
-                  <th className="table-cell text-right">الموظف</th><th className="table-cell text-right">الفرع</th><th className="table-cell text-right">القسم</th>
-                  <th className="table-cell text-right">الفريق</th><th className="table-cell text-right">المسمى الوظيفي</th><th className="table-cell text-center">الحالة الوظيفية</th>
+                  <th className="table-cell text-start">الموظف</th><th className="table-cell text-start">الفرع</th><th className="table-cell text-start">القسم</th>
+                  <th className="table-cell text-start">الفريق</th><th className="table-cell text-start">المسمى الوظيفي</th><th className="table-cell text-center">الحالة الوظيفية</th>
                   <th className="table-cell text-center">تاريخ التعيين</th>
-                  <th className="table-cell text-right">المسير</th><th className="table-cell text-center">حالة المسير</th><th className="table-cell text-center">الفترة</th>
+                  <th className="table-cell text-start">المسير</th><th className="table-cell text-center">حالة المسير</th><th className="table-cell text-center">الفترة</th>
                 </tr></thead>
                 <tbody>
                   {rows.map(row => (
@@ -234,7 +234,7 @@ function RosterTab({ period, filters, onFilters, onOpenRun, org, cycleStartDay, 
             onClick={() => view(value)}
             className={`px-4 py-1.5 rounded-lg text-sm font-medium ${filters.membership === value ? 'bg-white text-primary-600 shadow-sm' : 'text-gray-600'}`}>
             {PAYROLL_MEMBERSHIP_VIEW_LABELS[value]}
-            {data && <span className="text-xs text-gray-400 mr-1">({data.counts[value]})</span>}
+            {data && <span className="text-xs text-gray-400 ms-1">({data.counts[value]})</span>}
           </button>
         ))}
       </div>
@@ -273,9 +273,9 @@ function RosterTab({ period, filters, onFilters, onOpenRun, org, cycleStartDay, 
                     <input type="checkbox" aria-label="اختيار الكل" data-pick-all checked={allPicked}
                       onChange={() => setPicked(allPicked ? [] : rows.map(row => row.employeeId))} />
                   </th>}
-                  <th className="table-cell text-right">الموظف</th><th className="table-cell text-right">الفرع</th><th className="table-cell text-right">القسم</th>
-                  <th className="table-cell text-right">الفريق</th><th className="table-cell text-right">المسمى الوظيفي</th><th className="table-cell text-center">الحالة الوظيفية</th>
-                  <th className="table-cell text-center">تاريخ التعيين</th><th className="table-cell text-right">المسير</th>
+                  <th className="table-cell text-start">الموظف</th><th className="table-cell text-start">الفرع</th><th className="table-cell text-start">القسم</th>
+                  <th className="table-cell text-start">الفريق</th><th className="table-cell text-start">المسمى الوظيفي</th><th className="table-cell text-center">الحالة الوظيفية</th>
+                  <th className="table-cell text-center">تاريخ التعيين</th><th className="table-cell text-start">المسير</th>
                   {canMove && <th className="table-cell text-center">إجراء</th>}
                 </tr></thead>
                 <tbody>
@@ -382,10 +382,10 @@ function UnassignedTab({ period, filters, onFilters, onOpenRun, org, cycleStartD
                     <input type="checkbox" aria-label="اختيار الكل" data-pick-all checked={allPicked}
                       onChange={() => setPicked(allPicked ? [] : rows.map(row => row.employeeId))} />
                   </th>}
-                  <th className="table-cell text-right">الموظف</th><th className="table-cell text-center">تاريخ التعيين</th>
-                  <th className="table-cell text-right">الفرع</th><th className="table-cell text-right">القسم</th><th className="table-cell text-right">الفريق</th>
-                  <th className="table-cell text-right">المسمى الوظيفي</th><th className="table-cell text-center">الحالة الوظيفية</th>
-                  <th className="table-cell text-right">السبب</th>
+                  <th className="table-cell text-start">الموظف</th><th className="table-cell text-center">تاريخ التعيين</th>
+                  <th className="table-cell text-start">الفرع</th><th className="table-cell text-start">القسم</th><th className="table-cell text-start">الفريق</th>
+                  <th className="table-cell text-start">المسمى الوظيفي</th><th className="table-cell text-center">الحالة الوظيفية</th>
+                  <th className="table-cell text-start">السبب</th>
                   {canAdd && <th className="table-cell text-center">إجراء</th>}
                 </tr></thead>
                 <tbody>
@@ -439,8 +439,8 @@ function ConflictsTab({ period, matches, onOpenRun }: { period: string; matches:
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead><tr className="table-header">
-              <th className="table-cell text-right">الموظف</th><th className="table-cell text-right">الفرع / القسم</th>
-              <th className="table-cell text-right">المسير</th><th className="table-cell text-right">المسير التاني</th>
+              <th className="table-cell text-start">الموظف</th><th className="table-cell text-start">الفرع / القسم</th>
+              <th className="table-cell text-start">المسير</th><th className="table-cell text-start">المسير التاني</th>
               <th className="table-cell text-center">نوع التضارب</th><th className="table-cell text-center">الأثر</th>
             </tr></thead>
             <tbody>

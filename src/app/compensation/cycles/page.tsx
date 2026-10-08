@@ -138,7 +138,7 @@ export default function RaiseCyclesPage() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-gray-600">
                 <tr>
-                  <th className="table-header text-right">الدورة</th>
+                  <th className="table-header text-start">الدورة</th>
                   <th className="table-header text-center">يسري من راتب شهر</th>
                   <th className="table-header text-center">الحالة</th>
                   <th className="table-header text-center">اتعملت</th>
@@ -152,7 +152,7 @@ export default function RaiseCyclesPage() {
                     <td className="table-cell text-center font-mono" dir="ltr">{cycle.effectivePayrollPeriod}</td>
                     <td className="table-cell text-center">{cycle.statusLabel}</td>
                     <td className="table-cell text-center">{formatDate(cycle.createdAt)}</td>
-                    <td className="table-cell text-left">
+                    <td className="table-cell text-end">
                       <button type="button" className="btn-secondary text-xs disabled:opacity-50" disabled={busy} onClick={() => open(cycle.id)}>فتح</button>
                     </td>
                   </tr>
@@ -185,7 +185,7 @@ export default function RaiseCyclesPage() {
               <div className="flex flex-wrap items-center gap-3">
                 <h2 className="text-lg font-semibold text-gray-800">{detail.cycle.name}</h2>
                 <span className="text-sm text-gray-600">{detail.cycle.statusLabel} · يسري من راتب <span dir="ltr">{detail.cycle.effectivePayrollPeriod}</span></span>
-                <div className="flex flex-wrap gap-2 mr-auto">
+                <div className="flex flex-wrap gap-2 ms-auto">
                   {steps.map((step) => (
                     <button key={step} type="button" className={`${step === 'cancel' ? 'btn-secondary' : 'btn-primary'} text-sm disabled:opacity-50`} disabled={busy} onClick={() => setConfirmStep(step)}>
                       {STEP_LABELS[step]}
@@ -239,7 +239,7 @@ export default function RaiseCyclesPage() {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 text-gray-600">
                     <tr>
-                      <th className="table-header text-right">الوحدة</th>
+                      <th className="table-header text-start">الوحدة</th>
                       <th className="table-header text-center">الميزانية</th>
                       <th className="table-header text-center">المستخدم</th>
                       <th className="table-header text-center">الباقي</th>
@@ -258,9 +258,9 @@ export default function RaiseCyclesPage() {
                         <td className="table-cell text-center font-mono">{formatMoney(row.used)}</td>
                         <td className={`table-cell text-center font-mono ${row.over ? 'text-red-700 font-bold' : ''}`}>
                           {row.remaining === null ? '—' : formatMoney(row.remaining)}
-                          {row.over && <span className="inline-flex items-center gap-1 mr-2 text-xs"><AlertTriangle size={14} /> عدّت الميزانية</span>}
+                          {row.over && <span className="inline-flex items-center gap-1 ms-2 text-xs"><AlertTriangle size={14} /> عدّت الميزانية</span>}
                         </td>
-                        <td className="table-cell text-left">
+                        <td className="table-cell text-end">
                           {detail.canBudget && (budget?.departmentId === row.departmentId
                             ? <span className="inline-flex gap-2">
                                 <button type="button" className="btn-primary text-xs disabled:opacity-50" disabled={busy} onClick={saveBudget}>حفظ</button>
@@ -283,15 +283,15 @@ export default function RaiseCyclesPage() {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 text-gray-600">
                     <tr>
-                      <th className="table-header text-right">الموظف</th>
-                      <th className="table-header text-right">الوحدة</th>
+                      <th className="table-header text-start">الموظف</th>
+                      <th className="table-header text-start">الوحدة</th>
                       {detail.performance && <th className="table-header text-center">نتيجة الأداء</th>}
                       {detail.salaries && <th className="table-header text-center">الأساسي الحالي</th>}
                       <th className="table-header text-center">اقتراح المدير</th>
                       <th className="table-header text-center">النهائي</th>
                       {detail.salaries && <th className="table-header text-center">الأساسي الجديد</th>}
                       {detail.salaries && <th className="table-header text-center">النسبة</th>}
-                      <th className="table-header text-right">ملاحظات</th>
+                      <th className="table-header text-start">ملاحظات</th>
                       <th className="table-header" />
                     </tr>
                   </thead>
@@ -332,7 +332,7 @@ export default function RaiseCyclesPage() {
                             ? <input className="input w-full" value={edit.note} maxLength={500} placeholder="سبب التعديل (مطلوب)" onChange={(event) => setEdit({ ...edit, note: event.target.value })} />
                             : <>{line.note}{line.adjustNote ? <span className="block">التعديل: {line.adjustNote}</span> : null}</>}
                         </td>
-                        <td className="table-cell text-left">
+                        <td className="table-cell text-end">
                           {detail.canAdjust && line.active && (edit?.employeeId === line.employeeId
                             ? <span className="inline-flex gap-2">
                                 <button type="button" className="btn-primary text-xs disabled:opacity-50" disabled={busy || !edit.note.trim()} onClick={saveLine}>حفظ</button>

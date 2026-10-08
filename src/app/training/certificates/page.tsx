@@ -46,10 +46,10 @@ export default function TrainingCertificatesPage() {
             <table className="w-full text-sm" data-certificates>
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">الموظف</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">الدورة</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">الإصدار</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">الانتهاء</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">الموظف</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">الدورة</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">الإصدار</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">الانتهاء</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">

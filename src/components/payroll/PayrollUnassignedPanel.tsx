@@ -78,14 +78,14 @@ export function PayrollUnassignedPanel({ runId, snapshotVersion, runStatus, bran
         {report.rows.length > 0 ? <div className="max-h-80 overflow-auto rounded-xl border border-gray-100">
           <table className="w-full text-sm">
             <thead><tr className="table-header">
-              <th className="text-right px-3 py-2">الموظف</th><th className="text-right px-3 py-2">المكان</th>
-              <th className="text-center px-3 py-2">التغطية</th><th className="text-right px-3 py-2">السبب</th>
+              <th className="text-start px-3 py-2">الموظف</th><th className="text-start px-3 py-2">المكان</th>
+              <th className="text-center px-3 py-2">التغطية</th><th className="text-start px-3 py-2">السبب</th>
             </tr></thead>
             <tbody>{report.rows.map(row => <tr key={row.employeeId} className="table-row">
               <td className="table-cell"><p className="font-medium text-gray-800">{row.fullName}</p><p className="text-xs text-gray-400">{row.employeeCode}</p></td>
               <td className="table-cell text-xs">{[nameOf(branches, row.branchId), nameOf(departments, row.departmentId), nameOf(teams, row.teamId)].filter(Boolean).join(' / ') || '—'}</td>
               <td className="table-cell text-center text-xs" dir="ltr">{row.coverFrom ? `${row.coverFrom} → ${row.coverTo} (${row.coverDays})` : '—'}</td>
-              <td className="table-cell text-xs"><span className="badge bg-amber-50 text-amber-800 ml-1">{UNASSIGNED_REASON_LABELS[row.reasonCode]}</span> {row.reasonText}</td>
+              <td className="table-cell text-xs"><span className="badge bg-amber-50 text-amber-800 me-1">{UNASSIGNED_REASON_LABELS[row.reasonCode]}</span> {row.reasonText}</td>
             </tr>)}</tbody>
           </table>
         </div> : <p className="rounded-xl bg-success-50 p-3 text-sm text-success-700">لا يوجد موظف على رأس العمل خارج مسيرات هذه الفترة.</p>}

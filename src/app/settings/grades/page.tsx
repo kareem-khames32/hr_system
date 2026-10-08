@@ -244,14 +244,14 @@ export default function GradesPage() {
           <div className="relative max-w-md">
             <Search
               size={20}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
+              className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400"
             />
             <input
               type="text"
               placeholder="البحث عن درجة وظيفية..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="input pr-10 w-full"
+              className="input ps-10 w-full"
             />
           </div>
         </div>
@@ -272,7 +272,7 @@ export default function GradesPage() {
                 className={`card p-6 relative ${!grade.isActive ? 'opacity-60' : ''}`}
               >
                 {/* Actions */}
-                {canWrite && <div className="absolute top-4 left-4">
+                {canWrite && <div className="absolute top-4 end-4">
                   <button
                     onClick={() =>
                       setActiveMenu(activeMenu === grade.id ? null : grade.id)
@@ -288,7 +288,7 @@ export default function GradesPage() {
                         className="fixed inset-0 z-10"
                         onClick={() => setActiveMenu(null)}
                       />
-                      <div className="absolute left-0 top-full mt-1 w-40 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
+                      <div className="absolute end-0 top-full mt-1 w-40 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
                         <button
                           onClick={() => {
                             handleOpenModal(grade)
@@ -341,7 +341,7 @@ export default function GradesPage() {
                       <span className="text-2xl font-bold text-gray-800">
                         {Number(grade.minSalary).toLocaleString('en-US')}
                       </span>
-                      <span className="text-gray-500 text-sm mr-1">{currency}</span>
+                      <span className="text-gray-500 text-sm ms-1">{currency}</span>
                     </div>
                     <div className="flex-1 mx-4">
                       <div
@@ -358,7 +358,7 @@ export default function GradesPage() {
                       <span className="text-2xl font-bold text-primary-600">
                         {Number(grade.maxSalary).toLocaleString('en-US')}
                       </span>
-                      <span className="text-gray-500 text-sm mr-1">{currency}</span>
+                      <span className="text-gray-500 text-sm ms-1">{currency}</span>
                     </div>
                   </div>
                 </div>

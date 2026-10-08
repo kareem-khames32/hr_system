@@ -147,7 +147,7 @@ export function PayrollPolicyCreateForm({ onCreated, onCancel }: { onCreated: (s
     <div className="grid md:grid-cols-3 gap-3">
       <label className="md:col-span-2"><span className={labelClass}>الاسم</span><input className="input w-full" value={name} maxLength={200} placeholder="مثل: معادلات رواتب فرع المعادي" onChange={event => setName(event.target.value)} required /></label>
       <label><span className={labelClass}>تُطبّق من</span><input className="input w-full" type="date" value={effectiveFrom} onChange={event => setFrom(event.target.value)} required />
-        <span className="text-xs text-gray-500">بداية فترة مسير. المقترح: {suggested}{from !== null && from !== suggested && <button type="button" className="text-primary-600 mr-1" onClick={() => setFrom(null)}>استخدام المقترح</button>}</span></label>
+        <span className="text-xs text-gray-500">بداية فترة مسير. المقترح: {suggested}{from !== null && from !== suggested && <button type="button" className="text-primary-600 ms-1" onClick={() => setFrom(null)}>استخدام المقترح</button>}</span></label>
       <DefinitionBranchField value={branchId} onChange={setBranchId} editing={false} info={branchInfo} disabled={saving} />
     </div>
     <PolicySettingsFields value={settings} onChange={setSettings} disabled={saving || loadingDefaults} />

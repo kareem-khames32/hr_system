@@ -73,7 +73,7 @@ test('DGU-03: قسم «تفويض اعتماداتي» وشارة الصندوق
   assert.match(section, /if \(daysBetween\(form\.startDate, form\.endDate\) \+ 1 > DELEGATION_DAYS_MAX\) \{ setFormError\('فترة التفويض أقصاها سنة'\); return \}/)
   assert.match(section, /categories: form\.categories\.length \? form\.categories : null,/)
   // الإلغاء بحكم الخادم، وقبل الترحيل القسم بيقول ليه مقفول
-  assert.match(section, /\{row\.canRevoke && <button type="button" className="btn-secondary text-red-700 mr-auto disabled:opacity-50" disabled=\{busy\} onClick=\{\(\) => revoke\(row\)\}>إلغاء التفويض<\/button>\}/)
+  assert.match(section, /\{row\.canRevoke && <button type="button" className="btn-secondary text-red-700 ms-auto disabled:opacity-50" disabled=\{busy\} onClick=\{\(\) => revoke\(row\)\}>إلغاء التفويض<\/button>\}/)
   assert.match(section, /\{data && !data\.available && <p className="text-sm text-gray-500" data-delegations-unavailable>/)
   const page = read('src/app/approvals-inbox/page.tsx')
   assert.match(page, /<MyApprovalDecisions onOpen=\{setDetailId\} revision=\{decisionsRevision\} \/>\s+<ApprovalDelegations \/>/)
@@ -105,7 +105,7 @@ test('DGU-04: محرر السلسلة — خانة «مسموح تتفوّض» �
   // المقفولة لدور هيكلي بتتبعت false؛ المسموحة مابتتبعتش (افتراضي الخادم)؛ والدور الوظيفي مالوش الخانة أصلًا
   assert.deepEqual(built([fromApi(false), fromApi(true), { ...fromApi(false, 'hr') }, { ...fromApi(false, 'specific_employee'), specificEmployeeId: '5' }]), [false, undefined, undefined, false])
   const modal = read('src/components/approvals/ChainEditorModal.tsx')
-  assert.match(modal, /\{DELEGABLE_ROLES\.includes\(step\.approverRole\) && \(\s*<label className="flex items-center gap-1\.5 mr-3" title="[^"]+" data-step-can-delegate>/)
+  assert.match(modal, /\{DELEGABLE_ROLES\.includes\(step\.approverRole\) && \(\s*<label className="flex items-center gap-1\.5 ms-3" title="[^"]+" data-step-can-delegate>/)
   assert.match(modal, /checked=\{step\.canDelegate\}\s+disabled=\{readOnly\}\s+onChange=\{\(e\) => updateStep\(index, 'canDelegate', e\.target\.checked\)\}/)
   const controller = read('api/src/settings/settings.controller.ts')
   assert.match(controller, /@IsOptional\(\)\s+@IsBoolean\(\)\s+canDelegate\?: boolean\s+\}\s+class ReplaceStepsDto/)

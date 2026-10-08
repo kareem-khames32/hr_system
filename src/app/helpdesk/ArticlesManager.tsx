@@ -84,10 +84,10 @@ export default function ArticlesManager() {
           <table className="w-full text-sm">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-3 py-2 text-right font-medium text-gray-600">العنوان</th>
-                <th className="px-3 py-2 text-right font-medium text-gray-600">النوع</th>
-                <th className="px-3 py-2 text-right font-medium text-gray-600">الجمهور</th>
-                <th className="px-3 py-2 text-right font-medium text-gray-600">الحالة</th>
+                <th className="px-3 py-2 text-start font-medium text-gray-600">العنوان</th>
+                <th className="px-3 py-2 text-start font-medium text-gray-600">النوع</th>
+                <th className="px-3 py-2 text-start font-medium text-gray-600">الجمهور</th>
+                <th className="px-3 py-2 text-start font-medium text-gray-600">الحالة</th>
                 <th className="px-3 py-2" />
               </tr>
             </thead>
@@ -98,8 +98,8 @@ export default function ArticlesManager() {
                   <td className="px-3 py-2 text-gray-600">{row.typeName ?? 'عام'}</td>
                   <td className="px-3 py-2 text-gray-600">{row.audience ? 'جمهور محدد' : 'كل الشركة'}</td>
                   <td className="px-3 py-2 text-gray-600">{row.isPublished ? 'منشور' : 'مسودة'}</td>
-                  <td className="px-3 py-2 text-left whitespace-nowrap">
-                    <button onClick={() => edit(row)} className="text-primary-600 hover:underline text-xs ml-3">
+                  <td className="px-3 py-2 text-end whitespace-nowrap">
+                    <button onClick={() => edit(row)} className="text-primary-600 hover:underline text-xs me-3">
                       تعديل
                     </button>
                     <button onClick={() => toggle(row)} className="text-primary-600 hover:underline text-xs">

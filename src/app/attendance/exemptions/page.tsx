@@ -282,8 +282,8 @@ function ExemptionsContent() {
           <div className="flex-1 min-w-[220px]">
             <label htmlFor="exemption-search" className="label">بحث</label>
             <div className="relative">
-              <Search size={16} className="absolute right-3 top-3 text-gray-400" />
-              <input id="exemption-search" className="input pr-9" value={search} placeholder="اسم الموظف أو كوده أو رقم الطلب" onChange={event => setSearch(event.target.value)} />
+              <Search size={16} className="absolute start-3 top-3 text-gray-400" />
+              <input id="exemption-search" className="input ps-9" value={search} placeholder="اسم الموظف أو كوده أو رقم الطلب" onChange={event => setSearch(event.target.value)} />
             </div>
           </div>
           <div className="min-w-[220px]">
@@ -305,13 +305,13 @@ function ExemptionsContent() {
           <table className="w-full min-w-[960px]">
             <thead>
               <tr className="table-header">
-                <th className="table-cell text-right">#</th>
-                <th className="table-cell text-right">الموظف</th>
-                <th className="table-cell text-right">الفترة</th>
-                <th className="table-cell text-right">السبب</th>
-                <th className="table-cell text-right">الحالة</th>
-                <th className="table-cell text-right">القرار</th>
-                <th className="table-cell text-right">الإجراءات</th>
+                <th className="table-cell text-start">#</th>
+                <th className="table-cell text-start">الموظف</th>
+                <th className="table-cell text-start">الفترة</th>
+                <th className="table-cell text-start">السبب</th>
+                <th className="table-cell text-start">الحالة</th>
+                <th className="table-cell text-start">القرار</th>
+                <th className="table-cell text-start">الإجراءات</th>
               </tr>
             </thead>
             <tbody>

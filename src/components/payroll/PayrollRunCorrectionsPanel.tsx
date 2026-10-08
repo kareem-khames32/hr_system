@@ -52,9 +52,9 @@ function ReversalPreviewView({ preview, label }: { preview: PayrollReversalPrevi
         <table className="w-full text-xs">
           <thead>
             <tr className="table-header">
-              <th className="p-2 text-right">الموظف</th><th className="p-2 text-center">الصافي المعكوس</th><th className="p-2 text-center">إضافي يعود معتمدًا</th>
+              <th className="p-2 text-start">الموظف</th><th className="p-2 text-center">الصافي المعكوس</th><th className="p-2 text-center">إضافي يعود معتمدًا</th>
               <th className="p-2 text-center">أقساط تعود مستحقة</th><th className="p-2 text-center">ترحيل يُلغى</th><th className="p-2 text-center">قيود خصم / إضافة تُعاد</th>
-              <th className="p-2 text-center">سلف تُفتح</th><th className="p-2 text-center">قرارات إعفاء تبقى</th><th className="p-2 text-right">موانع وتنبيهات</th>
+              <th className="p-2 text-center">سلف تُفتح</th><th className="p-2 text-center">قرارات إعفاء تبقى</th><th className="p-2 text-start">موانع وتنبيهات</th>
             </tr>
           </thead>
           <tbody>
@@ -202,7 +202,7 @@ export function PayrollRunCorrectionsPanel({ run, employeeName, onOpenRun }: {
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="table-header"><th className="p-2 text-right">الموظف</th><th className="p-2 text-center">الصافي المعكوس</th><th className="p-2 text-center">الحالة</th><th className="p-2 text-right">ما أعاده التنفيذ</th></tr>
+                  <tr className="table-header"><th className="p-2 text-start">الموظف</th><th className="p-2 text-center">الصافي المعكوس</th><th className="p-2 text-center">الحالة</th><th className="p-2 text-start">ما أعاده التنفيذ</th></tr>
                 </thead>
                 <tbody>
                   {correction.lines.map(line => (
@@ -231,7 +231,7 @@ export function PayrollRunCorrectionsPanel({ run, employeeName, onOpenRun }: {
                 <thead>
                   <tr className="table-header">
                     {data.permissions.canReverse && <th className="w-10 p-2"><span className="sr-only">اختيار</span></th>}
-                    <th className="p-2 text-right">الموظف</th><th className="p-2 text-center">الصافي المصروف</th><th className="p-2 text-center">العكس</th>
+                    <th className="p-2 text-start">الموظف</th><th className="p-2 text-center">الصافي المصروف</th><th className="p-2 text-center">العكس</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -288,7 +288,7 @@ export function PayrollRunCorrectionsPanel({ run, employeeName, onOpenRun }: {
                       <thead>
                         <tr className="table-header">
                           {data.permissions.canSupplement && <th className="w-10 p-2"><span className="sr-only">اختيار</span></th>}
-                          <th className="p-2 text-right">الموظف</th><th className="p-2 text-center">الأساس</th><th className="p-2 text-right">الأهلية</th>
+                          <th className="p-2 text-start">الموظف</th><th className="p-2 text-center">الأساس</th><th className="p-2 text-start">الأهلية</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -336,7 +336,7 @@ export function PayrollRunCorrectionsPanel({ run, employeeName, onOpenRun }: {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="table-header">
-                    <th className="p-2 text-right">الموظف</th><th className="p-2 text-center">الأصلي</th><th className="p-2 text-center">معكوس منفذ</th><th className="p-2 text-center">عكس معلق</th>
+                    <th className="p-2 text-start">الموظف</th><th className="p-2 text-center">الأصلي</th><th className="p-2 text-center">معكوس منفذ</th><th className="p-2 text-center">عكس معلق</th>
                     <th className="p-2 text-center">تكميلي مصروف</th><th className="p-2 text-center">تكميلي جارٍ</th><th className="p-2 text-center">الصافي الفعلي</th><th className="p-2 text-center">فرق التسوية</th>
                   </tr>
                 </thead>

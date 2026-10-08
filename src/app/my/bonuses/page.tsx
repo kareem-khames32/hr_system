@@ -42,11 +42,11 @@ export default function MyBonusesPage() {
               <table className="w-full">
                 <thead>
                   <tr className="table-header">
-                    <th className="text-right px-3 py-3">النوع</th>
-                    <th className="text-right px-3 py-3">السبب</th>
+                    <th className="text-start px-3 py-3">النوع</th>
+                    <th className="text-start px-3 py-3">السبب</th>
                     <th className="text-center px-3 py-3">المبلغ ({currency})</th>
                     <th className="text-center px-3 py-3">شهر المسير</th>
-                    <th className="text-right px-3 py-3">المُقترِح</th>
+                    <th className="text-start px-3 py-3">المُقترِح</th>
                     <th className="text-center px-3 py-3">الحالة</th>
                   </tr>
                 </thead>

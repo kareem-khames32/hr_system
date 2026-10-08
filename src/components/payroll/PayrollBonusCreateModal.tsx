@@ -125,7 +125,7 @@ export function PayrollBonusCreateModal({ employeeId, employeeName, period, onCl
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label={`مكافأة — ${employeeName}`}>
-      <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-5 shadow-xl space-y-3 text-right" data-testid="payroll-bonus-create">
+      <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-5 shadow-xl space-y-3 text-start" data-testid="payroll-bonus-create">
         <div className="flex items-center justify-between gap-2">
           <h3 className="font-bold text-gray-800 flex items-center gap-2"><Gift size={18} className="text-success-500" />مكافأة — {employeeName}</h3>
           <button type="button" onClick={onClose} disabled={busy} className="text-sm text-gray-500 disabled:opacity-50">إغلاق</button>
@@ -201,7 +201,7 @@ export function PayrollBonusCreateModal({ employeeId, employeeName, period, onCl
           <div>
             <label htmlFor="payroll-bonus-reason" className="block text-sm font-medium text-gray-700 mb-2">
               سبب المكافأة <span className="text-red-500">*</span>
-              <span className="text-xs font-normal text-gray-500 mr-2">({creatable.reasonMinLength} حرفًا على الأقل — {form.reason.trim().length})</span>
+              <span className="text-xs font-normal text-gray-500 ms-2">({creatable.reasonMinLength} حرفًا على الأقل — {form.reason.trim().length})</span>
             </label>
             <textarea id="payroll-bonus-reason" className="input w-full min-h-[70px]" maxLength={1000} disabled={busy}
               placeholder="اشرح ما استحقت عليه المكافأة — يظهر السبب لكل معتمِد وللموظف"

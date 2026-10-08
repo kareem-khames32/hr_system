@@ -114,11 +114,11 @@ export default function RewardsPanel({ cycleId, cycleName, onClose }: { cycleId:
               <table className="w-full text-sm" data-reward-rows>
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-3 py-2 text-right font-medium text-gray-600">الموظف</th>
-                    <th className="px-3 py-2 text-right font-medium text-gray-600">المدير</th>
-                    <th className="px-3 py-2 text-right font-medium text-gray-600">الدرجة</th>
-                    <th className="px-3 py-2 text-right font-medium text-gray-600">التقدير</th>
-                    <th className="px-3 py-2 text-right font-medium text-gray-600">المكافأة المقترحة</th>
+                    <th className="px-3 py-2 text-start font-medium text-gray-600">الموظف</th>
+                    <th className="px-3 py-2 text-start font-medium text-gray-600">المدير</th>
+                    <th className="px-3 py-2 text-start font-medium text-gray-600">الدرجة</th>
+                    <th className="px-3 py-2 text-start font-medium text-gray-600">التقدير</th>
+                    <th className="px-3 py-2 text-start font-medium text-gray-600">المكافأة المقترحة</th>
                     <th className="px-3 py-2" />
                   </tr>
                 </thead>
@@ -139,7 +139,7 @@ export default function RewardsPanel({ cycleId, cycleName, onClose }: { cycleId:
                           '—'
                         )}
                       </td>
-                      <td className="px-3 py-2 text-left">
+                      <td className="px-3 py-2 text-end">
                         {row.suggestion?.status === 'SUGGESTED' && (
                           <button onClick={() => dismiss(row.suggestion!.id)} disabled={busy} className="text-red-600 hover:underline text-xs disabled:opacity-50">
                             صرف النظر

@@ -20,6 +20,7 @@ import { effectivePermissions, ROLE_PRESETS } from './permissions'
 import { Role, UserPermissionOverride } from './role.entity'
 import { OTP, TWO_FACTOR_CONFIG_KEY, TwoFactorChallengeView, TwoFactorError, TwoFactorService } from './two-factor.service'
 import { User } from './user.entity'
+import { readUserLanguage, UI_LANGUAGES, userLanguageReady, writeUserLanguage } from './user-language'
 import { PRODUCT_NAME } from '../settings/product-name'
 import { failureDelayMs, lockedMessage, lockedNow } from './login-security'
 import { LoginSecurityService, type LoginContext } from './login-security.service'
@@ -558,6 +559,15 @@ export class AuthService {
    * B2.17: بيانات الحساب للواجهة من الجلسة الحالية (نفس شكل user في رد الدخول: الهوية من التوكن نفسه، والاسم من القاعدة) ورمز
    * CSRF بتاعها. الواجهة بتناديه بعد تحديث الصفحة أو في تبويب جديد — مابقاش عندها توكن تقرا منه.
    */
+  // B6.2: لغة عرض الواجهة لصاحب الحساب (تفضيل عرض بس — من غير أثر على التوكن ولا الصلاحيات)
+  async language(payload: JwtPayload) {
+    return { language: await readUserLanguage(this.users.manager, payload.sub), available: [...UI_LANGUAGES], changeable: await userLanguageReady(this.users.manager) }
+  }
+
+  async setLanguage(payload: JwtPayload, language: unknown) {
+    return { language: await writeUserLanguage(this.users.manager, payload.sub, language), available: [...UI_LANGUAGES], changeable: true }
+  }
+
   async sessionView(payload: JwtPayload) {
     const row = await this.users.findOne({ where: { id: payload.sub }, select: ['id', 'displayName', 'domainObjectGuid'] })
     return {

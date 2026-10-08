@@ -185,14 +185,14 @@ export default function CostCentersPage() {
           <div className="relative max-w-md">
             <Search
               size={20}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
+              className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400"
             />
             <input
               type="text"
               placeholder="البحث بالكود أو الاسم..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="input pr-10 w-full"
+              className="input ps-10 w-full"
             />
           </div>
         </div>
@@ -216,7 +216,7 @@ export default function CostCentersPage() {
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
-                    <tr className="bg-gray-50 text-right">
+                    <tr className="bg-gray-50 text-start">
                       <th className="py-3 px-4 text-sm font-medium text-gray-500">الكود</th>
                       <th className="py-3 px-4 text-sm font-medium text-gray-500">الاسم</th>
                       <th className="py-3 px-4 text-sm font-medium text-gray-500">الحالة</th>

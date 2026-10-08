@@ -55,7 +55,7 @@ export default function EgTaxPreviewPanel({ runId }: { runId: number }) {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-600">
                   <tr>
-                    <th className="table-header text-right">الموظف</th>
+                    <th className="table-header text-start">الموظف</th>
                     <th className="table-header text-center">صافي الدخل الخاضع</th>
                     <th className="table-header text-center">الأيام</th>
                     <th className="table-header text-center">الوعاء السنوي</th>
@@ -68,7 +68,7 @@ export default function EgTaxPreviewPanel({ runId }: { runId: number }) {
                     <tr key={row.itemId} className="border-t border-gray-100" data-eg-tax-row={row.employeeId}>
                       <td className="table-cell">
                         {row.employeeName}
-                        {row.employeeCode && <span className="text-xs text-gray-400 mr-2">{row.employeeCode}</span>}
+                        {row.employeeCode && <span className="text-xs text-gray-400 ms-2">{row.employeeCode}</span>}
                       </td>
                       <td className="table-cell text-center font-mono">{formatMoney(row.netIncome)}</td>
                       <td className="table-cell text-center font-mono">{row.days}</td>

@@ -156,10 +156,10 @@ export default function HiringDocumentsPage() {
 
             <div className="card p-4 flex items-center gap-3 flex-wrap">
               <div className="relative flex-1 min-w-[220px]">
-                <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <Search size={18} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   type="text"
-                  className="input pr-10"
+                  className="input ps-10"
                   placeholder="بحث باسم الموظف أو كوده..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
@@ -201,16 +201,16 @@ export default function HiringDocumentsPage() {
                     <table className="w-full">
                       <thead>
                         <tr className="table-header">
-                          <th className="px-4 py-3 text-right w-10">
+                          <th className="px-4 py-3 text-start w-10">
                             <button onClick={toggleAll} aria-label="اختيار الكل" className="text-gray-400 hover:text-gray-600">
                               {allSelected ? <CheckSquare size={20} className="text-primary-600" /> : <Square size={20} />}
                             </button>
                           </th>
-                          <th className="px-4 py-3 text-right">الموظف</th>
-                          <th className="px-4 py-3 text-right">الفرع</th>
-                          <th className="px-4 py-3 text-right">القسم</th>
-                          <th className="px-4 py-3 text-right">الناقص</th>
-                          <th className="px-4 py-3 text-right">آخر تذكير</th>
+                          <th className="px-4 py-3 text-start">الموظف</th>
+                          <th className="px-4 py-3 text-start">الفرع</th>
+                          <th className="px-4 py-3 text-start">القسم</th>
+                          <th className="px-4 py-3 text-start">الناقص</th>
+                          <th className="px-4 py-3 text-start">آخر تذكير</th>
                           <th className="px-4 py-3 text-center">رفع</th>
                         </tr>
                       </thead>

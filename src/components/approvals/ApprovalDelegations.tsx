@@ -85,7 +85,7 @@ export default function ApprovalDelegations() {
           <span className="text-gray-500">{categoriesText(row.categories)}</span>
           <span className={`badge text-xs ${STATE_TONE[row.state]}`}>{DELEGATION_STATE_LABELS[row.state]}</span>
           {row.reason && <span className="text-gray-500 break-words">{row.reason}</span>}
-          {row.canRevoke && <button type="button" className="btn-secondary text-red-700 mr-auto disabled:opacity-50" disabled={busy} onClick={() => revoke(row)}>إلغاء التفويض</button>}
+          {row.canRevoke && <button type="button" className="btn-secondary text-red-700 ms-auto disabled:opacity-50" disabled={busy} onClick={() => revoke(row)}>إلغاء التفويض</button>}
         </li>
       ))}
     </ul>
@@ -93,7 +93,7 @@ export default function ApprovalDelegations() {
 
   return (
     <section className="card p-5" data-approval-delegations>
-      <button type="button" aria-expanded={open} onClick={() => setOpen(value => !value)} className="flex w-full items-center gap-3 text-right">
+      <button type="button" aria-expanded={open} onClick={() => setOpen(value => !value)} className="flex w-full items-center gap-3 text-start">
         <UserCheck size={20} className="text-primary-600" />
         <span className="flex-1"><span className="block font-bold text-gray-800">تفويض اعتماداتي</span><span className="text-sm text-gray-500" data-delegation-summary>{summary}</span></span>
         {open ? <ChevronUp size={18} /> : <ChevronDown size={18} />}

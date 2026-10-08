@@ -355,12 +355,12 @@ export default function AssetRegistryPage() {
             <div className="relative flex-1">
               <Search
                 size={18}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
+                className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400"
               />
               <input
                 type="text"
                 placeholder="بحث بالاسم أو الرقم التسلسلي..."
-                className="input pr-10 w-full"
+                className="input ps-10 w-full"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
@@ -409,7 +409,7 @@ export default function AssetRegistryPage() {
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
-                    <tr className="bg-gray-50 text-right">
+                    <tr className="bg-gray-50 text-start">
                       <th className="py-3 px-4 text-sm font-medium text-gray-500">الاسم</th>
                       <th className="py-3 px-4 text-sm font-medium text-gray-500">الفئة</th>
                       <th className="py-3 px-4 text-sm font-medium text-gray-500">الرقم التسلسلي</th>

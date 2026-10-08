@@ -108,11 +108,11 @@ export default function TrainingPage() {
             <table className="w-full text-sm" data-courses>
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">الدورة</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">النوع</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">المدة</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">المزوّد</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">الشهادة</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">الدورة</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">النوع</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">المدة</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">المزوّد</th>
+                  <th className="px-3 py-2 text-start font-medium text-gray-600">الشهادة</th>
                   <th className="px-3 py-2" />
                 </tr>
               </thead>
@@ -124,7 +124,7 @@ export default function TrainingPage() {
                     <td className="px-3 py-2 tabular-nums">{course.durationHours !== null ? `${course.durationHours} ساعة` : '—'}</td>
                     <td className="px-3 py-2 text-gray-600">{course.provider ?? '—'}</td>
                     <td className="px-3 py-2 text-gray-600">{course.givesCertificate ? (course.certificateValidMonths ? `صالحة ${course.certificateValidMonths} شهر` : 'من غير انتهاء') : '—'}</td>
-                    <td className="px-3 py-2 text-left">
+                    <td className="px-3 py-2 text-end">
                       <button onClick={() => toggle(course)} className="text-primary-600 hover:underline text-xs">
                         {course.isActive ? 'إيقاف' : 'إتاحة'}
                       </button>

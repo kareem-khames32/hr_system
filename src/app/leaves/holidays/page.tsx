@@ -408,7 +408,7 @@ export default function HolidaysPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-4">
-                  <div className="text-left">
+                  <div className="text-end">
                     <span className="px-3 py-1 rounded-full text-xs font-medium bg-primary-100 text-primary-700">
                       {holiday.country || 'كل الدول'}
                     </span>

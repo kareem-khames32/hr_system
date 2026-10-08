@@ -236,7 +236,7 @@ export default function PayslipPage() {
                 </div>
               </div>
             </div>
-            <div className="text-left">
+            <div className="text-end">
               <h2 className="text-2xl font-bold text-primary-600">قسيمة الراتب</h2>
               <p className="text-lg font-bold text-gray-800 mt-2">{run.period}</p>
             </div>
@@ -320,7 +320,7 @@ export default function PayslipPage() {
                             <p className="text-gray-800">{earning.name}</p>
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-left font-mono font-medium text-success-600">
+                        <td className="px-4 py-3 text-end font-mono font-medium text-success-600">
                           {formatMoneyOrDash(earning.amount)}
                         </td>
                       </tr>
@@ -329,7 +329,7 @@ export default function PayslipPage() {
                   <tfoot>
                     <tr className="bg-success-100">
                       <td className="px-4 py-3 font-bold text-success-800">{PAYROLL_LINE_TOTAL_LABELS.earnings}</td>
-                      <td className="px-4 py-3 text-left font-mono font-bold text-success-800 text-lg">
+                      <td className="px-4 py-3 text-end font-mono font-bold text-success-800 text-lg">
                         {formatMoney(totalEarnings)}
                       </td>
                     </tr>
@@ -355,7 +355,7 @@ export default function PayslipPage() {
                             {exemptionNote(deduction.component) && <p className="text-success-700 text-xs">{exemptionNote(deduction.component)}</p>}
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-left font-mono font-medium text-danger-600">
+                        <td className="px-4 py-3 text-end font-mono font-medium text-danger-600">
                           {formatMoneyOrDash(deduction.amount)}
                         </td>
                       </tr>
@@ -364,7 +364,7 @@ export default function PayslipPage() {
                   <tfoot>
                     <tr className="bg-danger-100">
                       <td className="px-4 py-3 font-bold text-danger-800">{PAYROLL_LINE_TOTAL_LABELS.deductions}</td>
-                      <td className="px-4 py-3 text-left font-mono font-bold text-danger-800 text-lg">
+                      <td className="px-4 py-3 text-end font-mono font-bold text-danger-800 text-lg">
                         {formatMoney(totalDeductions)}
                       </td>
                     </tr>

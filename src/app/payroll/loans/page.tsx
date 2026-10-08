@@ -408,13 +408,13 @@ export default function LoansPage() {
           <div className="flex flex-wrap items-end gap-4 min-w-0">
             <div className="flex-1 min-w-[220px]">
               <div className="relative">
-                <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <Search size={18} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   type="text"
                   placeholder="بحث بالاسم أو الرقم الوظيفي..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="input pr-10"
+                  className="input ps-10"
                 />
               </div>
             </div>
@@ -443,7 +443,7 @@ export default function LoansPage() {
             <table className="w-full">
               <thead>
                 <tr className="table-header">
-                  <th className="text-right px-4 py-4">الموظف</th>
+                  <th className="text-start px-4 py-4">الموظف</th>
                   <th className="text-center px-4 py-4">المبلغ</th>
                   <th className="text-center px-4 py-4">قيود الجدول</th>
                   <th className="text-center px-4 py-4">مسدد بالكامل</th>
@@ -518,7 +518,7 @@ export default function LoansPage() {
                           <table className="w-full">
                             <thead>
                               <tr className="table-header">
-                                <th className="text-right px-4 py-2">#</th>
+                                <th className="text-start px-4 py-2">#</th>
                                 <th className="text-center px-4 py-2">تاريخ الاستحقاق</th>
                                 <th className="text-center px-4 py-2">مبلغ القسط</th>
                                 <th className="text-center px-4 py-2">المدفوع فعليًا</th>
@@ -573,7 +573,7 @@ export default function LoansPage() {
 
         {/* Loan Flow Info */}
         <div className="grid grid-cols-3 gap-4">
-          <div className="card border-r-4 border-primary-500">
+          <div className="card border-s-4 border-primary-500">
             <h3 className="font-bold text-gray-800 mb-2">تقديم الطلب</h3>
             <ul className="text-sm text-gray-600 space-y-1">
               <li>• يقدَّم الطلب من محرك الطلبات (نوع «سلفة»)</li>
@@ -581,14 +581,14 @@ export default function LoansPage() {
               <li>• التقسيط للسلفة الاستثنائية بس (من زرار «سلفة استثنائية»)</li>
             </ul>
           </div>
-          <div className="card border-r-4 border-warning-500">
+          <div className="card border-s-4 border-warning-500">
             <h3 className="font-bold text-gray-800 mb-2">الاعتماد</h3>
             <ul className="text-sm text-gray-600 space-y-1">
               <li>• يمر الطلب بسلسلة الموافقات المعتمدة</li>
               <li>• عند الاكتمال يُنشأ سجل السلفة وجدول الأقساط آلياً</li>
             </ul>
           </div>
-          <div className="card border-r-4 border-danger-500">
+          <div className="card border-s-4 border-danger-500">
             <h3 className="font-bold text-gray-800 mb-2">السداد</h3>
             <ul className="text-sm text-gray-600 space-y-1">
               <li>• تُخصم الأقساط المستحقة آلياً من مسير الرواتب</li>

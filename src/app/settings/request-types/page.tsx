@@ -1083,7 +1083,7 @@ export default function RequestTypesPage() {
                       className="fixed inset-0 z-10"
                       onClick={() => setActiveMenu(null)}
                     />
-                    <div className="absolute left-0 top-full mt-1 w-48 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
+                    <div className="absolute end-0 top-full mt-1 w-48 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
                       <button
                         onClick={() => {
                           handleOpenModal(rt)
@@ -1197,7 +1197,7 @@ export default function RequestTypesPage() {
                   className="text-xs bg-primary-50 text-primary-700 px-2 py-1 rounded-lg border border-primary-100"
                 >
                   {f.label}
-                  <span className="text-primary-400 mr-1">
+                  <span className="text-primary-400 ms-1">
                     ({(fieldTypeLabels as Record<string, string>)[f.type] ?? f.type})
                   </span>
                 </span>
@@ -1327,14 +1327,14 @@ export default function RequestTypesPage() {
             <div className="relative flex-1">
               <Search
                 size={20}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
+                className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400"
               />
               <input
                 type="text"
                 placeholder="البحث عن نوع طلب..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="input pr-10 w-full md:w-96"
+                className="input ps-10 w-full md:w-96"
               />
             </div>
             <select
@@ -1632,7 +1632,7 @@ export default function RequestTypesPage() {
                     <div className="relative">
                       <Paperclip
                         size={16}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
+                        className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400"
                       />
                       <input
                         type="text"
@@ -1640,7 +1640,7 @@ export default function RequestTypesPage() {
                         onChange={(e) =>
                           setForm({ ...form, requiredAttachments: e.target.value })
                         }
-                        className="input w-full pr-9"
+                        className="input w-full ps-9"
                         placeholder="مثال: صورة الفاتورة، تقرير طبي"
                       />
                     </div>
@@ -1871,13 +1871,13 @@ export default function RequestTypesPage() {
                       <div className="relative mb-2">
                         <Search
                           size={16}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
+                          className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400"
                         />
                         <input
                           type="text"
                           value={empFilter}
                           onChange={(e) => setEmpFilter(e.target.value)}
-                          className="input w-full pr-9 text-sm"
+                          className="input w-full ps-9 text-sm"
                           placeholder="ابحث بالاسم أو الكود..."
                         />
                       </div>
@@ -1972,7 +1972,7 @@ export default function RequestTypesPage() {
                             <span className="text-sm text-gray-700">
                               {d.name}
                               {formBranch == null && (
-                                <span className="text-xs text-gray-400 mr-2">{branchInfo.label(d.branchId)}</span>
+                                <span className="text-xs text-gray-400 ms-2">{branchInfo.label(d.branchId)}</span>
                               )}
                             </span>
                           </label>
@@ -1997,7 +1997,7 @@ export default function RequestTypesPage() {
                               />
                               <span className="text-sm text-gray-700">
                                 {t.name}
-                                <span className="text-xs text-gray-400 mr-2">
+                                <span className="text-xs text-gray-400 ms-2">
                                   {[dept?.name, formBranch == null && dept ? branchInfo.label(dept.branchId) : null].filter(Boolean).join(' — ')}
                                 </span>
                               </span>
@@ -2087,7 +2087,7 @@ export default function RequestTypesPage() {
                       {Object.keys(form.customConds).filter((key) => form.customConds[key].length > 0 && !customFields.some((field) => field.fieldKey === key)).map((key) => (
                         <p key={key} className="text-xs text-amber-700" data-audience-custom-stale={key}>
                           شرط على حقل مابقاش متاح ({key})
-                          <button type="button" className="underline mr-2" onClick={() => setForm({ ...form, customConds: { ...form.customConds, [key]: [] } })}>إزالة الشرط</button>
+                          <button type="button" className="underline ms-2" onClick={() => setForm({ ...form, customConds: { ...form.customConds, [key]: [] } })}>إزالة الشرط</button>
                         </p>
                       ))}
                     </div>

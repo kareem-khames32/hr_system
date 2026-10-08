@@ -1264,8 +1264,8 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 <div>
                   <label className="label">تاريخ الميلاد *</label>
                   <div className="relative">
-                    <input type="date" className="input pl-10" value={form.birthDate} onChange={(e) => setField('birthDate', e.target.value)} />
-                    <Calendar size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input type="date" className="input pe-10" value={form.birthDate} onChange={(e) => setField('birthDate', e.target.value)} />
+                    <Calendar size={18} className="absolute end-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   </div>
                 </div>
                 <div>
@@ -1324,7 +1324,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                   <label className="label">رقم الجوال *</label>
                   <div className="relative">
                     <input type="tel" className="input pl-10" placeholder="+966 50 123 4567" dir="ltr" value={form.phone} onChange={(e) => setField('phone', e.target.value)} />
-                    <Phone size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <Phone size={18} className="absolute end-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   </div>
                 </div>
                 <div>
@@ -1335,7 +1335,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                   <label className="label">البريد الإلكتروني الشخصي</label>
                   <div className="relative">
                     <input type="email" className="input pl-10" placeholder="email@example.com" dir="ltr" value={form.personalEmail} onChange={(e) => setField('personalEmail', e.target.value)} />
-                    <Mail size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <Mail size={18} className="absolute end-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   </div>
                 </div>
                 {/* بريد العمل كان في قسم لوحده في خطوة تانية فمحدش بيلاقيه، وهو اللي بيتطابق
@@ -1344,7 +1344,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                   <label className="label">البريد الإلكتروني للعمل</label>
                   <div className="relative">
                     <input type="email" className="input pl-10" placeholder="ahmed.m@maharah.pro" dir="ltr" value={form.workEmail} onChange={(e) => setField('workEmail', e.target.value)} />
-                    <Mail size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <Mail size={18} className="absolute end-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   </div>
                   <p className="text-xs text-gray-400 mt-1">اختياري — وهو اللي بيتطابق بيه حساب الدومين لما الموظف يدخل بحساب الشركة.</p>
                 </div>

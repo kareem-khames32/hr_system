@@ -194,8 +194,8 @@ export default function MyCustodyPage() {
                 <table className="w-full max-sm:whitespace-nowrap">
                   <thead>
                     <tr className="table-header">
-                      <th className="text-right px-4 py-3">العهدة</th>
-                      <th className="text-right px-4 py-3">الرقم التسلسلي</th>
+                      <th className="text-start px-4 py-3">العهدة</th>
+                      <th className="text-start px-4 py-3">الرقم التسلسلي</th>
                       <th className="text-center px-4 py-3">تاريخ التسليم</th>
                       <th className="text-center px-4 py-3">الحالة</th>
                       <th className="text-center px-4 py-3">إجراء</th>

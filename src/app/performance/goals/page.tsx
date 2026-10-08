@@ -131,7 +131,7 @@ function GoalList({ goals, showOwner, onOpen }: { goals: ApiGoal[]; showOwner: b
   return (
     <div className="grid gap-3" data-goals>
       {goals.map((goal) => (
-        <button key={goal.id} onClick={() => onOpen(goal.id)} className="card text-right hover:shadow-md transition-shadow">
+        <button key={goal.id} onClick={() => onOpen(goal.id)} className="card text-start hover:shadow-md transition-shadow">
           <div className="flex items-start justify-between gap-3">
             <div>
               <h3 className="font-bold text-gray-800">{goal.title}</h3>

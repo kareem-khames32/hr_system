@@ -133,7 +133,7 @@ export default function CalibrationPage() {
               <h2 className="text-lg font-bold text-gray-800 mb-3">توزيع التقديرات لكل مدير</h2>
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-right text-gray-500 border-b">
+                  <tr className="text-start text-gray-500 border-b">
                     <th className="py-2 px-2 font-medium">المدير</th>
                     <th className="py-2 px-2 font-medium">العدد</th>
                     <th className="py-2 px-2 font-medium">المتوسط</th>
@@ -173,7 +173,7 @@ export default function CalibrationPage() {
             <div className="card overflow-x-auto" data-calibration-rows>
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-right text-gray-500 border-b">
+                  <tr className="text-start text-gray-500 border-b">
                     <th className="py-2 px-2 font-medium">الموظف</th>
                     <th className="py-2 px-2 font-medium">القسم</th>
                     <th className="py-2 px-2 font-medium">المدير</th>
@@ -204,7 +204,7 @@ export default function CalibrationPage() {
                         {row.statusLabel}
                         {row.objection && <p className="text-xs text-amber-700 mt-1">اعتراض: {row.objection.statusLabel}</p>}
                       </td>
-                      <td className="py-2 px-2 text-left">
+                      <td className="py-2 px-2 text-end">
                         {row.canCalibrate && (
                           <button onClick={() => open(row)} className="btn-secondary text-xs">
                             تعديل

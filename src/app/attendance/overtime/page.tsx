@@ -345,12 +345,12 @@ export default function OvertimePage() {
             <div className="relative flex-1 min-w-[16rem]">
               <Search
                 size={18}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
+                className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400"
               />
               <input
                 type="text"
                 placeholder="بحث بالموظف أو رقم السطر..."
-                className="input pr-10 w-full"
+                className="input ps-10 w-full"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
@@ -395,7 +395,7 @@ export default function OvertimePage() {
             <table className="w-full">
               <thead>
                 <tr className="table-header">
-                  <th className="text-right px-4 py-3">الموظف</th>
+                  <th className="text-start px-4 py-3">الموظف</th>
                   <th className="text-center px-4 py-3">التاريخ</th>
                   <th className="text-center px-4 py-3">المصدر</th>
                   <th className="text-center px-4 py-3">المطلوبة</th>
@@ -1017,7 +1017,7 @@ function AddOvertimePeriodModal({
                   key={option.value}
                   type="button"
                   onClick={() => setEffect(option.value)}
-                  className={`p-4 rounded-xl border-2 text-right transition-all ${
+                  className={`p-4 rounded-xl border-2 text-start transition-all ${
                     effect === option.value ? 'border-primary-500 bg-primary-50' : 'border-gray-200 hover:border-gray-300'
                   }`}
                 >
