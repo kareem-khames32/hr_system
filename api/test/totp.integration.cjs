@@ -465,3 +465,100 @@ test('TP-06 (CRP3E): a reset is refused when the account version moved after the
   assert.equal(next.kind, 'TOTP')
   expect(await http('POST', '/auth/login/verify', { challengeToken: next.challengeToken, code: codeOf(S.racer) }), 200)
 })
+
+test('TP-07 (CRP3F): a stale account or role save cannot write over a promotion, and a password-only login that the enrolment overtakes opens no session', async () => {
+  const account = async (key, extra = {}) => {
+    P[key] = passwordOf()
+    U[key] = await repo('User').save({ email: `${key}@totp.invalid`, displayName: `حساب ${key}`, role: 'employee', permissions: '[]', isActive: true, branchId: B.a.id,
+      passwordHash: await bcrypt.hash(P[key], 10), ...extra })
+  }
+  const done = response => { assert.ok([200, 201].includes(response.status), JSON.stringify(response.body)); return response.body }
+  const root = bearer(await signIn('admin'))
+  const totp = app.get(require('../src/auth/totp.service').TotpService)
+  const versionOf = async key => (await repo('User').findOneByOrFail({ id: U[key].id })).tokenVersion
+  const permsOf = async id => JSON.parse((await repo('Role').findOneByOrFail({ id })).permissions)
+
+  // ===== B17-01 (أ): تعديل حساب قرا الصف قبل ترقية دوره — الحفظ مابيرجّعش إصدار الحساب =====
+  const role = done(await http('POST', '/roles', { code: 'tp07_role', nameAr: 'دور اختبار الحفظ القديم', permissions: [] }, root))
+  await account('stale', { role: role.code }); await enroll('stale')
+  const judged = await repo('User').findOneByOrFail({ id: U.stale.id })
+  // مخزن المتحكم نفسه (النسخة اللي بيقرا بيها صف الحساب)
+  const users = app.get(require('../src/auth/users.controller').UsersController).users, realFindUser = users.findOne
+  let promoted = false
+  // أول قراية لصف الحساب (من تعديل الحساب) بترجع بالصف، وبعدها حزمة دوره بتترقّى قبل ما التعديل يحفظ
+  users.findOne = async function (...args) {
+    const row = await realFindUser.apply(this, args)
+    if (!promoted && row?.id === U.stale.id) {
+      promoted = true
+      done(await http('PATCH', `/roles/${role.id}`, { permissions: ['settings.manage'] }, root))
+    }
+    return row
+  }
+  let edited
+  try { edited = await http('PATCH', `/users/${U.stale.id}`, {}, root) } finally { users.findOne = realFindUser }
+  assert.equal(promoted, true)
+  assert.deepEqual(answer(edited), [409, 'بيانات الحساب اتغيّرت — حدّث الصفحة وحاول تاني'])
+  assert.deepEqual([await versionOf('stale'), await permsOf(role.id)], [judged.tokenVersion + 1, ['settings.manage']], 'الإصدار مارجعش والترقية باقية')
+  // فحكم إعادة الضبط اللي اتعمل قبل الترقية بيترفض، والتفعيل باقي
+  await assert.rejects(totp.adminReset({ sub: U.adminA.id, branchId: B.a.id }, judged), error => error.getStatus?.() === 409)
+  assert.equal((await rowOf('stale')).confirmedAt instanceof Date, true)
+  // والتعديل العادي زي ما هو: بالخانة المتغيّرة، والإصدار بيزيد واحد، وسطر التدقيق بيتسجّل
+  const audited = await audits('USER_UPDATED'), version = await versionOf('stale')
+  const disabled = expect(await http('PATCH', `/users/${U.stale.id}`, { isActive: false }, root), 200)
+  assert.deepEqual([disabled.isActive, 'passwordHash' in disabled, await versionOf('stale'), await audits('USER_UPDATED') - audited], [false, false, version + 1, 1])
+  assert.equal((await repo('User').findOneByOrFail({ id: U.stale.id })).role, role.code)
+  // تعديل من غير أي تغيير: ولا كتابة ولا زيادة إصدار
+  expect(await http('PATCH', `/users/${U.stale.id}`, {}, root), 200)
+  assert.equal(await versionOf('stale'), version + 1)
+
+  // ===== B17-01 (ب): تعديل اسم دور قرا حزمته قبل سحب صلاحية منها — الحفظ مابيرجّعش الحزمة القديمة =====
+  await account('member', { role: role.code })
+  const roles = app.get(require('../src/auth/roles.controller').RolesController).roles, realFindRole = roles.findOne
+  let withdrawn = false
+  roles.findOne = async function (...args) {
+    const row = await realFindRole.apply(this, args)
+    if (!withdrawn && row?.id === role.id) {
+      withdrawn = true
+      done(await http('PATCH', `/roles/${role.id}`, { permissions: [] }, root))
+    }
+    return row
+  }
+  const memberVersion = await versionOf('member')
+  let renamed
+  try { renamed = await http('PATCH', `/roles/${role.id}`, { nameAr: 'اسم جديد بحزمة قديمة' }, root) } finally { roles.findOne = realFindRole }
+  assert.equal(withdrawn, true)
+  assert.deepEqual(answer(renamed), [409, 'بيانات الدور اتغيّرت — حدّث الصفحة وحاول تاني'])
+  const stored = await repo('Role').findOneByOrFail({ id: role.id })
+  assert.deepEqual([JSON.parse(stored.permissions), stored.nameAr, await versionOf('member')], [[], 'دور اختبار الحفظ القديم', memberVersion + 1], 'الصلاحية المسحوبة مارجعتش')
+  // وتعديل الاسم لوحده بعدها بيعدّي من غير ما يحرّك إصدار الحسابات
+  assert.equal(done(await http('PATCH', `/roles/${role.id}`, { nameAr: 'دور باسمه الجديد' }, root)).nameAr, 'دور باسمه الجديد')
+  assert.deepEqual([await permsOf(role.id), await versionOf('member')], [[], memberVersion + 1])
+
+  // ===== B17-02: الدخول بكلمة السر لوحدها (رمز البريد مقفول) والتفعيل ثبت قبل فتح صف الجلسة =====
+  await account('solo')
+  const early = bearer(expect(await login('solo'), 201).accessToken)
+  const setup = expect(await http('POST', '/auth/totp/setup', undefined, early), 200)
+  const sessions = app.get(require('../src/auth/user-sessions.service').UserSessionsService), realOpen = sessions.open
+  const liveSessions = async () => Number((await query('SELECT COUNT(*) AS [n] FROM [user_sessions] WHERE [userId] = @0 AND [revokedAt] IS NULL', [U.solo.id]))[0].n)
+  let overtaken = false
+  sessions.open = async function (user, ...rest) {
+    if (user.id === U.solo.id && !overtaken) {
+      overtaken = true
+      expect(await http('POST', '/auth/totp/confirm', { code: codeOf(setup.secret) }, early), 200)
+    }
+    return realOpen.call(this, user, ...rest)
+  }
+  let raced
+  try { raced = await login('solo') } finally { sessions.open = realOpen }
+  assert.equal(overtaken, true)
+  assert.deepEqual([raced.status, messageOf(raced), 'accessToken' in (raced.body ?? {}), raced.cookies.length], [401, rules.TOTP_FACTOR_CHANGED, false, 0])
+  assert.equal(await liveSessions(), 1, 'صف جلسة الدخول اللي اتفتح اتنهى')
+  S.solo = setup.secret; await rewind('solo')
+  // والدخول الجاي برمز التطبيق، وتغيير كلمة المرور من الجلسة دي بيطلّع جلسة جديدة عادي (من جلسة قايمة)
+  const token = await signIn('solo')
+  const next = passwordOf()
+  const changed = expect(await http('POST', '/auth/change-password', { currentPassword: P.solo, newPassword: next }, bearer(token)), 200)
+  P.solo = next
+  assert.equal(typeof changed.accessToken, 'string')
+  expect(await http('GET', '/auth/me', undefined, bearer(changed.accessToken)), 200)
+})

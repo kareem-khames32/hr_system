@@ -217,7 +217,8 @@ test('source guards: only the super admin flips the switch, it bumps tokenVersio
   const update = users.slice(users.indexOf("@Patch(':id')"))
   const flip = update.indexOf('throw new ForbiddenException(SCOPE_ALL_BRANCHES_SUPER_ADMIN_ONLY)')
   const locked = update.indexOf('if (wasScopeAll) throw new ForbiddenException(SCOPE_ALL_BRANCHES_ACCOUNT_LOCKED)')
-  const save = update.indexOf('await this.users.save(user)')
+  // CRP3F: الحفظ بقى للصف المقفول المقري من جديد جوه المعاملة
+  const save = update.indexOf('em.getRepository(User).save(fresh)')
   assert.ok(flip > 0 && locked > flip && save > locked, 'الحراسة قبل الحفظ')
   assert.match(update, /dto\.scopeAllBranches !== undefined && dto\.scopeAllBranches !== wasScopeAll/)
   assert.match(update, /nextRole === 'super_admin' \? false : \(dto\.scopeAllBranches \?\? wasScopeAll\)/)

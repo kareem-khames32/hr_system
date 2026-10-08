@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   ForbiddenException,
   Get,
@@ -62,6 +63,9 @@ class CreateRoleDto {
   @IsArray({ message: 'الصلاحيات مصفوفة' })
   permissions: string[]
 }
+
+/** الدور اتغيّر (حزمته أو حالته) بعد ما التعديل اتحكم عليه — CRP3F */
+export const ROLE_CHANGED_MEANWHILE = 'بيانات الدور اتغيّرت — حدّث الصفحة وحاول تاني'
 
 class UpdateRoleDto {
   @IsOptional()
@@ -233,6 +237,8 @@ export class RolesController {
     }
     const prevPerms: string[] = JSON.parse(role.permissions)
     const wasActive = role.isActive
+    // CRP3F: الحزمة والحالة زي ما اتقروا — بيتقارنوا بالصف تحت القفل وقت الحفظ
+    const seenPermissions = role.permissions
     let permsChanged = false
     if (dto.permissions !== undefined) {
       const perms = validatePermList(dto.permissions)
@@ -271,8 +277,16 @@ export class RolesController {
     // CRP2A-B01 (مسح الصنف): حفظ الدور (وسطر تدقيقه من المستمع) وإبطال الجلسات في معاملة واحدة — فشل أي واحد بيرجّع الكل.
     // الصلاحيات داخل الـJWT (8 ساعات) → تغيير حزمة الدور أو تفعيله يُبطل فوراً
     // جلسات كل من عليه الدور (تغيير الاسم وحده لا يؤثر)
+    // CRP3F: الحكم فوق اتعمل على صف اتقري من غير قفل، وحفظ الكيان كله كان بيرجّع حزمة قديمة فوق تعديل حصل بعد القراية (تعديل اسم
+    // قرا الحزمة قبل سحب صلاحية منها) من غير ما إصدار الحسابات يتحرك. صف الدور بيتقفل ويتقري من جديد: حزمته أو حالته اتغيّروا بعد الحكم =
+    // 409، والخانات المبعوتة بس بتتحط على الصف الحالي
     const saved = await this.roles.manager.transaction(async (em) => {
-      const row = await em.getRepository(Role).save(role)
+      const fresh = await em.getRepository(Role).findOne({ where: { id: role.id }, lock: { mode: 'pessimistic_write' } })
+      if (!fresh || fresh.permissions !== seenPermissions || fresh.isActive !== wasActive) throw new ConflictException(ROLE_CHANGED_MEANWHILE)
+      if (dto.permissions !== undefined) fresh.permissions = role.permissions
+      if (dto.nameAr !== undefined) fresh.nameAr = role.nameAr
+      if (dto.isActive !== undefined) fresh.isActive = role.isActive
+      const row = await em.getRepository(Role).save(fresh)
       if (permsChanged || row.isActive !== wasActive) {
         await em.getRepository(User).increment(
           { role: role.code as User['role'] },

@@ -225,7 +225,7 @@ test('2FF4 — المصدر: الرفض قبل أي إصدار جلسة، وقر
   const body = auth.slice(auth.indexOf('private async finishLogin'), auth.indexOf('private httpFor'))
   assert.ok(body.indexOf("gate === 'UNKNOWN'") > 0, 'حالة «مش معروف» لازم تتفصل صريحة')
   assert.ok(
-    body.indexOf("gate === 'UNKNOWN'") < body.indexOf('return this.issueSession(user, session, context)'),
+    body.indexOf("gate === 'UNKNOWN'") < body.indexOf('await this.issueSession(user, session, context)'),
     'الرفض لازم يسبق أي إصدار جلسة'
   )
   assert.match(body, /ServiceUnavailableException/)
