@@ -28,6 +28,8 @@ export const DOC_TYPES: Array<{ code: string; label: string }> = [
   { code: 'experience_certificate', label: 'شهادة خبرة' },
   { code: 'formal_photo', label: 'صورة شخصية رسمية' },
   { code: 'iqama', label: 'إقامة' },
+  { code: 'work_permit', label: 'رخصة عمل' },
+  { code: 'qiwa_contract', label: 'توثيق العقد في قوى' },
   { code: 'driver_license', label: 'رخصة قيادة' },
   { code: 'health_certificate', label: 'شهادة صحية' },
   { code: 'letter', label: 'خطاب رسمي' },

@@ -15,6 +15,9 @@ export const DOC_TYPES_SEED: Array<{ code: string; nameAr: string }> = [
   { code: 'experience_certificate', nameAr: 'شهادة خبرة' },
   { code: 'formal_photo', nameAr: 'صورة شخصية رسمية' },
   { code: 'iqama', nameAr: 'إقامة' },
+  // B4.6 (أ): رخصة العمل وتوثيق العقد في قوى — بنفس خانات المستند (الرقم، الإصدار، الانتهاء) وإعدادات الانتهاء والمهمة
+  { code: 'work_permit', nameAr: 'رخصة عمل' },
+  { code: 'qiwa_contract', nameAr: 'توثيق العقد في قوى' },
   { code: 'driver_license', nameAr: 'رخصة قيادة' },
   { code: 'health_certificate', nameAr: 'شهادة صحية' },
   { code: 'letter', nameAr: 'خطاب رسمي' },

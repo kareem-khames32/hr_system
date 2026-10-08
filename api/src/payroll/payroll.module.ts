@@ -67,6 +67,7 @@ import { EgSalaryTaxController } from './eg-salary-tax.controller'
 import { EgSalaryTaxService } from './eg-salary-tax.service'
 import { EgTrainingFundService } from './eg-training-fund'
 import { MinimumWageAlertService } from './minimum-wage-alert'
+import { SaudizationReportService } from './saudization-report'
 import { SalaryItem } from './salary-items'
 import { SalaryItemsController } from './salary-items.controller'
 import { SalaryItemsService } from './salary-items.service'
@@ -155,7 +156,7 @@ import { HiddenRunPeriodsInterceptor } from './hidden-run-periods.interceptor'
     PayrollDailyAccrualController, PayrollApprovalChainController, PayrollDisbursementController, PayrollLiveController, SalaryItemsController, EgSalaryTaxController],
   providers: [PayrollService, ObligationsService, PayrollRulesService, PayrollPolicyService, PayrollSalaryHistoryService, TypedDeductionsService, TypedDeductionsScheduler, BonusesService,
     FinancialExemptionsService, PayrollCorrectionsService, SocialInsuranceService, PayrollOverviewService, PayrollAllowancesService,
-    PayrollDailyAccrualService, PayrollDailyAccrualScheduler, PayrollApprovalChainService, PayrollDisbursementService, PayrollLiveService, SalaryItemsService, MinimumWageAlertService, EgSalaryTaxService, EgTrainingFundService,
+    PayrollDailyAccrualService, PayrollDailyAccrualScheduler, PayrollApprovalChainService, PayrollDisbursementService, PayrollLiveService, SalaryItemsService, MinimumWageAlertService, SaudizationReportService, EgSalaryTaxService, EgTrainingFundService,
     // CR40: شبكة أمان على كل رد JSON لحساب فرع — فترة مسير مخفي له في أي نص بتتحجب (hidden-run-periods.interceptor.ts)
     { provide: APP_INTERCEPTOR, useClass: HiddenRunPeriodsInterceptor }],
   // B3.8-ب: مكافآت نتيجة التقييم بتتقدّم بخدمة المكافآت نفسها

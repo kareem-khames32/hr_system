@@ -3,6 +3,7 @@ import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { EgTrainingFundService } from './eg-training-fund'
 import { MinimumWageAlertService } from './minimum-wage-alert'
+import { SaudizationReportService } from './saudization-report'
 import { SocialInsuranceService } from './social-insurance.service'
 import { RequireModule } from '../modules-registry/module.guard'
 
@@ -11,7 +12,8 @@ import { RequireModule } from '../modules-registry/module.guard'
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('social-insurance')
 export class SocialInsuranceController {
-  constructor(private readonly service: SocialInsuranceService, private readonly trainingFund: EgTrainingFundService, private readonly minimumWage: MinimumWageAlertService) {}
+  constructor(private readonly service: SocialInsuranceService, private readonly trainingFund: EgTrainingFundService, private readonly minimumWage: MinimumWageAlertService,
+    private readonly saudizationReport: SaudizationReportService) {}
 
   @Perm('payroll.view')
   @Get('settings')
@@ -43,5 +45,12 @@ export class SocialInsuranceController {
   @Get('minimum-wage-alerts')
   minimumWageAlerts(@CurrentUser() user: JwtPayload) {
     return this.minimumWage.report(user)
+  }
+
+  // B4.6 (أ): تقرير نطاقات البسيط — نسبة السعوديين لكل كيان قانوني سعودي (قراءة بس، لحساب بكل الفروع)
+  @Perm('payroll.view')
+  @Get('saudization')
+  saudization(@CurrentUser() user: JwtPayload) {
+    return this.saudizationReport.report(user)
   }
 }

@@ -34,4 +34,10 @@ export interface ApiMinimumWageAlerts {
   employees: Array<{ employeeId: number; fullName: string; employeeCode: string | null; branchName: string; country: string; gross: number; minimum: number; shortfall: number }>
 }
 export const fetchMinimumWageAlerts = () => apiFetch<ApiMinimumWageAlerts>('/social-insurance/minimum-wage-alerts')
+// B4.6 (أ): نسبة السعودة لكل كيان قانوني سعودي (قراءة بس، لحساب بكل الفروع)
+export interface ApiSaudization {
+  asOf: string
+  entities: Array<{ entityId: number | null; name: string; headcount: number; saudis: number; unknownNationality: number; percent: number | null }>
+}
+export const fetchSaudization = () => apiFetch<ApiSaudization>('/social-insurance/saudization')
 export const fetchEgTrainingFund = (year?: number) => apiFetch<ApiEgTrainingFund>(`/social-insurance/eg-training-fund${year ? `?year=${year}` : ''}`)
