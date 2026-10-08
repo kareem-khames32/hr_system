@@ -26,6 +26,7 @@ import { ReportsController } from './reports/reports.controller'
 import { MetricsService } from './reports/metrics.service'
 import { ReportPdfRenderer } from './reports/report-pdf.renderer'
 import { SavedReportsModule } from './reports/saved-reports.module'
+import { ReportBuilderModule } from './reports/report-builder.module'
 import { AnnouncementsModule } from './announcements/announcements.module'
 import { TeamController } from './manager/team.controller'
 import { TeamService } from './manager/team.service'
@@ -167,6 +168,8 @@ import { dbPacketSize } from './common/sql-packet-size'
     TimesheetsModule,
     // B2.13-ب: التقارير المحفوظة والمجدولة
     SavedReportsModule,
+    // B5.9: بانِي التقارير (ميزة reports.builder، مقفولة افتراضيًا)
+    ReportBuilderModule,
     // B2.16: الإعلانات (موديول اختياري مقفول افتراضيًا)
     AnnouncementsModule,
   ],

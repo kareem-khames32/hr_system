@@ -158,6 +158,15 @@ export const MODULES = {
     permissions: ['reports.view', 'reports.save'],
     routes: ['/reports'],
     jobs: ['reports.scheduled'],
+    features: {
+      // B5.9: بانِي التقارير — مقفول لحد ما الشركة تقرر (باقة «كامل»)
+      'reports.builder': {
+        nameAr: 'بانِي التقارير',
+        description: 'تقرير من اختيارك: مصدر (موظفين، حضور، إجازات، طلبات، رواتب) وأعمدة وفلاتر وتجميع، وحفظه ومشاركته مع أدوار — كل قارئ بصلاحياته ونطاق فروعه',
+        default: false,
+        routes: ['/reports/builder'],
+      },
+    },
   }),
 
   // ===== الوقت والحضور =====

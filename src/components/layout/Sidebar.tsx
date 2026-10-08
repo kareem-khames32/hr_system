@@ -294,6 +294,8 @@ const adminMenuDefs: MenuItem[] = [
     children: [
       { label: 'لوحة التقارير', href: '/reports' },
       { label: 'تقارير مخصصة', href: '/reports/custom' },
+      // B5.9: بانِي التقارير (بيظهر لما ميزة «بانِي التقارير» مفتوحة)
+      { label: 'بانِي التقارير', href: '/reports/builder' },
       { label: 'تقرير مراكز التكلفة', href: '/reports/cost-centers', perm: 'payroll.view' },
     ],
   },
