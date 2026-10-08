@@ -111,6 +111,7 @@ const EXCEPTIONS = {
   'ReviewRewardsController.dismiss': 'SERVICE_CHECK', // POST /performance/rewards/:id/dismiss — B3.8-ب: المدير الموجّه له الاقتراح، أو إدارة الأداء في نطاقها
   'ReviewRewardsController.mine': 'SERVICE_CHECK', // GET /performance/rewards/mine — B3.8-ب: الاقتراحات الموجّهة للحساب (المدير المباشر)
   'ReviewRewardsController.submit': 'SERVICE_CHECK', // POST /performance/rewards/:id/submit — B3.8-ب: المدير الموجّه له الاقتراح بيقدّم المكافأة (وموديول المكافآت بيحكم)
+  'TrainingController.teamMissing': 'SERVICE_CHECK', // GET /training/mandatory/team — B3.9-ج: التدريب الإلزامي الناقص عند مرؤوسين الحساب المباشرين
   'TrainingController.mine': 'SELF', // GET /training/mine — B3.9: تسجيلات الموظف نفسه في التدريب
   'TrainingController.rate': 'SELF', // POST /training/enrollments/:id/rate — B3.9: تقييم الموظف لتدريبه (صاحب التسجيل بس)
   'ReviewsController.acknowledge': 'SELF', // POST /performance/reviews/:id/acknowledge — B3.7-ب: إقرار الموظف نفسه بنتيجته المعلنة

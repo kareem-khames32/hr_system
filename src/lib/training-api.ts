@@ -47,3 +47,22 @@ export const markTrainingEnrollment = (id: number, status: Exclude<TrainingEnrol
 export const fetchTrainingCertificates = () => apiFetch<{ available: boolean; message?: string; certificates: ApiTrainingCertificate[] }>(`${T}/certificates`)
 export const fetchMyTraining = () => apiFetch<{ available: boolean; enrollments: ApiMyTraining[] }>(`${T}/mine`)
 export const rateTraining = (id: number, rating: number, comment?: string) => apiFetch<{ available: boolean; enrollments: ApiMyTraining[] }>(`${T}/enrollments/${id}/rate`, json('POST', { rating, ...(comment ? { comment } : {}) }))
+
+// B3.9-ج: ميزانية تدريب الأقسام وتقرير التكلفة مقابلها، والتدريب الإلزامي والناقص منه
+export interface ApiTrainingBudget {
+  available: boolean; message?: string; year: number
+  rows: Array<{ departmentId: number; departmentName: string; branchName: string | null; hasBudget: boolean; budget: string; spent: string; remaining: string; seats: number; over: boolean }>
+  totals: { budget: string; spent: string; remaining: string; seats: number }
+}
+export interface ApiTrainingMissing { employeeName: string; departmentName: string | null; courseName: string; enrolled: boolean }
+export interface ApiTrainingRequirements {
+  available: boolean; message?: string; canCompany: boolean
+  requirements: Array<{ id: number; courseId: number; courseName: string; jobTitle: string | null; departmentId: number | null; departmentName: string | null; canRemove: boolean }>
+  missing: ApiTrainingMissing[]
+}
+export const fetchTrainingBudget = (year: number) => apiFetch<ApiTrainingBudget>(`${T}/budget?year=${year}`)
+export const setTrainingBudget = (year: number, departmentId: number, budget: string) => apiFetch<ApiTrainingBudget>(`${T}/budget`, json('PUT', { year, departmentId, budget }))
+export const fetchTrainingRequirements = () => apiFetch<ApiTrainingRequirements>(`${T}/requirements`)
+export const addTrainingRequirement = (body: { courseId: number; jobTitle?: string; departmentId?: number }) => apiFetch<ApiTrainingRequirements>(`${T}/requirements`, json('POST', body))
+export const removeTrainingRequirement = (id: number) => apiFetch<ApiTrainingRequirements>(`${T}/requirements/${id}`, { method: 'DELETE' })
+export const fetchTeamTrainingMissing = () => apiFetch<{ missing: ApiTrainingMissing[] }>(`${T}/mandatory/team`)

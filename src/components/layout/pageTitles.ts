@@ -103,6 +103,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/training/my-courses', 'دوراتي'],
   ['/training/add', 'إضافة دورة'],
   ['/training/certificates', 'الشهادات'],
+  ['/training/plan', 'خطة التدريب'],
   [/^\/training\/[^/]+/, 'تفاصيل الدورة'],
   ['/training', 'الدورات التدريبية'],
   ['/reports/custom', 'تقارير مخصصة'],

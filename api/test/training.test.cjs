@@ -65,7 +65,7 @@ test('TU-02: a new closed module with its permission, enrolling under the sessio
   assert.match(rate, /enrollment\.employeeId !== user\.employeeId\) throw new NotFoundException\(TRAINING_ENROLLMENT_NOT_FOUND\)/)
   const controller = read('api/src/training/training.controller.ts')
   assert.match(controller, /@RequireModule\('training'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)\n@Controller\('training'\)/)
-  assert.equal(controller.split("@Perm('training.manage')").length - 1, 10, 'الكتالوج والجلسات والتسجيل والحالة والشهادات بالصلاحية')
+  assert.equal(controller.split("@Perm('training.manage')").length - 1, 15, 'الكتالوج والجلسات والتسجيل والحالة والشهادات والميزانية والإلزامي بالصلاحية')
   assert.ok(controller.indexOf("@Get('certificates')") > 0 && controller.indexOf("@Get('mine')") > 0)
   assert.doesNotMatch(read('api/src/training/training.entities.ts'), /default:|CreateDateColumn/, 'من غير افتراضي (زي الترحيلات)')
 })
@@ -94,11 +94,30 @@ test('TU-03: the training request destination — a selectable handler owned by 
   assert.match(read('api/src/settings/settings.controller.ts'), /\{ key: 'training_enrollment', labelAr: 'تسجيل في جلسة تدريب' \}/)
   assert.match(read('src/app/requests/page.tsx'), /training_enrollment: 'تسجيل في جلسة تدريب',/)
   // الشاشات حقيقية: على الخادم ومن غير بيانات وهمية
-  assert.deepEqual(MODULES.training.routes, ['/training', '/training/add', '/training/certificates', '/training/my-courses', '/training/*'])
+  assert.deepEqual(MODULES.training.routes, ['/training', '/training/add', '/training/certificates', '/training/my-courses', '/training/plan', '/training/*'])
   for (const [page, call] of [['src/app/training/page.tsx', 'fetchTrainingSessions()'], ['src/app/training/[id]/page.tsx', 'fetchTrainingSession(id)'], ['src/app/training/add/page.tsx', 'createTrainingCourse('],
     ['src/app/training/certificates/page.tsx', 'fetchTrainingCertificates()'], ['src/app/training/my-courses/page.tsx', 'fetchMyTraining()']]) {
     const text = read(page)
     assert.ok(text.includes(call), `${page}: ${call}`)
     assert.doesNotMatch(text, /window\.(prompt|confirm|alert)|mockData|const (courses|certificates|sessions) = \[/, page)
   }
+})
+
+test('TU-04: the department budget written once per department and year under a range lock, the report within the branch scope, and mandatory training judged by scope', () => {
+  const plans = require('../src/training/training-plans.service')
+  assert.deepEqual([plans.cleanTrainingYear(2026), plans.cleanTrainingYear('2030')], [2026, 2030])
+  for (const bad of [1999, 2101, '20x6', 2026.5, null, {}]) refuses(() => plans.cleanTrainingYear(bad), 'year ' + String(bad))
+  const service = read('api/src/training/training-plans.service.ts')
+  const setBudget = service.slice(service.indexOf('async setBudget('), service.indexOf('// ===== التدريب الإلزامي ====='))
+  const order = ['this.assertManager(user)', 'cleanTrainingYear(input.year)', 'this.ds.transaction(', 'inBranchScope(branchScopeOf(user), department.branchId)', 'FROM [training_plans] WITH (UPDLOCK, HOLDLOCK) WHERE [year] = @0 AND [departmentId] = @1',
+    "action: 'TRAINING_BUDGET_SET'"].map(part => setBudget.indexOf(part))
+  assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), JSON.stringify(order))
+  const report = service.slice(service.indexOf('async budget('), service.indexOf('/** ميزانية قسم لسنة'))
+  assert.match(report, /filter\(\(row\) => inBranchScope\(scope, row\.branchId\)\)/, 'الأقسام بنطاق الحساب')
+  assert.match(report, /if \(!employee \|\| !inBranchScope\(scope, employee\.branchId\)\) continue/, 'التكلفة لموظفين النطاق بس')
+  assert.match(service, /FROM \[training_requirements\] WITH \(UPDLOCK, HOLDLOCK\) WHERE \[courseId\] = @0/, 'الإلزام مرة واحدة تحت قفل مدى')
+  assert.match(service, /employee\.managerEmployeeId === user\.employeeId && inBranchScope\(scope, employee\.branchId\)/, 'المدير شايف مرؤوسيه المباشرين في نطاقه')
+  assert.doesNotMatch(service, /\.save\(|EmployeeObligation|obligation/i, 'أرقام للتقرير بس: مفيش قيد مالي')
+  assert.doesNotMatch(read('api/src/training/training-plan.entities.ts'), /default:|CreateDateColumn/, 'من غير افتراضي (زي الترحيلات)')
+  assert.ok(read('src/app/training/plan/page.tsx').includes('fetchTrainingBudget(year)'))
 })

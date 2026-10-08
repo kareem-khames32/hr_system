@@ -304,3 +304,75 @@ test('TR-04: «طلب تدريب» — الجلسة من المتاح لفرع �
   try { assert.equal(expectStatus(await request(users.a1, 'GET', '/requests/types'), 200).some(row => row.code === 'TRAINING_REQUEST'), false) }
   finally { expectStatus(await request(users.admin, 'PUT', '/modules/training', { enabled: true }), 200); modules.invalidate() }
 })
+
+test('TR-05: ميزانية الأقسام وتقرير التكلفة مقابلها بنطاق الفروع، والتدريب الإلزامي لمسمى أو قسم والناقص منه (لإدارة التدريب، وللمدير عن فريقه)', async () => {
+  const plans = require('../src/training/training-plans.service')
+  org.sales = await repo('Department').save({ name: 'قسم المبيعات', code: 'TR_SAL', branchId: org.branchA.id })
+  org.bDepartment = await repo('Department').save({ name: 'قسم فرع ب', code: 'TR_BD', branchId: org.branchB.id })
+  await repo('Employee').update({ id: emps.a1.id }, { departmentId: org.sales.id, jobTitle: 'فني سلامة' })
+  await repo('Employee').update({ id: emps.a2.id }, { departmentId: org.sales.id, jobTitle: 'محاسب' })
+  await repo('Employee').update({ id: emps.a3.id }, { jobTitle: 'فني  سلامة' })
+  await repo('Employee').update({ id: emps.b1.id }, { departmentId: org.bDepartment.id, jobTitle: 'فني سلامة' })
+  emps.a4 = await employee({ fullName: 'فني جديد', departmentId: org.sales.id, jobTitle: 'فني سلامة', managerEmployeeId: emps.a1.id })
+  // الجلسة المجدولة اللي فيها متدربين القسم (350.50 للمقعد) — والجلسات الملغية برّه الحساب
+  const open = expectStatus(await request(users.hrA, 'GET', T + '/sessions'), 200).sessions.find(row => row.status === 'PLANNED' && row.counts.seats === 2)
+  const year = Number(open.startDate.slice(0, 4))
+  const B = T + '/budget'
+  assert.deepEqual([(await request(users.a1, 'GET', B)).status, (await request(users.hrA, 'GET', B + '?year=x')).status, (await request(users.hrA, 'GET', B + '?year=1999')).status], [403, 400, 400])
+  const first = expectStatus(await request(users.hrA, 'GET', B + `?year=${year}`), 200)
+  assert.deepEqual([first.year, first.rows.map(row => [row.departmentName, row.branchName, row.hasBudget, row.budget, row.spent, row.remaining, row.seats, row.over]), first.totals],
+    [year, [['قسم المبيعات', 'فرع التدريب أ', false, '0.00', '701.00', '-701.00', 2, false]], { budget: '0.00', spent: '701.00', remaining: '-701.00', seats: 2 }])
+  // موظف من غير قسم بيتجمع في صف لوحده
+  expectStatus(await request(users.hrA, 'PATCH', T + `/sessions/${open.id}`, { capacity: 3 }), 200)
+  expectStatus(await request(users.hrA, 'POST', T + `/sessions/${open.id}/enroll`, { employeeIds: [emps.a3.id] }), 200)
+  assert.deepEqual(expectStatus(await request(users.hrA, 'GET', B + `?year=${year}`), 200).rows.map(row => [row.departmentName, row.spent, row.seats]), [['قسم المبيعات', '701.00', 2], ['من غير قسم', '350.50', 1]])
+  // الميزانية: القيم، والقسم في النطاق، وصف واحد لكل قسم وسنة
+  const put = (user, body) => request(user, 'PUT', B, body)
+  for (const [body, message] of [[{ year: 1999, departmentId: org.sales.id, budget: 100 }, plans.TRAINING_YEAR], [{ year, departmentId: org.sales.id, budget: -1 }, plans.TRAINING_BUDGET],
+    [{ year, departmentId: org.sales.id }, plans.TRAINING_BUDGET], [{ year, departmentId: org.sales.id, budget: '5.555' }, plans.TRAINING_BUDGET]]) assert.deepEqual(answer(await put(users.hrA, body)), [400, message], JSON.stringify(body))
+  assert.deepEqual([answer(await put(users.hrA, { year, departmentId: org.bDepartment.id, budget: 100 })), answer(await put(users.hrA, { year, departmentId: 987654, budget: 100 })), (await put(users.a1, { year, departmentId: org.sales.id, budget: 100 })).status],
+    [[404, plans.TRAINING_DEPARTMENT_NOT_FOUND], [404, plans.TRAINING_DEPARTMENT_NOT_FOUND], 403])
+  const tight = expectStatus(await put(users.hrA, { year, departmentId: org.sales.id, budget: '500' }), 200).rows[0]
+  assert.deepEqual([tight.hasBudget, tight.budget, tight.spent, tight.remaining, tight.over], [true, '500.00', '701.00', '-201.00', true])
+  const roomy = expectStatus(await put(users.hrA, { year, departmentId: org.sales.id, budget: 1000 }), 200)
+  assert.deepEqual([roomy.rows[0].remaining, roomy.rows[0].over, roomy.totals, await repo('TrainingPlan').count()], ['299.00', false, { budget: '1000.00', spent: '1051.50', remaining: '-51.50', seats: 3 }, 1])
+  assert.equal(Number((await ds.query('SELECT COUNT(*) AS [n] FROM [audit_log] WHERE [action] = @0', ['TRAINING_BUDGET_SET']))[0].n), 2)
+  // فرع ب شايف قسمه بس؛ وسنة تانية من غير أرقام
+  assert.deepEqual([expectStatus(await request(users.hrB, 'GET', B + `?year=${year}`), 200).rows.map(row => [row.departmentName, row.spent]), expectStatus(await request(users.hrA, 'GET', B + `?year=${year + 2}`), 200).rows.map(row => [row.budget, row.spent])],
+    [[['قسم فرع ب', '0.00']], [['0.00', '0.00']]])
+
+  // التدريب الإلزامي: لمسمى أو قسم؛ الإلزام بالمسمى بس على مستوى الشركة لحساب من غير قيد فروع
+  const Q = T + '/requirements'
+  const add = (user, body) => request(user, 'POST', Q, body)
+  for (const [body, message] of [[{ courseId: state.course }, plans.TRAINING_REQUIREMENT_TARGET], [{ courseId: state.course, jobTitle: 'ا' }, plans.TRAINING_REQUIREMENT_TARGET],
+    [{ courseId: state.plain, departmentId: org.sales.id }, rules.TRAINING_COURSE_NOT_FOUND], [{ courseId: 987654, departmentId: org.sales.id }, rules.TRAINING_COURSE_NOT_FOUND]]) {
+    assert.deepEqual(answer(await add(users.hrA, body)), [400, message], JSON.stringify(body))
+  }
+  assert.deepEqual([answer(await add(users.hrA, { courseId: state.course, jobTitle: 'فني سلامة' })), answer(await add(users.hrA, { courseId: state.course, departmentId: org.bDepartment.id })), (await add(users.a1, { courseId: state.course, departmentId: org.sales.id })).status],
+    [[403, plans.TRAINING_REQUIREMENT_COMPANY], [404, plans.TRAINING_DEPARTMENT_NOT_FOUND], 403])
+  expectStatus(await add(users.hrA, { courseId: state.course, departmentId: org.sales.id, jobTitle: ' فني   سلامة ' }), 200)
+  assert.deepEqual(answer(await add(users.hrA, { courseId: state.course, departmentId: org.sales.id, jobTitle: 'فني سلامة' })), [400, plans.TRAINING_REQUIREMENT_EXISTS])
+  const wide = expectStatus(await add(users.admin, { courseId: state.course, jobTitle: 'فني سلامة' }), 200)
+  assert.equal(wide.requirements.length, 2)
+  // الناقص: اللي أكمل مش ناقص؛ المسجّل في جلسة شغالة «مسجّل»؛ والجديد ناقص — مرة واحدة حتى لو طابق إلزامين
+  const seen = expectStatus(await request(users.hrA, 'GET', Q), 200)
+  assert.deepEqual([seen.canCompany, seen.requirements.map(row => [row.courseName, row.jobTitle, row.departmentName, row.canRemove])],
+    [false, [['السلامة المهنية', 'فني سلامة', 'قسم المبيعات', true], ['السلامة المهنية', 'فني سلامة', null, false]]])
+  assert.deepEqual(seen.missing.map(row => [row.employeeName, row.departmentName, row.courseName, row.enrolled]).sort(),
+    [['فني جديد', 'قسم المبيعات', 'السلامة المهنية', false], ['متدرب تالت', null, 'السلامة المهنية', true]].sort())
+  // فرع ب: شايف إلزام الشركة بس وناقصه عند موظفينه
+  const seenB = expectStatus(await request(users.hrB, 'GET', Q), 200)
+  assert.deepEqual([seenB.requirements.map(row => [row.jobTitle, row.departmentName, row.canRemove]), seenB.missing.map(row => row.employeeName)], [[['فني سلامة', null, false]], ['موظف فرع ب']])
+  // المدير شايف الناقص عند مرؤوسيه المباشرين بس
+  assert.deepEqual([expectStatus(await request(users.a1, 'GET', T + '/mandatory/team'), 200).missing.map(row => [row.employeeName, row.enrolled]), expectStatus(await request(users.a2, 'GET', T + '/mandatory/team'), 200).missing,
+    expectStatus(await request(users.nobody, 'GET', T + '/mandatory/team'), 200).missing], [[['فني جديد', false]], [], []])
+  // الحذف: بنطاقه
+  const [own, company] = seen.requirements.map(row => row.id)
+  const remove = (user, id) => request(user, 'DELETE', Q + '/' + id)
+  assert.deepEqual([answer(await remove(users.hrA, company)), answer(await remove(users.hrB, own)), answer(await remove(users.hrA, 987654)), (await remove(users.a1, own)).status],
+    [[403, plans.TRAINING_REQUIREMENT_COMPANY], [404, plans.TRAINING_REQUIREMENT_NOT_FOUND], [404, plans.TRAINING_REQUIREMENT_NOT_FOUND], 403])
+  const left = expectStatus(await remove(users.hrA, own), 200)
+  assert.deepEqual([left.requirements.length, left.missing.length], [1, 2], 'إلزام الشركة لسه شغال')
+  const none = expectStatus(await remove(users.admin, company), 200)
+  assert.deepEqual([none.requirements, none.missing], [[], []])
+})

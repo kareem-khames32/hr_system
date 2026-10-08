@@ -8,16 +8,19 @@ import { BookOpen, Star } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import EmptyState from '@/components/EmptyState'
 import { formatDate } from '@/lib/dates'
-import { fetchMyTraining, rateTraining, type ApiMyTraining } from '@/lib/training-api'
+import { fetchMyTraining, fetchTeamTrainingMissing, rateTraining, type ApiMyTraining, type ApiTrainingMissing } from '@/lib/training-api'
 
 export default function MyCoursesPage() {
   const [rows, setRows] = useState<ApiMyTraining[] | null>(null)
   const [error, setError] = useState('')
   const [rating, setRating] = useState<{ id: number; value: number; comment: string } | null>(null)
   const [busy, setBusy] = useState(false)
+  // B3.9-ج: التدريب الإلزامي الناقص عند مرؤوسين المدير المباشرين
+  const [teamMissing, setTeamMissing] = useState<ApiTrainingMissing[]>([])
 
   useEffect(() => {
     fetchMyTraining().then((data) => setRows(data.enrollments)).catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل دوراتك'))
+    fetchTeamTrainingMissing().then((data) => setTeamMissing(data.missing)).catch(() => setTeamMissing([]))
   }, [])
 
   const save = async () => {
@@ -52,6 +55,19 @@ export default function MyCoursesPage() {
         {error && (
           <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-4">
             {error}
+          </div>
+        )}
+        {teamMissing.length > 0 && (
+          <div className="bg-amber-50 rounded-xl p-4 space-y-2" data-team-missing>
+            <p className="text-sm font-medium text-amber-900">تدريب إلزامي ناقص عند فريقك ({teamMissing.length})</p>
+            <ul className="text-sm text-amber-900 space-y-1">
+              {teamMissing.map((row, index) => (
+                <li key={index}>
+                  {row.employeeName} — {row.courseName}
+                  {row.enrolled ? ' · مسجّل في جلسة' : ' · لسه مااتسجّلش'}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
         {rows && rows.length === 0 && <EmptyState title="مفيش دورات مسجّل فيها لسه" icon={BookOpen} />}

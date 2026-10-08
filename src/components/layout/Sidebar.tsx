@@ -234,6 +234,8 @@ const adminMenuDefs: MenuItem[] = [
       { label: 'دوراتي', href: '/training/my-courses' },
       { label: 'إضافة دورة', href: '/training/add', perm: 'training.manage' },
       { label: 'الشهادات', href: '/training/certificates', perm: 'training.manage' },
+      // B3.9-ج: ميزانية الأقسام والتدريب الإلزامي
+      { label: 'خطة التدريب', href: '/training/plan', perm: 'training.manage' },
     ],
   },
   {

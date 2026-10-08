@@ -323,7 +323,7 @@ export const MODULES = {
     nameAr: 'التدريب', group: 'talent', dependsOn: ['employees'], softUses: ['documents'], preset: 'standard', defaultEnabled: false,
     description: 'كتالوج الدورات، وجلساتها بالسعة والتكلفة، وتسجيل الموظفين وحضورهم وإكمالهم، والشهادة كمستند للموظف بتاريخ انتهائه وتنبيه تجديده',
     permissions: ['training.manage'],
-    routes: ['/training', '/training/add', '/training/certificates', '/training/my-courses', '/training/*'],
+    routes: ['/training', '/training/add', '/training/certificates', '/training/my-courses', '/training/plan', '/training/*'],
     // B3.9-ب: وجهة «طلب تدريب» (أي نوع طلب وجهته دي بيتبع الموديول)
     requestHandlers: ['training_enrollment'],
   }),
