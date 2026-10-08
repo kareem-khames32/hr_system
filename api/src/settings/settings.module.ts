@@ -12,6 +12,11 @@ import { RequestCategoryChainsController } from './request-category-chains.contr
 import { RequestCategoryChainsService } from './request-category-chains.service'
 import { SettingsController } from './settings.controller'
 
+// B4.8 (ب)
+import { DataBreachIncident } from './data-protection'
+import { DataProtectionController } from './data-protection.controller'
+import { DataProtectionService } from './data-protection.service'
+
 @Module({
   imports: [
     // DestinationsService: قائمة الوجهات المنفّذة لبانِي الطلبات
@@ -24,11 +29,13 @@ import { SettingsController } from './settings.controller'
       ApprovalChain,
       ApprovalStep,
       RequestType,
+      // B4.8 (ب): سجل حوادث تسريب البيانات
+      DataBreachIncident,
     ]),
   ],
   // سلسلة كل فئة طلبات جوّه «بانِي الطلبات» (طلب المالك 26 سبتمبر)، وعملة الشاشات لأي مستخدم داخل (30 سبتمبر)
-  controllers: [SettingsController, RequestCategoryChainsController],
+  controllers: [SettingsController, RequestCategoryChainsController, DataProtectionController],
   // مفاتيح الإعدادات الافتراضية الناقصة تُضاف عند الإقلاع
-  providers: [ConfigDefaultsService, RequestCategoryChainsService],
+  providers: [ConfigDefaultsService, RequestCategoryChainsService, DataProtectionService],
 })
 export class SettingsModule {}

@@ -121,7 +121,8 @@ export const MODULES = {
     description: 'تكليف موظف أو دور بمهمة بموعد وإثبات، وصندوق «مهامي»، وتذكير وتصعيد المتأخر',
     permissions: ['tasks.manage', 'tasks.view_all', 'tasks.assign_any'],
     routes: ['/tasks', '/my/tasks'],
-    jobs: ['tasks.reminders'],
+    // B4.8 (ب): مهام مراجعة البيانات اللي عدّت مدة الاحتفاظ (بتتعمل كمهام، فتبع موديول المهام)
+    jobs: ['tasks.reminders', 'privacy.retention-alerts'],
     features: {
       // إضافة المالك 6 أكتوبر: تقييم اختياري للمهام المعلّمة — مقفول لحد ما الشركة تقرر. الالتزام بالميعاد ومرات الرجوع شغالين من غيره
       'tasks.rating': {

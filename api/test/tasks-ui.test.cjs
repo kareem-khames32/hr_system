@@ -112,7 +112,7 @@ test('TU-04: قايمة المهام والقايمة الجانبية والع�
   const registry = require('../src/modules-registry/registry')
   const def = registry.MODULES.tasks
   assert.deepEqual([def.core, def.dependsOn, def.softUses, def.permissions, def.routes, def.jobs],
-    [true, ['employees'], ['onboarding', 'offboarding'], ['tasks.manage', 'tasks.view_all', 'tasks.assign_any'], ['/tasks', '/my/tasks'], ['tasks.reminders']])
+    [true, ['employees'], ['onboarding', 'offboarding'], ['tasks.manage', 'tasks.view_all', 'tasks.assign_any'], ['/tasks', '/my/tasks'], ['tasks.reminders', 'privacy.retention-alerts']])
   // إضافة المالك: ميزة التقييم فرعية ومقفولة لحد ما الشركة تفتحها
   assert.deepEqual(Object.keys(def.features), ['tasks.rating'])
   assert.deepEqual([def.features['tasks.rating'].default, registry.featureEnabled({ modules: {}, features: {} }, 'tasks.rating')], [false, false])

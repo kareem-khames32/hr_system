@@ -46,6 +46,8 @@ export const SCHEDULED_JOBS = {
     label: 'تذكير المهام وتصعيد المتأخر منها', schedule: 'كل يوم 07:30' },
   'onboarding.probation-tasks': { cron: '40 7 * * *', module: 'onboarding.probation-tasks', lock: 'onboarding.probation-tasks',
     label: 'مهام قرار فترة التجربة قبل نهايتها', schedule: 'كل يوم 07:40' },
+  'privacy.retention-alerts': { cron: '50 7 * * *', module: 'privacy.retention-alerts', lock: 'privacy.retention-alerts',
+    label: 'مهام مراجعة البيانات اللي عدّت مدة الاحتفاظ', schedule: 'كل يوم 07:50' },
   'reports.scheduled': { cron: '20 * * * *', module: 'reports.scheduled', lock: 'reports.scheduled',
     label: 'إرسال التقارير المجدولة بالبريد', schedule: 'فحص كل ساعة عند الدقيقة 20 — الإرسال من الساعة 7 الصبح' },
   'scheduler.prune-runs': { cron: '40 3 * * *', module: null, lock: 'scheduler.prune-runs',

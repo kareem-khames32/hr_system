@@ -13,6 +13,7 @@ import { NotificationsService } from '../notifications/notifications.service'
 import { TasksService } from '../tasks/tasks.service'
 import { SavedReportsService } from '../reports/saved-reports.service'
 import { ProbationService } from '../onboarding/probation.service'
+import { DataProtectionService } from '../settings/data-protection.service'
 import { Scheduled } from './scheduled-jobs'
 import { ScheduledJobsService } from './scheduled-jobs.service'
 
@@ -101,6 +102,12 @@ export class ScheduledJobsRunner {
   @Scheduled('onboarding.probation-tasks')
   probationTasks() {
     return this.jobs.tick('onboarding.probation-tasks', () => this.use(ProbationService).raiseDecisionTasks())
+  }
+
+  // B4.8 (ب): مهمة مراجعة للموارد البشرية لكل فرع فيه بيانات عدّت مدة الاحتفاظ (من غير مسح)
+  @Scheduled('privacy.retention-alerts')
+  retentionAlerts() {
+    return this.jobs.tick('privacy.retention-alerts', () => this.use(DataProtectionService).raiseRetentionTasks())
   }
 
   // B2.13-ب: التقارير المحفوظة المستحقة النهارده لبريد أصحابها

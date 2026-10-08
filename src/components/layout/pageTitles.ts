@@ -127,6 +127,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/settings/statutory', 'حزمة الدولة'],
   ['/settings/salary-items', 'بنود الراتب'],
   ['/settings/banks', 'البنوك'],
+  ['/settings/data-protection', 'حماية البيانات'],
   ['/settings/departments', 'الإدارات والأقسام'],
   ['/settings/teams', 'الفرق'],
   ['/settings/job-titles', 'المسميات الوظيفية'],

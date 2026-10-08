@@ -226,8 +226,9 @@ test('RC-UI-11: الخادم — مسارات بالصلاحيتين، ربط ا
   for (const route of ["@Get('request-categories')", "@Put('request-categories/:category/chain')", "@Post('request-types/:id/customize-chain')",
     "@Post('request-types/:id/follow-category')"]) assert.ok(controller.includes(route), route)
   const module = read('api/src/settings/settings.module.ts')
-  assert.ok(module.includes('controllers: [SettingsController, RequestCategoryChainsController]'))
-  assert.ok(module.includes('providers: [ConfigDefaultsService, RequestCategoryChainsService]'))
+  // B4.8 (ب): + ضابط حماية البيانات في نفس الموديول
+  assert.ok(module.includes('controllers: [SettingsController, RequestCategoryChainsController, DataProtectionController]'))
+  assert.ok(module.includes('providers: [ConfigDefaultsService, RequestCategoryChainsService, DataProtectionService]'))
   const service = read('api/src/settings/request-category-chains.service.ts')
   const set = service.slice(service.indexOf('async setCategoryChain'), service.indexOf('async customizeType'))
   assert.ok(set.indexOf('assertChainAndTypePerms(user)') < set.indexOf('assertCompanyWideWrite(user)'))
