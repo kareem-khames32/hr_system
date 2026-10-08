@@ -144,7 +144,8 @@ function submitHarness({ suspensions = [], onBehalf = false } = {}) {
   service.destinations = new DestinationsService({}, {})
   service.ds = { getRepository: () => ({ findOne: async () => null }) }
   service.leaveBalances = { maxBackdateDays: async () => 30 }
-  service.attendance = { workingDaysForEmployee: async () => ({ total: 3, working: 3, skipped: [] }) }
+  // CRP5C: التقديم بيقرا تقويم الموظف بنسخة الحضور المربوطة بمعاملته (batchScope)
+  service.attendance = { batchScope() { return this }, workingDaysForEmployee: async () => ({ total: 3, working: 3, skipped: [] }) }
   // الخطوة اللي بعد فحص الإيقاف مباشرة في التقديم: وصولها = الفحص عدّى
   service.assertLeaveBalance = async () => { throw REACHED_BALANCE }
   const user = onBehalf

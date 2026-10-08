@@ -586,7 +586,7 @@ export class RequestsService {
       const working: string[] = []
       for (const date of parseHolidayWorkDates(JSON.parse(req.payload || '{}').dates)) {
         // تقويم اليوم مش مثبت: ما نرفضش — حالة اليوم في الحضور هي الحكم وقت حساب المسير
-        try { if ((await this.attendance.calendarDay(req.requesterId, date)).working) working.push(date) } catch { /* لا حكم */ }
+        try { if ((await this.attendance.batchScope(em).calendarDay(req.requesterId, date)).working) working.push(date) } catch { /* لا حكم */ }
       }
       if (working.length) throw new BadRequestException(`${working.join('، ')} ${working.length > 1 ? 'أيام عمل عادية' : 'يوم عمل عادي'} ليك — الطلب لأيام العطلة اللي اشتغلتها بس`)
     }
@@ -599,7 +599,7 @@ export class RequestsService {
       // اسم الشركة والمسمى وتاريخ التعيين قبل دخول الطلب مسار الاعتماد (الخطوة 7)
       await assertLetterIssuable(em, req.requesterId)
     }
-    await this.assertAttachmentOwnership(req, user)
+    await this.assertAttachmentOwnership(req, user, em)
     await validateEmploymentRequest(em, req, type)
     // B5.5 (ج): «تبديل وردية» والميزة مفتوحة — موافقة الطرف التاني بتتطلب من جديد عند كل تقديم وإعادة تقديم
     if (type.destinationHandler === 'shift_schedule') await stageSwapConsent(em, req, !!this.modules && await this.modules.isFeatureEnabledIn(em, SWAP_CONSENT_FEATURE))
@@ -902,7 +902,7 @@ export class RequestsService {
       if (p.fromDate && p.toDate && p.fromDate <= p.toDate) {
         const allDays = leaveTypeDef ? leaveCountsAllDays(leaveTypeDef) : false
         const { total, working, skipped } =
-          await this.attendance.workingDaysForEmployee(
+          await this.attendance.batchScope(em).workingDaysForEmployee(
             req.requesterId,
             String(p.fromDate),
             String(p.toDate)
@@ -925,7 +925,7 @@ export class RequestsService {
         if (!isHalf && y2 > y1) {
           const byYear: Record<string, number> = {}
           for (let y = y1; y <= y2; y++) {
-            const seg = await this.attendance.workingDaysForEmployee(
+            const seg = await this.attendance.batchScope(em).workingDaysForEmployee(
               req.requesterId,
               y === y1 ? String(p.fromDate) : `${y}-01-01`,
               y === y2 ? String(p.toDate) : `${y}-12-31`
@@ -1954,7 +1954,7 @@ export class RequestsService {
       this.assertPayloadKeys(type, req.payload, branchScopeOf(user))
       // وقيم البنك/المسمى قبل الحفظ أيضاً — الفارغ لا يُسقط المُرجَع لمسودة (SEC-EMP-2)
       this.assertSubmitValues(type, req.payload)
-      await this.assertAttachmentOwnership(req, user)
+      await this.assertAttachmentOwnership(req, user, em)
       req.status = 'DRAFT'
       await em.getRepository(Request).save(req)
       return this.submitLocked(user, id, em, true)
@@ -3460,7 +3460,8 @@ export class RequestsService {
     return { requiredFields: JSON.stringify(required), customFields: JSON.stringify(fields) }
   }
 
-  private async assertAttachmentOwnership(req: Request, actor: JwtPayload) {
+  // Codex P5C-B01: المنادي اللي جوه معاملة (التقديم وإعادة التقديم) بيبعت مديرها — قراية الملف بنفس اتصالها، من غير اتصال تاني من المخزن
+  private async assertAttachmentOwnership(req: Request, actor: JwtPayload, em?: EntityManager) {
     const fileIds = new Set<number>()
     const inspect = (value: unknown) => {
       if (typeof value === 'string' && /^file:\d+$/.test(value)) fileIds.add(Number(value.slice(5)))
@@ -3469,7 +3470,7 @@ export class RequestsService {
     }
     inspect(JSON.parse(req.payload || '{}'))
     for (const id of fileIds) {
-      const file = Number.isSafeInteger(id) && id > 0 ? await this.ds.getRepository(StoredFile).findOne({ where: { id } }) : null
+      const file = Number.isSafeInteger(id) && id > 0 ? await (em ?? this.ds.manager).getRepository(StoredFile).findOne({ where: { id } }) : null
       if (!file || !(file.uploadedBy === actor.sub || (!!req.createdByUserId && file.uploadedBy === req.createdByUserId) || file.employeeId === req.requesterId)) {
         throw new ForbiddenException('أحد المرفقات غير موجود أو لا يخص مقدم الطلب أو الموظف المستهدف')
       }
