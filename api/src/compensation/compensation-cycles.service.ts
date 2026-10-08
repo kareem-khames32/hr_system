@@ -1,14 +1,19 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException } from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource, type EntityManager } from 'typeorm'
 import { recordAudit } from '../audit/audit'
 import type { JwtPayload } from '../auth/auth.service'
 import { assertCompanyWideWrite, branchScopeOf, inBranchScope, userHasPerm, type BranchScope } from '../auth/guards'
+import { ModulesService } from '../modules-registry/modules.service'
 import { readBranchCurrencyOf } from '../org/branch-currency-db'
-import { ADJUST_STATUSES, BUDGET_STATUSES, budgetUsage, CompensationBudget, CompensationCycle, CompensationProposal, compensationCyclesReady, coveringUnits, CYCLE_STATUS_LABELS,
-  CYCLE_STEPS, cycleFields, cycleStepOf, PROPOSE_STATUSES, RAISE_AMOUNT_ERROR, raiseAmount, raiseNote } from './compensation-cycles'
+import { applyEmployeeSalaryChange, type EmployeeSalaryValue } from '../payroll/payroll-salary-change'
+import { readSalaryHistory, readSalaryHistoryCurrent } from '../payroll/payroll-salary-history'
+import { REVIEW_BANDS, reviewBand, reviewsReady } from '../performance/review-rules'
+import { ADJUST_STATUSES, approverIssue, BUDGET_STATUSES, budgetUsage, CompensationBudget, CompensationCycle, CompensationProposal, compensationCyclesReady, coveringUnits, CYCLE_STATUS_LABELS,
+  CYCLE_STEPS, cycleEvidenceReference, cycleFields, cycleStepOf, PROPOSE_STATUSES, RAISE_AMOUNT_ERROR, raiseAmount, raisedBasic, raiseNote, sameBasic } from './compensation-cycles'
 
-// B5.1 (ب): دورة الزيادات — الدورة وميزانياتها وسطور الاقتراح. **مفيش راتب بيتغيّر من هنا** (التطبيق في الجزء ج من خدمة تاريخ الراتب).
+// B5.1 (ب، ج): دورة الزيادات — الدورة وميزانياتها وسطور الاقتراح، واعتمادها وتطبيقها. الراتب بيتكتب في مكان واحد بس: `apply`، ومن خدمة تاريخ
+// الراتب القايمة (`applyEmployeeSalaryChange`) بعد اعتماد من حد ماقترحش — مفيش كتابة راتب تانية في الملف ده.
 //  - تحريك الدورة: حساب بكل الفروع. الميزانية والتعديل: بنطاق فروع الحساب (فرع الموظف أو الوحدة الحالي).
 //  - المدير المباشر بيقترح لمرؤوسيه المباشرين بس، وبيكتب المبلغ ومابيشوفش الراتب.
 //  - كل كتابة تحت قفل صف الدورة ثم صف الموظف، والحكم بعد القفل.
@@ -19,6 +24,10 @@ const EMPLOYEE_NOT_FOUND = 'الموظف مش موجود'
 const NOT_IN_TEAM = 'الموظف ده مش من مرؤوسيك المباشرين'
 const UNIT_NOT_FOUND = 'الإدارة أو القسم مش موجود'
 const NOT_ACTIVE = 'الموظف مش على رأس العمل — مفيش زيادة تتقترح له'
+const APPLY_NOT_ACTIVE = 'الموظف مش على رأس العمل — زيادته مااتطبّقتش'
+export const APPLY_BASIC_CHANGED = 'أساسي الموظف اتغيّر بعد آخر مراجعة لسطره — رجّع الدورة للمراجعة وراجع السطر'
+const APPLY_NEEDS_EDIT = 'تطبيق الزيادات على الرواتب محتاج «تعديل الموظفين» مع «اعتماد المسير»'
+const APPROVED_ONLY = 'الخطوة دي للدورة المعتمدة بس'
 const ACTIVE = `e.[isActive] = 1 AND e.[status] IN (N'active', N'probation', N'notice_period')`
 const round2 = (value: number) => Math.round(value * 100) / 100
 
@@ -26,7 +35,7 @@ interface LockedEmployee { id: number; fullName: string; branchId: number | null
 
 @Injectable()
 export class CompensationCyclesService {
-  constructor(@InjectDataSource() private readonly ds: DataSource) {}
+  constructor(@InjectDataSource() private readonly ds: DataSource, private readonly modules: ModulesService) {}
 
   private async assertReady(em: EntityManager) {
     if (!(await compensationCyclesReady(em))) throw new BadRequestException(CYCLES_MIGRATION_MISSING)
@@ -127,10 +136,13 @@ export class CompensationCyclesService {
     const visible = new Map(people.filter(row => inBranchScope(scope, row.branchId == null ? null : Number(row.branchId))).map(row => [Number(row.id), row]))
     const proposals = (await em.getRepository(CompensationProposal).find({ where: { cycleId: id }, order: { id: 'ASC' } })).filter(row => visible.has(row.employeeId))
     const names = await this.accountNames(em, proposals.flatMap(row => [row.proposedByUserId, ...(row.adjustedByUserId == null ? [] : [row.adjustedByUserId])]), scope)
+    // (ج) آخر نتيجة أداء معتمدة — لو موديول الأداء مفتوح وللي معاه صلاحيته
+    const scores = await this.performanceScores(em, user, id, proposals.map(row => row.employeeId))
     const lines = proposals.map(row => {
       const person = visible.get(row.employeeId)!, departmentId = person.departmentId == null ? null : Number(person.departmentId)
-      const basic = Number(person.basicSalary ?? 0), final = Number(row.finalAmount)
+      const basic = Number(person.basicSalary ?? 0), final = Number(row.finalAmount), score = scores?.get(row.employeeId) ?? null
       return {
+        performanceScore: score, performanceLabel: score === null ? null : REVIEW_BANDS.find(band => band.key === reviewBand(score))?.label ?? null,
         employeeId: row.employeeId, fullName: String(person.fullName), employeeCode: (person.employeeCode as string | null) ?? null, active: Number(person.active) === 1,
         departmentId, departmentName: departmentId == null ? null : unitName.get(departmentId) ?? null, currency: currencyOf(person.branchId == null ? null : Number(person.branchId)),
         proposedAmount: Number(row.proposedAmount), proposedBy: names.get(row.proposedByUserId) ?? null, proposedAt: row.proposedAt, note: row.note,
@@ -157,6 +169,9 @@ export class CompensationCyclesService {
     return {
       cycle: this.view(cycle), salaries, canMove: scope === null,
       canAdjust: ADJUST_STATUSES.includes(cycle.status), canBudget: BUDGET_STATUSES.includes(cycle.status),
+      // (ج) الاعتماد والتطبيق: لحساب بكل الفروع بصلاحية اعتماد المسير (والتطبيق محتاج تعديل الموظفين كمان)
+      canApprove: scope === null && userHasPerm(user, 'payroll.approve'), canApply: scope === null && userHasPerm(user, 'payroll.approve') && userHasPerm(user, 'employees.edit'),
+      performance: scores !== null,
       lines, budgets,
       totals: currencies.map(currency => {
         const rows = lines.filter(line => line.currency === currency)
@@ -224,6 +239,120 @@ export class CompensationCyclesService {
       await this.writeLine(em, cycle, employee, user, amount, note.note, 'adjust')
     })
     return this.detail(user, id)
+  }
+
+  // ===== (ج) الاعتماد والتطبيق =====
+
+  /** آخر نتيجة أداء معتمدة لكل موظف، أو null لو موديول الأداء مقفول أو جداوله ناقصة أو الحساب مامعهوش صلاحيته */
+  private async performanceScores(em: EntityManager, user: JwtPayload, cycleId: number, employeeIds: number[]): Promise<Map<number, number> | null> {
+    if (!(userHasPerm(user, 'performance.manage') || userHasPerm(user, 'performance.calibrate')) || !(await this.modules.isEnabled('performance')) || !(await reviewsReady(em))) return null
+    const out = new Map<number, number>()
+    if (!employeeIds.length) return out
+    const rows: Array<{ employeeId: number; finalScore: string | number | null }> = await em.query(
+      `SELECT a.[employeeId], a.[finalScore] FROM [review_assignments] a
+       WHERE a.[status] IN (N'APPROVED', N'ANNOUNCED', N'ACKNOWLEDGED') AND a.[finalScore] IS NOT NULL
+         AND a.[employeeId] IN (SELECT [employeeId] FROM [compensation_proposals] WHERE [cycleId] = @0)
+         AND a.[id] = (SELECT MAX(b.[id]) FROM [review_assignments] b WHERE b.[employeeId] = a.[employeeId] AND b.[status] IN (N'APPROVED', N'ANNOUNCED', N'ACKNOWLEDGED') AND b.[finalScore] IS NOT NULL)`, [cycleId])
+    const wanted = new Set(employeeIds)
+    for (const row of rows) if (wanted.has(Number(row.employeeId))) out.set(Number(row.employeeId), Number(row.finalScore))
+    return out
+  }
+
+  /** اعتماد الدورة — من حد ماقترحش (مش اللي بعتها للمراجعة ولا اللي كتب أو عدّل سطر)، لحساب بكل الفروع، تحت قفل صف الدورة */
+  async approve(user: JwtPayload, id: number) {
+    assertCompanyWideWrite(user)
+    await this.ds.transaction(async em => {
+      await this.assertReady(em)
+      const cycle = await this.lockCycle(em, id)
+      if (cycle.status !== 'REVIEW') throw new BadRequestException(`الاعتماد للدورة اللي تحت المراجعة بس — الدورة «${CYCLE_STATUS_LABELS[cycle.status]}»`)
+      const issue = approverIssue(cycle, await em.getRepository(CompensationProposal).find({ where: { cycleId: id } }), user.sub)
+      if (issue) throw new (issue.includes('مافيهاش') ? BadRequestException : ForbiddenException)(issue)
+      const now = new Date()
+      await em.getRepository(CompensationCycle).update({ id }, { status: 'APPROVED', approvedByUserId: user.sub, approvedAt: now, updatedByUserId: user.sub, updatedAt: now })
+      await recordAudit(em, { category: 'PAYROLL', action: 'RAISE_CYCLE_APPROVED', entityType: 'compensation_cycle', entityId: String(id), actorUserId: user.sub,
+        summary: `اعتماد دورة الزيادات: ${cycle.name}`, before: { status: cycle.status }, after: { status: 'APPROVED' } })
+    })
+    return this.detail(user, id)
+  }
+
+  /** رجوع الدورة المعتمدة للمراجعة — قبل ما أي سطر يتطبّق بس */
+  async unapprove(user: JwtPayload, id: number) {
+    assertCompanyWideWrite(user)
+    await this.ds.transaction(async em => {
+      await this.assertReady(em)
+      const cycle = await this.lockCycle(em, id)
+      if (cycle.status !== 'APPROVED') throw new BadRequestException(APPROVED_ONLY)
+      if (await em.getRepository(CompensationProposal).createQueryBuilder('line').where('line.cycleId = :id AND line.appliedAt IS NOT NULL', { id }).getCount()) {
+        throw new BadRequestException('فيه زيادات اتطبّقت من الدورة — مابترجعش للمراجعة')
+      }
+      const now = new Date()
+      await em.getRepository(CompensationCycle).update({ id }, { status: 'REVIEW', approvedByUserId: null, approvedAt: null, updatedByUserId: user.sub, updatedAt: now })
+      await recordAudit(em, { category: 'PAYROLL', action: 'RAISE_CYCLE_UNAPPROVED', entityType: 'compensation_cycle', entityId: String(id), actorUserId: user.sub,
+        summary: `رجوع دورة الزيادات للمراجعة: ${cycle.name}`, before: { status: 'APPROVED' }, after: { status: 'REVIEW' } })
+    })
+    return this.detail(user, id)
+  }
+
+  /**
+   * تطبيق الزيادات المعتمدة على الرواتب — سطر سطر، كل سطر في معاملته (الدورة ثم السطر ثم الموظف)، ومن خدمة تاريخ الراتب القايمة بس.
+   * السطر اللي اترفض (أساسي اتغيّر، موظف مش على رأس العمل، شهر مقفول أو لسه ماجاش…) بيتقال سببه والباقي بيكمّل؛ والدورة «اتطبّقت» لما مايفضلش سطر.
+   */
+  async apply(user: JwtPayload, id: number) {
+    assertCompanyWideWrite(user)
+    if (!userHasPerm(user, 'employees.edit')) throw new ForbiddenException(APPLY_NEEDS_EDIT)
+    await this.assertReady(this.ds.manager)
+    const head = await this.ds.getRepository(CompensationCycle).findOneBy({ id })
+    if (!head) throw new NotFoundException(CYCLE_NOT_FOUND)
+    if (head.status !== 'APPROVED') throw new BadRequestException(APPROVED_ONLY)
+    const pending = await this.ds.getRepository(CompensationProposal).createQueryBuilder('line').select(['line.id', 'line.employeeId'])
+      .where('line.cycleId = :id AND line.appliedAt IS NULL AND line.finalAmount > 0', { id }).orderBy('line.id', 'ASC').getMany()
+    let applied = 0
+    const refused: Array<{ employeeId: number; message: string }> = []
+    for (const target of pending) {
+      try {
+        if (await this.ds.transaction(em => this.applyLine(em, user, id, target.id))) applied++
+      } catch (error) {
+        if (!(error instanceof HttpException)) throw error
+        const body = error.getResponse()
+        refused.push({ employeeId: target.employeeId, message: typeof body === 'string' ? body : String((body as { message?: unknown }).message ?? error.message) })
+      }
+    }
+    await this.ds.transaction(async em => {
+      const cycle = await this.lockCycle(em, id)
+      if (cycle.status !== 'APPROVED') return
+      const left = await em.getRepository(CompensationProposal).createQueryBuilder('line').where('line.cycleId = :id AND line.appliedAt IS NULL AND line.finalAmount > 0', { id }).getCount()
+      if (left) return
+      const now = new Date()
+      await em.getRepository(CompensationCycle).update({ id }, { status: 'APPLIED', appliedAt: now, updatedByUserId: user.sub, updatedAt: now })
+      await recordAudit(em, { category: 'PAYROLL', action: 'RAISE_CYCLE_APPLIED', entityType: 'compensation_cycle', entityId: String(id), actorUserId: user.sub,
+        summary: `دورة الزيادات اتطبّقت كلها: ${cycle.name}`, before: { status: 'APPROVED' }, after: { status: 'APPLIED' } })
+    })
+    return { applied, refused, ...(await this.detail(user, id)) }
+  }
+
+  /** سطر واحد في معاملة المنادي: true = اتكتب في تاريخ الراتب؛ false = اتطبّق قبل كده. الرفض برسالته */
+  private async applyLine(em: EntityManager, user: JwtPayload, cycleId: number, lineId: number): Promise<boolean> {
+    const cycle = await this.lockCycle(em, cycleId)
+    if (cycle.status !== 'APPROVED') throw new BadRequestException(APPROVED_ONLY)
+    const repo = em.getRepository(CompensationProposal)
+    const line = await repo.findOne({ where: { id: lineId, cycleId }, lock: { mode: 'pessimistic_write' } })
+    if (!line || line.appliedAt !== null || !(Number(line.finalAmount) > 0)) return false
+    const employee = await this.lockEmployee(em, line.employeeId)
+    if (!employee || !employee.active) throw new BadRequestException(APPLY_NOT_ACTIVE)
+    const current = await readSalaryHistoryCurrent(em, line.employeeId), history = await readSalaryHistory(em, line.employeeId)
+    if (!current) throw new BadRequestException(APPLY_NOT_ACTIVE)
+    // المبلغ اتعتمد على أساسي معيّن: لو الأساسي اتغيّر بعدها السطر مايتطبّقش — محدش راجع الزيادة على الرقم الجديد
+    if (current.current.basicSalary === null || !sameBasic(current.current.basicSalary, line.currentBasic)) throw new ConflictException(APPLY_BASIC_CHANGED)
+    const result = await applyEmployeeSalaryChange(em, {
+      employeeId: line.employeeId, actorUserId: user.sub, effectivePayrollPeriod: cycle.effectivePayrollPeriod,
+      reason: `زيادة دورة «${cycle.name}»`.slice(0, 500), evidenceReference: cycleEvidenceReference(cycle.id),
+      expectedRevision: history.revision, expectedCurrentSourceHash: current.currentSourceHash,
+      salary: { ...current.current, basicSalary: raisedBasic(current.current.basicSalary, line.finalAmount) } as EmployeeSalaryValue,
+    })
+    await repo.update({ id: line.id }, { appliedAt: new Date(), appliedByUserId: user.sub, appliedRevision: result.history.revision })
+    await recordAudit(em, { category: 'PAYROLL', action: 'RAISE_APPLIED', entityType: 'compensation_proposal', entityId: `${cycle.id}:${line.employeeId}`, actorUserId: user.sub, branchId: employee.branchId,
+      summary: `تطبيق زيادة ${employee.fullName} من دورة ${cycle.name} (يسري من راتب ${cycle.effectivePayrollPeriod})`, after: { amount: Number(line.finalAmount), revision: result.history.revision, evidenceReference: cycleEvidenceReference(cycle.id) } })
+    return true
   }
 
   // ===== ورقة المدير =====

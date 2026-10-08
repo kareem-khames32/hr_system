@@ -33,6 +33,8 @@ export interface ApiRaiseLine {
   /** المبلغ اللي هيتعتمد */
   finalAmount: number; adjusted: boolean; adjustedBy: string | null; adjustedAt: string | null; adjustNote: string | null
   appliedAt: string | null
+  /** آخر نتيجة أداء معتمدة وتقديرها — لو موديول الأداء مفتوح وللي معاه صلاحيته، وغير كده null */
+  performanceScore: number | null; performanceLabel: string | null
   /** أرقام الراتب: لصاحب «عرض الرواتب» بس، وغير كده null */
   currentBasic: number | null; newBasic: number | null; percent: number | null
   /** الأساسي اتغيّر بعد آخر كتابة على السطر */
@@ -46,10 +48,13 @@ export interface ApiRaiseBudget {
 }
 export interface ApiRaiseCycleDetail {
   cycle: ApiRaiseCycle; salaries: boolean; canMove: boolean; canAdjust: boolean; canBudget: boolean
+  /** (ج) الاعتماد (من حد ماقترحش — الخادم بيحكم) والتطبيق على الرواتب، وهل عمود نتيجة الأداء معروض */
+  canApprove: boolean; canApply: boolean; performance: boolean
   lines: ApiRaiseLine[]; budgets: ApiRaiseBudget[]
   totals: Array<{ currency: string; count: number; proposed: number; final: number }>
   candidates: Array<{ employeeId: number; fullName: string; employeeCode: string | null }>
 }
+export interface ApiRaiseApplyResult extends ApiRaiseCycleDetail { applied: number; refused: Array<{ employeeId: number; message: string }> }
 export interface ApiMyRaises {
   cycles: Array<{
     id: number; name: string; effectivePayrollPeriod: string
@@ -65,5 +70,8 @@ export const fetchRaiseCycle = (id: number) => apiFetch<ApiRaiseCycleDetail>(`${
 export const moveRaiseCycle = (id: number, step: CycleStep) => apiFetch<ApiRaiseCycleDetail>(`${C}/cycles/${id}/steps/${step}`, json('POST', {}))
 export const setRaiseBudget = (id: number, departmentId: number, amount: number | null) => apiFetch<ApiRaiseCycleDetail>(`${C}/cycles/${id}/budgets/${departmentId}`, json('PUT', { amount }))
 export const adjustRaiseLine = (id: number, employeeId: number, amount: number, note: string) => apiFetch<ApiRaiseCycleDetail>(`${C}/cycles/${id}/lines/${employeeId}`, json('PUT', { amount, note }))
+export const approveRaiseCycle = (id: number) => apiFetch<ApiRaiseCycleDetail>(`${C}/cycles/${id}/approve`, json('POST', {}))
+export const unapproveRaiseCycle = (id: number) => apiFetch<ApiRaiseCycleDetail>(`${C}/cycles/${id}/unapprove`, json('POST', {}))
+export const applyRaiseCycle = (id: number) => apiFetch<ApiRaiseApplyResult>(`${C}/cycles/${id}/apply`, json('POST', {}))
 export const fetchMyRaises = () => apiFetch<ApiMyRaises>(`${C}/my-team`)
 export const proposeRaise = (id: number, employeeId: number, amount: number, note: string) => apiFetch<ApiMyRaises>(`${C}/cycles/${id}/my-team/${employeeId}`, json('PUT', { amount, ...(note ? { note } : {}) }))

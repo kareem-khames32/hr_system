@@ -194,6 +194,26 @@ export function coveringUnits(departmentId: number | null, parentOf: ReadonlyMap
   return out
 }
 
+// ===== (ج) الاعتماد والتطبيق =====
+
+/** مرجع تغيير الراتب المكتوب من الدورة — بيربط صف تاريخ الراتب برقمها */
+export const cycleEvidenceReference = (cycleId: number) => `COMP-CYCLE-${cycleId}`
+export const APPROVER_SENT_REVIEW = 'اللي بعت الدورة للمراجعة مايعتمدهاش — الاعتماد من حد تاني'
+export const APPROVER_WROTE_LINE = 'اللي اقترح أو عدّل سطر في الدورة مايعتمدهاش — الاعتماد من حد ماقترحش'
+export const APPROVE_NO_LINES = 'الدورة مافيهاش زيادات تتعتمد'
+/** اعتماد من حد ماقترحش: مش اللي بعتها للمراجعة، ومش اللي كتب أو عدّل أي سطر. بيرجّع رسالة الرفض أو null */
+export function approverIssue(cycle: { reviewByUserId: number | null }, lines: ReadonlyArray<{ proposedByUserId: number; adjustedByUserId: number | null; finalAmount: number | string }>, userId: number): string | null {
+  if (!lines.some(line => Number(line.finalAmount) > 0)) return APPROVE_NO_LINES
+  if (cycle.reviewByUserId === userId) return APPROVER_SENT_REVIEW
+  return lines.some(line => line.proposedByUserId === userId || line.adjustedByUserId === userId) ? APPROVER_WROTE_LINE : null
+}
+
+const cents = (value: number | string) => Math.round(Number(value) * 100)
+/** الأساسي اللي اتراجع عليه السطر هو أساسي الموظف دلوقتي؟ (بالقروش) */
+export const sameBasic = (left: number | string, right: number | string) => cents(left) === cents(right)
+/** الأساسي الجديد = الأساسي + الزيادة، نص بمنزلتين (حساب بالقروش) */
+export const raisedBasic = (currentBasic: number | string, amount: number | string) => ((cents(currentBasic) + cents(amount)) / 100).toFixed(2)
+
 // ===== جاهزية الترحيل =====
 
 let ready: boolean | null = null

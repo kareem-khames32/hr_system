@@ -9,11 +9,19 @@ import { MainLayout } from '@/components/layout'
 import { currencyLabel } from '@/lib/currency'
 import { formatDate } from '@/lib/dates'
 import { formatMoney } from '@/lib/money'
-import { adjustRaiseLine, createRaiseCycle, fetchRaiseCycle, fetchRaiseCycles, moveRaiseCycle, setRaiseBudget,
-  type ApiRaiseCycle, type ApiRaiseCycleDetail, type CycleStep } from '@/lib/compensation-api'
+import { adjustRaiseLine, applyRaiseCycle, approveRaiseCycle, createRaiseCycle, fetchRaiseCycle, fetchRaiseCycles, moveRaiseCycle, setRaiseBudget, unapproveRaiseCycle,
+  type ApiRaiseApplyResult, type ApiRaiseCycle, type ApiRaiseCycleDetail, type CycleStep } from '@/lib/compensation-api'
 
 const STEP_LABELS: Record<CycleStep, string> = { open: 'فتح للاقتراحات', review: 'قفل الاقتراحات وبدء المراجعة', reopen: 'رجوع للاقتراحات', cancel: 'إلغاء الدورة' }
 const STEPS_FROM: Record<string, CycleStep[]> = { DRAFT: ['open', 'cancel'], OPEN: ['review', 'cancel'], REVIEW: ['reopen', 'cancel'] }
+// (ج) الاعتماد والرجوع والتطبيق
+type Decision = 'approve' | 'unapprove' | 'apply'
+const DECISION_LABELS: Record<Decision, string> = { approve: 'اعتماد الدورة', unapprove: 'رجوع للمراجعة', apply: 'تطبيق على الرواتب' }
+const DECISION_CONFIRM: Record<Decision, string> = {
+  approve: 'اعتماد الزيادات النهائية زي ما هي؟ بعد الاعتماد مفيش اقتراح ولا تعديل.',
+  unapprove: 'ترجّع الدورة للمراجعة؟',
+  apply: 'الأساسي الجديد هيتكتب في ملف كل موظف وسجل راتبه من شهر السريان. متأكد؟',
+}
 const amountOf = (text: string): number | null => (/^\d{1,7}(\.\d{1,2})?$/.test(text.trim()) ? Number(text.trim()) : null)
 
 export default function RaiseCyclesPage() {
@@ -28,6 +36,8 @@ export default function RaiseCyclesPage() {
   const [add, setAdd] = useState({ employeeId: '', amount: '', note: '' })
   const [budget, setBudget] = useState<{ departmentId: number; amount: string } | null>(null)
   const [confirmStep, setConfirmStep] = useState<CycleStep | null>(null)
+  const [confirmDecision, setConfirmDecision] = useState<Decision | null>(null)
+  const [refused, setRefused] = useState<ApiRaiseApplyResult['refused']>([])
 
   const loadList = useCallback(() => {
     fetchRaiseCycles().then((data) => { setCycles(data.cycles); setReady(data.ready) }).catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل دورات الزيادات'))
@@ -48,7 +58,21 @@ export default function RaiseCyclesPage() {
       setBusy(false)
     }
   }
-  const open = (id: number) => run(() => fetchRaiseCycle(id), '')
+  const open = (id: number) => { setRefused([]); return run(() => fetchRaiseCycle(id), '') }
+  async function decide(decision: Decision) {
+    if (!detail) return
+    setConfirmDecision(null); setRefused([])
+    const id = detail.cycle.id
+    if (decision === 'approve') await run(() => approveRaiseCycle(id), 'اتعتمدت الدورة')
+    else if (decision === 'unapprove') await run(() => unapproveRaiseCycle(id), 'رجعت الدورة للمراجعة')
+    else {
+      await run(async () => {
+        const result = await applyRaiseCycle(id)
+        setRefused(result.refused)
+        return result
+      }, 'خلص التطبيق')
+    }
+  }
 
   async function create() {
     const ok = await run(() => createRaiseCycle({ name: form.name.trim(), effectivePayrollPeriod: form.effectivePayrollPeriod, ...(form.note.trim() ? { note: form.note.trim() } : {}) }), 'اتعملت الدورة (مسودة)')
@@ -80,6 +104,13 @@ export default function RaiseCyclesPage() {
 
   const canCreate = form.name.trim().length > 0 && /^\d{4}-\d{2}$/.test(form.effectivePayrollPeriod)
   const steps = detail && detail.canMove ? STEPS_FROM[detail.cycle.status] ?? [] : []
+  const appliedCount = detail ? detail.lines.filter((line) => line.appliedAt !== null).length : 0
+  const decisions: Decision[] = !detail ? [] : [
+    ...(detail.canApprove && detail.cycle.status === 'REVIEW' ? ['approve' as const] : []),
+    ...(detail.canApply && detail.cycle.status === 'APPROVED' ? ['apply' as const] : []),
+    ...(detail.canApprove && detail.cycle.status === 'APPROVED' && appliedCount === 0 ? ['unapprove' as const] : []),
+  ]
+  const nameOf = (employeeId: number) => detail?.lines.find((line) => line.employeeId === employeeId)?.fullName ?? `موظف رقم ${employeeId}`
 
   return (
     <MainLayout>
@@ -160,6 +191,11 @@ export default function RaiseCyclesPage() {
                       {STEP_LABELS[step]}
                     </button>
                   ))}
+                  {decisions.map((decision) => (
+                    <button key={decision} type="button" className={`${decision === 'unapprove' ? 'btn-secondary' : 'btn-primary'} text-sm disabled:opacity-50`} disabled={busy} onClick={() => setConfirmDecision(decision)}>
+                      {DECISION_LABELS[decision]}
+                    </button>
+                  ))}
                 </div>
               </div>
               {confirmStep && (
@@ -167,6 +203,22 @@ export default function RaiseCyclesPage() {
                   <span>متأكد من «{STEP_LABELS[confirmStep]}»؟</span>
                   <button type="button" className="btn-primary text-sm disabled:opacity-50" disabled={busy} onClick={() => move(confirmStep)}>أيوه</button>
                   <button type="button" className="btn-secondary text-sm" onClick={() => setConfirmStep(null)}>لأ</button>
+                </div>
+              )}
+              {confirmDecision && (
+                <div className="bg-amber-50 text-amber-800 rounded-xl p-3 flex flex-wrap items-center gap-3 text-sm" data-raise-decision>
+                  <span>{DECISION_CONFIRM[confirmDecision]}</span>
+                  <button type="button" className="btn-primary text-sm disabled:opacity-50" disabled={busy} onClick={() => decide(confirmDecision)}>أيوه</button>
+                  <button type="button" className="btn-secondary text-sm" onClick={() => setConfirmDecision(null)}>لأ</button>
+                </div>
+              )}
+              {detail.cycle.status === 'REVIEW' && detail.canApprove && (
+                <p className="text-xs text-gray-500">الاعتماد من حد ماقترحش: اللي بعت الدورة للمراجعة أو اقترح أو عدّل سطر فيها مايعتمدهاش.</p>
+              )}
+              {refused.length > 0 && (
+                <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 text-sm space-y-1" data-raise-refused>
+                  <p className="font-semibold">زيادات مااتطبّقتش ({refused.length}):</p>
+                  {refused.map((row) => <p key={row.employeeId}>{nameOf(row.employeeId)}: {row.message}</p>)}
                 </div>
               )}
               {detail.cycle.note && <p className="text-sm text-gray-600">{detail.cycle.note}</p>}
@@ -233,6 +285,7 @@ export default function RaiseCyclesPage() {
                     <tr>
                       <th className="table-header text-right">الموظف</th>
                       <th className="table-header text-right">الوحدة</th>
+                      {detail.performance && <th className="table-header text-center">نتيجة الأداء</th>}
                       {detail.salaries && <th className="table-header text-center">الأساسي الحالي</th>}
                       <th className="table-header text-center">اقتراح المدير</th>
                       <th className="table-header text-center">النهائي</th>
@@ -250,6 +303,11 @@ export default function RaiseCyclesPage() {
                           {!line.active && <span className="text-xs text-red-700"> (مش على رأس العمل)</span>}
                         </td>
                         <td className="table-cell">{line.departmentName ?? '—'}</td>
+                        {detail.performance && (
+                          <td className="table-cell text-center">
+                            {line.performanceScore === null ? '—' : <>{line.performanceLabel} <span className="text-xs text-gray-500 font-mono" dir="ltr">({line.performanceScore})</span></>}
+                          </td>
+                        )}
                         {detail.salaries && (
                           <td className="table-cell text-center font-mono">
                             {line.currentBasic === null ? '—' : formatMoney(line.currentBasic)}
@@ -265,6 +323,7 @@ export default function RaiseCyclesPage() {
                             ? <input className="input w-28 text-center" dir="ltr" inputMode="decimal" value={edit.amount} onChange={(event) => setEdit({ ...edit, amount: event.target.value })} />
                             : <>{formatMoney(line.finalAmount)} <span className="text-xs font-normal text-gray-500 font-sans">{currencyLabel(line.currency)}</span></>}
                           {line.adjusted && edit?.employeeId !== line.employeeId && <span className="block text-xs font-normal text-gray-500 font-sans">عدّله {line.adjustedBy ?? 'حساب برّه نطاقك'}</span>}
+                          {line.appliedAt && <span className="block text-xs font-normal text-green-700 font-sans">اتطبّقت {formatDate(line.appliedAt)}</span>}
                         </td>
                         {detail.salaries && <td className="table-cell text-center font-mono">{line.newBasic === null ? '—' : formatMoney(line.newBasic)}</td>}
                         {detail.salaries && <td className="table-cell text-center font-mono" dir="ltr">{line.percent === null ? '—' : `${line.percent}%`}</td>}

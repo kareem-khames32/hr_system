@@ -40,8 +40,12 @@ test('CCU-03: الميزانية — الباقي و«عدّت» (تحذير)، 
 
 test('CCU-04: مصدر الكود — مفيش راتب بيتكتب، والكتابة تحت قفل الدورة ثم الموظف، وورقة المدير من غير أرقام راتب، والصلاحيات', () => {
   const service = read('compensation/compensation-cycles.service.ts')
-  assert.doesNotMatch(service, /applyEmployeeSalaryChange|UPDATE \[employees\]|getRepository\(Employee\)|salary_history/i, 'الجزء (ب) مابيغيّرش راتب')
-  assert.equal((service.match(/const cycle = await this\.lockCycle\(em, id\)/g) ?? []).length, 4, 'الخطوة والميزانية والتعديل والاقتراح تحت قفل صف الدورة')
+  // (ج) الراتب بيتكتب في مكان واحد: applyLine، ومن خدمة تاريخ الراتب القايمة بس — مفيش كتابة مباشرة على جدول الموظفين ولا سجل الراتب
+  assert.doesNotMatch(service, /UPDATE \[employees\]|UPDATE dbo\.employees|getRepository\(Employee\)|INSERT INTO|employee_salary_history/i)
+  assert.equal((service.match(/applyEmployeeSalaryChange\(/g) ?? []).length, 1)
+  const applyLine = service.slice(service.indexOf('  private async applyLine('), service.indexOf('  // ===== ورقة المدير ====='))
+  assert.ok(applyLine.includes('await applyEmployeeSalaryChange(em, {'), 'الكتابة الوحيدة في applyLine')
+  assert.equal((service.match(/const cycle = await this\.lockCycle\(em, id\)/g) ?? []).length, 7, 'الخطوة والميزانية والتعديل والاقتراح والاعتماد والرجوع وقفل التطبيق تحت قفل صف الدورة')
   assert.match(service, /findOne\(\{ where: \{ id \}, lock: \{ mode: 'pessimistic_write' \} \}\)/)
   assert.match(service, /FROM \[employees\] e WITH \(UPDLOCK, ROWLOCK\) WHERE e\.\[id\] = @0/)
   for (const method of ['adjustLine', 'propose']) {
@@ -50,13 +54,31 @@ test('CCU-04: مصدر الكود — مفيش راتب بيتكتب، والك�
   }
   assert.match(service, /if \(!employee \|\| employee\.id === me \|\| employee\.managerEmployeeId !== me \|\| !employee\.active\) throw new NotFoundException\(NOT_IN_TEAM\)/)
   assert.match(service, /if \(!employee \|\| !inBranchScope\(branchScopeOf\(user\), employee\.branchId\)\) throw new NotFoundException\(EMPLOYEE_NOT_FOUND\)/)
-  assert.equal((service.match(/assertCompanyWideWrite\(user\)/g) ?? []).length, 2, 'فتح الدورة وتحريكها لحساب بكل الفروع')
   const myTeam = service.slice(service.indexOf('  async myTeam('), service.indexOf('  /** اقتراح المدير'))
   assert.doesNotMatch(myTeam, /basicSalary|currentBasic|finalAmount|newBasic|percent/, 'ورقة المدير: المبلغ اللي كتبه بس')
   assert.match(service, /currentBasic: salaries \? basic : null, newBasic: salaries \? round2\(basic \+ final\) : null/)
   const controller = read('compensation/compensation.controller.ts')
   assert.deepEqual([(controller.match(/@Perm\('compensation\.manage'\)/g) ?? []).length, (controller.match(/@Perm\('payroll\.view'\)/g) ?? []).length,
-    (controller.match(/@(Get|Post|Put|Patch|Delete)\(/g) ?? []).length, /@Delete\(/.test(controller)], [6, 1, 9, false])
+    (controller.match(/@(Get|Post|Put|Patch|Delete)\(/g) ?? []).length, /@Delete\(/.test(controller)], [6, 1, 12, false])
+  assert.equal((controller.match(/@Perm\('payroll\.approve'\)/g) ?? []).length, 3, 'الاعتماد والرجوع والتطبيق بصلاحية اعتماد المسير')
   assert.match(controller, /@RequireModule\('compensation'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)/)
   assert.match(read('modules-registry/registry.ts'), /routes: \['\/compensation', '\/compensation\/\*', '\/my\/raises'\]/)
+})
+
+test('CCU-05: الاعتماد من حد ماقترحش، والأساسي الجديد بالقروش، ومرجع الدورة، وترتيب أقفال التطبيق', () => {
+  const lines = [{ proposedByUserId: 5, adjustedByUserId: null, finalAmount: '300.00' }, { proposedByUserId: 6, adjustedByUserId: 7, finalAmount: 0 }]
+  assert.deepEqual([rules.approverIssue({ reviewByUserId: 9 }, lines, 9), rules.approverIssue({ reviewByUserId: 9 }, lines, 5), rules.approverIssue({ reviewByUserId: 9 }, lines, 7),
+    rules.approverIssue({ reviewByUserId: 9 }, lines, 8), rules.approverIssue({ reviewByUserId: null }, lines, 8)],
+  [rules.APPROVER_SENT_REVIEW, rules.APPROVER_WROTE_LINE, rules.APPROVER_WROTE_LINE, null, null])
+  assert.deepEqual([rules.approverIssue({ reviewByUserId: 9 }, [], 8), rules.approverIssue({ reviewByUserId: 9 }, [{ proposedByUserId: 5, adjustedByUserId: null, finalAmount: 0 }], 8)], [rules.APPROVE_NO_LINES, rules.APPROVE_NO_LINES])
+  assert.deepEqual([rules.raisedBasic('5000.00', 300), rules.raisedBasic('5000.10', '0.20'), rules.raisedBasic(1234.56, 0.01), rules.raisedBasic('0.00', 9999999.99)], ['5300.00', '5000.30', '1234.57', '9999999.99'])
+  assert.deepEqual([rules.sameBasic('5000.00', 5000), rules.sameBasic('5000.00', '5000.01'), rules.sameBasic(5000.1, '5000.10')], [true, false, true])
+  assert.equal(rules.cycleEvidenceReference(42), 'COMP-CYCLE-42')
+  const service = read('compensation/compensation-cycles.service.ts')
+  const applyLine = service.slice(service.indexOf('  private async applyLine('), service.indexOf('  // ===== ورقة المدير ====='))
+  const order = ['this.lockCycle(em, cycleId)', "lock: { mode: 'pessimistic_write' }", 'this.lockEmployee(em, line.employeeId)', 'sameBasic(current.current.basicSalary, line.currentBasic)', 'await applyEmployeeSalaryChange(em, {', 'appliedAt: new Date()']
+  assert.deepEqual(order.map(text => applyLine.indexOf(text) > 0), order.map(() => true))
+  assert.deepEqual([...order].sort((a, b) => applyLine.indexOf(a) - applyLine.indexOf(b)), order, 'الدورة ثم السطر ثم الموظف ثم الحكم ثم الكتابة ثم علامة التطبيق')
+  assert.match(service, /if \(!userHasPerm\(user, 'employees\.edit'\)\) throw new ForbiddenException\(APPLY_NEEDS_EDIT\)/)
+  assert.equal((service.match(/assertCompanyWideWrite\(user\)/g) ?? []).length, 5, 'الإنشاء والتحريك والاعتماد والرجوع والتطبيق لحساب بكل الفروع')
 })

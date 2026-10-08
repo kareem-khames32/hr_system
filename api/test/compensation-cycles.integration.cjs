@@ -267,3 +267,120 @@ test('CC-05: الميزانية — للوحدة في نطاق الحساب، ب
   assert.deepEqual([await basicOf(E.first), await basicOf(E.second), await basicOf(E.outsider), await basicOf(E.cairo), (await pool.request().query(`SELECT COUNT(*) AS n FROM dbo.employee_salary_history_versions`)).recordset[0].n],
     [5000, 6000, 7000, 9000, 0])
 })
+
+// ===== (ج) الاعتماد والتطبيق =====
+const wide = (label, permissions) => repo('User').save({ email: `${label}@comp-cycles.invalid`, displayName: 'حساب ' + label, passwordHash: 'test-only', role: 'employee', branchId: null,
+  scopeAllBranches: true, permissions: JSON.stringify(permissions) })
+// شهر مسير عدّى (أكيد مش لاحق لشهر المسير الجاري)
+const pastPeriod = () => { const date = new Date(Date.now() - 62 * 86400000); return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}` }
+const step = (id, name) => request(U.admin, 'POST', `${C}/${id}/steps/${name}`)
+const versions = async person => (await pool.request().input('id', person.id).query(`SELECT [revision], [reason], [evidenceReference], [createdBy] FROM dbo.employee_salary_history_versions WHERE [employeeId] = @id ORDER BY [revision]`)).recordset
+const messageOf = response => (Array.isArray(response.body?.message) ? response.body.message.join(' ') : response.body?.message)
+let applyCycle
+
+test('CC-06: الاعتماد — بصلاحية اعتماد المسير ولحساب بكل الفروع، ومن حد ماقترحش: مش اللي بعتها للمراجعة ولا اللي كتب أو عدّل سطر؛ والرجوع قبل التطبيق', async () => {
+  // ملفات الأجر كاملة بعملتها (زي ما تغيير الأجر بيشترط)
+  for (const person of [E.first, E.second, E.outsider]) await repo('Employee').update({ id: person.id }, { currency: 'SAR', phoneAllowance: 0, workNatureAllowance: 0 })
+  U.approver = await wide('approver', ['compensation.manage', 'payroll.view', 'payroll.approve'])
+  U.writer = await wide('writer', ['compensation.manage', 'payroll.view', 'payroll.approve', 'employees.edit'])
+  U.applier = await wide('applier', ['compensation.manage', 'payroll.view', 'payroll.approve', 'employees.edit'])
+  U.branchApprover = await account('branch-approver', B.riyadh, ['compensation.manage', 'payroll.view', 'payroll.approve', 'employees.edit'])
+  applyCycle = ok(await request(U.admin, 'POST', C, { name: 'دورة التطبيق', effectivePayrollPeriod: pastPeriod() }), 201).cycle.id
+  const A = `${C}/${applyCycle}`
+  // مسودة أو مفتوحة: مفيش اعتماد
+  assert.equal((await request(U.approver, 'POST', `${A}/approve`)).status, 400)
+  ok(await step(applyCycle, 'open'), 201)
+  ok(await request(U.manager, 'PUT', `${A}/my-team/${E.first.id}`, { amount: 300 }))
+  ok(await request(U.manager, 'PUT', `${A}/my-team/${E.second.id}`, { amount: 200 }))
+  ok(await request(U.writer, 'PUT', `${A}/lines/${E.second.id}`, { amount: 250, note: 'توحيد' }))
+  assert.equal((await request(U.approver, 'POST', `${A}/approve`)).status, 400, 'لسه مفتوحة')
+  ok(await step(applyCycle, 'review'), 201)
+  // بالصلاحية وبالنطاق
+  assert.deepEqual([(await request(U.hr, 'POST', `${A}/approve`)).status, (await request(U.manager, 'POST', `${A}/approve`)).status, (await request(U.branchApprover, 'POST', `${A}/approve`)).status,
+    (await request(U.approver, 'POST', `${C}/999999/approve`)).status], [403, 403, 403, 404])
+  // اللي بعتها للمراجعة (مدير النظام هنا)، واللي عدّل سطر: مايعتمدوش
+  const sent = await request(U.admin, 'POST', `${A}/approve`), wrote = await request(U.writer, 'POST', `${A}/approve`)
+  assert.deepEqual([[sent.status, messageOf(sent)], [wrote.status, messageOf(wrote)]], [[403, rules.APPROVER_SENT_REVIEW], [403, rules.APPROVER_WROTE_LINE]])
+  assert.equal((await repo('CompensationCycle').findOneByOrFail({ id: applyCycle })).status, 'REVIEW')
+  // حد ماقترحش: بيعتمد — وضغطتين مع بعض = اعتماد واحد
+  const both = await Promise.all([request(U.approver, 'POST', `${A}/approve`), request(U.approver, 'POST', `${A}/approve`)])
+  assert.deepEqual(both.map(response => response.status).sort(), [201, 400])
+  const approved = await repo('CompensationCycle').findOneByOrFail({ id: applyCycle })
+  assert.deepEqual([approved.status, approved.approvedByUserId, approved.approvedAt instanceof Date], ['APPROVED', U.approver.id, true])
+  // المعتمدة: مفيش اقتراح ولا تعديل ولا ميزانية ولا إلغاء
+  assert.deepEqual([(await request(U.manager, 'PUT', `${A}/my-team/${E.first.id}`, { amount: 999 })).status, (await request(U.writer, 'PUT', `${A}/lines/${E.first.id}`, { amount: 999, note: 'سبب' })).status,
+    (await request(U.writer, 'PUT', `${A}/budgets/${D.sales.id}`, { amount: 5000 })).status, (await step(applyCycle, 'cancel')).status], [400, 400, 400, 400])
+  // الرجوع للمراجعة قبل التطبيق، وبعدها اعتماد تاني
+  assert.deepEqual([(await request(U.hr, 'POST', `${A}/unapprove`)).status, (await request(U.branchApprover, 'POST', `${A}/unapprove`)).status], [403, 403])
+  assert.equal(ok(await request(U.approver, 'POST', `${A}/unapprove`), 201).cycle.status, 'REVIEW')
+  assert.equal((await request(U.approver, 'POST', `${A}/unapprove`)).status, 400)
+  const detail = ok(await request(U.approver, 'POST', `${A}/approve`), 201)
+  assert.deepEqual([detail.cycle.status, detail.canApprove, detail.canApply, detail.performance, detail.lines.map(row => row.performanceScore)], ['APPROVED', true, false, false, [null, null]])
+  // دورة من غير أي زيادة: مافيش حاجة تتعتمد
+  const empty = ok(await request(U.admin, 'POST', C, { name: 'دورة فاضية', effectivePayrollPeriod: pastPeriod() }), 201).cycle.id
+  ok(await step(empty, 'open'), 201); ok(await request(U.manager, 'PUT', `${C}/${empty}/my-team/${E.first.id}`, { amount: 0 })); ok(await step(empty, 'review'), 201)
+  const none = await request(U.approver, 'POST', `${C}/${empty}/approve`)
+  assert.deepEqual([none.status, messageOf(none)], [400, rules.APPROVE_NO_LINES])
+  ok(await step(empty, 'cancel'), 201)
+  assert.deepEqual((await repo('AuditLog').find({ where: { entityType: 'compensation_cycle', entityId: String(applyCycle) }, order: { id: 'ASC' } })).map(row => row.action).filter(action => /APPROVED|UNAPPROVED/.test(action)),
+    ['RAISE_CYCLE_APPROVED', 'RAISE_CYCLE_UNAPPROVED', 'RAISE_CYCLE_APPROVED'])
+  // ولا راتب اتغيّر بالاعتماد
+  assert.deepEqual([await basicOf(E.first), await basicOf(E.second), (await versions(E.first)).length], [5000, 6000, 0])
+})
+
+test('CC-07: التطبيق — من خدمة تاريخ الراتب، سطر سطر: الأساسي اللي اتغيّر بيترفض والباقي بيكمّل، ومابيتكررش، ومرجع الدورة على صف تاريخ الراتب، وضغطتين = مرة واحدة', async () => {
+  const A = `${C}/${applyCycle}`
+  // بالصلاحية: اعتماد المسير لوحده مايكفيش، ولا حساب فرع
+  const needsEdit = await request(U.approver, 'POST', `${A}/apply`)
+  assert.deepEqual([needsEdit.status, /تعديل الموظفين/.test(messageOf(needsEdit)), (await request(U.hr, 'POST', `${A}/apply`)).status, (await request(U.branchApprover, 'POST', `${A}/apply`)).status,
+    (await request(U.applier, 'POST', `${C}/999999/apply`)).status], [403, true, 403, 403, 404])
+  assert.deepEqual([await basicOf(E.first), (await versions(E.first)).length], [5000, 0])
+  // أساسي المرؤوس التاني اتغيّر بعد المراجعة: سطره بيترفض، والأول بيتطبّق
+  await repo('Employee').update({ id: E.second.id }, { basicSalary: 6100 })
+  const first = ok(await request(U.applier, 'POST', `${A}/apply`), 201)
+  assert.deepEqual([first.applied, first.refused.map(row => [row.employeeId, /اتغيّر بعد آخر مراجعة/.test(row.message)]), first.cycle.status], [1, [[E.second.id, true]], 'APPROVED'])
+  assert.deepEqual([await basicOf(E.first), await basicOf(E.second)], [5300, 6100])
+  const history = await versions(E.first)
+  assert.deepEqual(history.map(row => [row.revision, row.evidenceReference, row.createdBy, /دورة التطبيق/.test(row.reason)]), [[1, `COMP-CYCLE-${applyCycle}`, U.applier.id, true]])
+  const line = (await proposals()).find(row => row.cycleId === applyCycle && row.employeeId === E.first.id)
+  assert.deepEqual([line.appliedAt instanceof Date, line.appliedByUserId, line.appliedRevision], [true, U.applier.id, 1])
+  assert.deepEqual(first.lines.map(row => [row.employeeId, row.appliedAt !== null]), [[E.first.id, true], [E.second.id, false]])
+  // سجل تغيير الملف اتكتب من خدمة تغيير الأجر نفسها
+  assert.equal(Number((await pool.request().input('id', E.first.id).query(`SELECT COUNT(*) AS n FROM dbo.employee_status_history WHERE [employeeId] = @id AND [fieldName] = N'basicSalary'`)).recordset[0].n), 1)
+  // فيه سطر اتطبّق: الدورة مابترجعش للمراجعة؛ وتطبيق تاني مابيكررش
+  assert.equal((await request(U.approver, 'POST', `${A}/unapprove`)).status, 400)
+  const again = ok(await request(U.applier, 'POST', `${A}/apply`), 201)
+  assert.deepEqual([again.applied, again.refused.length, await basicOf(E.first), (await versions(E.first)).length], [0, 1, 5300, 1])
+  // الأساسي رجع للي اتراجع عليه: السطر بيتطبّق والدورة «اتطبّقت» — وضغطتين مع بعض = مرة واحدة
+  await repo('Employee').update({ id: E.second.id }, { basicSalary: 6000 })
+  const pair = await Promise.all([request(U.applier, 'POST', `${A}/apply`), request(U.applier, 'POST', `${A}/apply`)])
+  assert.deepEqual([pair.map(response => response.status === 201 || response.status === 400).every(Boolean), pair.filter(response => response.status === 201).reduce((sum, response) => sum + response.body.applied, 0)], [true, 1])
+  assert.deepEqual([await basicOf(E.second), (await versions(E.second)).length, (await repo('CompensationCycle').findOneByOrFail({ id: applyCycle })).status], [6250, 1, 'APPLIED'])
+  assert.equal((await request(U.applier, 'POST', `${A}/apply`)).status, 400, 'اتطبّقت خلاص')
+  assert.deepEqual([await basicOf(E.first), await basicOf(E.second), await basicOf(E.outsider)], [5300, 6250, 7000], 'كل زيادة مرة واحدة، واللي مالوش سطر زي ما هو')
+  assert.deepEqual((await repo('AuditLog').find({ where: { action: 'RAISE_APPLIED' }, order: { id: 'ASC' } })).map(row => [row.entityId, row.actorUserId, JSON.parse(row.after).evidenceReference]),
+    [[`${applyCycle}:${E.first.id}`, U.applier.id, `COMP-CYCLE-${applyCycle}`], [`${applyCycle}:${E.second.id}`, U.applier.id, `COMP-CYCLE-${applyCycle}`]])
+  assert.equal(await repo('AuditLog').count({ where: { action: 'RAISE_CYCLE_APPLIED' } }), 1)
+
+  // دورة شهر سريانها لسه ماجاش: خدمة تاريخ الراتب بترفض كل سطر — ولا راتب بيتكتب، والموظف اللي ساب الشغل سطره بيترفض
+  const future = ok(await request(U.admin, 'POST', C, { name: 'دورة السنة الجاية', effectivePayrollPeriod: '2099-01' }), 201).cycle.id
+  ok(await step(future, 'open'), 201)
+  ok(await request(U.manager, 'PUT', `${C}/${future}/my-team/${E.first.id}`, { amount: 100 }))
+  ok(await step(future, 'review'), 201); ok(await request(U.approver, 'POST', `${C}/${future}/approve`), 201)
+  const later = ok(await request(U.applier, 'POST', `${C}/${future}/apply`), 201)
+  assert.deepEqual([later.applied, later.refused.map(row => [row.employeeId, /شهر لاحق/.test(row.message)]), later.cycle.status, await basicOf(E.first), (await versions(E.first)).length],
+    [0, [[E.first.id, true]], 'APPROVED', 5300, 1])
+  await repo('Employee').update({ id: E.first.id }, { status: 'terminated', isActive: false })
+  const gone = ok(await request(U.applier, 'POST', `${C}/${future}/apply`), 201)
+  assert.deepEqual([gone.applied, gone.refused.map(row => /مش على رأس العمل/.test(row.message))], [0, [true]])
+  await repo('Employee').update({ id: E.first.id }, { status: 'active', isActive: true })
+
+  // نتيجة الأداء في المراجعة: لو الموديول مفتوح وللي معاه صلاحيته
+  await repo('ReviewAssignment').save({ cycleId: 1, employeeId: E.first.id, branchId: B.riyadh.id, managerEmployeeId: E.manager.id, status: 'APPROVED', selfSubmittedAt: null, managerSubmittedAt: null,
+    selfScore: null, managerScore: null, finalScore: 92, createdAt: new Date() })
+  const closed = ok(await request(U.admin, 'GET', `${C}/${future}`))
+  assert.deepEqual([closed.performance, closed.lines[0].performanceScore], [false, null], 'موديول الأداء مقفول')
+  ok(await request(U.admin, 'PUT', '/modules/performance', { enabled: true })); modules.invalidate()
+  const seen = ok(await request(U.admin, 'GET', `${C}/${future}`)), unseen = ok(await request(U.approver, 'GET', `${C}/${future}`))
+  assert.deepEqual([seen.performance, seen.lines.map(row => [row.performanceScore, row.performanceLabel]), unseen.performance, unseen.lines[0].performanceScore], [true, [[92, 'ممتاز']], false, null])
+})

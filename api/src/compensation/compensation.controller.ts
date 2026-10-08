@@ -68,6 +68,25 @@ export class CompensationController {
     return this.cycles.adjustLine(user, id, employeeId, dto)
   }
 
+  // (ج) الاعتماد والرجوع والتطبيق: بصلاحية اعتماد المسير ولحساب بكل الفروع؛ «من حد ماقترحش» و«تعديل الموظفين» للتطبيق في الخدمة
+  @Perm('payroll.approve')
+  @Post('cycles/:id/approve')
+  approveCycle(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number) {
+    return this.cycles.approve(user, id)
+  }
+
+  @Perm('payroll.approve')
+  @Post('cycles/:id/unapprove')
+  unapproveCycle(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number) {
+    return this.cycles.unapprove(user, id)
+  }
+
+  @Perm('payroll.approve')
+  @Post('cycles/:id/apply')
+  applyCycle(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number) {
+    return this.cycles.apply(user, id)
+  }
+
   // ورقة المدير: من غير مفتاح صلاحية — «المدير المباشر» موقع في الهيكل بيتحكم عليه في الخدمة (مرؤوسيه المباشرين بس)
   @Get('my-team')
   myTeam(@CurrentUser() user: JwtPayload) {
