@@ -1,7 +1,7 @@
 'use strict'
 // B5.4 (أ) على SQL حقيقي: المهارات — الموديول مقفول افتراضيًا، الترحيلات 155–157 (والأعمدة على employee_skills القايم من غير ما ملف الموظف يتأثر)،
 // المكتبة، المهارات المطلوبة للوظيفة المعتمدة، تقييم مهارة الموظف (صاحب الصلاحية في نطاقه أو المدير المباشر)، ومصفوفة الفجوة.
-// قاعدة اختبار عشوائية تُحذف في النهاية.
+// و(ب): الإحلال — الوظائف الحرجة وخلفاؤها (ترحيلي 158 و159)، بصلاحيته السرّية ونطاقه. قاعدة اختبار عشوائية تُحذف في النهاية.
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), crypto = require('node:crypto')
@@ -17,6 +17,7 @@ const uploads = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-skills-files-'))
 const secret = crypto.randomBytes(48).toString('hex')
 const jwt = new (require('../node_modules/@nestjs/jwt').JwtService)({ secret })
 const rules = require('../src/skills/skills')
+const succession = require('../src/skills/succession')
 const MIGRATIONS = ['20261010_155_skills.sql', '20261010_156_position_skill_requirements.sql', '20261010_157_employee_skill_links.sql'].map(name => path.resolve(apiRoot, '..', 'docs', 'migrations', 'payroll', name))
 const LINK_COLUMNS = ['skillId', 'source', 'assessedByUserId', 'assessedAt', 'validUntil']
 let master, pool, app, ds, base, modules, created = false, sequence = 0
@@ -252,4 +253,148 @@ test('SK-05: الفجوة — مستوفاة، أقل من المطلوب، مش
   ok(await request(U.admin, 'PUT', '/modules/skills', { enabled: false })); modules.invalidate()
   assert.deepEqual([(await request(U.hr, 'GET', '/skills/matrix')).status, (await assess(U.hr, E.one, S.weld, { level: 'expert' })).status, (await request(U.two, 'GET', '/skills/my')).status], [404, 404, 404])
   ok(await request(U.admin, 'PUT', '/modules/skills', { enabled: true })); modules.invalidate()
+})
+
+const SUCCESSION_MIGRATIONS = ['20261010_158_critical_positions.sql', '20261010_159_succession_nominations.sql'].map(name => path.resolve(apiRoot, '..', 'docs', 'migrations', 'payroll', name))
+const runSuccessionMigrations = async () => { assert.match(database, NAME); for (const file of SUCCESSION_MIGRATIONS) for (const batch of migrate.splitBatches(fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n'))) await pool.request().batch(batch) }
+const X = '/skills/succession'
+const plan = async (user, positionId) => ok(await request(user, 'GET', X)).positions.find(row => row.id === positionId)
+const mark = (user, positionId, body) => request(user, 'PUT', `${X}/positions/${positionId}`, body)
+const nominate = (user, positionId, body) => request(user, 'POST', `${X}/positions/${positionId}/nominations`, body)
+
+test('SK-06: الإحلال — سرّي بصلاحيته، وقبل الترحيلين الشاشة بتقول ناقص؛ الوظيفة الحرجة بسبب وفي نطاق الحساب؛ والمرشح على رأس العمل في النطاق ومش شاغل الوظيفة ومش متكرر', async () => {
+  U.talent = await account('talent', B.riyadh, ['succession.manage']); U.talentCairo = await account('talent-cairo', B.cairo, ['succession.manage'])
+  // صلاحية المهارات مش صلاحية الإحلال، والمرشح أو أي موظف مالوش مسار
+  for (const user of [U.hr, U.loose, U.boss, U.one]) assert.equal((await request(user, 'GET', X)).status, 403)
+  for (const migration of SUCCESSION_MIGRATIONS) {
+    const text = fs.readFileSync(migration), code = path.basename(migration).split('_')[1]
+    assert.equal(text.includes(Buffer.from('\r\n')), false, 'LF بس — git بيخزّن الملف LF')
+    assert.notDeepEqual([...text.subarray(0, 3)], [0xef, 0xbb, 0xbf])
+    assert.ok(String(text).match(/THROW \d+/g).every(found => new RegExp(`^THROW ${code}0\\d\\d$`).test(found)), code)
+    assert.doesNotMatch(String(text), /\bDROP\b|\bTRUNCATE\b|\bDELETE\b|\bINSERT\b|\bUPDATE\b/i)
+  }
+  await runSuccessionMigrations()
+  await pool.request().batch('DROP TABLE dbo.succession_nominations'); await pool.request().batch('DROP TABLE dbo.critical_positions'); succession.resetSuccessionCache()
+  assert.deepEqual((({ ready, positions, candidates }) => [ready, positions, candidates])(ok(await request(U.talent, 'GET', X))), [false, [], []])
+  refused(await mark(U.talent, P.tech.id, { critical: true, reason: 'وظيفة تشغيل أساسية' }), 400, succession.SUCCESSION_MIGRATION_MISSING)
+  refused(await nominate(U.talent, P.tech.id, { employeeId: E.free.id, readiness: 'READY_NOW' }), 400, succession.SUCCESSION_MIGRATION_MISSING)
+  await runSuccessionMigrations(); await runSuccessionMigrations()
+  const first = await plan(U.talent, P.tech.id)
+  assert.deepEqual([first.critical, first.reason, first.nominations, first.requirements, first.holders, first.hiddenHolders], [false, null, [], 0, [], 0], 'تفاصيل الوظيفة للحرجة بس')
+  assert.deepEqual(ok(await request(U.talent, 'GET', X)).readiness.map(row => row.code), ['READY_NOW', 'ONE_TO_TWO', 'THREE_PLUS'])
+  // تعليم «حرجة»
+  for (const [body, message] of [[{ critical: 'yes' }, '«حرجة» نعم أو لا'], [{ critical: true }, 'اكتب سبب اعتبار الوظيفة حرجة'], [{ critical: true, reason: 'x'.repeat(301) }, 'السبب 300 حرف بالكتير']]) refused(await mark(U.talent, P.tech.id, body), 400, message)
+  for (const id of [P.cairo.id, P.gone.id, 999999]) refused(await mark(U.talent, id, { critical: true, reason: 'سبب' }), 404, rules.POSITION_NOT_FOUND)
+  refused(await nominate(U.talent, P.tech.id, { employeeId: E.free.id, readiness: 'READY_NOW' }), 400, 'الوظيفة مش متعلّمة «حرجة» — علّمها الأول')
+  ok(await mark(U.talent, P.tech.id, { critical: true, reason: '  وظيفة تشغيل   أساسية ' }))
+  ok(await mark(U.talent, P.tech.id, { critical: true, reason: 'وظيفة تشغيل أساسية' }))
+  assert.equal(await repo('CriticalPosition').count({ where: { positionId: P.tech.id } }), 1, 'صف واحد للوظيفة')
+  const marked = await plan(U.talent, P.tech.id)
+  assert.deepEqual([marked.critical, marked.reason, marked.requirements, marked.holders, marked.hiddenHolders], [true, 'وظيفة تشغيل أساسية', 2, ['فني أول', 'فني تاني'], 0])
+  // الترشيح
+  E.gone = await employee('موظف منتهي', B.riyadh, { status: 'terminated', isActive: false })
+  for (const [body, message] of [[{ readiness: 'READY_NOW' }, 'اختار الموظف المرشح'], [{ employeeId: E.free.id, readiness: 'SOON' }, 'اختار درجة الجاهزية'], [{ employeeId: E.free.id, readiness: 'READY_NOW', note: 'x'.repeat(301) }, 'الملاحظة 300 حرف بالكتير']]) {
+    refused(await nominate(U.talent, P.tech.id, body), 400, message)
+  }
+  for (const person of [E.cairo, E.gone, { id: 999999 }]) refused(await nominate(U.talent, P.tech.id, { employeeId: person.id, readiness: 'READY_NOW' }), 404, rules.EMPLOYEE_NOT_FOUND)
+  refused(await nominate(U.talent, P.tech.id, { employeeId: E.one.id, readiness: 'READY_NOW' }), 400, 'الموظف شاغل الوظيفة نفسها — مايترشحش خليفة ليها')
+  refused(await nominate(U.talentCairo, P.tech.id, { employeeId: E.free.id, readiness: 'READY_NOW' }), 404, rules.POSITION_NOT_FOUND)
+  const a = ok(await nominate(U.talent, P.tech.id, { employeeId: E.free.id, readiness: 'READY_NOW', note: ' جاهز  يمسك ' }), 201), b = ok(await nominate(U.talent, P.tech.id, { employeeId: E.boss.id, readiness: 'ONE_TO_TWO' }), 201)
+  assert.deepEqual([a.rank, b.rank], [1, 2]); S.nomA = a.id; S.nomB = b.id
+  refused(await nominate(U.talent, P.tech.id, { employeeId: E.free.id, readiness: 'THREE_PLUS' }), 409, 'الموظف مرشح على الوظيفة دي قبل كده')
+  const listed = (await plan(U.talent, P.tech.id)).nominations
+  assert.deepEqual(listed.map(row => [row.rank, row.fullName, row.employeeId, row.readiness, row.readinessLabel, row.note, row.nominatedByName, row.hidden, row.gaps]),
+    [[1, 'موظف من غير وظيفة', E.free.id, 'READY_NOW', 'جاهز الآن', 'جاهز يمسك', 'حساب talent', false, 2], [2, 'مدير المصنع', E.boss.id, 'ONE_TO_TWO', 'خلال سنة لسنتين', null, 'حساب talent', false, 2]])
+  // فجوة المرشح عن مهارات الوظيفة الحرجة بتقل لما مهارته تتقيّم
+  ok(await assess(U.hr, E.free, S.weld, { level: 'expert' }))
+  assert.equal((await plan(U.talent, P.tech.id)).nominations[0].gaps, 1)
+  // المرشحين المتاحين: موظفين نطاق الحساب اللي على رأس العمل بس
+  const candidates = ok(await request(U.talent, 'GET', X)).candidates.map(row => row.id)
+  assert.deepEqual([candidates.includes(E.free.id), candidates.includes(E.cairo.id), candidates.includes(E.gone.id)], [true, false, false])
+})
+
+test('SK-07: الإحلال — مرشح برّه نطاق القارئ من غير اسم ولا رقم؛ التعديل والشيل تحت نطاق الوظيفة ومن غير مسح؛ وشيل علامة «حرجة» بيخفي الخلفاء؛ والمرشح مايعرفش', async () => {
+  // المرشح اتنقل لفرع تاني: قارئ فرع الوظيفة يشوفه «خارج نطاقك»، والحساب العام يشوفه كامل
+  await repo('Employee').update({ id: E.free.id }, { branchId: B.cairo.id })
+  const masked = (await plan(U.talent, P.tech.id)).nominations[0]
+  assert.deepEqual([masked.hidden, masked.fullName, masked.employeeId, masked.employeeCode, masked.gaps, masked.rank], [true, succession.HIDDEN_NOMINEE, null, null, null, 1])
+  assert.equal(JSON.stringify(await plan(U.talent, P.tech.id)).includes('موظف من غير وظيفة'), false)
+  assert.deepEqual((({ hidden, fullName, employeeId }) => [hidden, fullName, employeeId])((await plan(U.admin, P.tech.id)).nominations[0]), [false, 'موظف من غير وظيفة', E.free.id])
+  // قارئ الفرع التاني مايشوفش وظيفة الرياض أصلًا، حتى لو المرشح في فرعه
+  assert.equal(await plan(U.talentCairo, P.tech.id), undefined)
+  await repo('Employee').update({ id: E.free.id }, { branchId: B.riyadh.id })
+  // التعديل: الجاهزية والملاحظة والترتيب
+  const patch = (user, id, body) => request(user, 'PATCH', `${X}/nominations/${id}`, body)
+  for (const [body, message] of [[{ readiness: 'SOON' }, 'اختار درجة الجاهزية'], [{ readiness: 'READY_NOW', rank: 0 }, 'الترتيب رقم صحيح من 1 لحد 10'], [{ readiness: 'READY_NOW', rank: 11 }, 'الترتيب رقم صحيح من 1 لحد 10']]) refused(await patch(U.talent, S.nomA, body), 400, message)
+  for (const [user, id] of [[U.talentCairo, S.nomA], [U.talent, 999999]]) refused(await patch(user, id, { readiness: 'READY_NOW' }), 404, succession.NOMINATION_NOT_FOUND)
+  assert.equal((await patch(U.hr, S.nomA, { readiness: 'READY_NOW' })).status, 403)
+  ok(await patch(U.talent, S.nomA, { readiness: 'THREE_PLUS', note: 'محتاج تدريب', rank: 5 }))
+  assert.deepEqual((await plan(U.talent, P.tech.id)).nominations.map(row => [row.rank, row.fullName, row.readiness, row.note]), [[2, 'مدير المصنع', 'ONE_TO_TWO', null], [5, 'موظف من غير وظيفة', 'THREE_PLUS', 'محتاج تدريب']])
+  // الشيل: حالة «اتشال» بمين وإمتى، والصف باقي؛ والموظف يترشح تاني بصف جديد
+  refused(await request(U.talentCairo, 'DELETE', `${X}/nominations/${S.nomA}`), 404, succession.NOMINATION_NOT_FOUND)
+  ok(await request(U.talent, 'DELETE', `${X}/nominations/${S.nomA}`))
+  refused(await request(U.talent, 'DELETE', `${X}/nominations/${S.nomA}`), 404, succession.NOMINATION_NOT_FOUND)
+  refused(await patch(U.talent, S.nomA, { readiness: 'READY_NOW' }), 404, succession.NOMINATION_NOT_FOUND)
+  const removed = await repo('SuccessionNomination').findOneByOrFail({ id: S.nomA })
+  assert.deepEqual([removed.status, removed.removedByUserId, removed.removedAt != null], ['REMOVED', U.talent.id, true])
+  assert.deepEqual((await plan(U.talent, P.tech.id)).nominations.map(row => row.fullName), ['مدير المصنع'])
+  const again = ok(await nominate(U.talent, P.tech.id, { employeeId: E.free.id, readiness: 'READY_NOW' }), 201)
+  assert.deepEqual([again.id !== S.nomA, again.rank], [true, 3])
+  // طلبين مع بعض لنفس المرشح = ترشيح ساري واحد
+  ok(await request(U.talent, 'DELETE', `${X}/nominations/${again.id}`))
+  const twice = await Promise.all([nominate(U.talent, P.tech.id, { employeeId: E.free.id, readiness: 'READY_NOW' }), nominate(U.admin, P.tech.id, { employeeId: E.free.id, readiness: 'ONE_TO_TWO' })])
+  assert.deepEqual(twice.map(response => response.status).sort(), [201, 409])
+  assert.equal(await repo('SuccessionNomination').count({ where: { positionId: P.tech.id, employeeId: E.free.id, status: 'ACTIVE' } }), 1)
+  // المرشح مايعرفش: مفيش مسار له، وفجوته ومصفوفة مديره من غير أي أثر للترشيح
+  assert.equal((await request(U.boss, 'GET', X)).status, 403)
+  for (const [user, route] of [[U.boss, '/skills/my'], [U.boss, '/skills/my-team'], [U.hr, '/skills/matrix']]) assert.doesNotMatch(JSON.stringify(ok(await request(user, 'GET', route))), /nominat|readiness|succession|critical/i)
+  // شيل علامة «حرجة»: الخلفاء مابيتعرضوش (وصفوفهم باقية)، ورجوعها بيرجّعهم
+  ok(await mark(U.talent, P.tech.id, { critical: false }))
+  const plain = await plan(U.talent, P.tech.id)
+  assert.deepEqual([plain.critical, plain.nominations, await repo('SuccessionNomination').count({ where: { positionId: P.tech.id, status: 'ACTIVE' } })], [false, [], 2])
+  ok(await mark(U.talent, P.tech.id, { critical: true, reason: 'رجعت حرجة' }))
+  assert.equal((await plan(U.talent, P.tech.id)).nominations.length, 2)
+  const audit = await pool.request().query(`SELECT [action], COUNT(*) AS n FROM dbo.audit_log WHERE [action] LIKE N'SUCCESSION[_]%' OR [action] = N'POSITION_CRITICAL_SET' GROUP BY [action]`)
+  assert.deepEqual(Object.fromEntries(audit.recordset.map(row => [row.action, Number(row.n)])), { POSITION_CRITICAL_SET: 4, SUCCESSION_NOMINATED: 4, SUCCESSION_REMOVED: 2, SUCCESSION_UPDATED: 1 })
+})
+
+test('SK-08: شبكة 9-box — ميزة فرعية مقفولة افتراضيًا؛ الأداء من آخر تقييم معلن والإمكانات تقدير لموظفين نطاق الحساب بس، صف واحد للموظف، وبصلاحية الإحلال', async () => {
+  const N = `${X}/nine-box`, MIGRATION = path.resolve(apiRoot, '..', 'docs', 'migrations', 'payroll', '20261010_160_talent_potentials.sql')
+  const migrate160 = async () => { assert.match(database, NAME); for (const batch of migrate.splitBatches(fs.readFileSync(MIGRATION, 'utf8').replace(/\r\n/g, '\n'))) await pool.request().batch(batch) }
+  assert.equal(await modules.isFeatureEnabled(succession.NINE_BOX_FEATURE), false)
+  assert.deepEqual([(await request(U.talent, 'GET', N)).status, (await request(U.talent, 'PUT', `${N}/${E.one.id}`, { potential: 'HIGH' })).status], [404, 404])
+  ok(await request(U.admin, 'PUT', `/modules/features/${succession.NINE_BOX_FEATURE}`, { enabled: true })); modules.invalidate()
+  const text = fs.readFileSync(MIGRATION)
+  assert.equal(text.includes(Buffer.from('\r\n')), false, 'LF بس — git بيخزّن الملف LF')
+  assert.ok(String(text).match(/THROW \d+/g).every(code => /^THROW 1600\d\d$/.test(code)))
+  assert.doesNotMatch(String(text), /\bDROP\b|\bTRUNCATE\b|\bDELETE\b|\bINSERT\b|\bUPDATE\b/i)
+  await migrate160()
+  await pool.request().batch('DROP TABLE dbo.talent_potentials'); succession.resetNineBoxCache()
+  assert.deepEqual(ok(await request(U.talent, 'GET', N)), { ready: false, thresholds: { mediumFrom: 60, highFrom: 80 }, rows: [] })
+  refused(await request(U.talent, 'PUT', `${N}/${E.one.id}`, { potential: 'HIGH' }), 400, succession.NINE_BOX_MIGRATION_MISSING)
+  await migrate160(); await migrate160()
+  // تقييمات: آخر معلن هو اللي بيتحسب؛ واللي لسه مااتعلنش مابيتحسبش
+  const review = (person, status, finalScore) => repo('ReviewAssignment').save({ cycleId: 1, employeeId: person.id, branchId: person.branchId, managerEmployeeId: null, status, selfSubmittedAt: null, managerSubmittedAt: null,
+    selfScore: null, managerScore: null, finalScore, createdAt: new Date() })
+  await review(E.one, 'ACKNOWLEDGED', '55.00'); await review(E.one, 'ANNOUNCED', '85.00'); await review(E.two, 'ANNOUNCED', '70.00'); await review(E.boss, 'MANAGER_SUBMITTED', '90.00'); await review(E.cairo, 'ANNOUNCED', '40.00')
+  const rows = async user => ok(await request(user, 'GET', N)).rows.map(row => [row.fullName, row.score, row.performance, row.potential, row.box])
+  assert.deepEqual(await rows(U.talent), [['فني أول', 85, 'HIGH', null, null], ['فني تاني', 70, 'MEDIUM', null, null]])
+  assert.deepEqual(await rows(U.talentCairo), [['فني القاهرة', 40, 'LOW', null, null]])
+  // صلاحية المهارات مش كفاية، والموظف مالوش مسار
+  for (const user of [U.hr, U.boss, U.one]) assert.equal((await request(user, 'GET', N)).status, 403)
+  const rate = (user, person, body) => request(user, 'PUT', `${N}/${person.id}`, body)
+  for (const [body, message] of [[{ potential: 'TOP' }, 'اختار تقدير الإمكانات: منخفض، متوسط، أو عالي'], [{ potential: 'HIGH', note: 'x'.repeat(301) }, 'الملاحظة 300 حرف بالكتير']]) refused(await rate(U.talent, E.one, body), 400, message)
+  for (const person of [E.cairo, E.gone, { id: 999999 }]) refused(await rate(U.talent, person, { potential: 'HIGH' }), 404, rules.EMPLOYEE_NOT_FOUND)
+  assert.equal((await rate(U.hr, E.one, { potential: 'HIGH' })).status, 403)
+  ok(await rate(U.talent, E.one, { potential: 'HIGH', note: ' قيادي ' })); ok(await rate(U.talent, E.two, { potential: 'MEDIUM' })); ok(await rate(U.talent, E.two, { potential: 'LOW' })); ok(await rate(U.talent, E.boss, { potential: 'MEDIUM' }))
+  await Promise.all([rate(U.talent, E.free, { potential: 'LOW' }), rate(U.admin, E.free, { potential: 'HIGH' })])
+  assert.deepEqual([await repo('TalentPotential').count({ where: { employeeId: E.two.id } }), await repo('TalentPotential').count({ where: { employeeId: E.free.id } })], [1, 1])
+  // الخانة = الإمكانات × الأداء؛ ومن غير تقييم معلن مفيش خانة
+  assert.deepEqual((await rows(U.talent)).filter(row => row[0] !== 'موظف من غير وظيفة'), [['فني أول', 85, 'HIGH', 'HIGH', 9], ['فني تاني', 70, 'MEDIUM', 'LOW', 2], ['مدير المصنع', null, null, 'MEDIUM', null]])
+  assert.equal(ok(await request(U.talent, 'GET', N)).rows.find(row => row.employeeId === E.one.id).note, 'قيادي')
+  const audit = await pool.request().query(`SELECT COUNT(*) AS n FROM dbo.audit_log WHERE [action] = N'TALENT_POTENTIAL_SET'`)
+  assert.equal(Number(audit.recordset[0].n), 6)
+  // قفل الميزة: مفيش مسار، وباقي الإحلال شغال
+  ok(await request(U.admin, 'PUT', `/modules/features/${succession.NINE_BOX_FEATURE}`, { enabled: false })); modules.invalidate()
+  assert.deepEqual([(await request(U.talent, 'GET', N)).status, (await request(U.talent, 'GET', X)).status], [404, 200])
 })

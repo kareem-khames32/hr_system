@@ -129,6 +129,14 @@ const adminMenuDefs: MenuItem[] = [
     href: '/skills',
     perm: 'skills.manage',
   },
+  // B5.4 (ب): خطط الإحلال — سرّية (بصلاحيتها بس)
+  {
+    id: 'succession',
+    label: 'خطط الإحلال',
+    icon: <Users size={20} />,
+    href: '/skills/succession',
+    perm: 'succession.manage',
+  },
   // B2.5: قايمة كل المهام العامة في نطاق الحساب («مهامي» لكل حساب في بنود البوابة)
   {
     id: 'tasks',

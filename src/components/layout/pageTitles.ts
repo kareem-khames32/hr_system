@@ -54,6 +54,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/offboarding', 'إنهاء الخدمة'],
   ['/tasks', 'المهام'],
   ['/positions', 'الوظائف المعتمدة'],
+  ['/skills/succession', 'خطط الإحلال'],
   ['/skills', 'المهارات والإحلال'],
   ['/policies/reports', 'تقرير الإقرارات'],
   ['/policies', 'مكتبة السياسات'],
