@@ -50,6 +50,7 @@ const EXCEPTIONS = {
   'FinancialExemptionsController.mine': 'SELF', // GET /payroll/exemptions/mine
   'HiringDocumentsController.mine': 'SELF', // GET /hiring-documents/mine
   'LoansController.mine': 'SELF', // GET /loans/mine
+  'LegalEntitiesController.display': 'SELF', // GET /settings/legal-entities/display — B4.6 (ج): إعداد عرض الحساب نفسه (هجري جنب الميلادي) بفروعه هو
   // B2.4: اختيارات صاحب الحساب لقنوات إشعاراته (user.sub من التوكن — مفيش رقم مستخدم في الطلب)
   'NotificationsController.preferences': 'SELF', // GET /notifications/preferences
   'NotificationsController.setPreference': 'SELF', // PATCH /notifications/preferences

@@ -5,6 +5,8 @@ import { recordAudit } from '../audit/audit'
 import type { JwtPayload } from '../auth/auth.service'
 import { assertCompanyWideWrite } from '../auth/guards'
 import { branchCountryOf } from './branch-currency'
+import { branchScopeOf } from '../auth/guards'
+import { hijriDisplayFor, readHijriEntityIds, setHijriEntity } from './hijri-display'
 import {
   LEGAL_ENTITIES_MIGRATION_MISSING, LEGAL_ENTITY_BRANCH, LEGAL_ENTITY_BRANCH_COUNTRY, LEGAL_ENTITY_HAS_BRANCHES, LEGAL_ENTITY_INACTIVE, LEGAL_ENTITY_NOTHING, LEGAL_ENTITY_NOT_FOUND, LegalEntity,
   cleanLegalEntityValues, legalEntitiesReady, legalEntityGaps, type LegalEntityInput,
@@ -24,9 +26,10 @@ export class LegalEntitiesService {
   private branches(em: EntityManager, lockId?: number): Promise<BranchRow[]> {
     return em.query(`SELECT [id], [name], [country], [legalEntityId], [isActive] FROM dbo.branches${lockId ? ' WITH (UPDLOCK, ROWLOCK) WHERE [id] = @0' : ' ORDER BY [id]'}`, lockId ? [lockId] : [])
   }
-  private view(row: LegalEntity, branches: BranchRow[]) {
+  private view(row: LegalEntity, branches: BranchRow[], hijriIds: readonly number[]) {
     const { createdAt: _created, ...rest } = row
-    return { ...rest, isActive: row.isActive === true, gaps: legalEntityGaps(row),
+    // B4.6 (ج): عرض التاريخ الهجري جنب الميلادي لحسابات فروع الكيان ده
+    return { ...rest, isActive: row.isActive === true, gaps: legalEntityGaps(row), hijriDisplay: hijriIds.includes(row.id),
       branches: branches.filter((branch) => Number(branch.legalEntityId) === row.id).map((branch) => ({ id: Number(branch.id), name: branch.name })) }
   }
 
@@ -37,13 +40,35 @@ export class LegalEntitiesService {
     if (!(await legalEntitiesReady(em))) return { available: false, message: LEGAL_ENTITIES_MIGRATION_MISSING, entities: [], unlinkedBranches: [] }
     const branches = await this.branches(em)
     const rows = await em.getRepository(LegalEntity).find({ order: { id: 'ASC' } })
-    return { available: true, entities: rows.map((row) => this.view(row, branches)),
+    const hijriIds = await readHijriEntityIds(em)
+    return { available: true, entities: rows.map((row) => this.view(row, branches, hijriIds)),
       unlinkedBranches: branches.filter((branch) => branch.legalEntityId == null && branch.isActive !== false).map((branch) => ({ id: Number(branch.id), name: branch.name, country: branchCountryOf(branch.country) })) }
   }
 
   private async one(id: number) {
     const em = this.ds.manager
-    return this.view(await em.getRepository(LegalEntity).findOneOrFail({ where: { id } }), await this.branches(em))
+    return this.view(await em.getRepository(LegalEntity).findOneOrFail({ where: { id } }), await this.branches(em), await readHijriEntityIds(em))
+  }
+
+  /** B4.6 (ج): تفعيل أو قفل عرض التاريخ الهجري لكيان — لحساب بكل الفروع، تحت قفل صف الكيان، وبسطر تدقيق */
+  async setHijriDisplay(user: JwtPayload, id: number, enabled: unknown) {
+    assertCompanyWideWrite(user)
+    if (typeof enabled !== 'boolean') throw new BadRequestException('«عرض التاريخ الهجري» أيوه أو لأ')
+    await this.ds.transaction(async (em) => {
+      await this.assertReady(em)
+      const entity = await em.getRepository(LegalEntity).findOne({ where: { id }, lock: { mode: 'pessimistic_write' } })
+      if (!entity) throw new NotFoundException(LEGAL_ENTITY_NOT_FOUND)
+      const { before, after } = await setHijriEntity(em, id, enabled)
+      if (before.join(',') === after.join(',')) throw new BadRequestException(LEGAL_ENTITY_NOTHING)
+      await recordAudit(em, { category: 'SETTINGS', action: 'LEGAL_ENTITY_HIJRI_DISPLAY', entityType: 'legal_entity', entityId: id, actorUserId: user.sub,
+        summary: `${enabled ? 'تفعيل' : 'قفل'} عرض التاريخ الهجري لكيان «${entity.name}»`, before: { hijriDisplay: !enabled }, after: { hijriDisplay: enabled } })
+    })
+    return this.one(id)
+  }
+
+  /** B4.6 (ج): إعدادات العرض للحساب ده (أي حساب مسجّل دخوله) — بفروعه هو */
+  async display(user: JwtPayload) {
+    return { hijri: await hijriDisplayFor(this.ds.manager, branchScopeOf(user)) }
   }
 
   async create(user: JwtPayload, input: LegalEntityInput) {

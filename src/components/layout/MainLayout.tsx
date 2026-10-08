@@ -8,6 +8,8 @@ import { can, CHANGE_PASSWORD_PATH, getCurrentUser, hasSession, POLICY_GATE_PATH
 import { PREBOARDING_HOME, preboardingPathAllowed, preboardingUntil } from '@/lib/preboarding'
 import { fetchPendingPolicies, markPoliciesChecked, policiesCheckedThisSession } from '@/lib/policies-api'
 import { routeAvailable, useModules } from '@/lib/modules'
+import { setHijriDisplay } from '@/lib/dates'
+import { fetchDisplaySettings } from '@/lib/legal-entities-api'
 import Sidebar from './Sidebar'
 import Header from './Header'
 
@@ -132,6 +134,8 @@ export function AppShell({ children }: MainLayoutProps) {
         return
       }
       setAuthed(true)
+      // B4.6 (ج): إعداد عرض التاريخ الهجري للحساب — مرة للجلسة؛ الفشل = ميلادي بس زي الأول
+      fetchDisplaySettings().then((settings) => { if (!cancelled) setHijriDisplay(settings.hijri === true) }).catch(() => undefined)
     }
     if (hasSession()) {
       enter()

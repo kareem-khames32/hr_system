@@ -27,10 +27,39 @@ const toDate = (value: DateInput): Date | null => {
   return Number.isNaN(date.getTime()) ? null : date
 }
 
-/** تاريخ للعرض (افتراضيًا: 16 سبتمبر 2026) — الفارغ/غير الصالح «-». */
-export const formatDate = (value: DateInput, options: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'long', day: 'numeric' }): string => {
+// ===== B4.6 (ج): التاريخ الهجري جنب الميلادي =====
+// إعداد لكل كيان قانوني (الخادم بيقول للحساب: فرعه في كيان مفعّل له العرض ولا لأ) — بيتقري مرة للجلسة ويتحفظ في المتصفح.
+// مقفول (الافتراضي) = التواريخ ميلادي بس زي الأول بالحرف. التخزين والإدخال ميلادي دايمًا؛ ده عرض بس، بتقويم أم القرى.
+export const HIJRI_LOCALE = 'ar-SA-u-ca-islamic-umalqura-nu-latn'
+const HIJRI_STORAGE_KEY = 'hr.display.hijri'
+let hijriOn: boolean | null = null
+const hijriEnabled = (): boolean => {
+  if (hijriOn === null) {
+    try { hijriOn = typeof window !== 'undefined' && window.localStorage.getItem(HIJRI_STORAGE_KEY) === '1' } catch { hijriOn = false }
+  }
+  return hijriOn
+}
+/** إعداد الحساب من الخادم: يعرض الهجري جنب الميلادي ولا لأ */
+export const setHijriDisplay = (on: boolean): void => {
+  hijriOn = on
+  try { if (typeof window !== 'undefined') window.localStorage.setItem(HIJRI_STORAGE_KEY, on ? '1' : '0') } catch { /* من غير تخزين: الإعداد للجلسة دي بس */ }
+}
+/** التاريخ الهجري (أم القرى) لتاريخ ميلادي — مثال: «1 محرم 1447 هـ». الفارغ/غير الصالح «-». */
+export const formatHijriDate = (value: DateInput): string => {
   const date = toDate(value)
-  return date ? date.toLocaleDateString(DISPLAY_LOCALE, options) : '-'
+  return date ? date.toLocaleDateString(HIJRI_LOCALE, { year: 'numeric', month: 'long', day: 'numeric' }) : '-'
+}
+
+const FULL_DATE: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'long', day: 'numeric' }
+/**
+ * تاريخ للعرض (افتراضيًا: 16 سبتمبر 2026) — الفارغ/غير الصالح «-».
+ * لحساب مفعّل له عرض الهجري: التاريخ الكامل (من غير خيارات مخصوصة) بياخد الهجري بين قوسين جنبه.
+ */
+export const formatDate = (value: DateInput, options: Intl.DateTimeFormatOptions = FULL_DATE): string => {
+  const date = toDate(value)
+  if (!date) return '-'
+  const text = date.toLocaleDateString(DISPLAY_LOCALE, options)
+  return options === FULL_DATE && hijriEnabled() ? `${text} (${date.toLocaleDateString(HIJRI_LOCALE, FULL_DATE)})` : text
 }
 
 /** تاريخ ووقت للعرض. */

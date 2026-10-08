@@ -61,7 +61,7 @@ test('LU-02: one currency source before and after the migration, the branch colu
   assert.doesNotMatch(source.slice(source.indexOf('export class LegalEntity'), source.indexOf('export const LEGAL_ENTITIES_MIGRATION_MISSING')), /default:/, 'الكيان من غير قيم افتراضية')
 
   const service = read('api/src/org/legal-entities.service.ts')
-  assert.equal((service.match(/assertCompanyWideWrite\(user\)/g) ?? []).length, 4, 'القراءة والإنشاء والتعديل والربط لحساب الشركة كلها')
+  assert.equal((service.match(/assertCompanyWideWrite\(user\)/g) ?? []).length, 5, 'القراءة والإنشاء والتعديل والربط وعرض الهجري (B4.6-ج) لحساب الشركة كلها')
   assert.doesNotMatch(service, /\.save\(/, 'من غير حفظ كيان كامل')
   const update = service.slice(service.indexOf('  async update('), service.indexOf('  async linkBranch('))
   assert.ok(update.indexOf("lock: { mode: 'pessimistic_write' }") > 0 && update.indexOf("lock: { mode: 'pessimistic_write' }") < update.indexOf('cleanLegalEntityValues(input, row)'), 'القيم بتتحكم على الصف المقفول')
@@ -70,7 +70,8 @@ test('LU-02: one currency source before and after the migration, the branch colu
   const order = ["getRepository(LegalEntity).findOne({ where: { id: entityId }, lock: { mode: 'pessimistic_write' } })", 'await this.branches(em, branchId)', 'entity.isActive !== true',
     'country && country !== entity.country', 'UPDATE dbo.branches SET [legalEntityId] = @1 WHERE [id] = @0'].map(part => linking.indexOf(part))
   assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), 'الكيان ثم الفرع تحت القفل، والحكم قبل الكتابة: ' + order.join(','))
-  assert.equal((service.match(/await recordAudit\(/g) ?? []).length, 3)
+  // B4.6 (ج): +1 (تفعيل أو قفل عرض التاريخ الهجري لكيان)
+  assert.equal((service.match(/await recordAudit\(/g) ?? []).length, 4)
 
   // دولة الفرع اتغيّرت: كيانه القديم بيتفك جوه معاملة التعديل
   const orgService = read('api/src/org/org.service.ts')
@@ -88,7 +89,8 @@ test('LU-02: one currency source before and after the migration, the branch colu
   const controller = read('api/src/payroll/payroll.controller.ts')
   assert.ok(controller.indexOf("@Get('runs/entity-warnings')") > 0 && controller.indexOf("@Get('runs/entity-warnings')") < controller.indexOf("@Get('runs/:id')"), 'مسار التحذير قبل المسار بالرقم')
   const entityController = read('api/src/org/legal-entities.controller.ts')
-  assert.equal((entityController.match(/@Perm\('settings\.manage'\)/g) ?? []).length, 4)
+  // B4.6 (ج): +1 (مفتاح عرض الهجري لكيان)؛ وإعداد عرض الحساب نفسه من غير صلاحية (خدمة ذاتية موثّقة في routes-without-perm)
+  assert.equal((entityController.match(/@Perm\('settings\.manage'\)/g) ?? []).length, 5)
   assert.ok(entityController.indexOf("@Put('branches/:branchId')") < entityController.indexOf("@Patch(':id')"))
 
   // الواجهة

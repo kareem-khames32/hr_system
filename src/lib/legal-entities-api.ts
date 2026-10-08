@@ -7,6 +7,8 @@ export interface ApiLegalEntity {
   id: number; name: string; nameEn: string | null; country: EntityCountry; currency: 'EGP' | 'SAR'; timeZone: string | null; commercialRegister: string | null; taxNumber: string | null
   insuranceNumber: string | null; qiwaNumber: string | null; payrollBankName: string | null; payrollIban: string | null; wpsNumber: string | null; cycleStartDay: number | null; isActive: boolean
   gaps: string[]; branches: Array<{ id: number; name: string }>
+  /** B4.6 (ج): حسابات فروع الكيان ده بتشوف التاريخ الهجري جنب الميلادي */
+  hijriDisplay?: boolean
 }
 export interface ApiLegalEntities {
   available: boolean; message?: string; entities: ApiLegalEntity[]; unlinkedBranches: Array<{ id: number; name: string; country: EntityCountry | null }>
@@ -23,4 +25,7 @@ export const fetchLegalEntities = () => apiFetch<ApiLegalEntities>(L)
 export const createLegalEntity = (body: LegalEntityBody) => apiFetch<ApiLegalEntity>(L, json('POST', body))
 export const updateLegalEntity = (id: number, body: LegalEntityBody) => apiFetch<ApiLegalEntity>(`${L}/${id}`, json('PATCH', body))
 export const linkBranchEntity = (branchId: number, legalEntityId: number | null) => apiFetch<ApiLegalEntities>(`${L}/branches/${branchId}`, json('PUT', { legalEntityId }))
+// B4.6 (ج): عرض التاريخ الهجري — مفتاح لكل كيان، وإعداد الحساب نفسه (لأي حساب مسجّل دخوله)
+export const setEntityHijriDisplay = (id: number, enabled: boolean) => apiFetch<ApiLegalEntity>(`${L}/${id}/hijri-display`, json('PUT', { enabled }))
+export const fetchDisplaySettings = () => apiFetch<{ hijri: boolean }>(`${L}/display`)
 export const fetchPayrollEntityWarnings = () => apiFetch<{ warnings: ApiEntityWarning[] }>('/payroll/runs/entity-warnings')

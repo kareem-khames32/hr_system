@@ -9,8 +9,9 @@ import { MainLayout } from '@/components/layout'
 import PayrollEntityWarnings from '@/components/payroll/PayrollEntityWarnings'
 import { can, getCurrentUser, isCompanyWideUser } from '@/lib/api'
 import { currencyLabel, invalidateCurrency } from '@/lib/currency'
+import { setHijriDisplay } from '@/lib/dates'
 import {
-  ENTITY_COUNTRY_LABELS, createLegalEntity, fetchLegalEntities, linkBranchEntity, updateLegalEntity,
+  ENTITY_COUNTRY_LABELS, createLegalEntity, fetchDisplaySettings, fetchLegalEntities, linkBranchEntity, setEntityHijriDisplay, updateLegalEntity,
   type ApiLegalEntities, type ApiLegalEntity, type EntityCountry, type LegalEntityBody,
 } from '@/lib/legal-entities-api'
 
@@ -34,6 +35,24 @@ export default function LegalEntitiesPage() {
     fetchLegalEntities().then(setData).catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل الكيانات القانونية'))
   }, [])
   useEffect(load, [load])
+
+  // B4.6 (ج): عرض التاريخ الهجري جنب الميلادي لحسابات فروع الكيان — وإعداد الحساب الحالي بيتجدد بعدها
+  const toggleHijri = async (entity: ApiLegalEntity) => {
+    setBusy(true)
+    setError('')
+    setInfo('')
+    try {
+      const enabled = entity.hijriDisplay !== true
+      await setEntityHijriDisplay(entity.id, enabled)
+      setData(await fetchLegalEntities())
+      setHijriDisplay((await fetchDisplaySettings()).hijri === true)
+      setInfo(enabled ? `التاريخ الهجري هيظهر جنب الميلادي لحسابات فروع «${entity.name}».` : `اتقفل عرض التاريخ الهجري لـ«${entity.name}».`)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'تعذر حفظ إعداد التاريخ الهجري')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const link = async (branchId: number, entityId: number | null) => {
     setBusy(true)
@@ -143,6 +162,10 @@ export default function LegalEntitiesPage() {
                 ناقص: {entity.gaps.join('، ')}
               </div>
             )}
+            <label className="flex items-center gap-2 text-sm text-gray-700" data-entity-hijri>
+              <input type="checkbox" checked={entity.hijriDisplay === true} disabled={busy} onChange={() => toggleHijri(entity)} />
+              عرض التاريخ الهجري جنب الميلادي لحسابات فروع الكيان (عرض بس — التخزين والإدخال ميلادي)
+            </label>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
               {TEXT_FIELDS.filter(([key]) => key !== 'timeZone').map(([key, label]) => (
                 <div key={key}>

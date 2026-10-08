@@ -24,6 +24,9 @@ class LegalEntityDto {
 class BranchLinkDto {
   @IsOptional() legalEntityId?: unknown
 }
+class HijriDisplayDto {
+  @IsOptional() enabled?: unknown
+}
 
 // B4.1: الكيانات القانونية — بصلاحية الإعدادات، ولحساب نطاقه الشركة كلها (في الخدمة)
 @RequireModule('platform')
@@ -48,6 +51,18 @@ export class LegalEntitiesController {
   @Put('branches/:branchId')
   linkBranch(@CurrentUser() user: JwtPayload, @Param('branchId', ParseIntPipe) branchId: number, @Body() dto: BranchLinkDto) {
     return this.entities.linkBranch(user, branchId, dto.legalEntityId ?? null)
+  }
+
+  // B4.6 (ج): إعدادات العرض للحساب نفسه (هل يشوف الهجري جنب الميلادي) — لأي حساب مسجّل دخوله
+  @Get('display')
+  display(@CurrentUser() user: JwtPayload) {
+    return this.entities.display(user)
+  }
+
+  @Perm('settings.manage')
+  @Put(':id/hijri-display')
+  hijriDisplay(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: HijriDisplayDto) {
+    return this.entities.setHijriDisplay(user, id, dto.enabled)
   }
 
   @Perm('settings.manage')

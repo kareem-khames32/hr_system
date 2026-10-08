@@ -45,6 +45,7 @@ import { LeaveType } from '../requests/entities/leave.entities'
 import { checkEntitlementTiers, statutoryAnnualTiers, statutoryLeaveTypeCode, statutoryLeaveTypes } from '../requests/leave-entitlement-tiers'
 import { LEAVE_TYPE_EXTRAS_MIGRATION, leaveTypeExtrasReady, readLeaveTypeExtras, writeLeaveTypeExtras, type LeaveTypeExtras } from '../requests/leave-type-extras'
 import { readStatutoryEntries } from '../statutory/statutory.service'
+import { HIJRI_DISPLAY_KEY, HIJRI_DISPLAY_REFUSAL } from '../org/hijri-display'
 import { branchCountryOf } from '../org/branch-currency'
 import { RequestType } from '../requests/entities/request-type.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
@@ -802,6 +803,8 @@ export class SettingsController {
     dto.key = row.key
     // سلسلة الفئة ليها مسارها: تغييرها بينقل الأنواع الماشية عليها في نفس المعاملة — كتابة القيمة هنا كانت هتسيبهم على القديمة
     if (isCategoryChainKey(dto.key)) throw new BadRequestException('سلسلة الفئة بتتغيّر من «بانِي الطلبات» — مش من هنا')
+    // B4.6 (ج): قايمة كيانات عرض الهجري ليها مسارها (تحقق الكيان، والقفل، والتدقيق)
+    if (dto.key === HIJRI_DISPLAY_KEY) throw new BadRequestException(HIJRI_DISPLAY_REFUSAL)
     // B4.4 (ج): تفعيل الحسابات القانونية (ضريبة، صناديق) له مساره: لمدير النظام وبس لو صفوف الحزمة «اتأكد» — كتابة القيمة هنا كانت هتعدّي من الاتنين
     if (STATUTORY_CALCULATOR_CONFIG_KEYS.includes(dto.key)) throw new BadRequestException(STATUTORY_CALCULATOR_CONFIG_REFUSAL)
     // أسباب إنهاء الخدمة المخصصة ليها مسارها (PUT /offboarding/termination-reasons): تحقق المسمى والنسبة، وثبات
