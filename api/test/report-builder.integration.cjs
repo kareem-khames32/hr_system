@@ -175,6 +175,22 @@ test('RB-03: التشغيل — مفاتيح من القاموس بس وقيم �
   // الطلبات: النوع السرّي برّه المصدر حتى لمدير النظام
   assert.deepEqual([ok(await run(U.rep, { source: 'requests', columns: ['typeName', 'fullName', 'status'] }), 201).rows, ok(await run(U.admin, { source: 'requests', columns: ['typeName'], groupBy: 'typeName' }), 201).rows],
     [[['طلب عادي للبانِي', 'موظف أ', 'PENDING']], [['طلب عادي للبانِي', 2]]])
+  // Codex P5A-B04: السرية بتعريف الطلب الفعلي — طلب نوعه العام عادي وتعريفه سري، وطلب نوعه العام سري وتعريفه عادي، وتأجيل قسط سلفة ونوع السلفة سري: كلهم برّه
+  for (const [code, nameAr, isConfidential] of [['LOAN', 'سلفة', true], ['LOAN_INSTALLMENT_DEFER', 'تأجيل قسط سلفة', false]]) {
+    await pool.request().query(`DELETE FROM dbo.request_types WHERE [code] = N'${code}'`)
+    await repo('RequestType').save({ code, nameAr, category: 'OTHER', destinationHandler: 'record_only', isConfidential })
+  }
+  const hidden = []
+  for (const row of [{ typeCode: 'RB_OPEN', definitionCode: 'RB_SECRET' }, { typeCode: 'RB_SECRET', definitionCode: 'RB_OPEN' }, { typeCode: 'LOAN_INSTALLMENT_DEFER' }, { typeCode: 'RB_OPEN', definitionCode: 'RB_GONE' }]) {
+    hidden.push((await repo('Request').save({ ...row, requesterId: E.b.id, createdByUserId: U.admin.id, branchId: B.riyadh.id, status: 'PENDING' })).id)
+  }
+  const shownTo = async user => ok(await run(user, { source: 'requests', columns: ['typeName', 'fullName'] }), 201).rows
+  assert.deepEqual([await shownTo(U.rep), (await shownTo(U.admin)).filter(row => row[1] === 'موظف ب'), ok(await run(U.admin, { source: 'requests', columns: ['typeName'], groupBy: 'fullName' }), 201).rows.map(row => row[0])],
+    [[['طلب عادي للبانِي', 'موظف أ']], [], ['موظف أ', 'موظف ج']])
+  // التأجيل بيرجع يتعرض لو نوع السلفة مابقاش سري (السرية موروثة مش ثابتة)
+  await pool.request().query(`UPDATE dbo.request_types SET [isConfidential] = 0 WHERE [code] = N'LOAN'`)
+  assert.deepEqual((await shownTo(U.admin)).filter(row => row[1] === 'موظف ب'), [['تأجيل قسط سلفة', 'موظف ب']])
+  await repo('Request').delete(hidden)
   // الرواتب: المعتمد والمصروف بس، والمبلغ نص عشري
   assert.deepEqual(ok(await run(U.pay, { source: 'payroll', columns: ['period', 'runName', 'fullName', 'netPay'] }), 201).rows, [['2026-09', 'مسير سبتمبر', 'موظف أ', '4800.50']])
   // الموظف اتنقل لفرع برّه النطاق: صفوفه بتختفي من كل المصادر

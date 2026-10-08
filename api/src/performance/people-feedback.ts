@@ -194,11 +194,15 @@ export function feedbackFields(body: unknown): { fields: FeedbackFields | null; 
 export interface FeedbackSummary { relation: FeedbackRelation; label: string; hidden: boolean; count: number | null; average: number | null; strengths: string[]; improvements: string[] }
 /**
  * نتيجة علاقة واحدة: أقل من الحد = مخفية كلها (ولا العدد). غير كده: العدد والمتوسط (بكسرين)، والتعليقات مرتبة أبجديًا (مش بترتيب الإدخال).
+ * كل قايمة تعليقات لها حدها هي كمان (Codex P5A-N01): قايمة فيها أقل من الحد مابتتعرضش — تعليق وحيد بيتعرف صاحبه من الباقي.
  */
 export function feedbackSummary(relation: FeedbackRelation, rows: ReadonlyArray<Pick<Feedback360Response, 'rating' | 'strengths' | 'improvements'>>): FeedbackSummary {
   const label = FEEDBACK_RELATION_LABELS[relation]
   if (rows.length < FEEDBACK_MIN_GROUP) return { relation, label, hidden: true, count: null, average: null, strengths: [], improvements: [] }
-  const texts = (pick: (row: (typeof rows)[number]) => string | null) => rows.map(pick).filter((text): text is string => !!text).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+  const texts = (pick: (row: (typeof rows)[number]) => string | null) => {
+    const found = rows.map(pick).filter((text): text is string => !!text).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+    return found.length < FEEDBACK_MIN_GROUP ? [] : found
+  }
   return { relation, label, hidden: false, count: rows.length, average: Math.round((rows.reduce((sum, row) => sum + row.rating, 0) / rows.length) * 100) / 100,
     strengths: texts(row => row.strengths), improvements: texts(row => row.improvements) }
 }

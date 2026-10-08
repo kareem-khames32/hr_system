@@ -33,7 +33,11 @@ test('RBU-01: القاموس — خمس مصادر بصلاحيات وموديو
   assert.deepEqual(employees.columns.filter(column => column.type === 'money').map(column => [column.key, column.perm]), [['basicSalary', 'payroll.view']])
   // مفيش عمود للهوية ولا البنك ولا التواصل في أي مصدر
   assert.equal(rules.BUILDER_SOURCES.some(source => source.columns.some(column => /nationalId|passport|iban|bank|phone|email|address|birth/i.test(column.sql))), false)
-  assert.match(rules.sourceOf('requests').where, /ISNULL\(t\.\[isConfidential\], 0\) = 0/)
+  // السرية بحكم المحرك: التعريف الفعلي، والنوع العام، والموروثة لتأجيل قسط السلفة
+  const requestsSource = rules.sourceOf('requests')
+  assert.match(requestsSource.from, /INNER JOIN dbo\.request_types t ON t\.\[code\] = COALESCE\(NULLIF\(r\.\[definitionCode\], N''\), r\.\[typeCode\]\)/)
+  assert.equal(requestsSource.where, "ISNULL(t.[isConfidential], 0) = 0 AND NOT EXISTS (SELECT 1 FROM dbo.request_types bt WHERE bt.[code] = r.[typeCode] AND bt.[isConfidential] = 1)" +
+    " AND NOT (t.[code] = N'LOAN_INSTALLMENT_DEFER' AND EXISTS (SELECT 1 FROM dbo.request_types lt WHERE lt.[code] = N'LOAN' AND lt.[isConfidential] = 1))")
   assert.match(rules.sourceOf('payroll').where, /r\.\[status\] IN \(N'APPROVED', N'PAID'\) AND NOT EXISTS \(SELECT 1 FROM dbo\.\[payroll_run_reversal_lines\]/)
   assert.deepEqual([rules.sourceOf('users'), rules.sourceOf(undefined)], [null, null])
 })
@@ -70,7 +74,7 @@ test('RBU-03: الاستعلام — تعبيرات القاموس بس، وكل
   assert.deepEqual([grouped.params, grouped.headers.map(header => [header.key, header.label, header.type])], [['late'], [['date', 'اليوم', 'date'], ['count', 'العدد', 'number'], ['workMinutes', 'مجموع دقايق العمل', 'number'], ['lateMinutes', 'مجموع دقايق التأخير', 'number']]])
   // الشرط الثابت للمصدر (السرّي برّه) بيفضل مع النطاق والفلاتر
   const requests = rules.buildQuery(rules.definitionOf({ source: 'requests', columns: ['typeName'], groupBy: 'createdOn' }).definition, '1 = 0', [])
-  assert.match(requests.sql, /WHERE ISNULL\(t\.\[isConfidential\], 0\) = 0 AND 1 = 0 GROUP BY CONVERT\(date, r\.\[createdAt\]\) ORDER BY CONVERT\(date, r\.\[createdAt\]\)$/)
+  assert.ok(requests.sql.includes(` WHERE ${rules.sourceOf('requests').where} AND 1 = 0 GROUP BY CONVERT(date, r.[createdAt]) ORDER BY CONVERT(date, r.[createdAt])`) && requests.sql.endsWith('ORDER BY CONVERT(date, r.[createdAt])'))
   assert.deepEqual([rules.ROWS_MAX, rules.COLUMNS_MAX, rules.FILTERS_MAX, rules.DEFINITIONS_MAX], [2000, 12, 8, 50])
 })
 

@@ -52,7 +52,7 @@ test('MPU-03: مصدر الكود — ميزة مقفولة بمساراتها؛
   const service = read('attendance/mobile-punch.service.ts')
   const punch = service.slice(service.indexOf('async punch('), service.indexOf('// ===== الإدارة'))
   assert.ok(punch.indexOf('FROM dbo.employees WITH (UPDLOCK, ROWLOCK)') < punch.indexOf('judgePosition(fields, sites)') && punch.indexOf('judgePosition(fields, sites)') < punch.indexOf('attempts.save('))
-  assert.match(punch, /if \(judged\.outcome !== 'ACCEPTED'\) throw new BadRequestException\(OUTCOME_MESSAGES\[judged\.outcome\]\)\n    try \{\n      await this\.attendance\.ingest\(\[\{ employeeCode: judged\.fingerprintCode, timestamp: judged\.at\.toISOString\(\), deviceSn: `\$\{MOBILE_DEVICE_PREFIX\}\$\{judged\.siteId\}` \}\], undefined, user, \{ fromDevice: true \}\)/)
+  assert.match(punch, /if \(judged\.outcome !== 'ACCEPTED'\) throw new BadRequestException\(OUTCOME_MESSAGES\[judged\.outcome\]\)\n    try \{\n      await this\.attendance\.ingest\(\[\{ employeeCode: judged\.fingerprintCode, timestamp: judged\.at\.toISOString\(\), deviceSn: `\$\{MOBILE_DEVICE_PREFIX\}\$\{judged\.siteId\}` \}\], undefined, user, \{ fromDevice: true, onlyEmployeeId: me \}\)/)
   assert.ok(punch.indexOf('this.ds.transaction(') < punch.indexOf('await this.attendance.ingest(') && punch.lastIndexOf('})\n    if (judged.outcome') > 0, 'ingest برّه معاملة الحكم')
   assert.match(punch, /where: \{ branchId: Number\(person\.branchId\), isActive: true \}/, 'مواقع فرع الموظف الحالي المفعّلة بس')
   assert.doesNotMatch(service, /getRepository\(AttendancePunch\)|INSERT INTO dbo\.attendance_punches/, 'مفيش كتابة بصمة مباشرة')

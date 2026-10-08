@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common'
 import { Column, Entity, PrimaryGeneratedColumn, type EntityManager } from 'typeorm'
 import type { Request } from '../requests/entities/request.entity'
 import type { RequestType } from '../requests/entities/request-type.entity'
+import { assertHumanApproval } from './human-approval'
 
 // B5.3 (ب): سلفة المأمورية — طلب عادي في محرك الطلبات (وجهة `travel_advance`): الاعتماد النهائي بيسجّل سلفة «مفتوحة» من غير قيد في الدفتر
 //  (السلفة بتتصرف نقدًا برّه المسير، والمالية بتسجّل صرفها). التسوية في اعتماد تقرير المصروفات المربوطة بيه (expense-reports.ts).
@@ -107,6 +108,8 @@ export async function executeTravelAdvance(em: EntityManager, req: Request, _typ
   const advances = em.getRepository(TravelAdvance)
   const made = await advances.findOne({ where: { requestId: req.id } })
   if (made) return { ref: advanceCode(made.id), completed: true }
+  // السلفة فلوس بتطلع نقدًا: نفس شرط المراجعة البشرية بتاع تقرير المصروفات (Codex P5A-B01)
+  await assertHumanApproval(em, req)
   const values = advanceValues(payload)
   const advance = await advances.save(advances.create({ employeeId: req.requesterId, amount: values.amount, purpose: values.purpose, status: 'OPEN', requestId: req.id, paidAt: null, paidByUserId: null,
     reportId: null, closedAt: null, closedByUserId: null, closeNote: null, createdAt: new Date() }))

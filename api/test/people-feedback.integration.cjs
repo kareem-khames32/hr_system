@@ -192,13 +192,29 @@ test('PF-03: الرد والنتيجة — رد واحد لكل دعوة معت�
   assert.deepEqual((({ closed, summaries, minGroup }) => [closed, summaries, minGroup])(ok(await results(U.boss, C.open, E.s))), [false, [], 3])
   await pool.request().query(`UPDATE dbo.review_cycles SET [status] = N'CLOSED' WHERE [id] = ${Number(C.open)}`)
   refused(await respond(U.r4, (await inviteOf(E.boss, E.r4, 'UPWARD')).id, { rating: 2 }), 409, 'دورة التقييم اتقفلت')
+  // Codex P5A-B05: رد وإغلاق مع بعض — الرد يا إما قبل الإغلاق يا إما مرفوض، وبعد الإغلاق عدد الردود ثابت بين قراءتين
+  {
+    const racing = await cycle('دورة السباق', 'ACTIVE', [E.s])
+    await repo('Feedback360Invite').save(['c1', 'c2', 'c3'].map(key => ({ cycleId: racing, subjectEmployeeId: E.s.id, reviewerEmployeeId: E[key].id, relation: 'PEER', status: 'APPROVED', responded: false, createdByUserId: U.s.id, decidedByUserId: U.boss.id, createdAt: new Date() })))
+    const invites = await repo('Feedback360Invite').find({ where: { cycleId: racing }, order: { id: 'ASC' } })
+    const outcomes = await Promise.all([respond(U.c1, invites[0].id, { rating: 5 }), request(U.admin, 'POST', `/performance/reviews/cycles/${racing}/close`), respond(U.c2, invites[1].id, { rating: 1 }), respond(U.c3, invites[2].id, { rating: 3 })])
+    assert.equal(outcomes[1].status < 300, true, JSON.stringify(outcomes[1].body))
+    const stored = await repo('Feedback360Response').count({ where: { cycleId: racing } })
+    assert.equal(stored, [outcomes[0], outcomes[2], outcomes[3]].filter(response => response.status === 201).length)
+    assert.deepEqual([outcomes[0], outcomes[2], outcomes[3]].filter(response => response.status !== 201).map(response => [response.status, response.body.message]).filter(row => row[1] !== 'دورة التقييم اتقفلت'), [])
+    // بعد الإغلاق: مفيش رد بيدخل، والعدد زي ما هو
+    for (const [user, invite] of [[U.c1, invites[0]], [U.c2, invites[1]], [U.c3, invites[2]]]) assert.notEqual((await respond(user, invite.id, { rating: 4 })).status, 201)
+    assert.equal(await repo('Feedback360Response').count({ where: { cycleId: racing } }), stored)
+  }
   // بعد القفل: الزملاء 3 ردود = معروضة (التعليقات أبجديًا)، والمرؤوسين صفر = مخفية من غير عدد
   const forS = ok(await results(U.boss, C.open, E.s))
   assert.deepEqual([forS.closed, forS.employeeName, forS.summaries], [true, 'مرؤوس s', [
-    { relation: 'PEER', label: 'زملاء', hidden: false, count: 3, average: 4, strengths: ['أمين', 'دقيق', 'متعاون وسريع'], improvements: ['التوثيق'] },
+    // P5A-N01: تعليق التحسين الوحيد مابيتعرضش (قايمته أقل من الحد)
+    { relation: 'PEER', label: 'زملاء', hidden: false, count: 3, average: 4, strengths: ['أمين', 'دقيق', 'متعاون وسريع'], improvements: [] },
     { relation: 'UPWARD', label: 'مرؤوسين', hidden: true, count: null, average: null, strengths: [], improvements: [] }]])
   const forBoss = ok(await results(U.hr, C.open, E.boss))
-  assert.deepEqual(forBoss.summaries.map(row => [row.relation, row.hidden, row.count, row.average, row.improvements]), [['PEER', true, null, null, []], ['UPWARD', false, 3, 4, ['يوزّع الشغل بدري']]])
+  assert.deepEqual(forBoss.summaries.map(row => [row.relation, row.hidden, row.count, row.average, row.improvements]), [['PEER', true, null, null, []], ['UPWARD', false, 3, 4, []]])
+  assert.equal(JSON.stringify(forBoss).includes('يوزّع الشغل بدري'), false)
   // ردين بس = مخفية (ولا العدد ولا التعليقات)
   for (const rating of [1, 2]) await repo('Feedback360Response').save({ cycleId: C.open, subjectEmployeeId: E.r2.id, relation: 'PEER', rating, strengths: 'تعليق مايتعرضش', improvements: null })
   const few = ok(await results(U.boss, C.open, E.r2))
@@ -207,7 +223,8 @@ test('PF-03: الرد والنتيجة — رد واحد لكل دعوة معت�
   for (const [user, who] of [[U.s, E.s], [U.c1, E.s], [U.hrCairo, E.s], [U.boss, E.boss], [U.boss, E.c1]]) refused(await results(user, C.open, who), 404, rules.EMPLOYEE_NOT_FOUND)
   refused(await results(U.boss, 999999, E.s), 404, 'دورة التقييم مش موجودة')
   const team = ok(await request(U.boss, 'GET', `${F}/team`))
-  assert.deepEqual([team.canManage, team.people.map(row => [row.cycleId, row.cycleStatus, row.fullName]), ok(await request(U.hr, 'GET', `${F}/team`)).people.length, ok(await request(U.c1, 'GET', `${F}/team`)).people],
+  assert.deepEqual([team.canManage, team.people.filter(row => row.cycleId === C.open).map(row => [row.cycleId, row.cycleStatus, row.fullName]), ok(await request(U.hr, 'GET', `${F}/team`)).people.filter(row => row.cycleId === C.open).length,
+    ok(await request(U.c1, 'GET', `${F}/team`)).people],
     [false, [[C.open, 'CLOSED', 'مرؤوس r2'], [C.open, 'CLOSED', 'مرؤوس s']], 3, []])
 })
 
@@ -263,7 +280,9 @@ test('PF-04: اجتماعات 1:1 — بيحددها المدير المباشر
   await pool.request().query(`UPDATE dbo.employees SET [managerEmployeeId] = ${Number(E.boss.id)} WHERE [id] = ${Number(E.s.id)}`)
   // الميزة مقفولة: التقويم من غير اجتماعات
   ok(await request(U.admin, 'PUT', `/modules/features/${rules.ONE_ON_ONE_FEATURE}`, { enabled: false })); modules.invalidate()
-  assert.deepEqual([await calendar(U.s), (await request(U.s, 'GET', O)).status], [[], 404])
+  // P5A-N02: والميزة مقفولة رد التقويم من غير مفتاح الاجتماعات (شكله اللي قبل الميزة بالحرف)
+  const closedCalendar = ok(await request(U.s, 'GET', `/calendar?month=${month}`))
+  assert.deepEqual([Object.keys(closedCalendar).sort(), (await request(U.s, 'GET', O)).status], [['from', 'holidays', 'leaves', 'month', 'to', 'weekendDays'], 404])
 })
 
 test('PF-05: التقدير — كلمة شكر لزميل على رأس العمل في فرع المرسل الحالي بحد في اليوم، في قايمة الفرع بس؛ والإخفاء بصلاحيته في نطاقه وبسطر تدقيق', async () => {

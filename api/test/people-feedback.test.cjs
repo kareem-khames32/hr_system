@@ -23,7 +23,9 @@ test('PFU-01: 360 — الترشيح والرد، وملخص النتيجة: أ�
   assert.deepEqual(rules.feedbackSummary('PEER', [row(5, 'سر'), row(1, 'سر تاني')]), { relation: 'PEER', label: 'زملاء', hidden: true, count: null, average: null, strengths: [], improvements: [] })
   assert.deepEqual(rules.feedbackSummary('UPWARD', []), { relation: 'UPWARD', label: 'مرؤوسين', hidden: true, count: null, average: null, strengths: [], improvements: [] })
   // ترتيب التعليقات أبجدي مش بترتيب الإدخال، وكل قايمة لوحدها
-  assert.deepEqual(rules.feedbackSummary('PEER', [row(5, 'ي'), row(4, 'أ', 'ب'), row(2, null, 'ا')]), { relation: 'PEER', label: 'زملاء', hidden: false, count: 3, average: 3.67, strengths: ['أ', 'ي'], improvements: ['ا', 'ب'] })
+  assert.deepEqual(rules.feedbackSummary('PEER', [row(5, 'ي', 'ت'), row(4, 'أ', 'ب'), row(2, 'ج', 'ا')]), { relation: 'PEER', label: 'زملاء', hidden: false, count: 3, average: 3.67, strengths: ['أ', 'ج', 'ي'], improvements: ['ا', 'ب', 'ت'] })
+  // P5A-N01: قايمة تعليقات فيها أقل من الحد مابتتعرضش حتى لو الردود وصلت الحد
+  assert.deepEqual((({ hidden, count, strengths, improvements }) => [hidden, count, strengths, improvements])(rules.feedbackSummary('PEER', [row(5, 'ي'), row(4, 'أ', 'ب'), row(2, null, 'ا')])), [false, 3, [], []])
   assert.deepEqual([rules.FEEDBACK_MIN_GROUP, rules.PEERS_MAX, rules.RECOGNITIONS_PER_DAY], [3, 8, 5])
 })
 
@@ -59,7 +61,11 @@ test('PFU-04: مصدر الكود — الرد من غير مقيّم ولا و�
   assert.doesNotMatch(invite, /respondedAt|updatedAt|responseId/)
   // الرد: تحت قفل صف الدعوة، والدعوة بتتعلّم «رد» بس — ومن غير سطر تدقيق في الخدمة كلها
   const respond = service.slice(service.indexOf('async respond('), service.indexOf('async results('))
-  assert.match(respond, /findOne\(\{ where: \{ id: inviteId \}, lock: \{ mode: 'pessimistic_write' \} \}\)\n\s+if \(!invite \|\| invite\.reviewerEmployeeId !== me\) throw new NotFoundException\(INVITE_NOT_FOUND\)/)
+  // P5A-B05: صف الدورة بيتقفل قبل صف الدعوة، والحكم على الحالة بعد القفلين
+  assert.ok(respond.indexOf("FROM dbo.review_cycles WITH (UPDLOCK, ROWLOCK) WHERE [id] = @0', [peek.cycleId])") > 0)
+  assert.ok(respond.indexOf('FROM dbo.review_cycles WITH (UPDLOCK, ROWLOCK)') < respond.indexOf("lock: { mode: 'pessimistic_write' }"))
+  assert.ok(respond.indexOf("lock: { mode: 'pessimistic_write' }") < respond.indexOf("if (cycle?.status !== 'ACTIVE')"))
+  assert.match(respond, /findOne\(\{ where: \{ id: inviteId, cycleId: peek\.cycleId \}, lock: \{ mode: 'pessimistic_write' \} \}\)\n\s+if \(!invite \|\| invite\.reviewerEmployeeId !== me\) throw new NotFoundException\(INVITE_NOT_FOUND\)/)
   assert.match(respond, /responses\.create\(\{ cycleId: invite\.cycleId, subjectEmployeeId: invite\.subjectEmployeeId, relation: invite\.relation, \.\.\.fields \}\)/)
   assert.match(respond, /repo\.update\(\{ id: invite\.id \}, \{ responded: true \}\)/)
   assert.doesNotMatch(service, /recordAudit|respondedAt/)
@@ -81,7 +87,7 @@ test('PFU-04: مصدر الكود — الرد من غير مقيّم ولا و�
   assert.match(recognitions, /FROM dbo\.employees WITH \(UPDLOCK, ROWLOCK\) WHERE \[id\] = @0 AND \$\{ACTIVE\}`, \[me\]\)/)
   assert.match(recognitions, /WHERE \[id\] = @0 AND \[branchId\] = @1 AND \$\{ACTIVE\}`, \[fields\.toEmployeeId, Number\(self\.branchId\)\]\)/)
   // سطر التقويم: ورا ميزته
-  assert.match(read('assets/portal.controller.ts'), /\(await this\.modules\.isFeatureEnabled\(ONE_ON_ONE_FEATURE\)\) \? await oneOnOneCalendar\(this\.holidays\.manager, user, from, to\) : \[\]/)
+  assert.match(read('assets/portal.controller.ts'), /\(await this\.modules\.isFeatureEnabled\(ONE_ON_ONE_FEATURE\)\) \? await oneOnOneCalendar\(this\.holidays\.manager, user, from, to\) : null\n\s+return \{ month: m, from, to, holidays: monthHolidays, leaves, weekendDays, \.\.\.\(meetings \? \{ meetings \} : \{\}\) \}/)
 })
 
 test('PFU-05: الواجهة — التلات شاشات بعناوينهم في القايمة، والتقويم بيعرض الاجتماعات', () => {

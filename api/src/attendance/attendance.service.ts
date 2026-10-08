@@ -946,7 +946,8 @@ export class AttendanceService {
     deviceKey?: string,
     user?: JwtPayload,
     // reason = سبب الإدخال اليدوي — يُحفظ على كل بصمة مع مُدخِلها
-    opts?: { fromDevice?: boolean; reason?: string }
+    // onlyEmployeeId = هوية مثبّتة (بصمة الموبايل): كل البصمات لازم تتطابق مع الموظف ده بالظبط، وإلا مفيش حاجة بتتحفظ
+    opts?: { fromDevice?: boolean; reason?: string; onlyEmployeeId?: number }
   ) {
     const fromDevice = !user || !!opts?.fromDevice
     if (!user) {
@@ -1029,6 +1030,10 @@ export class AttendanceService {
       if (e.fingerprintCode) byFingerprint.set(e.fingerprintCode, e)
     }
     const resolve = (code: string) => byFingerprint.get(code)
+    // Codex P5A-B06: المنادي حكم على موظف بعينه (تحت قفل صف ملفه) — لو رقم البصمة اتنقل لموظف تاني بعد الحكم، البصمة ماتتكتبش لحد غيره
+    if (opts?.onlyEmployeeId != null && items.some((it) => resolve(it.code)?.id !== opts.onlyEmployeeId)) {
+      throw new ConflictException('رقم البصمة اتغيّر على ملفك وقت التسجيل — جرّب تاني')
+    }
 
     // الإدخال اليدوي: لموظف مسجّل داخل نطاق فرع المُدخِل، ولا لنفسه
     if (!fromDevice && user) {

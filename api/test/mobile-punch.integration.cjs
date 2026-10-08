@@ -195,3 +195,27 @@ test('MP-04: المراجعة — محاولات موظفين نطاق الحس�
   await cool(E.one)
   assert.deepEqual([(await punch(U.one, INSIDE)).status, (await request(U.viewer, 'GET', `${P}/attempts`)).status, (await punchesOf(E.one)).length], [404, 404, 2])
 })
+
+test('MP-05 (Codex P5A-B06): رقم البصمة اتنقل لموظف تاني بين الحكم والإدخال — مفيش بصمة بتتكتب لحد غير صاحب الطلب، والمحاولة بتتعلّم «تعذّر»', async () => {
+  const attendance = app.get(require('../src/attendance/attendance.service').AttendanceService)
+  ok(await request(U.admin, 'PUT', `/modules/features/${rules.MOBILE_PUNCH_FEATURE}`, { enabled: true })); modules.invalidate()
+  const site = await repo('PunchSite').save({ name: 'موقع السباق', branchId: B.cairo.id, latitude: SITE.latitude, longitude: SITE.longitude, radiusMeters: 300, isActive: true, updatedByUserId: U.admin.id, updatedAt: new Date() })
+  const victim = await employee('موظف من غير بصمة في فرع تاني', B.riyadh)
+  const before = { mine: (await punchesOf(E.cairo)).length, other: (await punchesOf(victim)).length }
+  // بين تثبيت الحكم والإدخال: رقم بصمة صاحب الطلب بيتنقل لموظف في فرع تاني (نفس اللي طلبَي تعديل موظف بيعملوه)
+  const original = attendance.ingest.bind(attendance)
+  attendance.ingest = async (...args) => {
+    await pool.request().query(`UPDATE dbo.employees SET [fingerprintCode] = NULL WHERE [id] = ${Number(E.cairo.id)}; UPDATE dbo.employees SET [fingerprintCode] = N'9003' WHERE [id] = ${Number(victim.id)}`)
+    return original(...args)
+  }
+  try {
+    refused(await punch(U.cairo, INSIDE), 409, 'رقم البصمة اتغيّر على ملفك وقت التسجيل — جرّب تاني')
+  } finally { attendance.ingest = original }
+  assert.deepEqual([(await punchesOf(E.cairo)).length, (await punchesOf(victim)).length, (await attemptsOf(E.cairo)).at(-1)[0]], [before.mine, before.other, 'FAILED'])
+  // الهوية المثبّتة في الإدخال نفسه: بصمة برقم موظف تاني مرفوضة، وبرقم صاحبها بتتسجّل له
+  const now = new Date().toISOString()
+  await assert.rejects(attendance.ingest([{ employeeCode: '9003', timestamp: now, deviceSn: 'MOBILE-0' }], undefined, { sub: U.cairo.id }, { fromDevice: true, onlyEmployeeId: E.cairo.id }), /رقم البصمة اتغيّر/)
+  await attendance.ingest([{ employeeCode: '9003', timestamp: now, deviceSn: 'MOBILE-0' }], undefined, { sub: U.admin.id }, { fromDevice: true, onlyEmployeeId: victim.id })
+  assert.deepEqual([(await punchesOf(E.cairo)).length, (await punchesOf(victim)).length], [before.mine, before.other + 1])
+  await repo('PunchSite').update({ id: site.id }, { isActive: false })
+})

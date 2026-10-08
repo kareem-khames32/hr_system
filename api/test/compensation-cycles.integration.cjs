@@ -16,9 +16,9 @@ const uploads = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-comp-cycles-files-'))
 const secret = crypto.randomBytes(48).toString('hex')
 const jwt = new (require('../node_modules/@nestjs/jwt').JwtService)({ secret })
 const rules = require('../src/compensation/compensation-cycles')
-const MIGRATIONS = ['20261009_140_compensation_cycles.sql', '20261009_141_compensation_budgets.sql', '20261009_142_compensation_proposals.sql']
+const MIGRATIONS = ['20261009_140_compensation_cycles.sql', '20261009_141_compensation_budgets.sql', '20261009_142_compensation_proposals.sql', '20261010_181_compensation_writers.sql']
   .map(name => path.resolve(apiRoot, '..', 'docs', 'migrations', 'payroll', name))
-const TABLES = ['compensation_cycles', 'compensation_budgets', 'compensation_proposals']
+const TABLES = ['compensation_cycles', 'compensation_budgets', 'compensation_proposals', 'compensation_writers']
 let master, pool, app, ds, base, modules, created = false, sequence = 0, cycleId
 const B = {}, D = {}, E = {}, U = {}
 const repo = name => { assert.match(database, NAME); assert.equal(ds.options.database, database); return ds.getRepository(name) }
@@ -102,11 +102,11 @@ test('CC-01: الموديول مقفول = مفيش مسار؛ وقبل التر
   assert.notEqual((await request(U.admin, 'GET', C)).status, 200)
   assert.notEqual((await request(U.manager, 'GET', '/compensation/my-team')).status, 200)
   ok(await request(U.admin, 'PUT', '/modules/compensation', { enabled: true })); modules.invalidate()
-  for (const [index, file] of MIGRATIONS.entries()) {
-    const text = fs.readFileSync(file)
+  for (const file of MIGRATIONS) {
+    const text = fs.readFileSync(file), code = path.basename(file).split('_')[1]
     assert.equal(text.includes(Buffer.from('\r\n')), false, 'LF بس — git بيخزّن الملف LF')
     assert.notDeepEqual([...text.subarray(0, 3)], [0xef, 0xbb, 0xbf])
-    assert.ok(String(text).match(/THROW \d+/g).every(code => new RegExp(`^THROW 14${index}0\\d\\d$`).test(code)), file)
+    assert.ok(String(text).match(/THROW \d+/g).every(found => new RegExp(`^THROW ${code}0\\d\\d$`).test(found)), file)
     assert.doesNotMatch(String(text), /\bDROP\b|\bTRUNCATE\b|\bDELETE\b|\bINSERT\b|\bUPDATE\b/i)
   }
   // شكل الكيانات = شكل الترحيلات: الملفات بتعدّي على قاعدة synchronize من غير تغيير
@@ -119,7 +119,7 @@ test('CC-01: الموديول مقفول = مفيش مسار؛ وقبل التر
   assert.equal((await request(U.admin, 'POST', C, { name: 'دورة قبل الترحيل', effectivePayrollPeriod: '2027-01' })).status, 400)
   assert.equal(ok(await request(U.admin, 'GET', '/compensation/bands')).basis, 'BASIC', 'سلّم الرواتب شغال من غير الجداول')
   await runMigrations(); await runMigrations()
-  assert.equal(await tablesPresent(), 3)
+  assert.equal(await tablesPresent(), 4)
   assert.deepEqual(ok(await request(U.admin, 'GET', C)), { ready: true, cycles: [] })
 })
 
@@ -226,6 +226,13 @@ test('CC-04: المراجعة — سطور نطاق الحساب بفرع الم
   assert.deepEqual([lineOf(ok(await request(U.hr, 'GET', `${C}/${cycleId}`)), E.outsider), lineOf(ok(await request(U.hrCairo, 'GET', `${C}/${cycleId}`)), E.outsider).finalAmount,
     (await request(U.hr, 'PUT', L(E.outsider), { amount: 175, note: 'سبب' })).status], [undefined, 150, 404])
   await repo('Employee').update({ id: E.outsider.id }, { branchId: B.riyadh.id })
+  // Codex P5A-B03: القسم اتنقل لفرع برّه نطاق المراجع والموظف لسه في فرعه — رقم القسم واسمه مايتعرضوش، ومدير النظام شايفهم
+  await repo('Department').update({ id: D.retail.id }, { branchId: B.cairo.id, name: 'قسم اتنقل للقاهرة' })
+  const moved = ok(await request(U.hr, 'GET', `${C}/${cycleId}`)), movedLine = lineOf(moved, E.first)
+  assert.deepEqual([movedLine.fullName, movedLine.departmentId, movedLine.departmentName, JSON.stringify(moved).includes('قسم اتنقل للقاهرة'), moved.budgets.some(row => row.departmentId === D.retail.id)],
+    ['مرؤوس أول', null, null, false, false])
+  assert.deepEqual((row => [row.departmentId, row.departmentName])(lineOf(ok(await request(U.admin, 'GET', `${C}/${cycleId}`)), E.first)), [D.retail.id, 'قسم اتنقل للقاهرة'])
+  await repo('Department').update({ id: D.retail.id }, { branchId: B.riyadh.id, name: 'قسم التجزئة' })
   // الأساسي اتغيّر بعد آخر كتابة = علامة لصاحب «عرض الرواتب»
   await repo('Employee').update({ id: E.first.id }, { basicSalary: 5200 })
   assert.deepEqual([lineOf(ok(await request(U.hr, 'GET', `${C}/${cycleId}`)), E.first)].map(row => [row.currentBasic, row.newBasic, row.basicChanged]), [[5200, 5600, true]])
@@ -301,6 +308,13 @@ test('CC-06: الاعتماد — بصلاحية اعتماد المسير ول�
   // اللي بعتها للمراجعة (مدير النظام هنا)، واللي عدّل سطر: مايعتمدوش
   const sent = await request(U.admin, 'POST', `${A}/approve`), wrote = await request(U.writer, 'POST', `${A}/approve`)
   assert.deepEqual([[sent.status, messageOf(sent)], [wrote.status, messageOf(wrote)]], [[403, rules.APPROVER_SENT_REVIEW], [403, rules.APPROVER_WROTE_LINE]])
+  assert.equal((await repo('CompensationCycle').findOneByOrFail({ id: applyCycle })).status, 'REVIEW')
+  // Codex P5A-B02: مراجع تاني حفظ نفس السطر بعد الكاتب الأول — الكاتب الأول لسه مايعتمدش (سجل الكاتبين مابيتمسحش)، والتاني كمان
+  ok(await request(U.applier, 'PUT', `${A}/lines/${E.second.id}`, { amount: 250, note: 'نفس المبلغ من مراجع تاني' }))
+  assert.equal((await repo('CompensationProposal').findOneByOrFail({ cycleId: applyCycle, employeeId: E.second.id })).adjustedByUserId, U.applier.id)
+  const first = await request(U.writer, 'POST', `${A}/approve`), second = await request(U.applier, 'POST', `${A}/approve`)
+  assert.deepEqual([[first.status, messageOf(first)], [second.status, messageOf(second)]], [[403, rules.APPROVER_WROTE_LINE], [403, rules.APPROVER_WROTE_LINE]])
+  assert.deepEqual((await repo('CompensationWriter').find({ where: { cycleId: applyCycle }, order: { id: 'ASC' } })).map(row => row.userId), [U.manager.id, U.writer.id, U.applier.id])
   assert.equal((await repo('CompensationCycle').findOneByOrFail({ id: applyCycle })).status, 'REVIEW')
   // حد ماقترحش: بيعتمد — وضغطتين مع بعض = اعتماد واحد
   const both = await Promise.all([request(U.approver, 'POST', `${A}/approve`), request(U.approver, 'POST', `${A}/approve`)])

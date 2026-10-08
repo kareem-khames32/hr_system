@@ -201,11 +201,42 @@ export const cycleEvidenceReference = (cycleId: number) => `COMP-CYCLE-${cycleId
 export const APPROVER_SENT_REVIEW = 'اللي بعت الدورة للمراجعة مايعتمدهاش — الاعتماد من حد تاني'
 export const APPROVER_WROTE_LINE = 'اللي اقترح أو عدّل سطر في الدورة مايعتمدهاش — الاعتماد من حد ماقترحش'
 export const APPROVE_NO_LINES = 'الدورة مافيهاش زيادات تتعتمد'
-/** اعتماد من حد ماقترحش: مش اللي بعتها للمراجعة، ومش اللي كتب أو عدّل أي سطر. بيرجّع رسالة الرفض أو null */
-export function approverIssue(cycle: { reviewByUserId: number | null }, lines: ReadonlyArray<{ proposedByUserId: number; adjustedByUserId: number | null; finalAmount: number | string }>, userId: number): string | null {
+/**
+ * اعتماد من حد ماقترحش: مش اللي بعتها للمراجعة، ومش اللي كتب أو عدّل أي سطر — **في أي وقت**: `writerIds` سجل كل اللي كتبوا في الدورة
+ * (compensation_writers)، فتعديل لاحق من حد تاني مابيمسحش الكاتب الأول (Codex P5A-B02). بيرجّع رسالة الرفض أو null
+ */
+export function approverIssue(cycle: { reviewByUserId: number | null }, lines: ReadonlyArray<{ proposedByUserId: number; adjustedByUserId: number | null; finalAmount: number | string }>, userId: number,
+  writerIds: readonly number[] = []): string | null {
   if (!lines.some(line => Number(line.finalAmount) > 0)) return APPROVE_NO_LINES
   if (cycle.reviewByUserId === userId) return APPROVER_SENT_REVIEW
-  return lines.some(line => line.proposedByUserId === userId || line.adjustedByUserId === userId) ? APPROVER_WROTE_LINE : null
+  return writerIds.includes(userId) || lines.some(line => line.proposedByUserId === userId || line.adjustedByUserId === userId) ? APPROVER_WROTE_LINE : null
+}
+
+/** كل حساب كتب سطر في دورة (اقتراح أو تعديل): صف واحد للحساب والدورة، ومابيتمسحش. نفس الشكل في ترحيل 181 بالحرف. */
+@Entity('compensation_writers')
+export class CompensationWriter {
+  @PrimaryGeneratedColumn({ primaryKeyConstraintName: 'PK_compensation_writers' })
+  id: number
+
+  @Column({ type: 'int' })
+  cycleId: number
+
+  @Column({ type: 'int' })
+  userId: number
+
+  @Column({ type: 'datetime2' })
+  createdAt: Date
+}
+
+/** تسجيل كاتب سطر في الدورة — جوه معاملة الكتابة (صف الدورة مقفول)، ومرة واحدة للحساب */
+export async function recordCycleWriter(em: EntityManager, cycleId: number, userId: number): Promise<void> {
+  await em.query(`IF NOT EXISTS (SELECT 1 FROM dbo.compensation_writers WITH (UPDLOCK, HOLDLOCK) WHERE [cycleId] = @0 AND [userId] = @1)
+    INSERT INTO dbo.compensation_writers ([cycleId], [userId], [createdAt]) VALUES (@0, @1, SYSDATETIME())`, [cycleId, userId])
+}
+/** كل اللي كتبوا سطر في الدورة */
+export async function cycleWriterIds(em: EntityManager, cycleId: number): Promise<number[]> {
+  const rows: Array<{ userId: number }> = await em.query('SELECT [userId] FROM dbo.compensation_writers WHERE [cycleId] = @0', [cycleId])
+  return rows.map(row => Number(row.userId))
 }
 
 const cents = (value: number | string) => Math.round(Number(value) * 100)
@@ -217,11 +248,11 @@ export const raisedBasic = (currentBasic: number | string, amount: number | stri
 // ===== جاهزية الترحيل =====
 
 let ready: boolean | null = null
-/** جداول ترحيلات 140–142 موجودة؟ الموجود بيتحفظ؛ الناقص بيتفحص مع كل نداء لحد ما الترحيل يتطبق */
+/** جداول ترحيلات 140–142 و181 موجودة؟ الموجود بيتحفظ؛ الناقص بيتفحص مع كل نداء لحد ما الترحيل يتطبق */
 export async function compensationCyclesReady(em: EntityManager): Promise<boolean> {
   if (ready === true) return true
   const [row] = await em.query(`SELECT CASE WHEN OBJECT_ID(N'dbo.compensation_cycles', N'U') IS NOT NULL AND OBJECT_ID(N'dbo.compensation_budgets', N'U') IS NOT NULL
-    AND OBJECT_ID(N'dbo.compensation_proposals', N'U') IS NOT NULL THEN 1 ELSE 0 END AS [ready]`)
+    AND OBJECT_ID(N'dbo.compensation_proposals', N'U') IS NOT NULL AND OBJECT_ID(N'dbo.compensation_writers', N'U') IS NOT NULL THEN 1 ELSE 0 END AS [ready]`)
   ready = Number(row?.ready) === 1
   return ready
 }

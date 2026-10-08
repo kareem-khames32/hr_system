@@ -82,7 +82,7 @@ export class MobilePunchService {
     })
     if (judged.outcome !== 'ACCEPTED') throw new BadRequestException(OUTCOME_MESSAGES[judged.outcome])
     try {
-      await this.attendance.ingest([{ employeeCode: judged.fingerprintCode, timestamp: judged.at.toISOString(), deviceSn: `${MOBILE_DEVICE_PREFIX}${judged.siteId}` }], undefined, user, { fromDevice: true })
+      await this.attendance.ingest([{ employeeCode: judged.fingerprintCode, timestamp: judged.at.toISOString(), deviceSn: `${MOBILE_DEVICE_PREFIX}${judged.siteId}` }], undefined, user, { fromDevice: true, onlyEmployeeId: me })
     } catch (cause) {
       await this.ds.getRepository(MobilePunchAttempt).update({ id: judged.attemptId }, { outcome: 'FAILED' })
       throw cause

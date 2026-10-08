@@ -3,7 +3,10 @@ import { Column, Entity, PrimaryGeneratedColumn, type EntityManager } from 'type
 import { EmployeeObligation } from '../requests/entities/financial.entities'
 import type { Request } from '../requests/entities/request.entity'
 import type { RequestType } from '../requests/entities/request-type.entity'
+import { assertHumanApproval } from './human-approval'
 import { advanceCode, attachedAdvance, TravelAdvance } from './travel-advances'
+
+export { assertHumanApproval, HUMAN_APPROVAL_REQUIRED } from './human-approval'
 
 // B5.3 (أ): تقارير المصروفات — تقرير ببنود وإيصال لكل بند وحد لكل فئة. ميزة فرعية `expenses.reports` (مقفولة افتراضيًا) جوه موديول
 //  المصروفات القائم. الاعتماد كله في محرك الطلبات: التقرير بيتقدّم كطلب وجهته `expense_report`، والخادم بيثبّت إجماليه وبنوده في الحمولة
@@ -491,6 +494,7 @@ export async function executeExpenseReport(em: EntityManager, req: Request, _typ
   const report = locked.report
   if (report.status === 'APPROVED') return { ref: reportCode(report.id), completed: true }
   if (report.status !== 'SUBMITTED') throw new BadRequestException(REPORT_NOT_LINKED)
+  await assertHumanApproval(em, req)
   const judged = await judgeLines(em, report)
   const advance = await attachedAdvance(em, report.id)
   const centsOf = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? cents(value) : NaN)
