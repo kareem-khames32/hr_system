@@ -1,0 +1,348 @@
+'use strict'
+// B3.12: لائحة الجزاءات على قاعدة SQL مؤقتة عشوائية بتتمسح في الآخر (hr_penalties_test_<16 hex>)، عبر HTTP بتوكنات موقّعة محليًا ومن غير كلمات
+// مرور. ولا رسالة بريد حقيقية.
+//  PN-01) اللائحة: المخالفة بدرجات تكرارها (القيم)، ونوع الخصم لخصم الأيام، بالصلاحية؛ والموديول مقفول افتراضيًا.
+//  PN-03) (CRP3K / Codex P3K-B12) بصمة المعاينة بتغطّي الجزاء نفسه (تعديل اللائحة بعد المعاينة = 409)؛ وجزاء الخصم «حجز» لحد ما طلب خصمه يثبت:
+//         توقيع تاني لنفس الموظف والمخالفة بيستنى، والحجز المقطوع بيتشال، والطلب اللي ثبت والرد وقع بيتربط من غير طلب تاني.
+//  PN-02) التوقيع: رقم التكرار في المدة (إعداد) تحت قفل الموظف ومطابق للمعاينة، بنطاق الفروع؛ أول مرة إنذار وتاني مرة خصم يومين ← **خصم مصنّف
+//         من النوع الموجود** في سلسلته، مربوط بالقضية؛ ورفض الخصومات مابيسيبش جزاء؛ والملغى مابيتحسبش في التكرار؛ و«جزاءاتي» للموظف.
+// Run (من api/): node --test test/penalties.integration.cjs
+const { test, before, after } = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), crypto = require('node:crypto')
+const apiRoot = path.resolve(__dirname, '..')
+require('../node_modules/ts-node').register({ project: path.join(apiRoot, 'tsconfig.json'), transpileOnly: true })
+require('../node_modules/reflect-metadata')
+const sql = require('../node_modules/mssql')
+const env = require('../node_modules/dotenv').parse(fs.readFileSync(path.join(apiRoot, '.env')))
+const database = `hr_penalties_test_${crypto.randomBytes(8).toString('hex')}`
+const NAME = /^hr_penalties_test_[a-f0-9]{16}$/
+const uploads = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-penalties-files-'))
+const secret = crypto.randomBytes(48).toString('hex')
+const jwt = new (require('../node_modules/@nestjs/jwt').JwtService)({ secret })
+const rules = require('../src/cases/penalties.service')
+let app, master, ds, base, modules, created = false, employeeNumber = 0
+const org = {}, users = {}, emps = {}, state = {}
+
+function assertDisposable() {
+  assert.match(database, NAME); assert.notEqual(database, env.DB_DATABASE)
+  if (ds) assert.equal(ds.options.database, database)
+}
+const repo = name => { assertDisposable(); return ds.getRepository(name) }
+const payloadOf = user => ({ sub: user.id, email: user.email, role: user.role, branchId: user.branchId ?? null, employeeId: user.employeeId ?? null,
+  tokenVersion: user.tokenVersion ?? 0, scopeAllBranches: user.scopeAllBranches ?? false,
+  permissions: user.role === 'super_admin' ? ['*'] : JSON.parse(user.permissions || '[]') })
+async function request(user, method, route, body) {
+  const response = await fetch(base + route, { method, headers: { 'Content-Type': 'application/json', ...(user ? { Authorization: `Bearer ${jwt.sign(payloadOf(user))}` } : {}) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
+  const text = await response.text()
+  return { status: response.status, body: text ? JSON.parse(text) : null }
+}
+const expectStatus = (response, status) => { assert.equal(response.status, status, JSON.stringify(response.body)); return response.body }
+const messageOf = response => [].concat(response.body?.message ?? []).join('، ')
+const answer = response => [response.status, messageOf(response)]
+const employee = (extra = {}) => repo('Employee').save({ employeeCode: `PN${String(++employeeNumber).padStart(3, '0')}`, fullName: `موظف الجزاءات ${employeeNumber}`, branchId: org.branchA.id,
+  departmentId: null, teamId: null, managerEmployeeId: null, joinDate: '2020-01-01', basicSalary: 9000, housingAllowance: 0, transportAllowance: 0, phoneAllowance: 0, workNatureAllowance: 0,
+  otherAllowance: 0, currency: 'SAR', status: 'active', isActive: true, payMethod: 'cash', ...extra })
+const account = (label, permissions, extra = {}) => repo('User').save({ email: `${label}@penalties.invalid`, displayName: `حساب ${label}`, passwordHash: 'test-only',
+  role: 'employee', branchId: org.branchA.id, permissions: JSON.stringify(permissions), isActive: true, ...extra })
+const { localDateOf } = require('../src/attendance/attendance.service')
+const dayAgo = days => localDateOf(new Date(Date.now() - days * 86400000))
+const P = '/penalties'
+
+before(async () => {
+  assert.equal(env.DB_TYPE || 'mssql', 'mssql')
+  assertDisposable()
+  master = await new sql.ConnectionPool({ server: env.DB_HOST || 'localhost', port: Number(env.DB_PORT || 1433), user: env.DB_USERNAME, password: env.DB_PASSWORD,
+    database: 'master', options: { encrypt: false, trustServerCertificate: true }, connectionTimeout: 5000 }).connect()
+  await master.request().query(`CREATE DATABASE [${database}]`); created = true
+  Object.assign(process.env, env, { DB_DATABASE: database, DB_SYNCHRONIZE: 'true', NODE_ENV: 'test', JWT_SECRET: secret, UPLOADS_ROOT: uploads })
+  app = await require('../node_modules/@nestjs/core').NestFactory.create(require('../src/app.module').AppModule, { logger: ['error'], abortOnError: false })
+  // مفيش رسالة بريد حقيقية بتطلع من الاختبار
+  const { MailService } = require('../src/auth/mail.service')
+  const mail = app.get(MailService)
+  mail.isConfigured = () => false
+  mail.send = async () => { throw new Error('no mail in tests') }
+  assert.notEqual(mail.send, MailService.prototype.send)
+  app.setGlobalPrefix('api')
+  app.useGlobalPipes(new (require('../node_modules/@nestjs/common').ValidationPipe)({ whitelist: true, transform: true }))
+  await app.listen(0, '127.0.0.1')
+  for (const cron of app.get(require('../node_modules/@nestjs/schedule').SchedulerRegistry).getCronJobs().values()) cron.stop()
+  app.get(require('../src/attendance/attendance-scheduler.service').AttendanceScheduler).runCatchUp = async () => undefined
+  app.get(require('../src/requests/requests-scheduler.service').RequestsScheduler).catchUp = async () => undefined
+  ds = app.get(require('../node_modules/typeorm').DataSource)
+  assertDisposable()
+  base = `http://127.0.0.1:${app.getHttpServer().address().port}/api`
+  modules = app.get(require('../src/modules-registry/modules.service').ModulesService)
+  await app.get(require('../src/settings/config-defaults.service').ConfigDefaultsService).onApplicationBootstrap()
+  await repo('RequestsConfig').save([
+    { key: 'payroll.cycle_start_day', value: '1' }, { key: 'payroll.monthly_days', value: '30' }, { key: 'payroll.daily_hours', value: '8' },
+    { key: 'payroll.policy.default_period_type', value: 'CALENDAR_MONTH' }, { key: 'payroll.policy.min_net_guarantee', value: 'null' },
+    { key: 'payroll.policy.net_floor_pct', value: 'null' }, { key: 'payroll.policy.max_deduction_pct_of_gross', value: 'null' },
+    { key: 'loan.insufficient_net_behavior', value: 'PARTIAL_THEN_CARRY' }, { key: 'payroll.salary_evidence_mode', value: 'MONTHLY_HISTORY_OR_CURRENT_FILE' },
+  ])
+
+  org.branchA = await repo('Branch').save({ code: 'PN_A', name: 'فرع الجزاءات أ', country: 'SA' })
+  org.branchB = await repo('Branch').save({ code: 'PN_B', name: 'فرع الجزاءات ب', country: 'SA' })
+  emps.late = await employee({ fullName: 'موظف متأخر' })
+  emps.other = await employee({ fullName: 'موظف تاني' })
+  emps.b1 = await employee({ fullName: 'موظف فرع ب', branchId: org.branchB.id })
+  users.admin = await repo('User').save({ email: 'admin@penalties.invalid', displayName: 'مدير النظام', passwordHash: 'test-only', role: 'super_admin', branchId: null,
+    scopeAllBranches: true, permissions: '[]', isActive: true })
+  // صاحب اللائحة ومعاه إدارة الخصومات (من غير سلطة الموارد البشرية: خصمه بيمشي في سلسلته)؛ وواحد من غير الخصومات؛ وواحد في فرع ب
+  users.hr = await account('hr', ['cases.penalties', 'cases.investigate', 'deductions.view', 'deductions.manage'])
+  users.bare = await account('bare', ['cases.penalties'])
+  users.hrB = await account('hr-b', ['cases.penalties', 'deductions.manage'], { branchId: org.branchB.id })
+  users.late = await account('late', [], { employeeId: emps.late.id })
+  expectStatus(await request(users.admin, 'PUT', '/modules/cases', { enabled: true }), 200); modules.invalidate()
+  state.daysType = expectStatus(await request(users.admin, 'POST', '/deductions/types', { code: 'PENALTY_DAYS', nameAr: 'جزاء تأديبي بالأيام', category: 'DISCIPLINARY', calcMethod: 'DAYS_OF_SALARY',
+    creatorScopes: ['HR'], approvalSteps: ['HR'] }), 201).id
+  state.fixedType = expectStatus(await request(users.admin, 'POST', '/deductions/types', { code: 'FIXED_FINE', nameAr: 'غرامة ثابتة', category: 'DISCIPLINARY', calcMethod: 'FIXED_AMOUNT', creatorScopes: ['HR'],
+    approvalSteps: ['HR'] }), 201).id
+}, { timeout: 180000 })
+
+after(async t => {
+  const errors = []
+  try { if (app) await app.close() } catch (error) { errors.push(error) }
+  try {
+    if (created) {
+      assertDisposable()
+      await master.request().query(`ALTER DATABASE [${database}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [${database}]`)
+    }
+  } catch (error) { errors.push(error) }
+  try { if (master) await master.close() } catch (error) { errors.push(error) }
+  fs.rmSync(uploads, { recursive: true, force: true })
+  if (errors.length) t.diagnostic(errors.map(error => error.message).join(' | '))
+}, { timeout: 60000 })
+
+test('PN-01: اللائحة — مخالفة بدرجات تكرارها ونوع خصمها، بالصلاحية، والتعديل بالخانات', async () => {
+  const V = P + '/violations'
+  const body = (extra = {}) => ({ category: 'الانضباط', name: 'التأخير عن موعد الدوام', steps: [{ action: 'WARNING' }, { action: 'DEDUCT_DAYS', days: 2 }, { action: 'SUSPENSION', days: 3 }, { action: 'TERMINATION' }],
+    deductionTypeId: state.daysType, ...extra })
+  assert.deepEqual([(await request(users.late, 'GET', V)).status, (await request(users.late, 'POST', V, body())).status], [403, 403])
+  for (const [change, message] of [[{ category: 'ا' }, rules.PENALTY_NAME], [{ name: 'اب' }, rules.PENALTY_NAME], [{ steps: [] }, rules.PENALTY_STEPS], [{ steps: [{ action: 'FINE' }] }, rules.PENALTY_STEPS],
+    [{ steps: [{ action: 'DEDUCT_DAYS' }] }, rules.PENALTY_STEPS], [{ steps: [{ action: 'DEDUCT_DAYS', days: 31 }] }, rules.PENALTY_STEPS], [{ steps: [{ action: 'DEDUCT_DAYS', days: 0.3 }] }, rules.PENALTY_STEPS],
+    [{ steps: [{ action: 'SUSPENSION', days: 1.5 }] }, rules.PENALTY_STEPS], [{ steps: [{ action: 'WARNING', days: 1 }] }, rules.PENALTY_STEPS], [{ steps: Array(5).fill({ action: 'WARNING' }) }, rules.PENALTY_STEPS],
+    [{ deductionTypeId: null }, rules.PENALTY_DEDUCTION_TYPE], [{ deductionTypeId: state.fixedType }, rules.PENALTY_DEDUCTION_TYPE], [{ deductionTypeId: 987654 }, rules.PENALTY_DEDUCTION_TYPE]]) {
+    assert.deepEqual(answer(await request(users.hr, 'POST', V, body(change))), [400, message], JSON.stringify(change).slice(0, 70))
+  }
+  assert.equal(await repo('PenaltyViolation').count(), 0)
+  const made = expectStatus(await request(users.hr, 'POST', V, body({ name: '  التأخير   عن موعد الدوام ' })), 200)
+  assert.deepEqual([made.windowDays, made.deductionTypes.map(row => row.nameAr), made.violations.map(row => [row.category, row.name, row.deductionTypeName, row.isActive, row.steps.map(step => [step.occurrenceLabel, step.label])])],
+    [180, ['جزاء تأديبي بالأيام'], [['الانضباط', 'التأخير عن موعد الدوام', 'جزاء تأديبي بالأيام', true,
+      [['التكرار الأول', 'إنذار كتابي'], ['التكرار التاني', 'خصم أيام (2 يوم)'], ['التكرار التالت', 'إيقاف عن العمل (3 يوم)'], ['التكرار الرابع', 'فصل']]]]])
+  state.violation = made.violations[0].id
+  // مخالفة إنذارات بس: من غير نوع خصم
+  const warnOnly = expectStatus(await request(users.hr, 'POST', V, { category: 'السلوك', name: 'مخالفة الزي', steps: [{ action: 'WARNING' }], deductionTypeId: state.daysType }), 200).violations.find(row => row.name === 'مخالفة الزي')
+  assert.deepEqual([warnOnly.deductionTypeId, warnOnly.steps.length], [null, 1])
+  state.warnOnly = warnOnly.id
+  // التعديل بالخانات اللي اتبعتت بس
+  const edited = expectStatus(await request(users.hr, 'PATCH', V + '/' + state.warnOnly, { isActive: false }), 200).violations.find(row => row.id === state.warnOnly)
+  assert.deepEqual([edited.name, edited.isActive, edited.steps.length], ['مخالفة الزي', false, 1])
+  assert.deepEqual(answer(await request(users.hr, 'PATCH', V + '/987654', { isActive: false })), [404, rules.PENALTY_VIOLATION_NOT_FOUND])
+})
+
+test('PN-02: التوقيع — التكرار في المدة ومطابق للمعاينة، وخصم الأيام خصم مصنّف في سلسلته مربوط بالقضية، ورفض الخصومات مابيسيبش جزاء، والملغى مابيتحسبش', async () => {
+  const period = localDateOf(new Date()).slice(0, 7)
+  const body = (extra = {}) => ({ employeeId: emps.late.id, violationId: state.violation, incidentDate: dayAgo(10), ...extra })
+  // التوقيع ببصمة المعاينة بتاعة نفس الهدف (Codex P3K-B12-01)
+  const signed = async (extra = {}) => body({ ...extra, expectedFingerprint: expectStatus(await request(users.hr, 'POST', P + '/preview', body(extra)), 200).fingerprint })
+  // المعاينة: بالصلاحية وبالنطاق والقيم
+  assert.deepEqual([(await request(users.late, 'POST', P + '/preview', body())).status, (await request(users.late, 'POST', P, body())).status], [403, 403])
+  for (const [change, message] of [[{ employeeId: emps.b1.id }, rules.PENALTY_EMPLOYEE], [{ employeeId: 987654 }, rules.PENALTY_EMPLOYEE], [{ violationId: state.warnOnly }, rules.PENALTY_VIOLATION_NOT_FOUND],
+    [{ violationId: 987654 }, rules.PENALTY_VIOLATION_NOT_FOUND], [{ incidentDate: '2026-02-31' }, rules.PENALTY_DATE], [{ incidentDate: localDateOf(new Date(Date.now() + 2 * 86400000)) }, rules.PENALTY_DATE]]) {
+    assert.deepEqual(answer(await request(users.hr, 'POST', P + '/preview', body(change))), [400, message], JSON.stringify(change))
+  }
+  const first = expectStatus(await request(users.hr, 'POST', P + '/preview', body()), 200)
+  assert.deepEqual([first.employeeName, first.occurrence, first.occurrenceLabel, first.action, first.label, first.needsPeriod, first.windowDays, /^[a-f0-9]{32}$/.test(first.fingerprint)], ['موظف متأخر', 1, 'التكرار الأول', 'WARNING', 'إنذار كتابي', false, 180, true])
+  assert.equal(await repo('EmployeePenalty').count(), 0, 'المعاينة مابتكتبش')
+  // التوقيع لازم يطابق المعاينة
+  assert.deepEqual([answer(await request(users.hr, 'POST', P, body())), answer(await request(users.hr, 'POST', P, body({ expectedFingerprint: 'f'.repeat(32) }))), answer(await request(users.hr, 'POST', P, body({ expectedFingerprint: 1 })))],
+    [[409, rules.PENALTY_CHANGED], [409, rules.PENALTY_CHANGED], [409, rules.PENALTY_CHANGED]])
+  const warned = expectStatus(await request(users.hr, 'POST', P, await signed({ note: ' اتأخر ساعة ' })), 201)
+  assert.deepEqual([warned.employeeName, warned.violationName, warned.occurrence, warned.label, warned.status, warned.deductionRequestId, warned.note], ['موظف متأخر', 'التأخير عن موعد الدوام', 1, 'إنذار كتابي', 'ACTIVE', null, 'اتأخر ساعة'])
+  assert.equal(await repo('DeductionRequest').count(), 0, 'الإنذار مالوش أثر مالي')
+  // ضغطتين مع بعض بنفس رقم التكرار: واحدة بس
+  const raceBody = await signed({ employeeId: emps.other.id })
+  const race = await Promise.all([request(users.hr, 'POST', P, raceBody), request(users.hr, 'POST', P, raceBody)])
+  assert.deepEqual([race.map(response => response.status).sort(), await repo('EmployeePenalty').count({ where: { employeeId: emps.other.id } })], [[201, 409], 1])
+
+  // تاني مرة: خصم يومين — محتاج شهر المسير، وبيتعمل خصم مصنّف من النوع الموجود في سلسلته، مربوط بالقضية
+  const second = expectStatus(await request(users.hr, 'POST', P + '/preview', body({ incidentDate: dayAgo(3) })), 200)
+  assert.deepEqual([second.occurrence, second.label, second.needsPeriod], [2, 'خصم أيام (2 يوم)', true])
+  assert.deepEqual(answer(await request(users.hr, 'POST', P, await signed({ incidentDate: dayAgo(3) }))), [400, rules.PENALTY_PERIOD])
+  // ملف قضية اتقرر فيها بجزاء على الموظف ده، والحساب مطّلع عليها
+  const caseId = expectStatus(await request(users.hr, 'POST', '/cases', { kind: 'VIOLATION', title: 'تكرار التأخير', respondentEmployeeId: emps.late.id }), 201).id
+  const officer = await employee({ fullName: 'محقق' })
+  await account('officer', [], { employeeId: officer.id })
+  expectStatus(await request(users.hr, 'POST', `/cases/${caseId}/investigator`, { employeeId: officer.id }), 200)
+  // قضية لسه ماتقررش فيها، أو مش للموظف ده، أو الحساب مش مطّلع عليها: نفس الرد
+  for (const wrong of [caseId, 987654]) assert.deepEqual(answer(await request(users.hr, 'POST', P, await signed({ incidentDate: dayAgo(3), targetPeriod: period, caseId: wrong }))), [400, rules.PENALTY_CASE], String(wrong))
+  expectStatus(await request(users.hr, 'POST', `/cases/${caseId}/events`, { kind: 'NOTICE', body: 'منسوب إليك تكرار التأخير' }), 200)
+  expectStatus(await request(users.hr, 'POST', `/cases/${caseId}/events`, { kind: 'DEFENSE', body: 'ظروف مواصلات', employeeId: emps.late.id }), 200)
+  expectStatus(await request(users.hr, 'POST', `/cases/${caseId}/decision`, { outcome: 'PENALTY', note: 'خصم يومين بحسب اللائحة' }), 200)
+  assert.deepEqual(answer(await request(users.hr, 'POST', P, await signed({ employeeId: emps.other.id, incidentDate: dayAgo(3), targetPeriod: period, caseId }))), [400, rules.PENALTY_CASE], 'القضية مش لموظف تاني')
+  // صاحب اللائحة من غير إدارة الخصومات: الخصومات بترفض — والجزاء مابيتسجّلش
+  const before = await repo('EmployeePenalty').count()
+  const refused = await request(users.bare, 'POST', P, await signed({ incidentDate: dayAgo(3), targetPeriod: period }))
+  assert.deepEqual([refused.status >= 400, await repo('EmployeePenalty').count(), await repo('DeductionRequest').count()], [true, before, 0], JSON.stringify(refused.body))
+  const fined = expectStatus(await request(users.hr, 'POST', P, await signed({ incidentDate: dayAgo(3), targetPeriod: period, caseId })), 201)
+  assert.deepEqual([fined.occurrence, fined.action, fined.days, fined.label, fined.caseId, fined.deductionRequestId > 0], [2, 'DEDUCT_DAYS', 2, 'خصم أيام (2 يوم)', caseId, true])
+  const deduction = await repo('DeductionRequest').findOneByOrFail({ id: fined.deductionRequestId })
+  assert.deepEqual([deduction.employeeId, deduction.deductionTypeId, Number(deduction.inputValue), deduction.status, deduction.creatorUserId, deduction.targetPeriod,
+    deduction.reason.includes('التأخير عن موعد الدوام') && deduction.reason.includes(`ملف قضية رقم ${caseId}`) && deduction.reason.includes(rules.penaltyMarker(fined.id))], [emps.late.id, state.daysType, 2, 'IN_APPROVAL', users.hr.id, period, true])
+  assert.equal(await repo('EmployeeObligation').count(), 0, 'ولا قيد في الدفتر قبل اعتماد سلسلة الخصم')
+  // وملف القضية اتسجّل فيه التنفيذ
+  const file = expectStatus(await request(users.hr, 'GET', `/cases/${caseId}`), 200)
+  assert.deepEqual([file.events.at(-1).kindLabel, file.events.at(-1).body], ['تغيير حالة', 'تنفيذ القرار — التأخير عن موعد الدوام — التكرار التاني: خصم أيام (2 يوم)'])
+
+  // السجل بالنطاق؛ و«جزاءاتي» للموظف من غير الملاحظات الداخلية
+  const register = expectStatus(await request(users.hr, 'GET', P + `?employeeId=${emps.late.id}`), 200).penalties
+  assert.deepEqual(register.map(row => [row.occurrence, row.label, row.status]), [[2, 'خصم أيام (2 يوم)', 'ACTIVE'], [1, 'إنذار كتابي', 'ACTIVE']])
+  assert.deepEqual([expectStatus(await request(users.hrB, 'GET', P), 200).penalties, (await request(users.hr, 'GET', P + '?employeeId=x')).status], [[], 400])
+  const mine = expectStatus(await request(users.late, 'GET', P + '/mine'), 200).penalties
+  assert.deepEqual([mine.map(row => [row.violationName, row.occurrenceLabel, row.label]), 'note' in mine[0], 'caseId' in mine[0]],
+    [[['التأخير عن موعد الدوام', 'التكرار التاني', 'خصم أيام (2 يوم)'], ['التأخير عن موعد الدوام', 'التكرار الأول', 'إنذار كتابي']], false, false])
+  // الإلغاء بسبب وبالنطاق ومرة واحدة — والملغى مابيتحسبش في التكرار
+  const cancel = (user, id, reason) => request(user, 'POST', P + `/${id}/cancel`, { reason })
+  assert.deepEqual([answer(await cancel(users.hr, warned.id, 'ا')), answer(await cancel(users.hrB, warned.id, 'سبب واضح')), answer(await cancel(users.hr, 987654, 'سبب واضح'))],
+    [[400, rules.PENALTY_CANCEL_REASON], [404, rules.PENALTY_NOT_FOUND], [404, rules.PENALTY_NOT_FOUND]])
+  const cancelled = expectStatus(await cancel(users.hr, warned.id, 'اتسجّل بالغلط'), 200)
+  assert.deepEqual([cancelled.status, cancelled.statusLabel, cancelled.cancelReason], ['CANCELLED', 'ملغى', 'اتسجّل بالغلط'])
+  assert.deepEqual(answer(await cancel(users.hr, warned.id, 'تاني مرة')), [409, rules.PENALTY_CANCELLED])
+  assert.equal(expectStatus(await request(users.hr, 'POST', P + '/preview', body({ incidentDate: dayAgo(1) })), 200).occurrence, 2, 'السابق الساري واحد بس (الخصم)')
+  // المدة إعداد: واقعة قديمة برّه المدة مابتتحسبش
+  await repo('RequestsConfig').save({ key: rules.PENALTY_WINDOW_KEY, value: '2' })
+  const narrow = expectStatus(await request(users.hr, 'POST', P + '/preview', body({ incidentDate: dayAgo(0) })), 200)
+  assert.deepEqual([narrow.windowDays, narrow.occurrence], [2, 1])
+  // الموديول لما يتقفل المسارات بتتقفل
+  expectStatus(await request(users.admin, 'PUT', '/modules/cases', { enabled: false }), 200); modules.invalidate()
+  try { assert.deepEqual([(await request(users.hr, 'GET', P)).status, (await request(users.late, 'GET', P + '/mine')).status], [404, 404]) }
+  finally { expectStatus(await request(users.admin, 'PUT', '/modules/cases', { enabled: true }), 200); modules.invalidate() }
+})
+
+test('PN-03: بصمة المعاينة بتغطّي الجزاء نفسه، وجزاء الخصم حجز لحد ما خصمه يثبت — من غير تكرار زيادة ولا طلب خصم تاني', async () => {
+  const period = localDateOf(new Date()).slice(0, 7)
+  const fresh = await employee({ fullName: 'موظف الحجز' })
+  const violation = expectStatus(await request(users.hr, 'POST', P + '/violations', { category: 'الانضباط', name: 'ترك العمل من غير إذن', deductionTypeId: state.daysType,
+    steps: [{ action: 'DEDUCT_DAYS', days: 1 }, { action: 'DEDUCT_DAYS', days: 2 }] }), 200).violations.find(row => row.name === 'ترك العمل من غير إذن')
+  const target = (extra = {}) => ({ employeeId: fresh.id, violationId: violation.id, incidentDate: dayAgo(5), ...extra })
+  const preview = async (extra = {}) => expectStatus(await request(users.hr, 'POST', P + '/preview', target(extra)), 200)
+  const apply = (fingerprint, extra = {}, user = users.hr) => request(user, 'POST', P, target({ expectedFingerprint: fingerprint, targetPeriod: period, ...extra }))
+  const rows = () => repo('EmployeePenalty').find({ where: { employeeId: fresh.id }, order: { id: 'ASC' } })
+  const deductions = () => repo('DeductionRequest').count({ where: { employeeId: fresh.id } })
+  await repo('RequestsConfig').save({ key: rules.PENALTY_WINDOW_KEY, value: '180' })
+
+  // B12-01: اتعرض «خصم يوم»، واللائحة اتعدّلت ليومين قبل التوقيع — نفس رقم التكرار، بس البصمة اتغيّرت ← 409 ومفيش خصم
+  const shown = await preview()
+  assert.deepEqual([shown.occurrence, shown.days], [1, 1])
+  expectStatus(await request(users.hr, 'PATCH', P + `/violations/${violation.id}`, { steps: [{ action: 'DEDUCT_DAYS', days: 2 }, { action: 'DEDUCT_DAYS', days: 3 }] }), 200)
+  assert.deepEqual([answer(await apply(shown.fingerprint)), (await rows()).length, await deductions()], [[409, rules.PENALTY_CHANGED], 0, 0])
+  // ومدة احتساب التكرار جزء من البصمة
+  const again = await preview()
+  await repo('RequestsConfig').save({ key: rules.PENALTY_WINDOW_KEY, value: '90' })
+  assert.deepEqual([again.fingerprint === shown.fingerprint, answer(await apply(again.fingerprint))], [false, [409, rules.PENALTY_CHANGED]])
+  await repo('RequestsConfig').save({ key: rules.PENALTY_WINDOW_KEY, value: '180' })
+
+  // B12-02: حجز لسه جديد لنفس الموظف والمخالفة (خصمه لسه مااتعملش): التوقيع التاني بيستنى — مابيحسبوش سابقة ومابيتجاهلوش
+  const reserved = await repo('EmployeePenalty').save({ employeeId: fresh.id, violationId: violation.id, occurrence: 1, action: 'DEDUCT_DAYS', days: '2.00', caseId: null, deductionRequestId: null, note: null,
+    incidentDate: dayAgo(6), status: 'PENDING', createdByUserId: users.hr.id, createdAt: new Date(), cancelledByUserId: null, cancelledAt: null, cancelReason: null })
+  const current = await preview()
+  assert.deepEqual([current.occurrence, answer(await apply(current.fingerprint)), (await rows()).map(row => row.status), await deductions()], [1, [409, rules.PENALTY_IN_PROGRESS], ['PENDING'], 0], 'الحجز مش سابقة')
+  // الحجز قديم ومالوش طلب خصم = محاولة اتقطعت: بيتشال، والتوقيع بيمشي بالتكرار الأول
+  await repo('EmployeePenalty').update({ id: reserved.id }, { createdAt: new Date(Date.now() - (rules.PENALTY_PENDING_MINUTES + 1) * 60000) })
+  const firstMade = expectStatus(await apply(current.fingerprint), 201)
+  assert.deepEqual([firstMade.occurrence, firstMade.days, firstMade.status, firstMade.deductionRequestId > 0, (await rows()).map(row => [row.id === reserved.id, row.status]), await deductions()],
+    [1, 2, 'ACTIVE', true, [[false, 'ACTIVE']], 1])
+
+  // حجز قديم طلب خصمه ثبت فعلًا (الرد وقع قبل الربط): بيتثبّت ساري مربوط بطلبه وبيتحسب سابقة — من غير طلب تاني
+  const orphan = await repo('EmployeePenalty').save({ employeeId: fresh.id, violationId: violation.id, occurrence: 2, action: 'DEDUCT_DAYS', days: '3.00', caseId: null, deductionRequestId: null, note: null,
+    incidentDate: dayAgo(4), status: 'PENDING', createdByUserId: users.hr.id, createdAt: new Date(Date.now() - 3600000), cancelledByUserId: null, cancelledAt: null, cancelReason: null })
+  const source = await repo('DeductionRequest').findOneByOrFail({ id: firstMade.deductionRequestId })
+  const { id: _id, ...copy } = source
+  const persisted = await repo('DeductionRequest').save({ ...copy, reason: `جزاء من لائحة الجزاءات ${rules.penaltyMarker(orphan.id)}: ترك العمل من غير إذن` })
+  // طلب بنفس العلامة من حساب تاني (مش اللي وقّع الجزاء) مابيتحسبش طلب الجزاء
+  const spoof = await repo('DeductionRequest').save({ ...copy, creatorUserId: users.admin.id, reason: `نص يدوي ${rules.penaltyMarker(orphan.id)}` })
+  await repo('DeductionRequest').update({ id: persisted.id }, { creatorUserId: users.admin.id })
+  assert.equal((await preview({ incidentDate: dayAgo(2) })).occurrence, 2, 'الحجز من غير طلب من صاحبه مش سابقة')
+  await repo('DeductionRequest').update({ id: persisted.id }, { creatorUserId: users.hr.id })
+  await repo('DeductionRequest').delete({ id: spoof.id })
+  const third = await preview({ incidentDate: dayAgo(2) })
+  // المعاينة بتحسب الحجز اللي طلبه ثبت سابقة (زي التوقيع بالظبط) ومن غير ما تكتب
+  assert.deepEqual([third.occurrence, third.days, (await repo('EmployeePenalty').findOneByOrFail({ id: orphan.id })).status], [3, 3, 'PENDING'])
+  // والتوقيع بيثبّت الحجز ساري مربوط بطلبه (من غير طلب تاني له) وبيوقّع الجزاء الجديد بالتكرار التالت
+  const thirdMade = expectStatus(await apply(third.fingerprint, { incidentDate: dayAgo(2) }), 201)
+  const settled = await repo('EmployeePenalty').findOneByOrFail({ id: orphan.id })
+  assert.deepEqual([settled.status, settled.deductionRequestId, thirdMade.occurrence, thirdMade.deductionRequestId !== persisted.id, await deductions()], ['ACTIVE', persisted.id, 3, true, 3])
+
+  // طلب الخصم ثبت والرد وقع (فشل قراءة بعد الحفظ): الجزاء بيلاقي طلبه بعلامته وبيتربط — ونفس الطلب مايتعملش تاني
+  const service = app.get(require('../src/cases/penalties.service').PenaltiesService)
+  const original = service.deductions.create
+  let calls = 0
+  service.deductions.create = async function (...args) { calls += 1; await original.apply(this, args); throw new Error('read failed after commit') }
+  try {
+    const fourth = await preview({ incidentDate: dayAgo(1) })
+    const linked = expectStatus(await apply(fourth.fingerprint, { incidentDate: dayAgo(1) }), 201)
+    const request4 = await repo('DeductionRequest').findOneByOrFail({ id: linked.deductionRequestId })
+    assert.deepEqual([calls, linked.status, linked.occurrence, request4.reason.includes(rules.penaltyMarker(linked.id)), await deductions(), (await rows()).map(row => row.status)], [1, 'ACTIVE', 4, true, 4, ['ACTIVE', 'ACTIVE', 'ACTIVE', 'ACTIVE']])
+  } finally { service.deductions.create = original }
+  // والرفض الحقيقي قبل الحفظ لسه بيشيل الحجز
+  const fifth = await preview({ incidentDate: dayAgo(0) })
+  const before = (await rows()).length
+  const refused = await apply(fifth.fingerprint, { incidentDate: dayAgo(0) }, users.bare)
+  assert.deepEqual([refused.status >= 400, (await rows()).length, await deductions()], [true, before, 4], JSON.stringify(refused.body))
+})
+
+const p3lLatch=()=>{let resolve;const promise=new Promise(r=>resolve=r);return{promise,resolve}}
+const p3lBounded=p=>Promise.race([p,new Promise((_,reject)=>{const timer=setTimeout(()=>reject(Error('Penalty barrier missed')),10000);timer.unref()})])
+async function p3lPenalty(name){const e=await employee(),v=expectStatus(await request(users.hr,'POST',P+'/violations',{category:'Synthetic discipline',name,steps:[{action:'DEDUCT_DAYS',days:1},{action:'DEDUCT_DAYS',days:2}],deductionTypeId:state.daysType}),200).violations.find(x=>x.name===name);return {e,v,input:{employeeId:e.id,violationId:v.id,incidentDate:dayAgo(1),targetPeriod:dayAgo(1).slice(0,7)}}}
+const p3lPreview=async input=>expectStatus(await request(users.hr,'POST',P+'/preview',input),200)
+test('P3L-P01 control: changed penalty rejects old fingerprint',async()=>{
+ const {e,v,input}=await p3lPenalty('Fingerprint control'),seen=await p3lPreview(input)
+ expectStatus(await request(users.hr,'PATCH',P+'/violations/'+v.id,{steps:[{action:'DEDUCT_DAYS',days:2}]}),200)
+ const rejected=await request(users.hr,'POST',P,{...input,expectedFingerprint:seen.fingerprint});assert.equal(rejected.status,409);assert.equal(await repo('EmployeePenalty').count({where:{employeeId:e.id}}),0)
+ console.log('REVIEW_MEASURE '+JSON.stringify({case:'P01',staleFingerprint:409,penalties:0}))
+})
+test('P3L-P02 control: pending failure cannot increase concurrent recurrence',async()=>{
+ const {e,v,input}=await p3lPenalty('Pending control'),seen=await p3lPreview(input),svc=app.get(require('../src/payroll/typed-deductions.service').TypedDeductionsService),original=svc.create,entered=p3lLatch(),release=p3lLatch();let pending
+ svc.create=async function(actor,...args){if(actor.sub===users.bare.id){entered.resolve();await release.promise}return original.call(this,actor,...args)}
+ try{
+  pending=request(users.bare,'POST',P,{...input,expectedFingerprint:seen.fingerprint});await p3lBounded(Promise.race([entered.promise,pending.then(()=>{throw Error('No pending barrier')})]))
+  const interim=await p3lPreview(input);assert.equal(interim.occurrence,1)
+  assert.equal((await request(users.hr,'POST',P,{...input,expectedFingerprint:interim.fingerprint})).status,409)
+  release.resolve();assert.equal((await pending).status,403)
+  const final=expectStatus(await request(users.hr,'POST',P,{...input,expectedFingerprint:interim.fingerprint}),201);assert.equal(final.occurrence,1);assert.equal(final.days,1)
+  console.log('REVIEW_MEASURE '+JSON.stringify({case:'P02',concurrent:409,failedFirst:403,finalOccurrence:1,days:1}))
+ }finally{release.resolve();if(pending)await pending;svc.create=original}
+})
+test('P3L-P03: expired pending reservation is deleted while its writer can still create a deduction',async()=>{
+ await repo('RequestsConfig').update({key:'deductions.duplicate_window_hours'},{value:'0'})
+ const {e,v,input}=await p3lPenalty('Expired live reservation'),seen=await p3lPreview(input),svc=app.get(require('../src/payroll/typed-deductions.service').TypedDeductionsService),original=svc.create,entered=p3lLatch(),release=p3lLatch();let pending,hit=false
+ svc.create=async function(...args){if(!hit){hit=true;entered.resolve();await release.promise}return original.apply(this,args)}
+ try{
+  pending=request(users.hr,'POST',P,{...input,expectedFingerprint:seen.fingerprint});await p3lBounded(Promise.race([entered.promise,pending.then(()=>{throw Error('No pending barrier')})]))
+  const old=await repo('EmployeePenalty').findOneByOrFail({employeeId:e.id,status:'PENDING'})
+  // Advance only this reservation's age to model an operation suspended beyond the declared ten minutes.
+  await repo('EmployeePenalty').update({id:old.id},{createdAt:new Date(Date.now()-11*60000)})
+  const current=await p3lPreview(input),second=expectStatus(await request(users.hr,'POST',P,{...input,expectedFingerprint:current.fingerprint}),201)
+  assert.equal(await repo('EmployeePenalty').findOneBy({id:old.id}),null)
+  release.resolve();const first=await pending
+  const count=await repo('DeductionRequest').count({where:{employeeId:e.id}}),rows=await repo('EmployeePenalty').find({where:{employeeId:e.id}})
+  assert.equal(count,2);assert.equal(rows.length,1);assert.equal(rows[0].occurrence,1)
+  console.log('REVIEW_MEASURE '+JSON.stringify({case:'P03',firstStatus:first.status,secondStatus:201,remainingPenalties:rows.length,financialRequests:count,oldReservationDeleted:true}))
+ }finally{release.resolve();if(pending)await pending;svc.create=original}
+})
+
+test('P3L-P04: manual HTTP financial reason is accepted as an unrelated penalty request',async()=>{
+ const {e,v,input}=await p3lPenalty('Forged marker recovery'),seen=await p3lPreview(input),svc=app.get(require('../src/payroll/typed-deductions.service').TypedDeductionsService),original=svc.create,entered=p3lLatch(),release=p3lLatch();let hit=false,pending
+ svc.create=async function(...args){if(!hit){hit=true;entered.resolve();await release.promise;throw Error('Synthetic failure before requested financial save')}return original.apply(this,args)}
+ try{
+  pending=request(users.hr,'POST',P,{...input,expectedFingerprint:seen.fingerprint});await p3lBounded(Promise.race([entered.promise,pending.then(()=>{throw Error('No recovery barrier')})]))
+  const reservation=await repo('EmployeePenalty').findOneByOrFail({employeeId:e.id,status:'PENDING'})
+  const manual=expectStatus(await request(users.hr,'POST','/deductions',{employeeId:e.id,deductionTypeId:state.fixedType,inputValue:'7',incidentDate:input.incidentDate,targetPeriod:input.targetPeriod,reason:'Manual unrelated request '+rules.penaltyMarker(reservation.id)}),201)
+  release.resolve();const result=await pending
+  assert.equal(result.status,201);assert.equal(result.body.deductionRequestId,manual.id)
+  const money=await repo('DeductionRequest').findOneByOrFail({id:manual.id});assert.equal(money.deductionTypeId,state.fixedType);assert.equal(Number(money.inputValue),7);assert.equal(result.body.days,1)
+  console.log('REVIEW_MEASURE '+JSON.stringify({case:'P04',manualHttp:201,penaltyHttp:201,penaltyDays:1,linkedFixedAmount:7,wrongFinancialType:true}))
+ }finally{release.resolve();if(pending)await pending;svc.create=original}
+})
