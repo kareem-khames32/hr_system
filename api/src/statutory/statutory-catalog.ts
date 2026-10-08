@@ -18,16 +18,18 @@ export interface StatutoryKeyInfo {
 const pct = (label: string) => `${label} (%)`
 const INSURANCE = 'حساب التأمينات الاجتماعية'
 
+// B4.4 (أ): مفتاحي الضريبة بتقراهم المعاينة عند الطلب — للعرض بس، ومفيش مبلغ بيتخصم بيهم لحد ما الخصم يتفعّل بإعداده
+const TAX_PREVIEW = 'معاينة ضريبة كسب العمل (للعرض بس — مابتتخصمش)'
 export const STATUTORY_CATALOG: readonly StatutoryKeyInfo[] = [
   // ===== مصر =====
   { country: 'EG', key: EG_INSURANCE_WAGE_LIMITS, label: 'حدود أجر التأمين', card: 'C-EG-03', usedBy: INSURANCE, codes: { min_salary: 'الحد الأدنى للأجر', max_salary: 'الحد الأقصى للأجر' } },
   { country: 'EG', key: 'eg.insurance.rates', label: 'نسب التأمينات الاجتماعية', card: 'C-EG-03', usedBy: null, codes: { employee_pct: pct('حصة الموظف'), employer_pct: pct('حصة صاحب العمل') } },
-  { country: 'EG', key: 'eg.salary_tax.brackets', label: 'ضريبة كسب العمل — الشرائح والإعفاء', card: 'C-EG-01', usedBy: null,
+  { country: 'EG', key: 'eg.salary_tax.brackets', label: 'ضريبة كسب العمل — الشرائح والإعفاء', card: 'C-EG-01', usedBy: TAX_PREVIEW,
     codes: { personal_exemption: 'الإعفاء الشخصي السنوي', disability_exemption: 'إعفاء ذوي الإعاقة السنوي', tax_year_days: 'أيام السنة الضريبية', band_1_to: 'الشريحة 1 لحد', band_1_pct: pct('الشريحة 1'),
       band_2_to: 'الشريحة 2 لحد', band_2_pct: pct('الشريحة 2'), band_3_to: 'الشريحة 3 لحد', band_3_pct: pct('الشريحة 3'), band_4_to: 'الشريحة 4 لحد', band_4_pct: pct('الشريحة 4'), band_5_to: 'الشريحة 5 لحد',
       band_5_pct: pct('الشريحة 5'), band_6_to: 'الشريحة 6 لحد', band_6_pct: pct('الشريحة 6'), band_top_pct: pct('فوق الشريحة 6'), insurance_premium_max_pct: pct('أقساط التأمين الخاص: حد من الصافي'),
       insurance_premium_max_amount: 'أقساط التأمين الخاص: حد المبلغ' } },
-  { country: 'EG', key: 'eg.salary_tax.high_income', label: 'ضريبة كسب العمل — إلغاء الشرائح الدنيا للدخول العالية', card: 'C-EG-01', usedBy: null,
+  { country: 'EG', key: 'eg.salary_tax.high_income', label: 'ضريبة كسب العمل — إلغاء الشرائح الدنيا للدخول العالية', card: 'C-EG-01', usedBy: TAX_PREVIEW,
     codes: { tier_1_from: 'الفئة 1: صافي الدخل من', tier_1_first_to: 'الفئة 1: أول', tier_1_first_pct: pct('الفئة 1: نسبة الأول'), tier_2_from: 'الفئة 2: صافي الدخل من', tier_2_first_to: 'الفئة 2: أول',
       tier_2_first_pct: pct('الفئة 2: نسبة الأول'), tier_3_from: 'الفئة 3: صافي الدخل من', tier_3_first_to: 'الفئة 3: أول', tier_3_first_pct: pct('الفئة 3: نسبة الأول'), tier_4_from: 'الفئة 4: صافي الدخل من',
       tier_4_first_to: 'الفئة 4: أول', tier_4_first_pct: pct('الفئة 4: نسبة الأول'), tier_5_from: 'الفئة 5: صافي الدخل من', tier_5_first_to: 'الفئة 5: أول', tier_5_first_pct: pct('الفئة 5: نسبة الأول') } },

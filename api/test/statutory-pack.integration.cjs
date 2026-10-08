@@ -100,7 +100,10 @@ test('SK-01: الإقلاع بيحمّل صفوف بطاقات C «محتاج ت
   const pack = expectStatus(await request(users.settings, 'GET', S), 200)
   assert.deepEqual([pack.available, pack.canEdit, pack.countries, pack.keys.length, expectStatus(await request(users.admin, 'GET', S), 200).canEdit],
     [true, false, [{ code: 'EG', label: 'مصر' }, { code: 'SA', label: 'السعودية' }], STATUTORY_CATALOG.length, true])
-  assert.deepEqual(pack.keys.filter(row => row.usedBy).map(row => [row.key, row.usedBy]), [['eg.insurance.wage_limits', 'حساب التأمينات الاجتماعية'], ['sa.gosi.new_track', 'حساب التأمينات الاجتماعية']])
+  // B4.4 (أ): مفتاحي الضريبة بتقراهم المعاينة عند الطلب (للعرض بس)
+  const TAX_PREVIEW = 'معاينة ضريبة كسب العمل (للعرض بس — مابتتخصمش)'
+  assert.deepEqual(pack.keys.filter(row => row.usedBy).map(row => [row.key, row.usedBy]), [['eg.insurance.wage_limits', 'حساب التأمينات الاجتماعية'], ['eg.salary_tax.brackets', TAX_PREVIEW],
+    ['eg.salary_tax.high_income', TAX_PREVIEW], ['sa.gosi.new_track', 'حساب التأمينات الاجتماعية']])
   assert.ok(pack.keys.every(row => row.rows.length >= 1 && row.rows.every(entry => entry.verified === false && entry.source)))
   // الساري النهارده: صف واحد بالكتير لكل مفتاح — آخر «ساري من» لحد النهارده
   const today = localDateOf(new Date())

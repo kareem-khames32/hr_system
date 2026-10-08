@@ -63,6 +63,8 @@ import { PayrollDailyAccrual } from './payroll-daily-accrual.entities'
 import { PayrollDailyAccrualService } from './payroll-daily-accrual.service'
 // B1.14: معاينة الفترة الجارية من التراكم اليومي (الراتب الحي)
 import { PayrollLiveController } from './payroll-live.controller'
+import { EgSalaryTaxController } from './eg-salary-tax.controller'
+import { EgSalaryTaxService } from './eg-salary-tax.service'
 import { SalaryItem } from './salary-items'
 import { SalaryItemsController } from './salary-items.controller'
 import { SalaryItemsService } from './salary-items.service'
@@ -148,10 +150,10 @@ import { HiddenRunPeriodsInterceptor } from './hidden-run-periods.interceptor'
   ],
   controllers: [PayrollController, ObligationsController, PayrollRulesController, PayrollPolicyController, PayrollSalaryHistoryController, TypedDeductionsController, BonusesController,
     FinancialExemptionsController, PayrollCorrectionsController, SocialInsuranceController, PayrollBankSheetController, PayrollOverviewController, PayrollAllowancesController,
-    PayrollDailyAccrualController, PayrollApprovalChainController, PayrollDisbursementController, PayrollLiveController, SalaryItemsController],
+    PayrollDailyAccrualController, PayrollApprovalChainController, PayrollDisbursementController, PayrollLiveController, SalaryItemsController, EgSalaryTaxController],
   providers: [PayrollService, ObligationsService, PayrollRulesService, PayrollPolicyService, PayrollSalaryHistoryService, TypedDeductionsService, TypedDeductionsScheduler, BonusesService,
     FinancialExemptionsService, PayrollCorrectionsService, SocialInsuranceService, PayrollOverviewService, PayrollAllowancesService,
-    PayrollDailyAccrualService, PayrollDailyAccrualScheduler, PayrollApprovalChainService, PayrollDisbursementService, PayrollLiveService, SalaryItemsService,
+    PayrollDailyAccrualService, PayrollDailyAccrualScheduler, PayrollApprovalChainService, PayrollDisbursementService, PayrollLiveService, SalaryItemsService, EgSalaryTaxService,
     // CR40: شبكة أمان على كل رد JSON لحساب فرع — فترة مسير مخفي له في أي نص بتتحجب (hidden-run-periods.interceptor.ts)
     { provide: APP_INTERCEPTOR, useClass: HiddenRunPeriodsInterceptor }],
   // B3.8-ب: مكافآت نتيجة التقييم بتتقدّم بخدمة المكافآت نفسها

@@ -88,6 +88,7 @@ import { PayrollOvertimeBreakdown } from '@/components/PayrollOvertimeBreakdown'
 import { PayrollInstallmentBreakdown } from '@/components/PayrollInstallmentBreakdown'
 import { PayrollObligationBreakdown } from '@/components/PayrollObligationBreakdown'
 import PayrollEntityWarnings from '@/components/payroll/PayrollEntityWarnings'
+import EgTaxPreviewPanel from '@/components/payroll/EgTaxPreviewPanel'
 
 const payMethodLabels: Record<string, string> = {
   transfer: 'تحويل بنكي',
@@ -1002,6 +1003,8 @@ export default function PayrollPage() {
             {chain && runDetail.status !== 'CANCELLED' && <PayrollApprovalChainStrip key={`${chain.runId}-${chain.snapshotVersion}-${chain.state}-${chain.currentStep?.order ?? 0}`} chain={chain}
               busy={actionBusy || detailLoading} onApprove={handleChainApprove} onReject={handleChainReject} />}
             {showConflicts(runConflicts, 'تعارضات المسير الحالي')}
+            {/* B4.4 (أ): معاينة ضريبة كسب العمل المصرية عند الطلب — قراءة بس */}
+            {runDetail.status !== 'CANCELLED' && !!currencyContext && items.some((item) => itemCurrency(item) === 'EGP') && <EgTaxPreviewPanel runId={runDetail.id} />}
             {!!runDetail.pendingOvertime?.length &&<div className="rounded-xl border border-amber-200 bg-amber-50 p-4 my-4 space-y-2" role="status">
               <h4 className="font-bold text-amber-900">إضافي معلّق داخل الفترة — {runDetail.pendingOvertime.length} سجل</h4>
               <p className="text-sm text-amber-800">هذه الساعات لم يكتمل اعتمادها، ولا تدخل في قيمة المسير. راجعها قبل الإقفال؛ اعتمادها بعد الإقفال يجعلها مستحقات عن الفترة الأصلية في مسير لاحق.</p>
