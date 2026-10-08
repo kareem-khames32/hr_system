@@ -165,6 +165,8 @@ const adminMenuDefs: MenuItem[] = [
       { label: 'الجدول الأسبوعي', href: '/attendance/weekly-schedule', perm: 'attendance.view_all' },
       // B5.5: نسخ أسبوع وأنماط تدوير ونشر الجدول (بتظهر لما ميزة «الجدولة المتقدمة» مفتوحة)
       { label: 'أدوات الجدولة', href: '/attendance/schedule-tools', perm: 'attendance.manage' },
+      // B5.6: مواقع بصمة الموبايل ومحاولاتها (بتظهر لما ميزة «بصمة الموبايل» مفتوحة)
+      { label: 'بصمة الموبايل', href: '/attendance/punch-sites', perm: 'attendance.view_all' },
       { label: 'الورديات', href: '/attendance/shifts', perm: 'settings.manage' },
       { label: 'الأذونات', href: '/attendance/permissions', perm: 'attendance.view_all' },
       { label: 'استثناء الحضور', href: '/attendance/exemptions', perm: 'attendance_exemption.view' },
@@ -531,6 +533,8 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
       // B5.4: فجوة مهارات الموظف ومصفوفة فريقه (بتظهر لما موديول المهارات مفتوح)
       { id: 'my-skills', label: 'مهاراتي', icon: <GraduationCap size={20} />, href: '/my/skills' },
       { id: 'my-attendance', label: 'حضوري', icon: <Clock size={20} />, href: '/my/attendance' },
+      // B5.6: تسجيل البصمة من الموبايل (بتظهر لما ميزة «بصمة الموبايل» مفتوحة)
+      { id: 'my-punch', label: 'بصمتي', icon: <Clock size={20} />, href: '/my/punch' },
       { id: 'my-leaves', label: 'إجازاتي وأرصدتي', icon: <Calendar size={20} />, href: '/my/leaves' },
       { id: 'my-payslips', label: 'قسائم راتبي', icon: <Wallet size={20} />, href: '/my/payslips' },
       { id: 'my-loans', label: 'سلفي', icon: <Wallet size={20} />, href: '/my/loans' },

@@ -107,6 +107,9 @@ const EXCEPTIONS = {
   // B5.5-ج: موافقة الطرف التاني على تبديل الوردية — طلبات صاحب الحساب هو طرف فيها بس (الخدمة بتحكم بـuser.employeeId؛ غيرها «مش موجود»)
   'SwapConsentsController.mine': 'SELF', // GET /attendance/swap-consents/mine
   'SwapConsentsController.decide': 'SELF', // POST /attendance/swap-consents/:requestId
+  // B5.6: بصمة الموبايل — بصمة صاحب الحساب هو (الخدمة بتحكم بـuser.employeeId تحت قفل صفه)
+  'MobilePunchController.mine': 'SELF', // GET /attendance/mobile-punch
+  'MobilePunchController.punch': 'SELF', // POST /attendance/mobile-punch
   // B2.7: قراءة نسخة سياسة وملفها — لصاحب صلاحية السياسات، أو للموظف اللي السياسة في جمهوره (الحكم في الخدمة)
   'PoliciesController.version': 'SERVICE_CHECK', // GET /policies/versions/:versionId
   'PoliciesController.versionFile': 'SERVICE_CHECK', // GET /policies/versions/:versionId/file

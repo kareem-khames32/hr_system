@@ -11,6 +11,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/my/expenses', 'مصروفاتي'],
   ['/my/skills', 'مهاراتي'],
   ['/my/shift-swaps', 'تبديل ورديتي'],
+  ['/my/punch', 'بصمتي'],
   ['/announcements', 'الإعلانات'],
   ['/helpdesk', 'مركز الخدمات'],
   ['/cases/penalties', 'لائحة الجزاءات'],
@@ -62,6 +63,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   // الحضور والانصراف
   ['/attendance/weekly-schedule', 'الجدول الأسبوعي'],
   ['/attendance/schedule-tools', 'أدوات الجدولة'],
+  ['/attendance/punch-sites', 'بصمة الموبايل'],
   ['/attendance/shifts', 'الورديات'],
   ['/attendance/permissions', 'الأذونات'],
   ['/attendance/exemptions', 'استثناء الحضور'],

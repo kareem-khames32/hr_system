@@ -169,6 +169,15 @@ export const MODULES = {
     routes: ['/attendance', '/my/attendance'],
     requestHandlers: ['attendance_log', 'attendance_corrections', 'attendance_trips'],
     jobs: ['attendance.materialize-absences', 'attendance.device-sync'],
+    features: {
+      // B5.6: بصمة من الموبايل بموقع ونطاق جغرافي لكل فرع — مقفولة لحد ما الشركة تقرر
+      'attendance.mobile_punch': {
+        nameAr: 'بصمة الموبايل',
+        description: 'الموظف بيسجّل بصمته من الموبايل جوه نطاق موقع متعرّف لفرعه (الحكم على الخادم وبوقته)، وكل محاولة بتتسجّل',
+        default: false,
+        routes: ['/my/punch', '/attendance/punch-sites'],
+      },
+    },
   }),
   shifts: moduleDef({
     nameAr: 'الورديات والجداول', group: 'time', dependsOn: ['attendance'],

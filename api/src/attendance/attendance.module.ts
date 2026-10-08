@@ -31,6 +31,9 @@ import { HolidayWorkOrder } from './holiday-work.entities'
 import { HolidayWorkController } from './holiday-work.controller'
 import { HolidayWorkService } from './holiday-work.service'
 
+import { MobilePunchAttempt, PunchSite } from './mobile-punch'
+import { MobilePunchController } from './mobile-punch.controller'
+import { MobilePunchService } from './mobile-punch.service'
 import { ScheduleRule, ScheduleViolation, ShiftCoverageRule } from './schedule-checks'
 import { SchedulePublication, ShiftRotation } from './schedule-tools'
 import { ScheduleToolsController } from './schedule-tools.controller'
@@ -73,10 +76,13 @@ import { SwapConsentsService } from './swap-consents.service'
       ShiftCoverageRule,
       ScheduleViolation,
       ShiftSwapConsent,
+      // B5.6: بصمة الموبايل (ميزة attendance.mobile_punch، مقفولة افتراضيًا)
+      PunchSite,
+      MobilePunchAttempt,
     ]),
   ],
-  controllers: [AttendanceController, AttendanceExemptionsController, AttendanceRuleController, HolidayWorkController, ScheduleToolsController, SwapConsentsController],
-  providers: [AttendanceService, DeviceSyncService, AttendanceScheduler, AttendanceExemptionsService, HolidayWorkService, ScheduleToolsService, SwapConsentsService],
+  controllers: [AttendanceController, AttendanceExemptionsController, AttendanceRuleController, HolidayWorkController, ScheduleToolsController, SwapConsentsController, MobilePunchController],
+  providers: [AttendanceService, DeviceSyncService, AttendanceScheduler, AttendanceExemptionsService, HolidayWorkService, ScheduleToolsService, SwapConsentsService, MobilePunchService],
   exports: [AttendanceService],
 })
 export class AttendanceModule {}
