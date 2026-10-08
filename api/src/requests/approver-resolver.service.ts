@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Equal, In, IsNull, Or, Repository } from 'typeorm'
+import { Equal, In, IsNull, Or, Repository, type EntityManager } from 'typeorm'
 import { Employee } from '../employees/employee.entity'
 import { Team } from '../org/entities/team.entity'
 import { Department } from '../org/entities/department.entity'
@@ -95,6 +95,14 @@ export class ApproverResolver {
     @InjectRepository(Department) private readonly departments: Repository<Department>,
     @InjectRepository(Branch) private readonly branches: Repository<Branch>
   ) {}
+
+  /**
+   * نسخة من المحلّل مربوطة بمدير معاملة: كل قراءاتها (الموظف والفريق والقسم والفرع) بنفس اتصال المعاملة — من غير اتصال تاني من المخزن
+   * (Codex P5D-B01). نفس نمط `AttendanceService.batchScope`. المنادي اللي جوه معاملة بيستخدمها بدل المحلّل المحقون.
+   */
+  inManager(em: EntityManager): ApproverResolver {
+    return new ApproverResolver(em.getRepository(Employee), em.getRepository(Team), em.getRepository(Department), em.getRepository(Branch))
+  }
 
   // المدير المباشر: managerEmployeeId ← قائد الفريق ← رئيس القسم ← مدير الفرع
   async directManagerOf(employeeId: number): Promise<number | null> {

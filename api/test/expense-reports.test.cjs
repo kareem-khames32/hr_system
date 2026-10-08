@@ -213,7 +213,7 @@ test('EXU-09: حد الدرجة والبدل اليومي — حد الدرجة 
 test('EXU-10 (Codex P5B): مصدر الكود — الاعتماد البشري في آخر تقديم ومن غير صاحب الطلب؛ وحكم الموديول والميزة جوه معاملة التقديم بمديرها؛ والقارئ بيرجع للافتراضي من غير جدولَي الموديولات', () => {
   const human = read('expenses/human-approval.ts'), requests = read('requests/requests.service.ts'), modules = read('modules-registry/modules.service.ts')
   // B01: بعد آخر إرجاع للاستكمال؛ N01: المستفيد مش المنشئ
-  assert.match(human, /AND a\.\[id\] > ISNULL\(\(SELECT MAX\(b\.\[id\]\) FROM dbo\.request_approvals b WHERE b\.\[requestId\] = @0 AND b\.\[action\] = N'RETURNED_FOR_INFO'\), 0\)/)
+  assert.match(human, /AND a\.\[id\] > ISNULL\(\(SELECT MAX\(b\.\[id\]\) FROM dbo\.request_approvals b WITH \(READPAST, READCOMMITTEDLOCK\) WHERE b\.\[requestId\] = @0 AND b\.\[action\] = N'RETURNED_FOR_INFO'\), 0\)/)
   assert.match(human, /\(u\.\[employeeId\] IS NULL OR u\.\[employeeId\] <> @1\)/)
   assert.match(human, /\[req\.id, req\.requesterId \?\? 0\]/)
   assert.doesNotMatch(human, /createdByUserId/)
@@ -248,4 +248,65 @@ test('EXU-11 (Codex P5C): معاملة التقديم وإعادة التقدي�
     assert.doesNotMatch(body, /this\.attendance\.(?!batchScope\(em\))/)
     assert.doesNotMatch(body, /this\.modules\.(isEnabled|isFeatureEnabled|allowedFor)\(|this\.moduleGate\./)
   }
+})
+
+test('EXU-12 (Codex P5D): مسح متعدّي — كل اللي بيتنادى من معاملات التقديم وإعادة التقديم والقرار في خدمة الطلبات بيقرا بمدير المعاملة (ولا قارئ مخزن على أي عمق)', () => {
+  const ts = require('../node_modules/typescript')
+  const file = path.join(apiRoot, 'src', 'requests', 'requests.service.ts')
+  const source = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true)
+  const methods = new Map()
+  const collect = node => {
+    if (ts.isClassDeclaration(node) && node.name?.text === 'RequestsService') for (const member of node.members) if (ts.isMethodDeclaration(member) && ts.isIdentifier(member.name)) methods.set(member.name.text, member)
+    ts.forEachChild(node, collect)
+  }
+  collect(source)
+  // اللي بيشتغل بعد الالتزام (برّه المعاملة) مش جزء من المسح
+  const AFTER_COMMIT = new Set(['afterSubmission', 'afterDestination'])
+  const reachable = new Set(), queue = ['submitLocked', 'resubmit', 'act']
+  while (queue.length) {
+    const name = queue.pop()
+    if (reachable.has(name) || !methods.has(name) || AFTER_COMMIT.has(name)) continue
+    reachable.add(name)
+    const walk = node => {
+      if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword && methods.has(node.name.text)) queue.push(node.name.text)
+      ts.forEachChild(node, walk)
+    }
+    walk(methods.get(name))
+  }
+  for (const expected of ['submitLocked', 'resubmit', 'act', 'resolveChain', 'skipLevelMissingMessage', 'assertLeaveBalance', 'assertAttachmentOwnership', 'approveInstantlyOnBehalf', 'executeDestinationLocked', 'assertTypeModuleEnabled'])
+    assert.ok(reachable.has(expected), expected)
+  // نداءات على اعتمادية محقونة مالهاش قاعدة بيانات (حساب نقي، بيانات وصفية، سجل الخادم)، أو بتبعت المدير بشكل تاني
+  const NO_DATABASE = new Set(['ds.transaction', 'ds.getMetadata', 'destinations.supports', 'destinations.unsupportedMessage', 'destinations.executionModeOf', 'resolver.hasHrOverride', 'resolver.satisfies',
+    'resolver.holdsStep', 'resolver.inManager', 'leaveBalances.splitByYear', 'leaveBalances.balanceGateDate', 'attendance.batchScope', 'logger.warn', 'logger.error', 'logger.log'])
+  // فرعين بيتاخدوا لما المنادي برّه معاملة بس (المدير مش مبعوت): حكم الموديول وحكم الميزة
+  const OUTSIDE_ONLY = new Set(['assertTypeModuleEnabled:moduleGate.allowedFor', 'typeFeatureOpen:modules.isFeatureEnabled'])
+  const offenders = []
+  let checked = 0
+  for (const name of reachable) {
+    const walk = node => {
+      if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+        const chain = [node.expression.name.text]
+        let base = node.expression.expression
+        while (ts.isPropertyAccessExpression(base)) { chain.unshift(base.name.text); base = base.expression }
+        if (base.kind === ts.SyntaxKind.ThisKeyword && chain.length === 2 && !methods.has(chain[0])) {
+          checked++
+          const key = chain.join('.'), args = node.arguments.map(argument => argument.getText(source))
+          const ok = NO_DATABASE.has(key) || OUTSIDE_ONLY.has(`${name}:${key}`) || args.includes('em')
+          if (!ok) offenders.push(`${name}: this.${key}(${args.join(', ').slice(0, 60)})`)
+        }
+      }
+      ts.forEachChild(node, walk)
+    }
+    walk(methods.get(name))
+  }
+  assert.ok(checked >= 25, String(checked))
+  assert.deepEqual(offenders, [], 'قراءة باعتمادية محقونة من غير مدير المعاملة:\n' + offenders.join('\n'))
+  // والمحلّل والأرصدة نفسهم: النسخة المربوطة بترجع مستودعات المدير، والبوابتين بيقروا بيه
+  const resolver = read('requests/approver-resolver.service.ts'), balances = read('requests/leave-balances.service.ts'), human = read('expenses/human-approval.ts')
+  assert.match(resolver, /inManager\(em: EntityManager\): ApproverResolver \{\n\s+return new ApproverResolver\(em\.getRepository\(Employee\), em\.getRepository\(Team\), em\.getRepository\(Department\), em\.getRepository\(Branch\)\)/)
+  assert.doesNotMatch(resolver.slice(resolver.indexOf('export class ApproverResolver')), /this\.ds\b|getRepository\((?!Employee\)|Team\)|Department\)|Branch\))/)
+  assert.match(balances, /await \(manager \? manager\.getRepository\(RequestsConfig\) : this\.config\)\.findOne\(\{ where: \{ key: 'leave\.max_backdate_days' \} \}\)/)
+  assert.match(balances, /const repo = manager \? manager\.getRepository\(LeaveBalance\) : this\.balances\n\s+const ctx = await this\.accrualContext\(employeeId, manager\)\n[^\n]+\n\s+await this\.assertOpenService\(repo\.manager, employeeId, segment\.start\)\n\s+const entry = await this\.entryAt\(repo, /)
+  // N01: قراءة سجل القرارات بتتخطّى الممسوك (في الجملة وفي الاستعلام الفرعي)
+  assert.equal((human.match(/WITH \(READPAST, READCOMMITTEDLOCK\)/g) || []).length, 2)
 })

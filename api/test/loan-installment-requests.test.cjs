@@ -186,7 +186,8 @@ test('actual deferral chain uses current LOAN, requester branch and exact server
   const chains = [{ id: 10, code: 'OWNER_LOAN', branchId: null, isActive: true }, { id: 11, code: 'OWNER_LOAN', branchId: 8, isActive: true }]
   const steps = [{ id: 1, chainId: 11, stepOrder: 1, approverRole: 'direct_manager_of_requester' },
     { id: 2, chainId: 11, stepOrder: 2, approverRole: 'finance', thresholdField: 'amount', thresholdOp: '>', thresholdValue: 10000000000000000 }]
-  service.resolver = { resolveApproverEmployee: async role => role === 'direct_manager_of_requester' ? 21 : null }
+  // CRP5D: حل السلسلة بياخد نسخة المحلّل المربوطة بمعاملته (inManager)
+  service.resolver = { inManager() { return this }, resolveApproverEmployee: async role => role === 'direct_manager_of_requester' ? 21 : null }
   const manager = {
     getRepository(entity) {
       if (entity.name === 'RequestType') return { findOneBy: async where => { assert.equal(where.code, 'LOAN'); return actualLoan } }

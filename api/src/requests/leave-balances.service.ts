@@ -451,9 +451,10 @@ export class LeaveBalancesService {
   }
 
   // حدّ الأثر الرجعي لطلب إجازة الموظف (يوم) — الأقدم للموارد البشرية بس (LEV-20)
-  async maxBackdateDays(): Promise<number> {
+  // manager: المنادي اللي جوه معاملة بيبعت مديرها — القراءة بنفس اتصالها (Codex P5D-N02)
+  async maxBackdateDays(manager?: EntityManager): Promise<number> {
     const v = (
-      await this.config.findOne({ where: { key: 'leave.max_backdate_days' } })
+      await (manager ? manager.getRepository(RequestsConfig) : this.config).findOne({ where: { key: 'leave.max_backdate_days' } })
     )?.value
     const n = Number(v ?? '30')
     return Number.isFinite(n) && n >= 0 ? n : 30
@@ -562,12 +563,15 @@ export class LeaveBalancesService {
     balanceType: BalanceType,
     days: number,
     onDate: string,
-    pendingDays = 0
+    pendingDays = 0,
+    // المنادي اللي جوه معاملة بيبعت مديرها — كل قراءات البوابة بنفس اتصالها (Codex P5D-N02). البوابة للقراءة بس: مابتعملش صف رصيد
+    manager?: EntityManager
   ) {
-    const ctx = await this.accrualContext(employeeId)
+    const repo = manager ? manager.getRepository(LeaveBalance) : this.balances
+    const ctx = await this.accrualContext(employeeId, manager)
     const segment = this.gateSegment(onDate)
-    await this.assertOpenService(this.balances.manager, employeeId, segment.start)
-    const entry = await this.entryAt(this.balances, employeeId, balanceType, segment.start, ctx)
+    await this.assertOpenService(repo.manager, employeeId, segment.start)
+    const entry = await this.entryAt(repo, employeeId, balanceType, segment.start, ctx)
     const measure = this.measureDate(entry, onDate, segment.start, segment.later)
     const view = this.view(entry.row, measure, ctx, false, entry)
     const available = Math.round((view.remaining - pendingDays) * 100) / 100
