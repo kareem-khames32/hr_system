@@ -329,13 +329,16 @@ export class RequestsService {
   }
 
   // نوع طلب موديوله مقفول (أو مش مفعّل للمستخدم): نفس رد «النوع غير موجود» — مانكشفش إن الموديول موجود
-  private async assertTypeModuleEnabled(type: Pick<RequestType, 'code' | 'destinationHandler'>, user: JwtPayload) {
-    if (!(await this.moduleGate.allowedFor(moduleOfRequestType(type), user)) || !(await this.typeFeatureOpen(type))) throw new NotFoundException('نوع الطلب غير موجود')
+  // Codex P5B-B02: المنادي اللي جوه معاملة (التقديم) بيبعت مديرها — حالة الموديول وجمهوره والميزة بيتقروا بنفس اتصالها، من غير اتصال تاني من المخزن
+  private async assertTypeModuleEnabled(type: Pick<RequestType, 'code' | 'destinationHandler'>, user: JwtPayload, em?: EntityManager) {
+    const open = em && this.modules ? await this.modules.allowedForIn(em, moduleOfRequestType(type), user) : await this.moduleGate.allowedFor(moduleOfRequestType(type), user)
+    if (!open || !(await this.typeFeatureOpen(type, em))) throw new NotFoundException('نوع الطلب غير موجود')
   }
 
   // B5.3: نوع وجهته «تقرير مصروفات» أو «سلفة مأمورية» تبع ميزة فرعية مقفولة افتراضيًا — وهي مقفولة، النوع زي اللي موديوله مقفول (الطلبات المفتوحة بتكمّل سلسلتها)
-  private async typeFeatureOpen(type: Pick<RequestType, 'destinationHandler'>): Promise<boolean> {
-    return (type.destinationHandler !== EXPENSE_REPORT_HANDLER && type.destinationHandler !== TRAVEL_ADVANCE_HANDLER) || !this.modules || await this.modules.isFeatureEnabled(EXPENSE_REPORTS_FEATURE)
+  private async typeFeatureOpen(type: Pick<RequestType, 'destinationHandler'>, em?: EntityManager): Promise<boolean> {
+    if ((type.destinationHandler !== EXPENSE_REPORT_HANDLER && type.destinationHandler !== TRAVEL_ADVANCE_HANDLER) || !this.modules) return true
+    return em ? this.modules.isFeatureEnabledIn(em, EXPENSE_REPORTS_FEATURE) : this.modules.isFeatureEnabled(EXPENSE_REPORTS_FEATURE)
   }
 
   // هل النوع متاح للمستخدم ده؟ (ب4)
@@ -561,7 +564,7 @@ export class RequestsService {
     const type = await em.getRepository(RequestType).findOne({ where: { code: definitionCodeOf(req) } })
     if (!type) throw new NotFoundException('نوع الطلب غير موجود')
     // مسودة من نوع موديوله اتقفل مابتتقدمش؛ الطلب المرجّع للاستكمال مفتوح أصلًا فبيكمّل سلسلته
-    if (!resubmission) await this.assertTypeModuleEnabled(type, user)
+    if (!resubmission) await this.assertTypeModuleEnabled(type, user, em)
     if (!type.isActive) throw new BadRequestException('نوع الطلب معطّل')
     if (!resubmission && !audienceJudged) await this.assertFirstSubmission(user, req, type, em)
     if (isLeaveDefinition(type)) {

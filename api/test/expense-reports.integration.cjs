@@ -603,3 +603,36 @@ test('EX-13 (Codex P5A-B01): سلسلة فاضية بـ«تنفيذ فوري» �
   ok(await act(U.approver, sent.id, 'APPROVE'), 201)
   assert.deepEqual((await entries(sent.id)).map(row => Number(row.amount)), [123])
 })
+
+test('EX-14 (Codex P5B-B01): اعتماد جولة قبل الإرجاع مايصرفش مبلغ اتغيّر — إعادة تقديم على سلسلة «تنفيذ فوري» مرفوضة كلها، وبالسلسلة الحقيقية القيد بالمبلغ الجديد بعد اعتماد جديد', async () => {
+  const chain = await repo('ApprovalChain').findOneByOrFail({ code: 'EX_HR' })
+  const second = await account('approver-two', B.riyadh, ['approve.hr', 'requests.view_all'], { scopeAllBranches: true })
+  const id = ok(await request(U.two, 'POST', `${M}/reports`, { title: 'مصروفات اتغيّرت بعد الاعتماد' }), 201).id
+  const first = ok(await line(U.two, id, { categoryId: C.meals, expenseDate: day(-1), amount: 123, note: 'وجبة' }), 201)
+  const lineId = first.id ?? (await reportOf(U.two, id)).lines[0].id
+  // خطوتين: الأولى بتعتمد الـ123 والتانية بترجّع الطلب للاستكمال
+  const extra = await repo('ApprovalStep').save({ chainId: chain.id, stepOrder: 2, approverRole: 'hr' })
+  try {
+    const sent = ok(await send(U.two, id), 201)
+    ok(await act(U.approver, sent.id, 'APPROVE'), 201)
+    ok(await act(second, sent.id, 'RETURN', 'راجع المبلغ'), 201)
+    ok(await request(U.two, 'PATCH', `${M}/reports/${id}/lines/${lineId}`, { categoryId: C.meals, expenseDate: day(-1), amount: 999, note: 'وجبة' }))
+    // السلسلة بقت فاضية وعليها «تنفيذ فوري»: اعتماد الـ123 القديم مش مراجعة للـ999
+    await repo('ApprovalStep').delete({ chainId: chain.id })
+    await repo('ApprovalChain').update({ id: chain.id }, { autoApprove: true })
+    refused(await request(U.two, 'POST', `/requests/${sent.id}/resubmit`, {}), 400, rules.HUMAN_APPROVAL_REQUIRED)
+    assert.deepEqual([(await entries(sent.id)).length, (await repo('Request').findOneByOrFail({ id: sent.id })).status, (await reportOf(U.two, id)).phase], [0, 'RETURNED_FOR_INFO', 'RETURNED'])
+    // بالسلسلة الحقيقية: إعادة التقديم بتستنى اعتماد جديد، والقيد بالمبلغ الجديد
+    await repo('ApprovalChain').update({ id: chain.id }, { autoApprove: false })
+    await repo('ApprovalStep').save({ chainId: chain.id, stepOrder: 1, approverRole: 'hr' })
+    ok(await request(U.two, 'POST', `/requests/${sent.id}/resubmit`, {}), 201)
+    assert.equal((await entries(sent.id)).length, 0)
+    ok(await act(second, sent.id, 'APPROVE'), 201)
+    assert.deepEqual((await entries(sent.id)).map(row => Number(row.amount)), [999])
+  } finally {
+    await repo('ApprovalChain').update({ id: chain.id }, { autoApprove: false })
+    await repo('ApprovalStep').delete({ chainId: chain.id })
+    await repo('ApprovalStep').save({ chainId: chain.id, stepOrder: 1, approverRole: 'hr' })
+    void extra
+  }
+})

@@ -104,7 +104,7 @@ test('EXU-06: مصدر الكود — المسارات ورا الموديول �
   const requests = read('requests/requests.service.ts')
   assert.match(requests, /if \(type\.destinationHandler === EXPENSE_REPORT_HANDLER\) req\.payload = JSON\.stringify\(await stageExpenseReport\(em, req\)\)/)
   assert.match(requests, /allowedFor\(moduleOfRequestType\(type\), user\) && await this\.typeFeatureOpen\(type\)\) all\.push\(type\)/)
-  assert.match(requests, /\|\| !\(await this\.typeFeatureOpen\(type\)\)\) throw new NotFoundException\('نوع الطلب غير موجود'\)/)
+  assert.match(requests, /if \(!open \|\| !\(await this\.typeFeatureOpen\(type, em\)\)\) throw new NotFoundException\('نوع الطلب غير موجود'\)/)
   assert.match(read('requests/destinations.service.ts'), /\[EXPENSE_REPORT_HANDLER\]: executeExpenseReport,/)
   assert.ok(JSON.stringify(require('../src/auth/permissions')).includes('expenses.manage'))
 })
@@ -208,4 +208,23 @@ test('EXU-09: حد الدرجة والبدل اليومي — حد الدرجة 
   assert.match(mine, /\{report\.editable && data!\.perDiem\.length > 0 && \(/)
   assert.match(admin, /data-per-diem-rate-form/); assert.match(admin, /data-expense-grade-limits/)
   assert.match(web('lib/request-payload.ts'), /\n  perDiem: 'بدل يومي',/)
+})
+
+test('EXU-10 (Codex P5B): مصدر الكود — الاعتماد البشري في آخر تقديم ومن غير صاحب الطلب؛ وحكم الموديول والميزة جوه معاملة التقديم بمديرها؛ والقارئ بيرجع للافتراضي من غير جدولَي الموديولات', () => {
+  const human = read('expenses/human-approval.ts'), requests = read('requests/requests.service.ts'), modules = read('modules-registry/modules.service.ts')
+  // B01: بعد آخر إرجاع للاستكمال؛ N01: المستفيد مش المنشئ
+  assert.match(human, /AND a\.\[id\] > ISNULL\(\(SELECT MAX\(b\.\[id\]\) FROM dbo\.request_approvals b WHERE b\.\[requestId\] = @0 AND b\.\[action\] = N'RETURNED_FOR_INFO'\), 0\)/)
+  assert.match(human, /\(u\.\[employeeId\] IS NULL OR u\.\[employeeId\] <> @1\)/)
+  assert.match(human, /\[req\.id, req\.requesterId \?\? 0\]/)
+  assert.doesNotMatch(human, /createdByUserId/)
+  // B02: معاملة التقديم بتبعت مديرها، والقراءتين بيه
+  assert.match(requests, /if \(!resubmission\) await this\.assertTypeModuleEnabled\(type, user, em\)/)
+  assert.match(requests, /const open = em && this\.modules \? await this\.modules\.allowedForIn\(em, moduleOfRequestType\(type\), user\) : await this\.moduleGate\.allowedFor\(moduleOfRequestType\(type\), user\)/)
+  assert.match(requests, /return em \? this\.modules\.isFeatureEnabledIn\(em, EXPENSE_REPORTS_FEATURE\) : this\.modules\.isFeatureEnabled\(EXPENSE_REPORTS_FEATURE\)/)
+  const inside = modules.slice(modules.indexOf('async allowedForIn('), modules.indexOf('* الموديول كان مقفول في اليوم ده؟'))
+  assert.doesNotMatch(inside, /this\.ds\b|this\.load\(|this\.subjects|this\.subjectOf\(/)
+  assert.match(inside, /const fresh = await this\.freshLoaded\(em\)/)
+  // N02: جدول مش موجود = القيم الافتراضية
+  const fresh = modules.slice(modules.indexOf('private async freshLoaded('))
+  assert.match(fresh, /if \(sqlErrorNumber\(error\) !== MISSING_TABLE\) throw error\n\s+return \{ state: \{ modules: \{\}, features: \{\} \}, audiences: \{\} \}/)
 })

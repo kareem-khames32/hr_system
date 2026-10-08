@@ -145,6 +145,30 @@ export class ModulesService {
   }
 
   /**
+   * نفس حكم `allowedFor` لمنادي جوه معاملة (Codex P5B-B02): الحالة والجمهور وموقع الموظف بيتقروا بمدير المعاملة نفسه — من غير اتصال تاني
+   * من المخزن ومن غير الذاكرة المؤقتة.
+   */
+  async allowedForIn(em: import('typeorm').EntityManager, module: ModuleKey, user: JwtPayload | null | undefined): Promise<boolean> {
+    const fresh = await this.freshLoaded(em)
+    const allowed = async (key: ModuleKey, seen: ReadonlySet<string>): Promise<boolean> => {
+      if (!moduleEnabled(fresh.state, key)) return false
+      if (!user) return true
+      const next = new Set(seen).add(key)
+      for (const dependency of moduleDefOf(key).dependsOn) {
+        if (isModuleKey(dependency) && !next.has(dependency) && !(await allowed(dependency, next))) return false
+      }
+      const audience = fresh.audiences[key]
+      if (!audience || moduleDefOf(key).core) return true
+      const base: AudienceSubject = { role: user.role, permissions: user.permissions ?? [], employeeId: user.employeeId ?? null, branchId: user.branchId ?? null }
+      if (!user.employeeId || (!audienceNeedsEmployee(audience) && !audienceNeedsPositions(audience))) return requestAudienceAllows(audience, base, 'submit')
+      const employee = await em.getRepository(Employee).findOne({ where: { id: user.employeeId }, select: { id: true, departmentId: true, teamId: true, branchId: true } })
+      return requestAudienceAllows(audience, { ...base, departmentId: employee?.departmentId ?? null, teamId: employee?.teamId ?? null, branchId: employee?.branchId ?? user.branchId ?? null,
+        positions: await orgPositionsOf(em, user.employeeId) }, 'submit')
+    }
+    return allowed(module, new Set())
+  }
+
+  /**
    * الموديول كان مقفول في اليوم ده؟ مقفول دلوقتي = أي يوم؛ ومفتوح دلوقتي = اليوم جوه فترة قفل سابقة (من يوم القفل ليوم الفتح).
    * محرك الحضور بيسأل قبل ما يحسب يوم: والحضور مقفول مفيش بصمات بتتجمع، فاليوم اللي من غير سجل مايتحسبش غياب — لا في المسير
    * ولا في لحاق الغياب بعد ما الموديول يتفتح تاني.
@@ -435,9 +459,22 @@ export class ModulesService {
   }
 
   private async freshState(em: import('typeorm').EntityManager): Promise<ModulesState> {
-    const state: ModulesState = { modules: {}, features: {} }
-    for (const row of await em.getRepository(SystemModule).find()) state.modules[row.key] = !!row.enabled
-    for (const row of await em.getRepository(SystemModuleFeature).find()) state.features[row.key] = !!row.enabled
-    return state
+    return (await this.freshLoaded(em)).state
+  }
+
+  // Codex P5B-N02: قاعدة قبل ترحيل 076 (جدولَي الموديولات مش موجودين) = القيم الافتراضية، زي القارئ اللي بالذاكرة المؤقتة بالظبط
+  private async freshLoaded(em: import('typeorm').EntityManager): Promise<{ state: ModulesState; audiences: Record<string, string> }> {
+    const state: ModulesState = { modules: {}, features: {} }, audiences: Record<string, string> = {}
+    try {
+      for (const row of await em.getRepository(SystemModule).find()) {
+        state.modules[row.key] = !!row.enabled
+        if (row.audience && parseRequestAudience(row.audience)) audiences[row.key] = row.audience
+      }
+      for (const row of await em.getRepository(SystemModuleFeature).find()) state.features[row.key] = !!row.enabled
+    } catch (error) {
+      if (sqlErrorNumber(error) !== MISSING_TABLE) throw error
+      return { state: { modules: {}, features: {} }, audiences: {} }
+    }
+    return { state, audiences }
   }
 }
