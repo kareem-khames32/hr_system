@@ -86,8 +86,11 @@ test('EPU-04: مصدر الكود — الإعداد مبذور مقفول، و�
   assert.match(exporter, /INNER JOIN dbo\.\[requests\] r ON r\.\[id\] = p\.\[\$\{name\}\] WHERE p\.\[id\] = s\.\[\$\{parent\.column\}\] AND \$\{CONFIDENTIAL_REQUEST_SQL\}/)
   assert.match(exporter, /s WHERE \$\{mine\}\$\{notFromConfidential\(section\.table\)\} ORDER BY 1/)
   // P4C-B01: ملف الموظف وكل الأقسام بيعدّوا على حجب النص المنسوخ من طلب سري؛ وP4C-N02: الأقساط عن طريق سلفتها
-  assert.match(exporter, /const employee = scrubConfidentialTexts\(projectEmployee\(entity, user, await partialMaskingOn\(em\)\), secrets\)/)
-  assert.match(exporter, /rows: scrubConfidentialTexts\(truncated \? rows\.slice\(0, EMPLOYEE_DATA_SECTION_LIMIT\) : rows, secrets\) \}\)/)
+  // P4D: الحجب بنوع الخانة ثم بالمحتوى، وقراءة الطلبات السرية بعد آخر قسم
+  assert.match(exporter, /const guard = <T>\(value: T, table: string\): T => \(confidential\.length \? scrubConfidentialTexts\(maskFreeText\(value, table\), secrets\) : value\)/)
+  assert.match(exporter, /const employee = guard\(projected, 'employees'\)\n\s+const guarded = sections\.map\(\(\{ table, rows, \.\.\.section \}\) => \(\{ \.\.\.section, rows: rows\.map\(row => guard\(row, table\)\) \}\)\)/)
+  assert.ok(exporter.indexOf('for (const section of EMPLOYEE_DATA_SECTIONS) {') < exporter.indexOf('const confidential: Array<{ payload: string | null }>'), 'الطلبات السرية بتتقري بعد حلقة الأقسام (P4D-B02)')
+  assert.ok(exporter.indexOf('const confidential: Array<{ payload: string | null }>') < exporter.indexOf("action: 'EMPLOYEE_DATA_EXPORT'"))
   assert.match(exporter, /r\.\[requesterId\] = @0 OR \(ISJSON\(r\.\[payload\]\) = 1 AND TRY_CONVERT\(int, JSON_VALUE\(r\.\[payload\], '\$\.employeeId'\)\) = @0\)\) AND \$\{CONFIDENTIAL_REQUEST_SQL\}/)
   assert.deepEqual(exportRules.EMPLOYEE_DATA_SECTIONS.find(section => section.key === 'loanInstallments'), { key: 'loanInstallments', label: 'أقساط السلف', table: 'loan_installments', column: 'loanId',
     owner: { table: 'loans', column: 'employeeId' }, access: 'finance' })
@@ -150,4 +153,43 @@ test('EPU-06 (P4C-B01): حجب النص السردي المنسوخ من طلب 
   assert.deepEqual(text.scrubConfidentialTexts(row, secrets), { id: 7, removeReason: text.CONFIDENTIAL_TEXT_MARK, note: 'عادي', amount: 321.5, at, nested: [{ label: text.CONFIDENTIAL_TEXT_MARK, code: 'ANNUAL' }], empty: null })
   assert.equal(text.scrubConfidentialTexts(row, []), row, 'من غير طلبات سرية: نفس الكائن ومن غير أي شغل')
   assert.doesNotMatch(fs.readFileSync(path.join(apiRoot, 'src', 'employees', 'confidential-text.ts'), 'utf8'), /EntityManager|getRepository|\.query\(/)
+})
+
+test('EPU-07 (P4D-B01): خانات الكلام الحر متحددة بنوعها — كل خانة نصية اسمها سردي أو طولها 300 فأكتر في جداول التصدير مصنّفة، وحجبها مابيبصّش لشكل النص', () => {
+  const text = require('../src/employees/confidential-text')
+  // الحجب بنوع الخانة: أي كلام (قصير، لاتيني، بمسافات غريبة) بيتحجب؛ والخانات التانية والفاضية زي ما هي
+  const row = { id: 3, removeReason: 'مرض', nameAr: 'معال', status: 'REMOVED', birthDate: '2015-01-01', empty: null }
+  assert.deepEqual(text.maskFreeText(row, 'dependents'), { ...row, removeReason: text.FREE_TEXT_MARK })
+  assert.deepEqual(text.maskFreeText({ condition: 'contaminated', notes: '  ', status: 'LOST', assetId: 5 }, 'custody_assignments'), { condition: text.FREE_TEXT_MARK, notes: '  ', status: 'LOST', assetId: 5 })
+  assert.deepEqual(text.maskFreeText({ archiveReason: 'سطر\nجديد\tومسافات   كتير', fullName: 'موظف', address: 'عنوان' }, 'employees'), { archiveReason: text.FREE_TEXT_MARK, fullName: 'موظف', address: 'عنوان' })
+  const untouched = { reason: 'كلام' }
+  assert.equal(text.maskFreeText(untouched, 'employee_salary_history'), untouched, 'جدول من غير خانات كلام حر: نفس الكائن')
+  // توحيد المسافات في طبقة المحتوى
+  const secrets = text.confidentialTexts([JSON.stringify({ reason: 'سبب\nفيه   سطر\tجديد' })])
+  assert.deepEqual([secrets, text.isConfidentialCopy('سبب فيه سطر جديد', secrets), text.isConfidentialCopy('مكافأة:  سبب فيه\nسطر جديد', secrets)], [['سبب فيه سطر جديد'], true, true])
+  // الحارس: من تعريفات الكيانات — خانة نصية اسمها سردي أو طولها 300+ (أو MAX) في جدول من جداول التصدير أو جدول الموظفين لازم تبقى مصنّفة
+  require('../src/app.module')
+  const storage = require('../node_modules/typeorm').getMetadataArgsStorage()
+  const { EMPLOYEE_DATA_SECTIONS } = require('../src/employees/employee-data-export')
+  const NARRATIVE_NAME = /reason|note|label|description|comment|condition|purpose|remark|details|title|statement|message/i
+  const unclassified = [], tables = ['employees', ...EMPLOYEE_DATA_SECTIONS.map(section => section.table)]
+  for (const table of tables) {
+    const meta = storage.tables.find(entry => entry.name === table)
+    if (!meta) continue
+    for (const column of storage.columns.filter(entry => entry.target === meta.target)) {
+      const design = Reflect.getMetadata('design:type', column.target.prototype, column.propertyName), type = column.options.type
+      if (!(type === undefined ? design === String : [String, 'nvarchar', 'varchar', 'text', 'ntext', 'simple-json'].includes(type))) continue
+      const length = column.options.length === undefined ? 255 : String(column.options.length).toUpperCase() === 'MAX' ? Infinity : Number(column.options.length)
+      if (!(NARRATIVE_NAME.test(column.propertyName) || length >= 300)) continue
+      if (!(text.FREE_TEXT_COLUMNS[table] ?? []).includes(column.propertyName) && !(text.STRUCTURED_LONG_COLUMNS[table] ?? []).includes(column.propertyName)) unclassified.push(`${table}.${column.propertyName}`)
+    }
+  }
+  assert.deepEqual(unclassified, [], 'خانة نصية سردية أو طويلة مش مصنّفة: كلام حر (FREE_TEXT_COLUMNS) ولا قيمة سجل (STRUCTURED_LONG_COLUMNS)؟')
+  // وكل خانة مصنّفة موجودة فعلًا في جدولها
+  for (const [table, columns] of [...Object.entries(text.FREE_TEXT_COLUMNS), ...Object.entries(text.STRUCTURED_LONG_COLUMNS)]) {
+    const meta = storage.tables.find(entry => entry.name === table)
+    assert.ok(meta, table)
+    const names = storage.columns.filter(entry => entry.target === meta.target).map(entry => entry.propertyName)
+    for (const column of columns) assert.ok(names.includes(column), `${table}.${column}`)
+  }
 })

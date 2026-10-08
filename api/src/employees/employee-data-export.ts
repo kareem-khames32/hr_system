@@ -5,7 +5,7 @@ import { recordAudit } from '../audit/audit'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, inBranchScope, userHasPerm } from '../auth/guards'
 import { LOAN_DEFERRAL_TYPE } from '../requests/loan-installment-requests'
-import { confidentialTexts, scrubConfidentialTexts } from './confidential-text'
+import { confidentialTexts, maskFreeText, scrubConfidentialTexts } from './confidential-text'
 import { Employee } from './employee.entity'
 import { readGosiFirstRegistered } from './employee-gosi-registration'
 import { partialMaskingOn } from './employee-privacy'
@@ -16,6 +16,9 @@ import { canSeeEmployeesFinance, projectEmployee } from './employee-projection'
 // مش في الملف: حسابات الدخول، وملفات القضايا والتحقيقات وتقييمات الغير (فيها بيانات ناس تانية)، والملفات المرفوعة نفسها (مراجعها بس)،
 // والطلبات السرّية (بتتقري من أطرافها بس). والأقسام المالية والجزاءات بتطلع للي معاه صلاحيتها بس — اللي اتشال بيتقال في `omitted`.
 // P4A-B04: السرّية بحكم تعريف الطلب الفعلي (definitionCode ثم typeCode — زي شاشة الطلب)، وأي سجل اتعمل من طلب سري (عمود requestId) برّه كمان.
+// P4D-B01: الحكم على النص المنسوخ بنوع الخانة: خانات الكلام الحر (`FREE_TEXT_COLUMNS`) كلها محجوبة عند موظف له أي طلب سري — شكل النص وطوله
+// ولغته وتحويل الكاتب مالهمش أثر. وP4D-B02: «له طلب سري» ونصوصه بيتقروا بعد آخر قراءة للأقسام (الطلب بيتسجّل قبل أثره أو معاه)، فمفيش
+// نص سري بيتقري في قسم وقايمة الحجب لسه ماتعرفوش.
 // P4C-B01: رابط إنشاء الصف مابيحميش نص اتنسخ له بعدين بالتحديث (سبب حذف معال، وصف فقد عهدة، سبب أرشفة في ملف الموظف) — فأي خانة نصية
 // في ملف الموظف أو في أي قسم فيها نص سردي من طلب سري له بتطلع محجوبة (`confidential-text.ts`). وP4C-N02: أقساط السلف بتتصدّر عن طريق سلفتها.
 // P4B-B01: «سجل اتعمل من طلب سري» بكل أعمدة الربط الفعلية للطلب (مش `requestId` بس — قيد الدفتر بيشاور بـ`sourceRequestId`)، وبالقفزة التانية
@@ -88,11 +91,7 @@ export class EmployeeDataExportService {
       if (!locked || !inBranchScope(scope, locked.branchId == null ? null : Number(locked.branchId))) throw new NotFoundException(EMPLOYEE_NOT_FOUND)
       const entity = await em.getRepository(Employee).findOneOrFail({ where: { id: employeeId } })
       entity.gosiFirstRegisteredAt = (await readGosiFirstRegistered(em, [employeeId])).get(employeeId) ?? null
-      // النصوص السردية في الطلبات السرية اللي الموظف صاحبها أو موضوعها — أي خانة اتنسخت فيها بتتحجب
-      const confidential: Array<{ payload: string | null }> = await em.query(`SELECT r.[payload] FROM dbo.[requests] r
-        WHERE (r.[requesterId] = @0 OR (ISJSON(r.[payload]) = 1 AND TRY_CONVERT(int, JSON_VALUE(r.[payload], '$.employeeId')) = @0)) AND ${CONFIDENTIAL_REQUEST_SQL}`, [employeeId])
-      const secrets = confidentialTexts(confidential.map(row => row.payload))
-      const employee = scrubConfidentialTexts(projectEmployee(entity, user, await partialMaskingOn(em)), secrets)
+      const projected = projectEmployee(entity, user, await partialMaskingOn(em))
       const column = async (table: string, name: string) => {
         const [exists]: Array<{ ok: number }> = await em.query('SELECT CASE WHEN COL_LENGTH(@0, @1) IS NOT NULL THEN 1 ELSE 0 END AS [ok]', [`dbo.${table}`, name])
         return Number(exists?.ok) === 1
@@ -111,7 +110,7 @@ export class EmployeeDataExportService {
           .map(name => ` AND NOT EXISTS (SELECT 1 FROM dbo.[${parent.table}] p INNER JOIN dbo.[requests] r ON r.[id] = p.[${name}] WHERE p.[id] = s.[${parent.column}] AND ${CONFIDENTIAL_REQUEST_SQL})`) : []
         return [...own, ...viaParent].join('')
       }
-      const sections: Array<{ key: string; label: string; count: number; truncated: boolean; rows: unknown[] }> = []
+      const sections: Array<{ key: string; label: string; table: string; count: number; truncated: boolean; rows: unknown[] }> = []
       const omitted: Array<{ key: string; label: string; reason: string }> = []
       for (const section of EMPLOYEE_DATA_SECTIONS) {
         // القسم بصلاحية اللي بيصدّر: «تعديل الموظفين» مابيفتحش الجزاءات ولا يزوّد على قاعدة البيانات المالية
@@ -125,12 +124,20 @@ export class EmployeeDataExportService {
           ? await em.query(`SELECT TOP (${EMPLOYEE_DATA_SECTION_LIMIT + 1}) r.* FROM dbo.[requests] r WHERE r.[requesterId] = @0 AND NOT ${CONFIDENTIAL_REQUEST_SQL} ORDER BY r.[id]`, [employeeId])
           : await em.query(`SELECT TOP (${EMPLOYEE_DATA_SECTION_LIMIT + 1}) s.* FROM dbo.[${section.table}] s WHERE ${mine}${notFromConfidential(section.table)} ORDER BY 1`, [employeeId])
         const truncated = rows.length > EMPLOYEE_DATA_SECTION_LIMIT
-        sections.push({ key: section.key, label: section.label, count: Math.min(rows.length, EMPLOYEE_DATA_SECTION_LIMIT), truncated, rows: scrubConfidentialTexts(truncated ? rows.slice(0, EMPLOYEE_DATA_SECTION_LIMIT) : rows, secrets) })
+        sections.push({ key: section.key, label: section.label, table: section.table, count: Math.min(rows.length, EMPLOYEE_DATA_SECTION_LIMIT), truncated, rows: truncated ? rows.slice(0, EMPLOYEE_DATA_SECTION_LIMIT) : rows })
       }
-      const counts = Object.fromEntries(sections.filter(section => section.count > 0).map(section => [section.key, section.count]))
+      // الطلبات السرية اللي الموظف صاحبها أو موضوعها — بتتقري **بعد** كل الأقسام: أي طلب سري أثره ظهر في قسم فوق متسجّل (قبل أثره أو معاه)
+      // فالقراءة دي شايفاه. له طلب سري = خانات الكلام الحر كلها محجوبة (مصدرها مايتثبتش إنه آمن)، وفوقها حجب المحتوى لباقي الخانات.
+      const confidential: Array<{ payload: string | null }> = await em.query(`SELECT r.[payload] FROM dbo.[requests] r
+        WHERE (r.[requesterId] = @0 OR (ISJSON(r.[payload]) = 1 AND TRY_CONVERT(int, JSON_VALUE(r.[payload], '$.employeeId')) = @0)) AND ${CONFIDENTIAL_REQUEST_SQL}`, [employeeId])
+      const secrets = confidentialTexts(confidential.map(row => row.payload))
+      const guard = <T>(value: T, table: string): T => (confidential.length ? scrubConfidentialTexts(maskFreeText(value, table), secrets) : value)
+      const employee = guard(projected, 'employees')
+      const guarded = sections.map(({ table, rows, ...section }) => ({ ...section, rows: rows.map(row => guard(row, table)) }))
+      const counts = Object.fromEntries(guarded.filter(section => section.count > 0).map(section => [section.key, section.count]))
       await recordAudit(em, { category: 'EXPORT', action: 'EMPLOYEE_DATA_EXPORT', entityType: 'employee', entityId: employeeId, actorUserId: user.sub, branchId: entity.branchId ?? null,
         summary: `تصدير بيانات الموظف رقم ${employeeId} كاملة (طلب اطلاع)`, after: { sections: counts, omitted: omitted.map(entry => entry.key) } })
-      return { exportedAt: new Date().toISOString(), employeeId, employee, sections, omitted, excluded: EMPLOYEE_DATA_EXCLUDED }
+      return { exportedAt: new Date().toISOString(), employeeId, employee, sections: guarded, omitted, excluded: EMPLOYEE_DATA_EXCLUDED }
     })
   }
 }

@@ -32,6 +32,8 @@ const setMasking = value => request(admin, 'PATCH', '/settings/config', { key: p
 const fields = row => [row.nationalId ?? null, row.passportNo ?? null, row.iban ?? null, row.nationalIdMasked ?? null, row.passportNoMasked ?? null, row.ibanMasked ?? null]
 const fileOf = async user => fields(ok(await request(user, 'GET', `/employees/${E.target.id}`), 200))
 const listOf = async user => fields(ok(await request(user, 'GET', '/employees'), 200).find(row => row.id === E.target.id))
+// موظف التجهيز له تظلّم (GRIEVANCE) سري من بذرة الأنواع: الاختبارات اللي بتقارن «سري / مش سري» بتتحكم في النوعين
+const confidentialTypes = (leaveAnnual, grievance) => ds.query(`UPDATE [request_types] SET [isConfidential] = CASE [code] WHEN N'LEAVE_ANNUAL' THEN @0 ELSE @1 END WHERE [code] IN (N'LEAVE_ANNUAL', N'GRIEVANCE')`, [leaveAnnual ? 1 : 0, grievance ? 1 : 0])
 const profileOf = async user => fields(ok(await request(user, 'GET', `/employees/${E.target.id}/profile`), 200).employee)
 const historyOf = async user => { const row = ok(await request(user, 'GET', `/employees/${E.target.id}/history`), 200).find(entry => entry.fieldName === 'nationalId'); return [row.oldValue, row.newValue] }
 const documentNumbers = async user => ok(await request(user, 'GET', `/employees/${E.target.id}/profile`), 200).documents.map(doc => doc.number)
@@ -290,14 +292,14 @@ test('EP-08 (P4C-B01): نص طلب سري اتنسخ بالتحديث لصف ق�
   const custody = await repo('CustodyAssignment').save({ assetId: 987654, employeeId: E.target.id, status: 'LOST', condition: description.slice(0, 100), requestId: null, assignedAt: new Date() })
   await repo('Employee').update({ id: E.target.id }, { archiveReason: archive })
   const find = (data, key, id) => data.sections.find(row => row.key === key)?.rows.find(row => row.id === id)
-  const MARK = require('../src/employees/confidential-text').CONFIDENTIAL_TEXT_MARK
+  const MARK = require('../src/employees/confidential-text').FREE_TEXT_MARK
   try {
-    // الطلب مش سري: النصوص زي ما هي
-    await repo('RequestType').update({ id: type.id }, { isConfidential: false })
+    // مفيش أي طلب سري للموظف: النصوص زي ما هي
+    await confidentialTypes(false, false)
     const open = ok(await request(U.editor, 'GET', route), 200)
     assert.deepEqual([find(open, 'dependents', child.id).removeReason, find(open, 'custody', custody.id).condition, open.employee.archiveReason], [reason, description.slice(0, 100), archive])
     // الطلب سري: التلاتة محجوبين، والصفوف نفسها وباقي خاناتها موجودة، وولا حرف من النص في الرد كله
-    await repo('RequestType').update({ id: type.id }, { isConfidential: true })
+    await confidentialTypes(true, false)
     const hidden = ok(await request(U.editor, 'GET', route), 200)
     assert.deepEqual([find(hidden, 'dependents', child.id).removeReason, find(hidden, 'custody', custody.id).condition, hidden.employee.archiveReason], [MARK, MARK, MARK])
     assert.deepEqual([find(hidden, 'dependents', child.id).nameAr, find(hidden, 'dependents', child.id).status, find(hidden, 'custody', custody.id).status, hidden.employee.fullName, hidden.employee.nationalId],
@@ -307,7 +309,7 @@ test('EP-08 (P4C-B01): نص طلب سري اتنسخ بالتحديث لصف ق�
     // حتى لمدير النظام (مش طرف في الطلب): التصدير ملف بيتسلّم
     assert.equal(ok(await request(admin, 'GET', route), 200).employee.archiveReason, MARK)
   } finally {
-    await repo('RequestType').update({ id: type.id }, { isConfidential: false })
+    await confidentialTypes(false, true)
     await repo('Employee').update({ id: E.target.id }, { archiveReason: null })
     await repo('CustodyAssignment').delete({ id: custody.id }); await repo('Dependent').delete({ id: child.id }); await repo('Request').delete({ id: made.id })
   }
@@ -332,5 +334,86 @@ test('EP-09 (P4C-N02): أقساط السلف بتتصدّر عن طريق سلف
     for (const row of rows) await repo('LoanInstallment').delete({ id: row.id })
     for (const loan of [open, secret, other]) await repo('Loan').delete({ id: loan.id })
     await repo('Request').delete({ id: made.id })
+  }
+})
+
+test('EP-10 (P4D-B01): خانات الكلام الحر محجوبة بنوعها عند موظف له طلب سري — سبب بمسافات وسطور، وسبب من 3 حروف، وكلمة لاتينية تحت خانة مش سردية؛ والقيم البنيوية وموظف من غير طلب سري زي ما هم', async () => {
+  const route = `/employees/${E.target.id}/data-export`
+  const { FREE_TEXT_MARK } = require('../src/employees/confidential-text')
+  const type = await repo('RequestType').findOneByOrFail({ code: 'LEAVE_ANNUAL' })
+  const spaced = 'سبب  فيه\nسطر جديد\tوتبويب'
+  const made = await repo('Request').save({ typeCode: 'LEAVE', definitionCode: 'LEAVE_ANNUAL', requesterId: E.target.id, branchId: B.one.id, status: 'COMPLETED', payload: JSON.stringify({ reason: spaced, cause: 'مرض', condition: 'contaminated' }) })
+  const dependent = removeReason => repo('Dependent').save({ employeeId: E.target.id, nameAr: 'معال P4D', nameEn: null, relation: 'SON', birthDate: '2016-01-01', nationalId: null, gender: null, isInsured: false, documentId: null,
+    status: 'REMOVED', removeReason, requestId: null, createdByUserId: admin.id, createdAt: new Date(), updatedAt: new Date() })
+  // زي ما الوجهات بتكتب: المسافات متوحّدة، والسبب القصير زي ما هو، ووصف العهدة كلمة لاتينية
+  const first = await dependent(spaced.replace(/\s+/g, ' ')), second = await dependent('مرض')
+  const custody = await repo('CustodyAssignment').save({ assetId: 987655, employeeId: E.target.id, status: 'RETURNED', condition: 'contaminated', requestId: null, assignedAt: new Date() })
+  const otherChild = await repo('Dependent').save({ employeeId: E.other.id, nameAr: 'معال موظف تاني', nameEn: null, relation: 'SON', birthDate: '2016-01-01', nationalId: null, gender: null, isInsured: false, documentId: null,
+    status: 'REMOVED', removeReason: 'مرض', requestId: null, createdByUserId: admin.id, createdAt: new Date(), updatedAt: new Date() })
+  const find = (data, key, id) => data.sections.find(row => row.key === key)?.rows.find(row => row.id === id)
+  try {
+    await confidentialTypes(true, false)
+    const hidden = ok(await request(U.editor, 'GET', route), 200)
+    assert.deepEqual([find(hidden, 'dependents', first.id).removeReason, find(hidden, 'dependents', second.id).removeReason, find(hidden, 'custody', custody.id).condition], [FREE_TEXT_MARK, FREE_TEXT_MARK, FREE_TEXT_MARK])
+    // القيم البنيوية في نفس الصفوف زي ما هي
+    assert.deepEqual([find(hidden, 'dependents', second.id).nameAr, find(hidden, 'dependents', second.id).status, find(hidden, 'dependents', second.id).relation, find(hidden, 'custody', custody.id).status,
+      hidden.employee.fullName, hidden.employee.status], ['معال P4D', 'REMOVED', 'SON', 'RETURNED', 'موظف الخصوصية', 'active'])
+    const body = JSON.stringify(hidden)
+    assert.deepEqual([body.includes('سطر جديد'), body.includes('مرض'), body.includes('contaminated')], [false, false, false])
+    // موظف تاني من غير أي طلب سري: كلامه الحر بيتصدّر عادي (نفس النص «مرض»)
+    const other = ok(await request(admin, 'GET', `/employees/${E.other.id}/data-export`), 200)
+    assert.equal(find(other, 'dependents', otherChild.id).removeReason, 'مرض')
+    // ومفيش أي طلب سري للموظف الأول: كلامه بيرجع
+    await confidentialTypes(false, false)
+    const open = ok(await request(U.editor, 'GET', route), 200)
+    assert.deepEqual([find(open, 'dependents', second.id).removeReason, find(open, 'custody', custody.id).condition], ['مرض', 'contaminated'])
+    // والتظلّم السري لوحده (وجهته تسجيل بس) بيحجب برضه: مصدر الكلام الحر مايتثبتش إنه مش منه
+    await confidentialTypes(false, true)
+    assert.equal(find(ok(await request(U.editor, 'GET', route), 200), 'dependents', second.id).removeReason, FREE_TEXT_MARK)
+  } finally {
+    await confidentialTypes(false, true)
+    await repo('CustodyAssignment').delete({ id: custody.id })
+    for (const row of [first, second, otherChild]) await repo('Dependent').delete({ id: row.id })
+    await repo('Request').delete({ id: made.id })
+  }
+})
+
+test('EP-11 (P4D-B02): طلب سري اتسجّل ونصه اتكتب في نص التصدير (قبل قراءة قسمه) — التصدير نفسه بيحجبه، مش اللي بعده بس', async () => {
+  const route = `/employees/${E.target.id}/data-export`
+  const { FREE_TEXT_MARK } = require('../src/employees/confidential-text')
+  const type = await repo('RequestType').findOneByOrFail({ code: 'LEAVE_ANNUAL' })
+  await repo('RequestType').update({ id: type.id }, { isConfidential: true })
+  const custody = await repo('CustodyAssignment').save({ assetId: 987656, employeeId: E.target.id, status: 'ACTIVE', condition: 'حالة عادية معلنة', requestId: null, assignedAt: new Date() })
+  const secret = 'وصف فقد العهدة السري اللي اتكتب في نص التصدير'
+  const original = ds.transaction
+  let reached, release, paused = false, made = null
+  const arrived = new Promise(resolve => { reached = resolve }), gate = new Promise(resolve => { release = resolve })
+  // التصدير بيقف قبل قراءة قسم العهد (بعد ما قفل الموظف وقرا أقسام قبله)
+  ds.transaction = function (...args) {
+    const work = args[args.length - 1]
+    if (paused || typeof work !== 'function' || !String(work).includes('UPDLOCK, ROWLOCK')) return original.apply(this, args)
+    paused = true
+    return original.call(this, async em => {
+      const query = em.query.bind(em); let stopped = false
+      em.query = async (sqlText, ...rest) => { if (!stopped && String(sqlText).includes('dbo.[custody_assignments] s')) { stopped = true; reached(); await gate } return query(sqlText, ...rest) }
+      return work(em)
+    })
+  }
+  const pending = request(U.editor, 'GET', route)
+  try {
+    await Promise.race([arrived, pending.then(() => { throw new Error('export finished before the barrier') })])
+    ds.transaction = original
+    // في النص: طلب سري جديد اتسجّل، ووجهته حدّثت وصف العهدة القديمة بنصه (اتصالات تانية، ومابتلمسش صف الموظف)
+    made = await repo('Request').save({ typeCode: 'LEAVE', definitionCode: 'LEAVE_ANNUAL', requesterId: E.target.id, branchId: B.one.id, status: 'COMPLETED', payload: JSON.stringify({ assignmentId: custody.id, description: secret }) })
+    await repo('CustodyAssignment').update({ id: custody.id }, { condition: secret.slice(0, 100) })
+    release()
+    const data = ok(await pending, 200)
+    const row = data.sections.find(section => section.key === 'custody').rows.find(entry => entry.id === custody.id)
+    assert.deepEqual([row.condition, JSON.stringify(data).includes('وصف فقد العهدة')], [FREE_TEXT_MARK, false], 'التصدير اللي كان شغال حجب النص اللي اتكتب في نصه')
+  } finally {
+    release(); ds.transaction = original; await pending.catch(() => {})
+    await repo('RequestType').update({ id: type.id }, { isConfidential: false })
+    await repo('CustodyAssignment').delete({ id: custody.id })
+    if (made) await repo('Request').delete({ id: made.id })
   }
 })
