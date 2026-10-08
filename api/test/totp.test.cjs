@@ -94,9 +94,18 @@ test('TT-03: an enrolled account is asked for the app code before the mail gate;
   assert.match(auth, /const opened = await this\.issueSession\(user, \{ \.\.\.session, factorProven: challenge\.codeHash === TOTP_CHALLENGE_MARK \}, context\)/)
   // CRP3F: كل جلسة جديدة لحساب مفعّل محتاجة إثبات العامل — كلمة السر لوحدها من غيره، وتغيير كلمة المرور وإعادة الإصدار من جلسة قايمة بيه
   assert.equal(auth.split('factorProven: true').length - 1, 2, 'تغيير كلمة المرور وإعادة الإصدار بعد التفعيل بس')
-  assert.match(auth, /return this\.issueSession\(\{ \.\.\.user, mustChangePassword: false, passwordChangedAt, tokenVersion \}, \{ \.\.\.session, factorProven: true \}, context\)/)
+  // CRP3G-B01: الجلسة من صف الحساب المقري من جديد بعد الكتابة (مش الصف القديم بإصدار جديد)
+  assert.match(auth, /await this\.sessions\.revokeAll\(user\.id, 'PASSWORD'\)\n[\s\S]{0,420}const current = await this\.withPasswordState\(\)\.where\('u\.id = :id', \{ id: user\.id \}\)\.getOne\(\)\n\s+if \(!current \|\| !current\.isActive\) throw new UnauthorizedException\('الحساب معطّل'\)\n\s+return this\.issueSession\(current, \{ \.\.\.session, factorProven: true \}, context\)/)
+  assert.doesNotMatch(auth, /issueSession\(\{ \.\.\.user,/, 'مفيش جلسة من صف قديم بخانات متركّبة')
   assert.match(auth, /if \(current\.sid\) await this\.sessions\.revoke\(current\.sid, current\.sub, 'LOGOUT'\)\n\s+return this\.issueSession\(user, \{ \.\.\.session, factorProven: true \}, context\)/)
-  assert.match(auth, /tokenVersion: \(\) => 'tokenVersion \+ 1',\n\s+\}\n\s+\)\n\s+\/\/ الجلسة الجديدة بإصدار الحساب دلوقتي/, 'تغيير كلمة المرور بيزوّد الإصدار في القاعدة')
+  assert.match(auth, /tokenVersion: \(\) => 'tokenVersion \+ 1',\n\s+\}\n\s+\)\n/, 'تغيير كلمة المرور بيزوّد الإصدار في القاعدة')
+  // CRP3G-B02: الدور المقترح بيتقري قبل الحكم، وصفه بيتقفل ويتقارن قبل صف الحساب جوه معاملة الحفظ — في التعديل والإنشاء
+  const assign = read('api/src/auth/users.controller.ts')
+  assert.match(assign, /const judgedRole = roleChanged \? await this\.roleStamp\(dto\.role as string\) : null\n\s+if \(roleChanged\) await this\.assertAssignableRole\(dto\.role as string\)/)
+  assert.match(assign, /if \(judgedRole !== null && \(await this\.roleStamp\(dto\.role as string, em\)\) !== judgedRole\) throw new ConflictException\(ASSIGNED_ROLE_CHANGED\)\n\s+const fresh = await em\.getRepository\(User\)\.findOne\(\{ where: \{ id \}, lock: \{ mode: 'pessimistic_write' \} \}\)/)
+  assert.match(assign, /const judgedRole = await this\.roleStamp\(dto\.role\)\n\s+await this\.assertAssignableRole\(dto\.role\)/)
+  assert.match(assign, /if \(\(await this\.roleStamp\(dto\.role, em\)\) !== judgedRole\) throw new ConflictException\(ASSIGNED_ROLE_CHANGED\)\n\s+return em\.getRepository\(User\)\.save\(/)
+  assert.match(assign, /\.where\('id = :id AND tokenVersion = :seen', \{ id: target\.id, seen: target\.tokenVersion \?\? 0 \}\)/, 'كلمة السر المؤقتة بشرط الإصدار اللي اتحكم عليه')
   // CRP3F: تعديل الحساب وتعديل الدور بيقفلوا الصف ويقروه من جديد جوه معاملة الحفظ ويرفضوا لو اتغيّر بعد الحكم
   const accountEdit = read('api/src/auth/users.controller.ts')
   assert.match(accountEdit, /const fresh = await em\.getRepository\(User\)\.findOne\(\{ where: \{ id \}, lock: \{ mode: 'pessimistic_write' \} \}\)\n\s+if \(!fresh \|\| \(fresh\.tokenVersion \?\? 0\) !== seenVersion\) throw new ConflictException\(ACCOUNT_CHANGED_MEANWHILE\)/)

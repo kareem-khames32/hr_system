@@ -462,11 +462,13 @@ export class AuthService {
         tokenVersion: () => 'tokenVersion + 1',
       }
     )
-    // الجلسة الجديدة بإصدار الحساب دلوقتي
-    const tokenVersion = (await this.users.findOne({ where: { id: user.id }, select: ['id', 'tokenVersion'] }))?.tokenVersion ?? 0
     // B2.17-ب: الإصدار زاد فكل جلسات الحساب ماتت — صفوفها بتتقفل، والجلسة الجديدة بصف جديد
     await this.sessions.revokeAll(user.id, 'PASSWORD')
-    return this.issueSession({ ...user, mustChangePassword: false, passwordChangedAt, tokenVersion }, { ...session, factorProven: true }, context)
+    // CRP3G-B01: الجلسة الجديدة من صف الحساب المقري من جديد بعد الكتابة — دوره وصلاحياته ونطاقه وإصداره مع بعض. الصف اللي اتقري فوق (قبل
+    // فحص كلمة السر) ممكن يكون اتسحب منه دور أو صلاحية في الطريق، والإصدار الجديد مايتركّبش على هوية قديمة
+    const current = await this.withPasswordState().where('u.id = :id', { id: user.id }).getOne()
+    if (!current || !current.isActive) throw new UnauthorizedException('الحساب معطّل')
+    return this.issueSession(current, { ...session, factorProven: true }, context)
   }
 
   // توكن + بيانات الحساب للواجهة (نفس رد الدخول)
