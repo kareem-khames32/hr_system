@@ -2,7 +2,7 @@
 
 // B3.2: «إدارة الوظائف» — الوظائف الشاغرة (من احتياج معتمد أو من الشاشة): الوصف والمتطلبات والعدد، والحالة: مسودة ← منشورة ↔ موقوفة ← مقفولة
 import { useCallback, useEffect, useState } from 'react'
-import { Briefcase, Plus, X } from 'lucide-react'
+import { Briefcase, Link2, Plus, X } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import EmptyState from '@/components/EmptyState'
 import { formatDate } from '@/lib/dates'
@@ -29,6 +29,19 @@ export default function RecruitmentJobsPage() {
   const [filter, setFilter] = useState<RecruitmentJobStatus | 'all'>('all')
   const [editing, setEditing] = useState<ApiRecruitmentJob | 'new' | null>(null)
   const [busy, setBusy] = useState(0)
+  const [copied, setCopied] = useState(0)
+
+  // B3.3-ب: لينك التقديم العام للوظيفة المنشورة «خارجي» (بيشتغل لما ميزة «صفحة الوظائف العامة» مفتوحة) — النسخ والتحديد اليدوي لو النسخ اترفض
+  const copyLink = async (job: ApiRecruitmentJob) => {
+    const link = `${window.location.origin}/careers/${job.id}`
+    try {
+      await navigator.clipboard.writeText(link)
+      setCopied(job.id)
+      setTimeout(() => setCopied(0), 2500)
+    } catch {
+      window.prompt('لينك التقديم', link)
+    }
+  }
 
   const load = useCallback(() => {
     setError('')
@@ -143,6 +156,12 @@ export default function RecruitmentJobsPage() {
                     <td className="px-4 py-3">
                       {data.canManage && job.status !== 'CLOSED' && (
                         <div className="flex items-center justify-end gap-2 flex-wrap">
+                          {job.status === 'PUBLISHED' && job.external && (
+                            <button onClick={() => copyLink(job)} className="btn-secondary text-sm inline-flex items-center gap-1" title="لينك التقديم العام (محتاج ميزة «صفحة الوظائف العامة» مفتوحة)">
+                              <Link2 size={14} />
+                              {copied === job.id ? 'اتنسخ' : 'لينك التقديم'}
+                            </button>
+                          )}
                           <button onClick={() => setEditing(job)} className="btn-secondary text-sm">
                             تعديل
                           </button>

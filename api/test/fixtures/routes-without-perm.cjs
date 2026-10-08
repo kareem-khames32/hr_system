@@ -21,6 +21,9 @@ const EXCEPTIONS = {
   'AuthController.verify': 'PUBLIC_OK', // POST /auth/login/verify
   'BrandingController.branding': 'PUBLIC_OK', // GET /branding
   'BrandingController.logo': 'PUBLIC_OK', // GET /branding/logo
+  'CareersController.apply': 'PUBLIC_OK', // POST /careers/jobs/:id/apply — B3.3-ب: تقديم من اللينك العام (ميزة مقفولة افتراضيًا، وحد بالعنوان)
+  'CareersController.detail': 'PUBLIC_OK', // GET /careers/jobs/:id — B3.3-ب: وظيفة منشورة «خارجي» بس
+  'CareersController.list': 'PUBLIC_OK', // GET /careers/jobs — B3.3-ب: الوظائف المنشورة «خارجي» بس
   'HealthController.check': 'PUBLIC_OK', // GET /health
   // ===== SELF (26) — خدمة ذاتية: بيشتغل على بيانات صاحب الحساب بس (user.sub / user.employeeId) — دور «موظف» صلاحياته فاضية فمفيش مفتاح ينفع =====
   // B2.16: لوحة الإعلانات وتسجيل القراءة — الموظف لنفسه (الإعلان ساري وهو في جمهوره؛ الفحص في الخدمة)

@@ -56,7 +56,7 @@ export class CandidateApplicationsService {
   /** وظيفة كل مرشح ومصدره لقايمة المرشحين (المرشح من غير وظيفة = null). الوظيفة بتتعرض لو لسه في نطاق فروع الحساب */
   async attach<T extends { id: number }>(user: JwtPayload, rows: T[]) {
     const em = this.ds.manager
-    const empty = () => rows.map((row) => ({ ...row, application: null as null | { jobId: number; jobCode: string; source: string | null; nationalId: string | null; internal: boolean } }))
+    const empty = () => rows.map((row) => ({ ...row, application: null as null | { jobId: number; jobCode: string; source: string | null; nationalId: string | null; internal: boolean; cvFileId: number | null; consentAt: Date | null } }))
     if (!rows.length || !(await recruitmentJobsReady(em)) || !(await candidateApplicationsReady(em))) return empty()
     const applications = await em.getRepository(CandidateApplication).find({ where: { candidateId: In(rows.map((row) => row.id)) } })
     if (!applications.length) return empty()
@@ -69,7 +69,9 @@ export class CandidateApplicationsService {
       return {
         ...row,
         application: application && jobs.has(application.jobId)
-          ? { jobId: application.jobId, jobCode: jobCode(application.jobId), source: application.source ?? null, nationalId: application.nationalId ?? null, internal: application.applicantEmployeeId != null }
+          ? { jobId: application.jobId, jobCode: jobCode(application.jobId), source: application.source ?? null, nationalId: application.nationalId ?? null, internal: application.applicantEmployeeId != null,
+              // B3.3-ب: ملف السيرة الذاتية (بيتفتح من /files/:id بحكم المرشح) وتاريخ موافقة البيانات
+              cvFileId: application.cvFileId ?? null, consentAt: application.consentAt ?? null }
           : null,
       }
     })

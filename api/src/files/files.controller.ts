@@ -33,6 +33,7 @@ import { assertHrDocumentFileAccess } from '../hr-documents/hr-document-access'
 import { documentAckRequest, sendVerifiedFile, verifiedDocumentFile } from '../hr-documents/document-acknowledgements'
 import { assertLetterFileAccess } from '../letters/letter-access'
 import { assertTaskFileAccess } from '../tasks/task-rules'
+import { assertCandidateCvAccess } from '../recruitment/candidate-applications'
 import { assertExecutionProofAccess } from '../requests/execution-tasks'
 import { CommentsService } from '../comments/comments.service'
 import { AnnouncementsService } from '../announcements/announcements.service'
@@ -186,6 +187,9 @@ export class FilesController {
     } else if (f.entityType === 'announcement') {
       // B2.16-ب: مرفق إعلان — بحكم الإعلان نفسه (اللي بيديره، أو موظف الإعلان ساري له وهو في جمهوره)، مش بملكية الرفع العامة
       await this.announcements.assertFileAccess(user, f)
+    } else if (f.entityType === 'candidate_cv') {
+      // B3.3-ب: السيرة الذاتية لمتقدّم من اللينك العام — بحكم المرشح (إدارة التوظيف ونطاق فرعه)، مش بملكية الرفع العامة
+      await assertCandidateCvAccess(this.ds.manager, user, f)
     } else {
     const isOwner = (!!user.employeeId && f.employeeId === user.employeeId) || (!!user.sub && f.uploadedBy === user.sub)
     // صور الموظفين قابلة للعرض لأي مطّلع على الموظفين (ليست مستنداً حساساً)

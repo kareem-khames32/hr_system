@@ -24,6 +24,7 @@ import {
   createCandidate,
   updateCandidate,
   fetchBranches,
+  fetchFileObjectUrl,
   type ApiCandidate,
   type ApiBranch,
 } from '@/lib/api'
@@ -149,6 +150,17 @@ export default function RecruitmentPage() {
     } finally {
       setAddSaving(false)
     }
+  }
+
+  // B3.3-ب: السيرة الذاتية للمتقدّم من اللينك العام — بتتجاب بالجلسة (الخادم بيحكم بنطاق المرشح) وتتفتح في تبويب
+  const openCv = async (fileId: number) => {
+    const url = await fetchFileObjectUrl(fileId)
+    if (!url) {
+      setError('تعذر فتح السيرة الذاتية')
+      return
+    }
+    window.open(url, '_blank', 'noopener')
+    setTimeout(() => URL.revokeObjectURL(url), 60000)
   }
 
   // التعيين بنفس نموذج إضافة الموظف وحقوله الإجبارية، متعبّي من بيانات المرشح
@@ -339,6 +351,13 @@ export default function RecruitmentPage() {
                             تقدّم بتاريخ: {formatDate(candidate.createdAt)}
                           </span>
                         </div>
+                        {candidate.application?.source && <span className="text-gray-500 text-sm">المصدر: {candidate.application.source}</span>}
+                        {candidate.application?.cvFileId != null && (
+                          <button onClick={() => openCv(candidate.application!.cvFileId!)} className="flex items-center gap-1 text-primary-600 text-sm hover:underline">
+                            <FileText size={14} />
+                            السيرة الذاتية
+                          </button>
+                        )}
                         {candidate.notes && (
                           <div className="flex items-center gap-1 text-gray-500 text-sm">
                             <FileText size={14} />

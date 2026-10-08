@@ -1651,7 +1651,9 @@ export interface ApiCandidate {
   positionTitle: string; branchId?: number; stage: string; notes?: string
   hiredEmployeeId?: number; createdAt: string
   /** B3.3-أ: الوظيفة الشاغرة اللي المرشح عليها ومصدره (null = مرشح من غير وظيفة) */
-  application?: { jobId: number; jobCode: string; source: string | null; nationalId: string | null; internal: boolean } | null
+  application?: { jobId: number; jobCode: string; source: string | null; nationalId: string | null; internal: boolean
+    /** B3.3-ب: ملف السيرة الذاتية (بيتفتح بالجلسة بحكم المرشح) وتاريخ موافقة البيانات، للمتقدّم من اللينك العام */
+    cvFileId?: number | null; consentAt?: string | null } | null
 }
 export const fetchCandidates = () => get<ApiCandidate[]>('/candidates')
 /** مع jobId: المسمى والفرع من الوظيفة، والخادم بيفحص التكرار (موبايل، بريد، هوية) على نفس الوظيفة */

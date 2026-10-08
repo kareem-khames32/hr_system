@@ -266,11 +266,19 @@ export const MODULES = {
     description: 'احتياج التوظيف والوظائف الشاغرة، ومسار المرشحين والتعيين منه',
     permissions: ['candidates.manage'],
     // المتقدمين والوظائف الشاغرة (B3.2) شاشات حقيقية؛ باقي ما تحت /recruitment شاشات عرض (DEMO_ROUTES) لحد ما الموديول الكامل ينزل
-    // B3.3-أ: «وظائف داخلية» في البوابة (/my/jobs)
-    routes: ['/recruitment', '/recruitment/applicants', '/recruitment/jobs', '/my/jobs'],
+    // B3.3-أ: «وظائف داخلية» في البوابة (/my/jobs). B3.3-ب: صفحة الوظائف العامة (/careers) — صفحتها من غير دخول، والخادم بيقفلها بميزتها
+    routes: ['/recruitment', '/recruitment/applicants', '/recruitment/jobs', '/my/jobs', '/careers', '/careers/*'],
     // B3.2-أ: طلب «احتياج توظيف» ووجهته (الاعتماد بيعمل وظيفة شاغرة مسودة)
     requestTypes: ['RECRUITMENT_REQUISITION'],
     requestHandlers: ['recruitment_requisition'],
+    features: {
+      // B3.3-ب: مسارات من غير دخول — مقفولة لحد ما الشركة تقرر (والسيرفر يبقى متاح للمتقدمين)
+      'recruitment.public_careers': {
+        nameAr: 'صفحة الوظائف العامة والتقديم من لينك',
+        description: 'صفحة من غير دخول بتعرض الوظائف المنشورة «خارجي»، ولينك تقديم لكل وظيفة: الاسم والبريد والموبايل والسيرة الذاتية وموافقة البيانات — والمتقدّم بيدخل مرشح على الوظيفة',
+        default: false,
+      },
+    },
   }),
   // B2.16: الإعلانات — إعلان لجمهور «مين + فين» بتاريخ نشر وانتهاء، ولوحته في البوابة، وتقرير مين قرا. موديول جديد = مقفول لحد ما
   // الشركة تفتحه، وفي الباقة الأساسية

@@ -99,7 +99,7 @@ test('PU-03: ربط البوابة في الواجهة — التحويل بكو
   assert.match(client, /res\.status === 403 &&\n\s+details\?\.code === 'POLICY_ACK_REQUIRED' &&\n\s+typeof window !== 'undefined' &&\n\s+!window\.location\.pathname\.startsWith\('\/login'\)\n\s+\) \{\n\s+window\.location\.href = POLICY_GATE_PATH/)
   const layout = read('src/components/layout/MainLayout.tsx')
   // شاشة الإقرار تحت ‎/login: من غير إطار النظام ومن غير حارسه
-  assert.match(layout, /const BARE_PATHS = \['\/login'\]/)
+  assert.match(layout, /const BARE_PATHS = \['\/login', '\/careers'\]/)
   assert.match(layout, /if \(!authed \|\| bare \|\| policiesCheckedThisSession\(\)\) return\n\s+let cancelled = false\n\s+fetchPendingPolicies\(\)\n\s+\.then\(\(pending\) => \{\n\s+if \(cancelled\) return\n\s+if \(pending\.policies\.length\) window\.location\.href = POLICY_GATE_PATH\n\s+else markPoliciesChecked\(\)\n\s+\}\)\n\s+\.catch\(\(\) => undefined\)/)
   // العلامة قيمتها علامة الجلسة (B2.17: مفيش توكن في التخزين): دخول جديد بيعرض الشاشة تاني، و«بعدين» بيحطها؛ وتخزين مقفول = من غير فحص عند الدخول
   const ui = require('../../src/lib/policies-api')

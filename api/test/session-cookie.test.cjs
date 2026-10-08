@@ -131,7 +131,9 @@ test('SK-03: the web app keeps no token — nothing in storage, no Authorization
     const direct = [...text.matchAll(/fetch\(\s*(`\$\{API_BASE\}[^`]*`|API_BASE[^,)]*)\s*(,\s*([^)]{0,40}))?/g)]
     for (const match of direct) {
       const rest = match[3] ?? ''
-      assert.ok(/^await sessionInit\(/.test(rest) || /^\{ credentials: 'include' \}/.test(rest), `${file}: ${match[0].slice(0, 110)}`)
+      // B3.3-ب: صفحة الوظائف العامة (للمتقدمين من برّه) بتنادي من غير جلسة عن قصد — في ملفها هي بس
+      const publicCall = file === 'src/lib/careers-api.ts' && /^\{ credentials: 'omit'/.test(rest)
+      assert.ok(/^await sessionInit\(/.test(rest) || /^\{ credentials: 'include' \}/.test(rest) || publicCall, `${file}: ${match[0].slice(0, 110)}`)
     }
   }
   assert.equal(client.split("fetch(`${API_BASE}/auth/session`, { credentials: 'include' })").length - 1, 1)

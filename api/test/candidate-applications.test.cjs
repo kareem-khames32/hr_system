@@ -2,6 +2,7 @@
 // B3.3-أ: المرشح على وظيفة شاغرة — فحص من غير قاعدة (الدورة الفعلية في candidate-applications.integration.cjs):
 //  CU-01) القواعد: تطبيع الموبايل والبريد والهوية، ورقم الهوية والمصدر المكتوبين.
 //  CU-02) الربط: الإضافة والتقديم تحت قفل صف الوظيفة والحكم بعده، والتقديم الداخلي بقفل صف الموظف وفرعه الحالي، والمسارات محروسة.
+//  CU-03) (ب) اللينك العام: قيم المتقدّم والموافقة، وحد المحاولات، والمسارات بميزة مقفولة ومن غير حارس جلسة عن قصد، والتقديم تحت قفل الوظيفة.
 // Run (من api/): node --test test/candidate-applications.test.cjs
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
@@ -57,4 +58,37 @@ test('CU-02: adding and applying run under the job row lock with the judgment af
   assert.match(candidates, /return this\.applications\.attach\(user, rows\)/)
   const entity = read('api/src/recruitment/candidate-application.entity.ts')
   assert.doesNotMatch(entity, /default:|CreateDateColumn/, 'من غير افتراضي (زي الترحيل)')
+})
+
+test('CU-03: public applications — applicant values and consent, the attempt limiter, a closed feature without a session guard on purpose', () => {
+  const careers = require('../src/recruitment/careers')
+  assert.deepEqual([careers.cleanApplicantName('  أحمد   علي '), careers.cleanApplicantEmail(' A@B.Example '), careers.cleanApplicantPhone(' +966 (55) 000-1111 ')], ['أحمد علي', 'a@b.example', '+966 (55) 000-1111'])
+  for (const bad of ['ab', '', null, 7, 'ا'.repeat(201)]) refuses(() => careers.cleanApplicantName(bad), 'name ' + String(bad))
+  for (const bad of ['a@b', 'a b@c.example', '@c.example', null, 'a@b.c', 'ا'.repeat(200) + '@x.example']) refuses(() => careers.cleanApplicantEmail(bad), 'email ' + String(bad))
+  for (const bad of ['12345', 'call me', '1'.repeat(16), null, 501234567, '0501234567;drop']) refuses(() => careers.cleanApplicantPhone(bad), 'phone ' + String(bad))
+  assert.doesNotThrow(() => { careers.assertConsent(true); careers.assertConsent('true') })
+  for (const bad of [false, 'false', 'yes', 1, undefined, null, 'TRUE']) refuses(() => careers.assertConsent(bad), 'consent ' + String(bad))
+  assert.deepEqual([[...careers.CV_FILE_TYPES], careers.CV_MAX_MB, careers.CV_ENTITY_TYPE, careers.SOURCE_PUBLIC, careers.PUBLIC_CAREERS_FEATURE], [['pdf', 'doc', 'docx'], 5, 'candidate_cv', 'لينك عام', 'recruitment.public_careers'])
+  // حد المحاولات: لكل مفتاح وللكل، والنافذة بتتحرك
+  let clock = 1000
+  const limiter = new careers.AttemptLimiter(2, 3, 100, () => clock)
+  assert.deepEqual([limiter.take('a'), limiter.take('a'), limiter.take('a'), limiter.take('b'), limiter.take('c')], [true, true, false, true, false], 'مفتاح أ اتقفل بعد 2، والسقف العام بعد 3')
+  clock += 101
+  assert.deepEqual([limiter.take('a'), limiter.take('c')], [true, true], 'بعد النافذة')
+  limiter.reset(); assert.equal(limiter.take('a'), true)
+  // الميزة مقفولة افتراضيًا، والمسارات من غير حارس جلسة عن قصد وبالميزة
+  assert.equal(MODULES.recruitment.features['recruitment.public_careers'].default, false)
+  const controller = read('api/src/recruitment/careers.controller.ts')
+  assert.match(controller, /@RequireModule\('recruitment'\)\n@RequireFeature\(PUBLIC_CAREERS_FEATURE\)\n@Controller\('careers'\)/)
+  assert.doesNotMatch(controller, /UseGuards|CurrentUser/)
+  assert.match(controller, /limits: \{ fileSize: CV_MAX_MB \* 1024 \* 1024, files: 1, fields: 12, fieldSize: 4096 \}/)
+  // التقديم: الحد أولًا ← القيم ← الملف ← قفل الوظيفة ← منشورة خارجيًا ← التكرار (بنفس رد المقبول) ← الحفظ؛ والملف اللي ماتربطش بيتشال
+  const service = read('api/src/recruitment/careers.service.ts')
+  const apply = service.slice(service.indexOf('async apply('))
+  const order = ['this.limiter.take(', 'cleanApplicantName(input.fullName)', 'assertConsent(input.consent)', 'classifyUpload(file.buffer', 'await storage.write(', "lock: { mode: 'pessimistic_write' }",
+    "job.status !== 'PUBLISHED' || job.external !== true", 'await assertNotDuplicateOnJob(', 'if (error instanceof ConflictException) return false', 'await candidates.save(', 'consentAt: new Date()'].map(part => apply.indexOf(part))
+  assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), JSON.stringify(order))
+  assert.match(apply, /if \(cv && !kept\) await storage\.remove\(cv\.storedName\)/)
+  assert.doesNotMatch(service.slice(service.indexOf('private view('), service.indexOf('async list(')), /salary|reason|department/i, 'من غير راتب ولا قسم ولا سبب')
+  assert.match(read('api/src/files/files.controller.ts'), /\} else if \(f\.entityType === 'candidate_cv'\) \{\n[^\n]*\n\s+await assertCandidateCvAccess\(this\.ds\.manager, user, f\)/)
 })

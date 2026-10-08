@@ -6,6 +6,10 @@
 //  CA-02) «وظائف داخلية»: الموظف بيشوف المنشور داخليًا في فرعه الحالي بس (من غير نطاق الراتب)، وبيقدّم مرة واحدة من بيانات ملفه؛ وظيفة
 //         فرع تاني أو خارجية بس أو موقوفة = غير موجودة؛ حساب من غير موظف أو موظف منتهي مابيقدّمش؛ والموظف اللي اتنقل بيتحكم بفرعه الحالي.
 //  CA-03) الموديول المقفول بيقفل المسارات، ومن غير دخول 401.
+//  CA-04) (ب) صفحة الوظائف العامة: الميزة المقفولة = 404؛ والمفتوحة بتعرض المنشور «خارجي» بس، من غير راتب ولا قسم ولا سبب.
+//  CA-05) (ب) التقديم من اللينك: القيم والموافقة، والسيرة الذاتية بنوعها الحقيقي (PDF/Word بس)، والمرشح بيتعمل على الوظيفة بمصدره وموافقته
+//         وملفه؛ المكرر بياخد نفس الرد من غير صف ولا ملف؛ وظيفة مش منشورة خارجيًا = غير موجودة؛ والحد بالعنوان 429.
+//  CA-06) (ب) السيرة الذاتية بتتقري بحكم المرشح: مسؤول توظيف فرعه 200، فرع تاني 404، ومن غير الصلاحية 403.
 // Run (من api/): node --test test/candidate-applications.integration.cjs
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
@@ -21,6 +25,7 @@ const uploads = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-candidate-apps-files-'
 const secret = crypto.randomBytes(48).toString('hex')
 const jwt = new (require('../node_modules/@nestjs/jwt').JwtService)({ secret })
 const rules = require('../src/recruitment/candidate-applications')
+const careers = require('../src/recruitment/careers')
 let app, master, ds, base, modules, created = false, employeeNumber = 0
 const org = {}, users = {}, emps = {}, jobs = {}
 
@@ -53,6 +58,20 @@ const job = (extra = {}) => repo('RecruitmentJob').save({ title: 'محاسب', b
 const add = (user, body) => request(user, 'POST', '/candidates', body)
 const openings = async user => expectStatus(await request(user, 'GET', '/recruitment/openings'), 200)
 const apply = (user, id, body = {}) => request(user, 'POST', `/recruitment/openings/${id}/apply`, body)
+// (ب) من غير دخول
+const pdf = () => Buffer.from('%PDF-1.4\n1 0 obj<<>>endobj\n%%EOF\n')
+const feature = on => request(users.admin, 'PUT', '/modules/features/recruitment.public_careers', { enabled: on })
+const publicGet = route => request(null, 'GET', route)
+async function submit(jobId, fields, file) {
+  const form = new FormData()
+  for (const [key, value] of Object.entries(fields)) if (value !== undefined) form.append(key, String(value))
+  if (file) form.append('cv', new Blob([file.bytes], { type: file.type ?? 'application/pdf' }), file.name)
+  const response = await fetch(`${base}/careers/jobs/${jobId}/apply`, { method: 'POST', body: form })
+  const text = await response.text()
+  return { status: response.status, body: text ? JSON.parse(text) : null }
+}
+const person = (extra = {}) => ({ fullName: 'متقدّم من اللينك', email: 'link@applicant.invalid', phone: '+966 55 000 1111', consent: 'true', ...extra })
+const storedFiles = () => fs.readdirSync(uploads, { recursive: true }).filter(name => /\.(pdf|docx?|png)$/.test(String(name))).length
 
 before(async () => {
   assert.equal(env.DB_TYPE || 'mssql', 'mssql')
@@ -161,7 +180,8 @@ test('CA-01: مرشح على وظيفة — المسمى والفرع منها،
   // القايمة: وظيفة كل مرشح ومصدره، والحر من غير وظيفة؛ وقايمة الوظائف بعدد المتقدمين
   const listed = expectStatus(await request(users.recruiterA, 'GET', '/candidates'), 200)
   const byId = Object.fromEntries(listed.map(item => [item.id, item]))
-  assert.deepEqual(byId[made.id].application, { jobId: jobs.open.id, jobCode: `J-${String(jobs.open.id).padStart(4, '0')}`, source: 'لينكد إن', nationalId: 'A123456', internal: false })
+  assert.deepEqual(byId[made.id].application, { jobId: jobs.open.id, jobCode: `J-${String(jobs.open.id).padStart(4, '0')}`, source: 'لينكد إن', nationalId: 'A123456', internal: false,
+    cvFileId: null, consentAt: null })
   assert.equal(byId[free.id].application, null)
   const board = expectStatus(await request(users.recruiterA, 'GET', '/recruitment/jobs'), 200).jobs
   assert.deepEqual([board.find(item => item.id === jobs.open.id).applicants, board.find(item => item.id === jobs.paused.id).applicants, board.find(item => item.id === jobs.draft.id).applicants], [1, 2, 0])
@@ -226,4 +246,97 @@ test('CA-03: الموديول المقفول بيقفل المسارات، وم�
     assert.equal((await add(users.recruiterA, { fullName: 'والموديول مقفول', jobId: jobs.open.id })).status, 404)
   } finally { expectStatus(await request(users.admin, 'PUT', '/modules/recruitment', { enabled: true }), 200); modules.invalidate() }
   expectStatus(await apply(users.b1, jobs.branchB.id), 200)
+})
+
+test('CA-04: صفحة الوظائف العامة — الميزة المقفولة 404، والمفتوحة بتعرض المنشور «خارجي» بس ومن غير راتب ولا قسم', async () => {
+  // الافتراضي مقفول: المسارات التلاتة زي اللي مش موجودة
+  assert.equal((await publicGet('/careers/jobs')).status, 404)
+  assert.equal((await publicGet('/careers/jobs/' + jobs.externalOnly.id)).status, 404)
+  assert.equal((await submit(jobs.externalOnly.id, person())).status, 404)
+  assert.equal(await repo('Candidate').count({ where: { email: 'link@applicant.invalid' } }), 0)
+  expectStatus(await feature(true), 200); modules.invalidate()
+  jobs.both = await job({ internal: true, external: true, title: 'مندوب مبيعات', departmentId: null })
+  jobs.externalPaused = await job({ internal: false, external: true, status: 'PAUSED' })
+  const listed = expectStatus(await publicGet('/careers/jobs'), 200).jobs
+  assert.deepEqual(listed.map(item => item.id).sort((a, b) => a - b), [jobs.externalOnly.id, jobs.both.id], 'الداخلي بس، والموقوف، والمسودة، والمقفول مش ظاهرين')
+  const shown = expectStatus(await publicGet('/careers/jobs/' + jobs.externalOnly.id), 200)
+  assert.deepEqual(Object.keys(shown).sort(), ['branchName', 'code', 'description', 'id', 'openings', 'publishedAt', 'requirements', 'startDate', 'title'])
+  assert.deepEqual([shown.title, shown.branchName, shown.description], ['محاسب', 'فرع التقديم أ', 'محاسب عام لقسم المالية'])
+  for (const hidden of [jobs.open, jobs.paused, jobs.draft, jobs.closed, jobs.externalPaused, { id: 987654 }]) assert.equal((await publicGet('/careers/jobs/' + hidden.id)).status, 404, String(hidden.id))
+  // الموديول مقفول = الميزة مقفولة
+  expectStatus(await request(users.admin, 'PUT', '/modules/recruitment', { enabled: false }), 200); modules.invalidate()
+  try { assert.equal((await publicGet('/careers/jobs')).status, 404) } finally { expectStatus(await request(users.admin, 'PUT', '/modules/recruitment', { enabled: true }), 200); modules.invalidate() }
+  // الميزة بترجع مفتوحة مع الموديول (الإعداد محفوظ)، وإلا نفتحها
+  if ((await publicGet('/careers/jobs')).status !== 200) { expectStatus(await feature(true), 200); modules.invalidate() }
+})
+
+test('CA-05: التقديم من اللينك — القيم والموافقة والسيرة الذاتية، والمكرر بنفس الرد من غير صف، وغير المنشور خارجيًا غير موجود، والحد 429', async () => {
+  const service = app.get(require('../src/recruitment/careers.service').CareersService)
+  service.limiter.reset()
+  const target = jobs.externalOnly.id
+  const before = [await count('candidates'), await count('candidate_applications'), await count('stored_files'), storedFiles()]
+  for (const [fields, message] of [
+    [person({ fullName: 'ab' }), careers.CAREERS_NAME], [person({ fullName: undefined }), careers.CAREERS_NAME], [person({ email: 'not-an-email' }), careers.CAREERS_EMAIL],
+    [person({ phone: '12345' }), careers.CAREERS_PHONE], [person({ phone: 'call me' }), careers.CAREERS_PHONE], [person({ consent: undefined }), careers.CAREERS_CONSENT],
+    [person({ consent: 'false' }), careers.CAREERS_CONSENT], [person({ nationalId: '12' }), rules.CANDIDATE_NATIONAL_ID], [person({ source: 'م'.repeat(61) }), 'مصدر المرشح لا يتجاوز 60 حرف'],
+  ]) assert.deepEqual(answer(await submit(target, fields)), [400, message], JSON.stringify(fields))
+  // السيرة الذاتية: النوع الحقيقي PDF أو Word بس
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c6300010000050001a5f645400000000049454e44ae426082', 'hex')
+  assert.match(messageOf(await submit(target, person(), { bytes: png, name: 'photo.png', type: 'image/png' })), /مش مسموح/)
+  assert.equal((await submit(target, person(), { bytes: Buffer.from('<html><script>alert(1)</script></html>'), name: 'cv.pdf' })).status, 400)
+  assert.equal((await submit(target, person(), { bytes: pdf(), name: 'cv.docx' })).status, 400, 'الامتداد لازم يطابق المحتوى')
+  assert.deepEqual([await count('candidates'), await count('candidate_applications'), await count('stored_files'), storedFiles()], before, 'المرفوض ماكتبش صف ولا ملف')
+  for (const hidden of [jobs.open, jobs.paused, jobs.externalPaused, { id: 987654 }]) assert.deepEqual(answer(await submit(hidden.id, person(), { bytes: pdf(), name: 'cv.pdf' })), [404, 'الوظيفة غير موجودة'])
+  assert.deepEqual([await count('candidates'), storedFiles()], [before[0], before[3]], 'ولا الوظيفة اللي مش مفتوحة')
+
+  // المقبول: مرشح على الوظيفة بمصدره وموافقته وملفه، والرد مافيهوش غير «اتستلم»
+  assert.deepEqual(expectStatus(await submit(target, person({ nationalId: 'b77-88 99', source: 'لينكد إن' }), { bytes: pdf(), name: 'سيرتي.pdf' }), 200), { received: true })
+  const candidate = await repo('Candidate').findOneByOrFail({ email: 'link@applicant.invalid' })
+  const application = await repo('CandidateApplication').findOneByOrFail({ candidateId: candidate.id })
+  const file = await repo('StoredFile').findOneByOrFail({ id: application.cvFileId })
+  assert.deepEqual([candidate.fullName, candidate.phone, candidate.positionTitle, candidate.branchId, candidate.stage], ['متقدّم من اللينك', '+966 55 000 1111', 'محاسب', org.branchA.id, 'applied'])
+  assert.deepEqual([application.jobId, application.source, application.nationalId, application.applicantEmployeeId, application.consentAt instanceof Date],
+    [target, 'لينكد إن', 'B778899', null, true])
+  assert.deepEqual([file.entityType, file.entityId, file.mime, file.originalName, file.employeeId ?? null, file.uploadedBy ?? null], ['candidate_cv', candidate.id, 'application/pdf', 'سيرتي.pdf', null, null])
+  assert.equal(storedFiles(), before[3] + 1)
+  // من غير سيرة ذاتية ومن غير مصدر: مقبول، والمصدر «لينك عام»
+  expectStatus(await submit(target, person({ email: 'second@applicant.invalid', phone: '0551112222' })), 200)
+  const plain = await repo('CandidateApplication').findOneByOrFail({ candidateId: (await repo('Candidate').findOneByOrFail({ email: 'second@applicant.invalid' })).id })
+  assert.deepEqual([plain.source, plain.cvFileId], ['لينك عام', null])
+
+  // المكرر (نفس البريد، أو نفس الموبايل بصيغة تانية، أو نفس الهوية): نفس الرد بالحرف، ومن غير صف ولا ملف
+  service.limiter.reset() // الاختبار نفسه عدّى حد العنوان الواحد (20 في 10 دقايق) بالمحاولات اللي فوق
+  const mid = [await count('candidates'), await count('candidate_applications'), await count('stored_files'), storedFiles()]
+  for (const fields of [person({ fullName: 'نفس البريد' }), person({ email: 'x1@applicant.invalid', phone: '0550001111' }), person({ email: 'x2@applicant.invalid', phone: '0559990000', nationalId: 'B778899' })]) {
+    assert.deepEqual(expectStatus(await submit(target, fields, { bytes: pdf(), name: 'again.pdf' }), 200), { received: true })
+  }
+  assert.deepEqual([await count('candidates'), await count('candidate_applications'), await count('stored_files'), storedFiles()], mid, 'المكرر ماعملش صف وملفه اتشال')
+  // ونفس الشخص على وظيفة تانية مسموح
+  expectStatus(await submit(jobs.both.id, person()), 200)
+
+  // الحد بالعنوان: المحاولة بتتحسب حتى المرفوضة، وبعد الحد 429 من غير أي كتابة
+  service.limiter.reset()
+  const real = service.limiter
+  service.limiter = new careers.AttemptLimiter(2, 100, 60000)
+  try {
+    assert.equal((await submit(target, person({ email: 'bad' }))).status, 400)
+    expectStatus(await submit(target, person({ email: 'third@applicant.invalid', phone: '0553334444' })), 200)
+    assert.deepEqual(answer(await submit(target, person({ email: 'fourth@applicant.invalid', phone: '0555556666' }))), [429, careers.CAREERS_TOO_MANY])
+    assert.equal(await repo('Candidate').count({ where: { email: 'fourth@applicant.invalid' } }), 0)
+  } finally { service.limiter = real }
+})
+
+test('CA-06: السيرة الذاتية بتتقري بحكم المرشح — مسؤول توظيف فرعه بس', async () => {
+  const candidate = await repo('Candidate').findOneByOrFail({ email: 'link@applicant.invalid' })
+  const application = await repo('CandidateApplication').findOneByOrFail({ candidateId: candidate.id })
+  const read = async user => (await fetch(base + '/files/' + application.cvFileId, { headers: user ? { Authorization: 'Bearer ' + jwt.sign(payloadOf(user)) } : {} })).status
+  assert.deepEqual([await read(users.recruiterA), await read(users.recruiterB), await read(users.a1), await read(users.nobody), await read(null)], [200, 404, 403, 403, 401])
+  const listed = expectStatus(await request(users.recruiterA, 'GET', '/candidates'), 200).find(item => item.id === candidate.id)
+  assert.deepEqual([listed.application.cvFileId, typeof listed.application.consentAt, listed.application.source], [application.cvFileId, 'string', 'لينكد إن'])
+  // ملف بتصنيف السيرة الذاتية بس مش ملف تقديم المرشح ده: غير موجود حتى لمسؤول التوظيف
+  const stray = await repo('StoredFile').save({ originalName: 'stray.pdf', storedName: 'none/stray.pdf', mime: 'application/pdf', size: 10, entityType: 'candidate_cv', entityId: candidate.id })
+  assert.equal((await fetch(base + '/files/' + stray.id, { headers: { Authorization: 'Bearer ' + jwt.sign(payloadOf(users.recruiterA)) } })).status, 404)
+  // المرشح اتنقل لفرع تاني (وظيفته في فرع ب): مسؤول فرع أ مابقاش يقراه
+  await repo('Candidate').update({ id: candidate.id }, { branchId: org.branchB.id })
+  try { assert.deepEqual([await read(users.recruiterA), await read(users.recruiterB)], [404, 200]) } finally { await repo('Candidate').update({ id: candidate.id }, { branchId: org.branchA.id }) }
 })

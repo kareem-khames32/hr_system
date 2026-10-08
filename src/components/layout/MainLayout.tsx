@@ -87,7 +87,8 @@ const requiredPermFor = (path: string): string | string[] | null => {
 }
 
 // شاشات بلا إطار النظام (القائمة الجانبية والهيدر)
-const BARE_PATHS = ['/login']
+// B3.3-ب: صفحة الوظائف العامة (/careers) للمتقدمين من برّه — من غير إطار ولا حارس دخول (الخادم بيقفلها بميزتها)
+const BARE_PATHS = ['/login', '/careers']
 const isBarePath = (path: string) => BARE_PATHS.some((bare) => path === bare || path.startsWith(`${bare}/`))
 
 // داخل الإطار الدائم؟ — كل صفحة تلف نفسها بـ<MainLayout> فيصير مجرد تمرير للمحتوى

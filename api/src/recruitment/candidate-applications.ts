@@ -1,6 +1,8 @@
-import { BadRequestException, ConflictException } from '@nestjs/common'
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common'
 import { In, type EntityManager } from 'typeorm'
 import { Candidate } from '../assets/assets.entities'
+import type { JwtPayload } from '../auth/auth.service'
+import { branchScopeOf, inBranchScope, userHasPerm } from '../auth/guards'
 import { CandidateApplication } from './candidate-application.entity'
 
 // B3.3-أ: قواعد تقديم المرشح على وظيفة — فحص وجود ترحيل 105، وتطبيع وسائل التواصل، وفحص التكرار على نفس الوظيفة. دوال بمدير المعاملة بس.
@@ -55,6 +57,18 @@ export function cleanSource(raw: unknown, fallback: string): string {
   const value = raw.replace(/\s+/g, ' ').trim()
   if (value.length > CANDIDATE_SOURCE_MAX) throw new BadRequestException(`مصدر المرشح لا يتجاوز ${CANDIDATE_SOURCE_MAX} حرف`)
   return value || fallback
+}
+
+/**
+ * B3.3-ب: قراءة ملف سيرة ذاتية (stored_files بتصنيف candidate_cv) — بحكم المرشح نفسه: صلاحية إدارة التوظيف، والمرشح في نطاق فروع
+ * الحساب. الملف لازم يكون هو ملف تقديم المرشح ده. برّه النطاق = غير موجود.
+ */
+export async function assertCandidateCvAccess(em: EntityManager, user: JwtPayload, file: { id: number; entityId?: number | null }): Promise<void> {
+  if (!userHasPerm(user, 'candidates.manage')) throw new ForbiddenException('لا تملك صلاحية الاطلاع على هذا الملف')
+  const application = (await candidateApplicationsReady(em)) && file.entityId != null
+    ? await em.getRepository(CandidateApplication).findOne({ where: { candidateId: file.entityId, cvFileId: file.id } }) : null
+  const candidate = application ? await em.getRepository(Candidate).findOne({ where: { id: application.candidateId } }) : null
+  if (!candidate || candidate.branchId == null || !inBranchScope(branchScopeOf(user), candidate.branchId)) throw new NotFoundException('الملف غير موجود')
 }
 
 export interface ApplicantIdentity { email?: string | null; phone?: string | null; nationalId?: string | null; applicantEmployeeId?: number | null }
