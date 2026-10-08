@@ -9,11 +9,13 @@ import { MainLayout } from '@/components/layout'
 import EmptyState from '@/components/EmptyState'
 import { fetchEmployees, type ApiEmployee } from '@/lib/api'
 import { formatDate } from '@/lib/dates'
-import { CASE_KIND_LABELS, fetchHandledCases, fetchMyCases, objectToCase, openCase, type ApiCaseSummary, type ApiMyCase, type CaseKind } from '@/lib/cases-api'
+import { CASE_KIND_LABELS, fetchHandledCases, fetchMyCases, fetchMyPenalties, objectToCase, openCase, type ApiCaseSummary, type ApiMyCase, type ApiPenalty, type CaseKind } from '@/lib/cases-api'
 
 export default function CasesPage() {
   const [handled, setHandled] = useState<Array<ApiCaseSummary & { investigating: boolean }> | null>(null)
   const [mine, setMine] = useState<ApiMyCase[]>([])
+  // B3.12: جزاءات الموظف السارية
+  const [penalties, setPenalties] = useState<ApiPenalty[]>([])
   const [canOpen, setCanOpen] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
@@ -27,6 +29,7 @@ export default function CasesPage() {
       .then((data) => { setHandled(data.cases); setCanOpen(data.canOpen); setNotice(data.available ? '' : data.message ?? '') })
       .catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل القضايا'))
     fetchMyCases().then((data) => setMine(data.cases)).catch(() => setMine([]))
+    fetchMyPenalties().then((data) => setPenalties(data.penalties)).catch(() => setPenalties([]))
   }, [])
   useEffect(load, [load])
 
@@ -70,6 +73,16 @@ export default function CasesPage() {
         {notice && (
           <div role="status" className="bg-amber-50 text-amber-800 rounded-xl p-4">
             {notice}
+          </div>
+        )}
+        {penalties.length > 0 && (
+          <div className="card space-y-2" data-my-penalties>
+            <h2 className="text-lg font-bold text-gray-800">جزاءاتي السارية</h2>
+            {penalties.map((row) => (
+              <p key={row.id} className="text-sm text-gray-700">
+                {row.violationName} — {row.occurrenceLabel}: {row.label} <span className="text-xs text-gray-400">· {formatDate(row.incidentDate)}</span>
+              </p>
+            ))}
           </div>
         )}
         {mine.length > 0 && (
@@ -137,7 +150,7 @@ export default function CasesPage() {
             ))}
           </div>
         )}
-        {handled && !notice && handled.length === 0 && mine.length === 0 && <EmptyState title="مفيش قضايا ليك" icon={Scale} />}
+        {handled && !notice && handled.length === 0 && mine.length === 0 && penalties.length === 0 && <EmptyState title="مفيش قضايا ليك" icon={Scale} />}
       </div>
       {adding && <OpenCaseModal onClose={() => setAdding(false)} onDone={() => { setAdding(false); load() }} />}
     </MainLayout>

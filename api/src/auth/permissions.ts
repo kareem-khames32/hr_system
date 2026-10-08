@@ -120,6 +120,8 @@ export const PERMISSIONS: Record<string, string> = {
   'helpdesk.manage': 'إدارة مركز الخدمات',
   // B3.11: الشكاوى والتحقيقات — الاطلاع على ملف القضية بعضويتها مش بالصلاحية
   'cases.investigate': 'فتح ملفات القضايا',
+  // B3.12: لائحة الجزاءات وتوقيعها
+  'cases.penalties': 'لائحة الجزاءات وتوقيعها',
   // B2.11: الوظائف المعتمدة
   'positions.view': 'عرض الوظائف المعتمدة',
   'positions.manage': 'إدارة الوظائف المعتمدة',
@@ -141,7 +143,7 @@ export const PERMISSION_MODULES: Array<{ key: string; labelAr: string; permissio
   { key: 'performance', labelAr: 'إدارة الأداء', permissions: ['performance.manage', 'performance.calibrate'] },
   { key: 'training', labelAr: 'التدريب', permissions: ['training.manage'] },
   { key: 'helpdesk', labelAr: 'مركز الخدمات', permissions: ['helpdesk.manage'] },
-  { key: 'cases', labelAr: 'الشكاوى والتحقيقات', permissions: ['cases.investigate'] },
+  { key: 'cases', labelAr: 'الشكاوى والتحقيقات', permissions: ['cases.investigate', 'cases.penalties'] },
   { key: 'positions', labelAr: 'الوظائف المعتمدة', permissions: ['positions.view', 'positions.manage'] },
   { key: 'announcements', labelAr: 'الإعلانات', permissions: ['announcements.manage'] },
   { key: 'org', labelAr: 'الهيكل التنظيمي', permissions: ['org.manage'] },
@@ -195,6 +197,7 @@ export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   'candidates.approve_offers': 'يعتمد عرض العمل (الراتب وتاريخ البدء) أو يرجّعه قبل ما يتبعت للمرشح — واللي عمل العرض مايعتمدوش',
   'positions.view': 'يفتح شاشة «الوظائف المعتمدة»: الوظائف وأعدادها وتقرير «معتمد / مشغول / شاغر» لكل قسم وشاغلي كل وظيفة — في نطاق فروعه',
   'announcements.manage': 'يكتب الإعلانات وينشرها ويسحبها ويشوف مين قراها — حساب الفروع لإعلانات فروعه بس',
+  'cases.penalties': 'يدير لائحة الجزاءات (المخالفات ودرجات تكرارها)، ويوقّع الجزاء على موظفين نطاق فروعه بحسب اللائحة ورقم التكرار — وجزاء الخصم بيتعمل خصم مصنّف بسلسلته',
   'cases.investigate': 'يفتح ملف قضية (شكوى، تظلم، مخالفة) لموظفين نطاق فروعه ويبقى أول مطّلع عليه — وأي ملف تاني مابيشوفوش غير لما يتضاف له (المشكو في حقه أو مديره المباشر مايتضافوش)',
   'helpdesk.manage': 'يشوف تقرير الاستفسارات (العدد، متوسط وقت الرد والحل، المتجاوز للمهلة، رضا الموظفين) لفروع نطاقه، ويدير مقالات قاعدة المعرفة — الرد على الاستفسار نفسه لمسؤول مهمته',
   'training.manage': 'يدير كتالوج الدورات، ويعمل الجلسات لفروع نطاقه، ويسجّل الموظفين ويسجّل حضورهم وإكمالهم — والشهادة بتتسجّل مستند للموظف بانتهائه',
@@ -398,6 +401,8 @@ export const ROLE_PRESETS: Array<{
       'helpdesk.manage',
       // B3.11: زي المهام — في حزمة الكود بس (والموديول نفسه مقفول افتراضيًا)
       'cases.investigate',
+      // B3.12: لائحة الجزاءات
+      'cases.penalties',
       // خطة المراجعة 24: طلب استثناء الحضور واعتماده وإنهاؤه — لا يعتمد أحد ما أنشأه (فصل مهام في الخدمة).
       // الاعتماد التنفيذي approve_executive يبقى لمدير النظام (ترحيل 20260914_*_c1_attendance_exemption_roles)
       'attendance_exemption.view', 'attendance_exemption.manage', 'attendance_exemption.approve',

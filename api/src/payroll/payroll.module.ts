@@ -151,6 +151,7 @@ import { HiddenRunPeriodsInterceptor } from './hidden-run-periods.interceptor'
     // CR40: شبكة أمان على كل رد JSON لحساب فرع — فترة مسير مخفي له في أي نص بتتحجب (hidden-run-periods.interceptor.ts)
     { provide: APP_INTERCEPTOR, useClass: HiddenRunPeriodsInterceptor }],
   // B3.8-ب: مكافآت نتيجة التقييم بتتقدّم بخدمة المكافآت نفسها
-  exports: [BonusesService],
+  // B3.12: وجزاء الخصم من لائحة الجزاءات بخدمة الخصومات المصنّفة نفسها
+  exports: [BonusesService, TypedDeductionsService],
 })
 export class PayrollModule {}

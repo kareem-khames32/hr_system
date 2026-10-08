@@ -333,7 +333,9 @@ test('no month-only date filter is left in src/: every remaining month input is 
     // «مكافأة» من صف المسير: نفس حقل «شهر المسير المستهدف» في نموذج الاقتراح، جاهزًا بشهر المسير — لا فلتر
     'src/components/payroll/PayrollBonusCreateModal.tsx',
     // B3.8-ب: مكافآت دورة التقييم — نفس حقل «شهر المسير المستهدف» في نموذج اقتراح المكافآت، لا فلتر
-    'src/app/performance/cycles/RewardsPanel.tsx']
+    'src/app/performance/cycles/RewardsPanel.tsx',
+    // B3.12: توقيع جزاء الخصم — نفس حقل «شهر المسير المستهدف» في نموذج التوقيع، لا فلتر
+    'src/app/cases/penalties/page.tsx']
   const unexpected = monthInputs.filter(file => !allowed.includes(file))
   assert.deepEqual(unexpected, [], `month-only inputs outside forms — use DayRangeFilter (filters) or PayrollPeriodSelect (payroll run by period): ${unexpected.join(', ')}`)
   for (const file of ['src/components/payroll/PayrollAllowancesTab.tsx', 'src/components/payroll/PayrollOverviewTabs.tsx']) {

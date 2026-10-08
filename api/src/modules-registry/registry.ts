@@ -341,8 +341,9 @@ export const MODULES = {
   cases: moduleDef({
     nameAr: 'الشكاوى والتحقيقات', group: 'people', dependsOn: ['employees'], preset: 'standard', defaultEnabled: false,
     description: 'ملف قضية سرّي للشكوى أو التظلم أو المخالفة: أطراف ومحقق وخط زمني (إفادات، أدلة، جلسات، إخطار ودفاع)، وقرار، واعتراض في مهلة — مايشوفوش غير المطّلعين عليه',
-    permissions: ['cases.investigate'],
-    routes: ['/cases', '/cases/*'],
+    permissions: ['cases.investigate', 'cases.penalties'],
+    // B3.12: + لائحة الجزاءات
+    routes: ['/cases', '/cases/penalties', '/cases/*'],
     // وجهة «فتح ملف قضية» (أي نوع طلب وجهته دي بيتبع الموديول)
     requestHandlers: ['case_open'],
   }),

@@ -36,10 +36,10 @@ test('CU-11: case values, the objection window from its setting, and the conflic
 
 test('CU-12: a new closed module with its permission and request destination, access by case membership under the row lock, the conflict judged inside the transaction, the decision conditions, the objection, and the routes', () => {
   const module = MODULES.cases
-  assert.deepEqual([module.defaultEnabled, module.permissions, module.requestHandlers, module.dependsOn], [false, ['cases.investigate'], ['case_open'], ['employees']])
+  assert.deepEqual([module.defaultEnabled, module.permissions, module.requestHandlers, module.dependsOn], [false, ['cases.investigate', 'cases.penalties'], ['case_open'], ['employees']])
   const { PERMISSIONS, PERMISSION_MODULES, ROLE_PRESETS } = require('../src/auth/permissions')
   assert.deepEqual(['cases.investigate' in PERMISSIONS, PERMISSION_MODULES.find(unit => unit.key === 'cases').permissions, ROLE_PRESETS.find(role => role.code === 'hr_manager').permissions.includes('cases.investigate'),
-    ROLE_PRESETS.find(role => role.code === 'employee').permissions.includes('cases.investigate')], [true, ['cases.investigate'], true, false])
+    ROLE_PRESETS.find(role => role.code === 'employee').permissions.includes('cases.investigate')], [true, ['cases.investigate', 'cases.penalties'], true, false])
   const service = read('api/src/cases/cases.service.ts')
   // العضوية هي الباب الوحيد لملف القضية: مفيش قراءة لقضية من غير handled، ولا استثناء بصلاحية أو بدور
   const handled = service.slice(service.indexOf('private async handled('), service.indexOf('/** موظف في نطاق فروع الحساب'))
@@ -88,7 +88,40 @@ test('CU-13: case attachments by membership (upload, one-time conditional attach
   assert.match(files, /if \(entityType === 'case'\) \{\n\s+if \(entityId !== undefined \|\| employeeId !== undefined\) throw new BadRequestException\('مرفق القضية بيترفع من غير رقم كيان أو موظف'\)\n\s+await this\.cases\.assertCanUpload\(user\)/)
   assert.match(files, /\} else if \(f\.entityType === 'case'\) \{\n[^\n]*\n\s+await this\.cases\.assertFileAccess\(user, f\)/)
   assert.match(files, /entityType === 'policy' \|\| entityType === 'announcement' \|\| entityType === 'case' \? undefined :/, 'مرفق القضية مش تبع موظف')
-  assert.deepEqual(MODULES.cases.routes, ['/cases', '/cases/*'])
+  assert.deepEqual(MODULES.cases.routes, ['/cases', '/cases/penalties', '/cases/*'])
   assert.ok(read('src/app/cases/page.tsx').includes('fetchHandledCases()') && read('src/app/cases/[id]/page.tsx').includes('fetchCaseFile(id)'))
   assert.doesNotMatch(read('src/app/cases/[id]/page.tsx'), /window\.(prompt|confirm|alert)/)
+})
+
+test('CU-14: the penalties catalog steps, the step for a repetition, the counting window, and applying under the employee row lock with the deduction created through the typed-deductions service outside the transaction', () => {
+  const penalties = require('../src/cases/penalties.service')
+  assert.deepEqual(penalties.cleanPenaltySteps([{ action: 'WARNING' }, { action: 'DEDUCT_DAYS', days: 0.25 }, { action: 'SUSPENSION', days: 3 }, { action: 'TERMINATION', days: null }]),
+    [{ action: 'WARNING', days: null }, { action: 'DEDUCT_DAYS', days: 0.25 }, { action: 'SUSPENSION', days: 3 }, { action: 'TERMINATION', days: null }])
+  for (const bad of [[], 'x', null, Array(5).fill({ action: 'WARNING' }), [{ action: 'FINE' }], [{ action: 'DEDUCT_DAYS' }], [{ action: 'DEDUCT_DAYS', days: 0.3 }], [{ action: 'DEDUCT_DAYS', days: 31 }], [{ action: 'DEDUCT_DAYS', days: '2' }],
+    [{ action: 'SUSPENSION', days: 1.5 }], [{ action: 'WARNING', days: 1 }], [null]]) refuses(() => penalties.cleanPenaltySteps(bad), JSON.stringify(bad).slice(0, 50))
+  const steps = [{ action: 'WARNING', days: null }, { action: 'DEDUCT_DAYS', days: 2 }]
+  // اللي بعد آخر درجة بياخد آخر درجة
+  assert.deepEqual([1, 2, 3, 9, 0].map(occurrence => penalties.penaltyStepFor(steps, occurrence).action), ['WARNING', 'DEDUCT_DAYS', 'DEDUCT_DAYS', 'DEDUCT_DAYS', 'WARNING'])
+  assert.equal(penalties.penaltyStepFor([], 1), null)
+  assert.deepEqual(['90', '1', '3650', '0', '3651', '2.5', 'x', null, undefined].map(raw => penalties.penaltyWindowDays(raw)), [90, 1, 3650, 180, 180, 180, 180, 180, 180])
+  assert.deepEqual([penalties.occurrenceLabel(1), penalties.occurrenceLabel(4), penalties.occurrenceLabel(6), penalties.penaltyLabel(steps[0]), penalties.penaltyLabel(steps[1])],
+    ['التكرار الأول', 'التكرار الرابع', 'التكرار رقم 6', 'إنذار كتابي', 'خصم أيام (2 يوم)'])
+  assert.deepEqual(penalties.parsePenaltySteps('تالف'), [])
+  const service = read('api/src/cases/penalties.service.ts')
+  const apply = service.slice(service.indexOf('async apply('), service.indexOf('// ===== السجل ====='))
+  const order = ['this.assertManager(user)', 'this.ds.transaction(', 'await this.target(em, user, input)', "getRepository(Employee).findOne({ where: { id: employee.id }, lock: { mode: 'pessimistic_write' } })", 'await this.judge(em, employee.id, violation, incidentDate)',
+    'input.expectedOccurrence !== occurrence', 'await this.caseOf(em, user, input.caseId, employee.id)', 'getRepository(EmployeePenalty).insert(', 'await this.deductions.create(user,', "where('id = :id AND deductionRequestId IS NULL'", 'throw error',
+    'update({ id: made.id }, { deductionRequestId: deduction.id })', 'getRepository(HrCaseEvent).insert('].map(part => apply.indexOf(part))
+  assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), JSON.stringify(order))
+  const transaction = apply.slice(apply.indexOf('this.ds.transaction('), apply.indexOf("if (made.step.action === 'DEDUCT_DAYS')"))
+  assert.doesNotMatch(transaction, /this\.deductions\./, 'خدمة الخصومات برّه المعاملة')
+  assert.doesNotMatch(service, /EmployeeObligation|obligation/i, 'مفيش قيد بيتكتب من هنا: الخصم بسلسلته ودفتره')
+  const caseOf = service.slice(service.indexOf('private async caseOf('), service.indexOf('/**\n   * توقيع جزاء'))
+  assert.match(caseOf, /entry\.role === 'HANDLER' && entry\.userId === user\.sub\) && parties\.some\(\(entry\) => entry\.role === 'RESPONDENT' && entry\.employeeId === employeeId\)/)
+  const controller = read('api/src/cases/penalties.controller.ts')
+  assert.match(controller, /@RequireModule\('cases'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)\n@Controller\('penalties'\)/)
+  assert.equal(controller.split("@Perm('cases.penalties')").length - 1, 7, 'اللائحة والسجل والمعاينة والتوقيع والإلغاء بالصلاحية')
+  assert.ok(controller.indexOf("@Get('mine')") > 0 && controller.indexOf("@Post('preview')") < controller.indexOf("@Post(':id/cancel')"))
+  assert.match(read('api/src/payroll/payroll.module.ts'), /exports: \[BonusesService, TypedDeductionsService\]/)
+  assert.ok(read('src/app/cases/penalties/page.tsx').includes('previewPenalty(target())'))
 })

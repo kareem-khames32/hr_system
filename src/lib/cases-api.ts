@@ -41,3 +41,31 @@ export const fetchMyCases = () => apiFetch<{ cases: ApiMyCase[] }>(`${C}/mine`)
 export const objectToCase = (id: number, reason: string) => apiFetch<{ cases: ApiMyCase[] }>(`${C}/${id}/objection`, json({ reason }))
 /** مرفق دليل: بيترفع بتصنيف «قضية» من غير رقم، والخادم بيربطه بحدثه تحت قفل القضية */
 export const uploadCaseFile = (file: File) => uploadFile(file, { entityType: 'case' })
+
+// B3.12: لائحة الجزاءات — المخالفات ودرجات تكرارها، وتوقيع الجزاء (معاينة ثم تأكيد)، والسجل، و«جزاءاتي»
+export type PenaltyAction = 'WARNING' | 'DEDUCT_DAYS' | 'SUSPENSION' | 'TERMINATION'
+export const PENALTY_ACTION_LABELS: Record<PenaltyAction, string> = { WARNING: 'إنذار كتابي', DEDUCT_DAYS: 'خصم أيام', SUSPENSION: 'إيقاف عن العمل', TERMINATION: 'فصل' }
+export interface ApiPenaltyCatalog {
+  available: boolean; message?: string; windowDays: number
+  violations: Array<{ id: number; category: string; name: string; steps: Array<{ action: PenaltyAction; days: number | null; label: string; occurrenceLabel: string }>; deductionTypeId: number | null
+    deductionTypeName: string | null; isActive: boolean }>
+  deductionTypes: Array<{ id: number; nameAr: string }>
+}
+export interface ViolationBody { category?: string; name?: string; steps?: Array<{ action: PenaltyAction; days?: number }>; deductionTypeId?: number | null; isActive?: boolean }
+export interface ApiPenaltyPreview {
+  employeeName: string; violationName: string; incidentDate: string; occurrence: number; occurrenceLabel: string; action: PenaltyAction; days: number | null; label: string; windowDays: number; needsPeriod: boolean
+}
+export interface ApiPenalty {
+  id: number; employeeId?: number; employeeName?: string; violationName: string; category: string | null; occurrence: number; occurrenceLabel: string; action: PenaltyAction; days: number | null; label: string
+  incidentDate: string; status: 'ACTIVE' | 'CANCELLED'; statusLabel: string; caseId?: number | null; deductionRequestId: number | null; note?: string | null; cancelReason?: string | null; createdAt: string
+}
+export interface PenaltyTarget { employeeId: number; violationId: number; incidentDate: string }
+const P = '/penalties'
+export const fetchViolations = () => apiFetch<ApiPenaltyCatalog>(`${P}/violations`)
+export const createViolation = (body: ViolationBody) => apiFetch<ApiPenaltyCatalog>(`${P}/violations`, json(body))
+export const updateViolation = (id: number, body: ViolationBody) => apiFetch<ApiPenaltyCatalog>(`${P}/violations/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
+export const previewPenalty = (body: PenaltyTarget) => apiFetch<ApiPenaltyPreview>(`${P}/preview`, json(body))
+export const applyPenalty = (body: PenaltyTarget & { expectedOccurrence: number; targetPeriod?: string; caseId?: number; note?: string }) => apiFetch<ApiPenalty>(P, json(body))
+export const fetchPenalties = (employeeId?: number) => apiFetch<{ available: boolean; message?: string; penalties: ApiPenalty[] }>(`${P}${employeeId ? `?employeeId=${employeeId}` : ''}`)
+export const cancelPenalty = (id: number, reason: string) => apiFetch<ApiPenalty>(`${P}/${id}/cancel`, json({ reason }))
+export const fetchMyPenalties = () => apiFetch<{ penalties: ApiPenalty[] }>(`${P}/mine`)
