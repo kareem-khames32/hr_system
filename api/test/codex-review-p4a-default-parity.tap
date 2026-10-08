@@ -1,0 +1,484 @@
+TAP version 13
+# Subtest: P4A-C01: 500 line projections match actual pre-phase-4 code, byte for byte
+ok 1 - P4A-C01: 500 line projections match actual pre-phase-4 code, byte for byte
+  ---
+  duration_ms: 80.4915
+  type: 'test'
+  ...
+# Subtest: P4A-C02: old statutory seed rows and existing insurance inputs unchanged
+ok 2 - P4A-C02: old statutory seed rows and existing insurance inputs unchanged
+  ---
+  duration_ms: 35.1319
+  type: 'test'
+  ...
+# Subtest: P4A-C03: employee projection with masking off is identical to pre-phase-4 for owner, payroll, editor and ordinary viewer
+ok 3 - P4A-C03: employee projection with masking off is identical to pre-phase-4 for owner, payroll, editor and ordinary viewer
+  ---
+  duration_ms: 31.0068
+  type: 'test'
+  ...
+# Subtest: LU-01: creating and editing values, currency from the country, a fixed country, the IBAN of the entity country, the time zone, the gaps, and the branch currency
+ok 4 - LU-01: creating and editing values, currency from the country, a fixed country, the IBAN of the entity country, the time zone, the gaps, and the branch currency
+  ---
+  duration_ms: 2.2118
+  type: 'test'
+  ...
+# Subtest: LU-02: one currency source before and after the migration, the branch column outside the entity, locked field-only writes, the unlink on a country change, the payroll guard, the routes and the screens
+ok 5 - LU-02: one currency source before and after the migration, the branch column outside the entity, locked field-only writes, the unlink on a country change, the payroll guard, the routes and the screens
+  ---
+  duration_ms: 9.1131
+  type: 'test'
+  ...
+# Subtest: LU-03: the local day in a zone, and the absence catch-up split into the general group and one group per zoned entity
+ok 6 - LU-03: the local day in a zone, and the absence catch-up split into the general group and one group per zoned entity
+  ---
+  duration_ms: 2.6217
+  type: 'test'
+  ...
+# Subtest: SP-01: every seed row belongs to a catalog key with exactly its codes, the new keys are reference data no calculator reads, and the worked examples of the C cards hold
+ok 7 - SP-01: every seed row belongs to a catalog key with exactly its codes, the new keys are reference data no calculator reads, and the worked examples of the C cards hold
+  ---
+  duration_ms: 270.8791
+  type: 'test'
+  ...
+# Subtest: SP-02: value and source cleaners, edits for the system administrator only under the definition row lock with an audit line, the routes and the screen
+ok 8 - SP-02: value and source cleaners, edits for the system administrator only under the definition row lock with an audit line, the routes and the screen
+  ---
+  duration_ms: 3.0405
+  type: 'test'
+  ...
+# Subtest: SU-01: البذرة — أكواد فريدة، وترتيبها = الرتب الثابتة قبل الجدول، ومكونات الراتب بتتناسب بأيام الخدمة، والبنود القانونية الجديدة مابتتحسبش
+ok 9 - SU-01: البذرة — أكواد فريدة، وترتيبها = الرتب الثابتة قبل الجدول، ومكونات الراتب بتتناسب بأيام الخدمة، والبنود القانونية الجديدة مابتتحسبش
+  ---
+  duration_ms: 0.5988
+  type: 'test'
+  ...
+# Subtest: SU-02: المطابقة على 500 بند مولّدين بكل الحالات — نفس الناتج بالحرف بالترتيب الثابت وبترتيب الجدول، والمجاميع = الأعمدة المحفوظة
+ok 10 - SU-02: المطابقة على 500 بند مولّدين بكل الحالات — نفس الناتج بالحرف بالترتيب الثابت وبترتيب الجدول، والمجاميع = الأعمدة المحفوظة
+  ---
+  duration_ms: 19.2909
+  type: 'test'
+  ...
+# Subtest: SU-03: الترتيب من الجدول — تغييره بيرتّب السطور والأعمدة من غير ما يغيّر مبلغ، والسطر اللي مالوش بند في الآخر
+ok 11 - SU-03: الترتيب من الجدول — تغييره بيرتّب السطور والأعمدة من غير ما يغيّر مبلغ، والسطر اللي مالوش بند في الآخر
+  ---
+  duration_ms: 14.4318
+  type: 'test'
+  ...
+# Subtest: SU-04: مصدر الكود — كل شاشة بتعرض البنود بتقرا الترتيب من الجدول، والتعديل لحساب الشركة تحت قفل الصف وبسطر تدقيق، ومفيش إضافة ولا مسح
+ok 12 - SU-04: مصدر الكود — كل شاشة بتعرض البنود بتقرا الترتيب من الجدول، والتعديل لحساب الشركة تحت قفل الصف وبسطر تدقيق، ومفيش إضافة ولا مسح
+  ---
+  duration_ms: 3.4073
+  type: 'test'
+  ...
+# Subtest: ET-01: الجدول من حزمة الدولة بتاريخ الفترة — الشرائح والإعفاء والسنة 360 يوم، وقبل سريانه أو ناقص = مفيش حساب
+ok 13 - ET-01: الجدول من حزمة الدولة بتاريخ الفترة — الشرائح والإعفاء والسنة 360 يوم، وقبل سريانه أو ناقص = مفيش حساب
+  ---
+  duration_ms: 0.3091
+  type: 'test'
+  ...
+# Subtest: ET-02: الضريبة السنوية بالشرائح وعلى حدودها
+ok 14 - ET-02: الضريبة السنوية بالشرائح وعلى حدودها
+  ---
+  duration_ms: 0.134
+  type: 'test'
+  ...
+# Subtest: ET-03: مثال C-EG-01 — راتب 15,000 كله خاضع للتأمين: 1,482.50 في يناير وفي فبراير (تراكمي)، وبالطريقة المباشرة
+ok 15 - ET-03: مثال C-EG-01 — راتب 15,000 كله خاضع للتأمين: 1,482.50 في يناير وفي فبراير (تراكمي)، وبالطريقة المباشرة
+  ---
+  duration_ms: 0.2168
+  type: 'test'
+  ...
+# Subtest: ET-04: التراكمي — زيادة في نص السنة ومكافأة شهر وتعيين في نص الشهر، ودخل تحت الإعفاء، وفترة من غير أيام
+ok 16 - ET-04: التراكمي — زيادة في نص السنة ومكافأة شهر وتعيين في نص الشهر، ودخل تحت الإعفاء، وفترة من غير أيام
+  ---
+  duration_ms: 0.2352
+  type: 'test'
+  ...
+# Subtest: ET-05: إلغاء الشرائح الدنيا للدخول العالية — أول الوعاء بنسبة الدرجة والباقي بشرائحه
+ok 17 - ET-05: إلغاء الشرائح الدنيا للدخول العالية — أول الوعاء بنسبة الدرجة والباقي بشرائحه
+  ---
+  duration_ms: 0.0781
+  type: 'test'
+  ...
+# Subtest: ET-06: صافي الدخل الخاضع من سطور القسيمة بعلامات بنود الراتب، وأيام الفترة من تناسب البند
+ok 18 - ET-06: صافي الدخل الخاضع من سطور القسيمة بعلامات بنود الراتب، وأيام الفترة من تناسب البند
+  ---
+  duration_ms: 0.1484
+  type: 'test'
+  ...
+# Subtest: ET-07: مصدر الكود — حساب نقي: مفيش قاعدة بيانات ولا كتابة، والأرقام من حزمة الدولة مش ثوابت
+ok 19 - ET-07: مصدر الكود — حساب نقي: مفيش قاعدة بيانات ولا كتابة، والأرقام من حزمة الدولة مش ثوابت
+  ---
+  duration_ms: 0.2521
+  type: 'test'
+  ...
+# Subtest: PSU-01: قرّاء breakdown.statutory — الغايب صفر، والتالف null (مش صفر)، واللقطة بالقرش
+ok 20 - PSU-01: قرّاء breakdown.statutory — الغايب صفر، والتالف null (مش صفر)، واللقطة بالقرش
+  ---
+  duration_ms: 0.471
+  type: 'test'
+  ...
+# Subtest: PSU-02: سطور القسيمة — سطر لكل خصم قانوني بعد التأمينات وجوه إجمالي الاستقطاعات؛ من غيرها أو بلقطة تالفة = السطور القديمة بالحرف
+ok 21 - PSU-02: سطور القسيمة — سطر لكل خصم قانوني بعد التأمينات وجوه إجمالي الاستقطاعات؛ من غيرها أو بلقطة تالفة = السطور القديمة بالحرف
+  ---
+  duration_ms: 0.246
+  type: 'test'
+  ...
+# Subtest: PSU-03: وعاء الضريبة من غير السطور القانونية مهما كانت علامتها، ودخل من غير أيام جديدة بيتضاف للتراكمي
+ok 22 - PSU-03: وعاء الضريبة من غير السطور القانونية مهما كانت علامتها، ودخل من غير أيام جديدة بيتضاف للتراكمي
+  ---
+  duration_ms: 0.1428
+  type: 'test'
+  ...
+# Subtest: PSU-04: تفسير الصافي السالب وتنبيه تغيّر الصافي بياخدوا الخصم القانوني من التفصيل
+ok 23 - PSU-04: تفسير الصافي السالب وتنبيه تغيّر الصافي بياخدوا الخصم القانوني من التفصيل
+  ---
+  duration_ms: 0.3546
+  type: 'test'
+  ...
+# Subtest: PSU-05: مصدر الكود — الحساب ورا سياقه (null والإعدادين مقفولين)، والتحقق بيطرح المجموع القانوني، ومفاتيح التفعيل ليها مسار واحد لمدير النظام
+ok 24 - PSU-05: مصدر الكود — الحساب ورا سياقه (null والإعدادين مقفولين)، والتحقق بيطرح المجموع القانوني، ومفاتيح التفعيل ليها مسار واحد لمدير النظام
+  ---
+  duration_ms: 232.1548
+  type: 'test'
+  ...
+# Subtest: PSU-06: B4.4 (د) — قاعدة صندوق التدريب من حزمة الدولة (مثال البطاقة: 2,700 × 0.25% = 6.75 ← 10 جنيه)، وقايمة فروع الحساب، وكود التأمين الصحي في اللقطة
+ok 25 - PSU-06: B4.4 (د) — قاعدة صندوق التدريب من حزمة الدولة (مثال البطاقة: 2,700 × 0.25% = 6.75 ← 10 جنيه)، وقايمة فروع الحساب، وكود التأمين الصحي في اللقطة
+  ---
+  duration_ms: 265.3338
+  type: 'test'
+  ...
+# Subtest: default resignation factors change exactly at configured 2, 5 and 10 year thresholds
+ok 26 - default resignation factors change exactly at configured 2, 5 and 10 year thresholds
+  ---
+  duration_ms: 0.298
+  type: 'test'
+  ...
+# Subtest: termination uses the configured wage tiers without resignation threshold jumps
+ok 27 - termination uses the configured wage tiers without resignation threshold jumps
+  ---
+  duration_ms: 0.0958
+  type: 'test'
+  ...
+# Subtest: default reason factors apply zero dismissal and full configured non-resignation payouts
+ok 28 - default reason factors apply zero dismissal and full configured non-resignation payouts
+  ---
+  duration_ms: 0.1201
+  type: 'test'
+  ...
+# Subtest: custom thresholds, wage tiers and reason factors override defaults without changing unspecified reasons
+ok 29 - custom thresholds, wage tiers and reason factors override defaults without changing unspecified reasons
+  ---
+  duration_ms: 0.1217
+  type: 'test'
+  ...
+# Subtest: payout follows the two-stage money rule (cut at two decimals, no rounding) and zero service or wage yields zero
+ok 30 - payout follows the two-stage money rule (cut at two decimals, no rounding) and zero service or wage yields zero
+  ---
+  duration_ms: 0.0535
+  type: 'test'
+  ...
+# Subtest: inclusive final working dates reach exactly 2, 5 and 10 years without fractional-year boundary loss
+ok 31 - inclusive final working dates reach exactly 2, 5 and 10 years without fractional-year boundary loss
+  ---
+  duration_ms: 0.2087
+  type: 'test'
+  ...
+# Subtest: calendar service length handles the existing leap-day anniversary convention and impossible/reversed dates
+ok 32 - calendar service length handles the existing leap-day anniversary convention and impossible/reversed dates
+  ---
+  duration_ms: 0.0521
+  type: 'test'
+  ...
+# Subtest: policy table parsers reject bad factors, missing fields, duplicate or reversed thresholds and unknown reasons
+ok 33 - policy table parsers reject bad factors, missing fields, duplicate or reversed thresholds and unknown reasons
+  ---
+  duration_ms: 0.1677
+  type: 'test'
+  ...
+# Subtest: legacy missing reason and malformed historical policy use their existing documented fallback rules
+ok 34 - legacy missing reason and malformed historical policy use their existing documented fallback rules
+  ---
+  duration_ms: 0.0912
+  type: 'test'
+  ...
+# Subtest: custom termination reasons use their own factor on the full award, and an unknown code is never resignation or a full award
+ok 35 - custom termination reasons use their own factor on the full award, and an unknown code is never resignation or a full award
+  ---
+  duration_ms: 0.4557
+  type: 'test'
+  ...
+# Subtest: service preview and persisted EOS lines match independent expected amounts at every resignation/termination boundary
+ok 36 - service preview and persisted EOS lines match independent expected amounts at every resignation/termination boundary
+  ---
+  duration_ms: 5.0103
+  type: 'test'
+  ...
+# Subtest: service preview respects custom policy and zero payouts do not create a fictitious EOS line
+ok 37 - service preview respects custom policy and zero payouts do not create a fictitious EOS line
+  ---
+  duration_ms: 0.6042
+  type: 'test'
+  ...
+# Subtest: B4.5 (أ): end of service applies per country — applied by default, closed only by an explicit false, seeded, validated and shown on the policies screen
+ok 38 - B4.5 (أ): end of service applies per country — applied by default, closed only by an explicit false, seeded, validated and shown on the policies screen
+  ---
+  duration_ms: 2151.4869
+  type: 'test'
+  ...
+# Subtest: OLU-01: مصر — نهار العمل 1.35 ويوم الراحة 2، والعطلة الرسمية من غير حد، وقبل سريان الصف مفيش
+ok 39 - OLU-01: مصر — نهار العمل 1.35 ويوم الراحة 2، والعطلة الرسمية من غير حد، وقبل سريان الصف مفيش
+  ---
+  duration_ms: 0.2474
+  type: 'test'
+  ...
+# Subtest: OLU-02: السعودية — 1 + 50% × (الأساسي ÷ الإجمالي) لأي نوع يوم، مقرّب لفوق لمنزلتين
+ok 40 - OLU-02: السعودية — 1 + 50% × (الأساسي ÷ الإجمالي) لأي نوع يوم، مقرّب لفوق لمنزلتين
+  ---
+  duration_ms: 0.1317
+  type: 'test'
+  ...
+# Subtest: OLU-03: المعامل المطبّق = الأعلى، واللقطة للحد القانوني لما هو اللي اتطبق بس
+ok 41 - OLU-03: المعامل المطبّق = الأعلى، واللقطة للحد القانوني لما هو اللي اتطبق بس
+  ---
+  duration_ms: 0.0805
+  type: 'test'
+  ...
+# Subtest: OLU-04: مصدر الكود — ورا الإعداد المقفول في أدلة الإضافي، والأرقام من الحزمة، والتفعيل من مسار الحسابات القانونية
+ok 42 - OLU-04: مصدر الكود — ورا الإعداد المقفول في أدلة الإضافي، والأرقام من الحزمة، والتفعيل من مسار الحسابات القانونية
+  ---
+  duration_ms: 2.9599
+  type: 'test'
+  ...
+# Subtest: LTU-01: التحقق من الشرائح — الدولة والخدمة والسن والأيام، وشريحة من غير شرط أو مكررة مرفوضة
+ok 43 - LTU-01: التحقق من الشرائح — الدولة والخدمة والسن والأيام، وشريحة من غير شرط أو مكررة مرفوضة
+  ---
+  duration_ms: 0.4443
+  type: 'test'
+  ...
+# Subtest: LTU-02: من غير شرائح = أيام النوع بالحرف؛ بالشرائح أعلى شريحة منطبقة بدولة الفرع والخدمة والسن
+ok 44 - LTU-02: من غير شرائح = أيام النوع بالحرف؛ بالشرائح أعلى شريحة منطبقة بدولة الفرع والخدمة والسن
+  ---
+  duration_ms: 0.2477
+  type: 'test'
+  ...
+# Subtest: LTU-03: اقتراح الشرائح من حزمة الدولة — مصر 4 والسعودية 2، والأرقام من الحزمة مش من الكود
+ok 45 - LTU-03: اقتراح الشرائح من حزمة الدولة — مصر 4 والسعودية 2، والأرقام من الحزمة مش من الكود
+  ---
+  duration_ms: 0.198
+  type: 'test'
+  ...
+# Subtest: LTU-04: أنواع إجازات الحزمة لكل دولة — مصر (وضع 120 × 3، أبوة 1 × 3، حج 30 مرة) والسعودية (وضع 84، أبوة 3، زواج 5، وفاة 5 و3، حج 15 مرة)
+ok 46 - LTU-04: أنواع إجازات الحزمة لكل دولة — مصر (وضع 120 × 3، أبوة 1 × 3، حج 30 مرة) والسعودية (وضع 84، أبوة 3، زواج 5، وفاة 5 و3، حج 15 مرة)
+  ---
+  duration_ms: 0.2333
+  type: 'test'
+  ...
+# Subtest: LTU-05: مصدر الكود — الشرائح بتدخل في سياق الاستحقاق بس لما النوع ليه شرائح، والعمودين برّه قراءة وكتابة النوع
+ok 47 - LTU-05: مصدر الكود — الشرائح بتدخل في سياق الاستحقاق بس لما النوع ليه شرائح، والعمودين برّه قراءة وكتابة النوع
+  ---
+  duration_ms: 1.9477
+  type: 'test'
+  ...
+# Subtest: SPU-01: أيام الإيقاف بأجر موقوفة ومش مخصومة؛ ومن غير علامة «بأجر» الحساب زي الأول بالحرف
+ok 48 - SPU-01: أيام الإيقاف بأجر موقوفة ومش مخصومة؛ ومن غير علامة «بأجر» الحساب زي الأول بالحرف
+  ---
+  duration_ms: 0.4975
+  type: 'test'
+  ...
+# Subtest: SPU-02: «موقوف بلا أجر» في التقرير للإيقاف من غير أجر بس
+ok 49 - SPU-02: «موقوف بلا أجر» في التقرير للإيقاف من غير أجر بس
+  ---
+  duration_ms: 0.2234
+  type: 'test'
+  ...
+# Subtest: SPU-03: حد مدة الإيقاف بأجر من الحزمة — مصر بس، ولما الصف «اتأكد» بس، وبتاريخ بداية الإيقاف
+ok 50 - SPU-03: حد مدة الإيقاف بأجر من الحزمة — مصر بس، ولما الصف «اتأكد» بس، وبتاريخ بداية الإيقاف
+  ---
+  duration_ms: 0.1378
+  type: 'test'
+  ...
+# Subtest: SPU-04: مصدر الكود — الإعداد مقفول مبذور، والعمود برّه الكيان، وكل قارئ إيقافات بيحط علامة «بأجر»، والحكم تحت قفل صف الموظف
+ok 51 - SPU-04: مصدر الكود — الإعداد مقفول مبذور، والعمود برّه الكيان، وكل قارئ إيقافات بيحط علامة «بأجر»، والحكم تحت قفل صف الموظف
+  ---
+  duration_ms: 5.2719
+  type: 'test'
+  ...
+# Subtest: FCU-01: الحد من الحزمة — السعودية 5 أيام، ومصر ومن غير دولة من غير حد، والرقم بيتغيّر مع صف الحزمة
+ok 52 - FCU-01: الحد من الحزمة — السعودية 5 أيام، ومصر ومن غير دولة من غير حد، والرقم بيتغيّر مع صف الحزمة
+  ---
+  duration_ms: 0.2238
+  type: 'test'
+  ...
+# Subtest: FCU-02: الحكم — من غير حد مفيش رفض؛ الجزاء لوحده أكبر من الحد؛ ومجموع الشهر أكبر من الحد؛ والحد بالظبط مسموح
+ok 53 - FCU-02: الحكم — من غير حد مفيش رفض؛ الجزاء لوحده أكبر من الحد؛ ومجموع الشهر أكبر من الحد؛ والحد بالظبط مسموح
+  ---
+  duration_ms: 0.1152
+  type: 'test'
+  ...
+# Subtest: FCU-03: مصدر الكود — ورا إعداده المقفول، وتحت قفل صف الموظف، ومن مسار الحسابات القانونية بس
+ok 54 - FCU-03: مصدر الكود — ورا إعداده المقفول، وتحت قفل صف الموظف، ومن مسار الحسابات القانونية بس
+  ---
+  duration_ms: 1.5602
+  type: 'test'
+  ...
+# Subtest: RTU-01: مصر — إخطار 3 شهور من تاريخ التقديم ومهلة رد 10 أيام؛ والإخطار الأقصر والمهلة اللي عدّت متعلّمين
+ok 55 - RTU-01: مصر — إخطار 3 شهور من تاريخ التقديم ومهلة رد 10 أيام؛ والإخطار الأقصر والمهلة اللي عدّت متعلّمين
+  ---
+  duration_ms: 0.3514
+  type: 'test'
+  ...
+# Subtest: RTU-02: السعودية — إخطار 30 يوم ومهلة رد 30 يوم؛ ودولة تانية أو تاريخ ناقص أو قبل سريان الصف = مفيش
+ok 56 - RTU-02: السعودية — إخطار 30 يوم ومهلة رد 30 يوم؛ ودولة تانية أو تاريخ ناقص أو قبل سريان الصف = مفيش
+  ---
+  duration_ms: 0.1509
+  type: 'test'
+  ...
+# Subtest: RTU-03: الحد الأدنى للأجور — مصر من الحزمة والسعودية مالهاش صف؛ والفرق للإجمالي الأقل بس
+ok 57 - RTU-03: الحد الأدنى للأجور — مصر من الحزمة والسعودية مالهاش صف؛ والفرق للإجمالي الأقل بس
+  ---
+  duration_ms: 0.1279
+  type: 'test'
+  ...
+# Subtest: RTU-04: مصدر الكود — عرض بس: ورا إعداده المقفول ولمن تنظيم الموظف ظاهر له، ومن مسار الحسابات القانونية؛ وتنبيه الأجور قراءة بنطاق الحساب
+ok 58 - RTU-04: مصدر الكود — عرض بس: ورا إعداده المقفول ولمن تنظيم الموظف ظاهر له، ومن مسار الحسابات القانونية؛ وتنبيه الأجور قراءة بنطاق الحساب
+  ---
+  duration_ms: 1.5285
+  type: 'test'
+  ...
+# Subtest: SZU-01: نسبة السعوديين لكل كيان — السعودي بقاعدة التأمينات، ومن غير جنسية متعدّين لوحدهم، وفروع من غير كيان في مجموعة
+ok 59 - SZU-01: نسبة السعوديين لكل كيان — السعودي بقاعدة التأمينات، ومن غير جنسية متعدّين لوحدهم، وفروع من غير كيان في مجموعة
+  ---
+  duration_ms: 0.2614
+  type: 'test'
+  ...
+# Subtest: SZU-02: رخصة العمل وتوثيق العقد في قوى نوعين في بذرة كتالوج المستندات ومرآتها، من غير تغيير في الباقي
+ok 60 - SZU-02: رخصة العمل وتوثيق العقد في قوى نوعين في بذرة كتالوج المستندات ومرآتها، من غير تغيير في الباقي
+  ---
+  duration_ms: 0.886
+  type: 'test'
+  ...
+# Subtest: SZU-03: مصدر الكود — تقرير قراءة لحساب بكل الفروع، ومن غير عمود إقامة جديد على الموظف
+ok 61 - SZU-03: مصدر الكود — تقرير قراءة لحساب بكل الفروع، ومن غير عمود إقامة جديد على الموظف
+  ---
+  duration_ms: 0.9921
+  type: 'test'
+  ...
+# Subtest: BKU-01: كود البنك من الآيبان — السعودي رقمين والمصري 4 أرقام بعد خانتي التحقق؛ والآيبان الغلط من غير كود
+ok 62 - BKU-01: كود البنك من الآيبان — السعودي رقمين والمصري 4 أرقام بعد خانتي التحقق؛ والآيبان الغلط من غير كود
+  ---
+  duration_ms: 0.408
+  type: 'test'
+  ...
+# Subtest: BKU-02: التنبيه بس لما الجدول فيه بنوك مفعّلة لدولة الآيبان والكود مش منهم
+ok 63 - BKU-02: التنبيه بس لما الجدول فيه بنوك مفعّلة لدولة الآيبان والكود مش منهم
+  ---
+  duration_ms: 0.1675
+  type: 'test'
+  ...
+# Subtest: BKU-03: خانات البنك — الدولة والكود عند الإضافة بس، وطول الكود بدولته، والاسم والسويفت والتفعيل
+ok 64 - BKU-03: خانات البنك — الدولة والكود عند الإضافة بس، وطول الكود بدولته، والاسم والسويفت والتفعيل
+  ---
+  duration_ms: 0.6028
+  type: 'test'
+  ...
+# Subtest: BKU-04: كشف البنك — من غير جدول الصفوف زي الأول بالحرف؛ وبالجدول تنبيه كود البنك بعد تنبيهات الملف القايمة ومن غير تغيير مبلغ
+ok 65 - BKU-04: كشف البنك — من غير جدول الصفوف زي الأول بالحرف؛ وبالجدول تنبيه كود البنك بعد تنبيهات الملف القايمة ومن غير تغيير مبلغ
+  ---
+  duration_ms: 0.9885
+  type: 'test'
+  ...
+# Subtest: BKU-06: شاشة الصرف — نفس تنبيه كشف البنك بنفس الجدول، ومن غيره الصفوف زي الأول
+ok 66 - BKU-06: شاشة الصرف — نفس تنبيه كشف البنك بنفس الجدول، ومن غيره الصفوف زي الأول
+  ---
+  duration_ms: 609.6203
+  type: 'test'
+  ...
+# Subtest: BKU-05: مصدر الكود — مفيش عمود كود بنك على الموظف، والجدول من غير بذرة، والتنبيه في كشف البنك وشاشة الصرف من نفس القايمة
+ok 67 - BKU-05: مصدر الكود — مفيش عمود كود بنك على الموظف، والجدول من غير بذرة، والتنبيه في كشف البنك وشاشة الصرف من نفس القايمة
+  ---
+  duration_ms: 2.7548
+  type: 'test'
+  ...
+# Subtest: HJU-01: قايمة كيانات الإعداد — أرقام صحيحة موجبة فريدة مرتّبة، والغلط بيتشال، والتفعيل والقفل
+ok 68 - HJU-01: قايمة كيانات الإعداد — أرقام صحيحة موجبة فريدة مرتّبة، والغلط بيتشال، والتفعيل والقفل
+  ---
+  duration_ms: 0.5586
+  type: 'test'
+  ...
+# Subtest: HJU-02: دالة عرض التاريخ — مقفول = ميلادي بس؛ مفتوح = الهجري بين قوسين للتاريخ الكامل بس، بتقويم أم القرى
+ok 69 - HJU-02: دالة عرض التاريخ — مقفول = ميلادي بس؛ مفتوح = الهجري بين قوسين للتاريخ الكامل بس، بتقويم أم القرى
+  ---
+  duration_ms: 1.6508
+  type: 'test'
+  ...
+# Subtest: HJU-03: مصدر الكود — الإعداد بيتكتب من مسار الكيانات بس، والحكم بفروع الحساب نفسه، والهيكل بيقراه مرة للجلسة
+ok 70 - HJU-03: مصدر الكود — الإعداد بيتكتب من مسار الكيانات بس، والحكم بفروع الحساب نفسه، والهيكل بيقراه مرة للجلسة
+  ---
+  duration_ms: 1.9431
+  type: 'test'
+  ...
+# Subtest: EPU-01: شكل الإخفاء — الآيبان «SA•• •••• 1234» والهوية «•••••• 1234»، والقصير كله مخفي، والفاضي null
+ok 71 - EPU-01: شكل الإخفاء — الآيبان «SA•• •••• 1234» والهوية «•••••• 1234»، والقصير كله مخفي، والفاضي null
+  ---
+  duration_ms: 0.2308
+  type: 'test'
+  ...
+# Subtest: EPU-02: الإعداد مقفول — الإسقاط زي الأول بالحرف لكل الحسابات (المالية مشيولة عن غير المصرّح، والهوية كاملة)
+ok 72 - EPU-02: الإعداد مقفول — الإسقاط زي الأول بالحرف لكل الحسابات (المالية مشيولة عن غير المصرّح، والهوية كاملة)
+  ---
+  duration_ms: 0.1845
+  type: 'test'
+  ...
+# Subtest: EPU-03: الإعداد مفتوح — الهوية كاملة لصاحب الملف وللي بيعدّل بس، والآيبان مخفي لغير المصرّح له بالمالية، والأصلية مشيولة
+ok 73 - EPU-03: الإعداد مفتوح — الهوية كاملة لصاحب الملف وللي بيعدّل بس، والآيبان مخفي لغير المصرّح له بالمالية، والأصلية مشيولة
+  ---
+  duration_ms: 0.1382
+  type: 'test'
+  ...
+# Subtest: EPU-04: مصدر الكود — الإعداد مبذور مقفول، وكل رد بملف موظف بياخد حكمه، وملف Excel بنفس الحكم، والتصدير الكامل بصلاحية التعديل وبسطر تدقيق
+ok 74 - EPU-04: مصدر الكود — الإعداد مبذور مقفول، وكل رد بملف موظف بياخد حكمه، وملف Excel بنفس الحكم، والتصدير الكامل بصلاحية التعديل وبسطر تدقيق
+  ---
+  duration_ms: 12267.9265
+  type: 'test'
+  ...
+# Subtest: EPU-05 (CR4-SELF): سجل تغيير الهوية والجواز بنفس حكم الخانة — مقفول زي الأول، ومفتوح مخفي لغير صاحب الملف واللي بيعدّل
+ok 75 - EPU-05 (CR4-SELF): سجل تغيير الهوية والجواز بنفس حكم الخانة — مقفول زي الأول، ومفتوح مخفي لغير صاحب الملف واللي بيعدّل
+  ---
+  duration_ms: 12.4679
+  type: 'test'
+  ...
+# Subtest: DPU-01: موعد الإخطار = الاكتشاف + 72 ساعة؛ والساعات الباقية والتأخير للحادثة اللي لسه مااتبلّغتش بس
+ok 76 - DPU-01: موعد الإخطار = الاكتشاف + 72 ساعة؛ والساعات الباقية والتأخير للحادثة اللي لسه مااتبلّغتش بس
+  ---
+  duration_ms: 0.2567
+  type: 'test'
+  ...
+# Subtest: DPU-02: خانات الحادثة — العنوان ووقت الاكتشاف (مش في المستقبل) وعدد المتأثرين، وملاحظة الإخطار مطلوبة
+ok 77 - DPU-02: خانات الحادثة — العنوان ووقت الاكتشاف (مش في المستقبل) وعدد المتأثرين، وملاحظة الإخطار مطلوبة
+  ---
+  duration_ms: 0.3772
+  type: 'test'
+  ...
+# Subtest: DPU-03: مدد الاحتفاظ — فاضي أو صفر أو غلط = من غير مدة (الافتراضي)، وحد التاريخ = النهارده ناقص الشهور
+ok 78 - DPU-03: مدد الاحتفاظ — فاضي أو صفر أو غلط = من غير مدة (الافتراضي)، وحد التاريخ = النهارده ناقص الشهور
+  ---
+  duration_ms: 0.212
+  type: 'test'
+  ...
+# Subtest: DPU-04: مصدر الكود — مفيش مسح، ولحساب بكل الفروع بصلاحية الإعدادات، ومهمة يومية بتعمل مهام مراجعة بس
+ok 79 - DPU-04: مصدر الكود — مفيش مسح، ولحساب بكل الفروع بصلاحية الإعدادات، ومهمة يومية بتعمل مهام مراجعة بس
+  ---
+  duration_ms: 4.1984
+  type: 'test'
+  ...
+1..79
+# tests 79
+# suites 0
+# pass 79
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 21816.0189
