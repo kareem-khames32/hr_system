@@ -293,5 +293,105 @@ test('RV-04: الاعتماد والإعلان والإقرار — المدير
   // المدير وإدارة الأداء شايفين الإقرار؛ والقايمة عند إدارة الأداء بالحالة الجديدة
   assert.equal(expectStatus(await request(users.boss, 'GET', R + '/' + state.rep), 200).acknowledgement.comment, 'اطلعت على التقييم')
   assert.deepEqual(expectStatus(await request(users.hrA, 'GET', R + '/cycles/' + state.cycle + '/assignments'), 200).assignments.map(row => row.status), ['OPEN', 'ACKNOWLEDGED', 'OPEN'])
-  assert.deepEqual((await repo('ReviewResponse').find({ where: { assignmentId: state.rep }, order: { id: 'ASC' } })).map(row => row.relation), ['SELF', 'MANAGER', 'ACK'])
+  // B3.8-أ: الإعلان بيسجّل لحظته (صف PUB) — مهلة الاعتراض منها
+  assert.deepEqual((await repo('ReviewResponse').find({ where: { assignmentId: state.rep }, order: { id: 'ASC' } })).map(row => row.relation), ['SELF', 'MANAGER', 'PUB', 'ACK'])
+})
+
+test('RV-05: المعايرة والاعتراض — تعديل بسبب قبل الاعتماد بيتسجّل (قبل/بعد/مين)، وتوزيع التقديرات لكل مدير، والاعتراض طلب مربوط بتقييم معلن في مهلته ومرة واحدة، والمعايرة بعد اعتراض اتقبل', async () => {
+  users.cal = await account('cal', ['performance.calibrate'])
+  users.calB = await account('cal-b', ['performance.calibrate'], { branchId: org.branchB.id })
+  users.approver = await account('approver', ['approve.hr', 'requests.view_all'])
+  const chain = await repo('ApprovalChain').save({ code: 'RV_OBJ', nameAr: 'سلسلة الاعتراض', isActive: true, autoApprove: false })
+  await repo('ApprovalStep').save({ chainId: chain.id, stepOrder: 1, approverRole: 'hr' })
+  if (!(await repo('RequestType').findOneBy({ code: 'APPRAISAL_OBJECTION' }))) {
+    await repo('RequestType').save({ code: 'APPRAISAL_OBJECTION', nameAr: 'اعتراض على تقييم أداء', category: 'employee_relations', destinationHandler: 'none', approvalChainId: chain.id, isActive: true })
+  } else await repo('RequestType').update({ code: 'APPRAISAL_OBJECTION' }, { approvalChainId: chain.id, isActive: true })
+  const audits = async action => Number((await ds.query('SELECT COUNT(*) AS [n] FROM [audit_log] WHERE [action] = @0', [action]))[0].n)
+  const object = (user, payload) => request(user, 'POST', '/requests', { typeCode: 'APPRAISAL_OBJECTION', payload, submit: true })
+  const objections = async () => (await repo('Request').find({ where: { typeCode: 'APPRAISAL_OBJECTION' }, order: { id: 'ASC' } })).map(row => [row.requesterId, JSON.parse(row.payload).reviewId ?? null, row.status === 'DRAFT'])
+
+  // دورة تانية (النموذج بقى من 10 في RV-01): المدير سلّم تقييم المندوبين (70 و100)
+  const cycle = expectStatus(await request(users.hrA, 'POST', R + '/cycles', cycleBody({ name: 'تقييم المعايرة' })), 201).id
+  expectStatus(await request(users.hrA, 'POST', R + `/cycles/${cycle}/launch`), 200)
+  const assigned = expectStatus(await request(users.hrA, 'GET', R + `/cycles/${cycle}/assignments`), 200).assignments
+  const rep = assigned.find(row => row.employeeName === 'مندوب أول').id, peer = assigned.find(row => row.employeeName === 'مندوب تاني').id, boss = assigned.find(row => row.employeeName === 'مدير المبيعات').id
+  expectStatus(await request(users.boss, 'POST', R + `/${rep}/submit`, { answers: { sections: { s2: { s2i1: { rating: 8 }, s2i2: { rating: 8 } } }, goals: { [state.g1]: { rating: 6 }, [state.g2]: { rating: 6 } } } }), 200)
+  expectStatus(await request(users.boss, 'POST', R + `/${peer}/submit`, { answers: { sections: { s2: { s2i1: { rating: 10 }, s2i2: { rating: 10 } } } } }), 200)
+
+  // دورات المعايرة وجلستها: بصلاحيتها، وبنطاق الفروع
+  const C = R + `/cycles/${cycle}/calibration`
+  assert.deepEqual([(await request(users.hrA, 'GET', R + '/calibration')).status, (await request(users.boss, 'GET', C)).status, answer(await request(users.calB, 'GET', C))], [403, 403, [404, rules.REVIEW_CYCLE_NOT_FOUND]])
+  assert.deepEqual([expectStatus(await request(users.cal, 'GET', R + '/calibration'), 200).cycles.map(row => row.name), expectStatus(await request(users.calB, 'GET', R + '/calibration'), 200).cycles],
+    [['تقييم المعايرة', 'تقييم الربع الأخير'], []])
+  const session = expectStatus(await request(users.cal, 'GET', C), 200)
+  assert.deepEqual(session.rows.map(row => [row.employeeName, row.departmentName, row.branchName, row.managerScore, row.finalScore, row.band, row.bandLabel, row.adjustments.length, row.objection, row.canCalibrate]),
+    [['مندوب أول', 'قسم المبيعات', 'فرع التقييم أ', 70, 70, 'C', 'جيد', 0, null, true], ['مندوب تاني', 'قسم المبيعات', 'فرع التقييم أ', 100, 100, 'A', 'ممتاز', 0, null, true]], 'اللي المدير سلّمه بس (المدير نفسه لسه مفتوح)')
+  assert.deepEqual(session.managers.map(row => [row.name, row.count, row.average, row.bands.filter(band => band.count).map(band => [band.key, band.count])]), [['مدير المبيعات', 2, 85, [['A', 1], ['C', 1]]]])
+  assert.deepEqual(session.distribution.map(band => [band.key, band.count, band.percent, band.guide, band.over]), [['A', 1, 50, 10, false], ['B', 0, 0, 20, false], ['C', 1, 50, 40, false], ['D', 0, 0, 20, false], ['E', 0, 0, 10, false]])
+  assert.deepEqual(session.groups, { departments: [{ id: org.sales.id, name: 'قسم المبيعات' }], branches: [{ id: org.branchA.id, name: 'فرع التقييم أ' }] })
+  assert.deepEqual(JSON.stringify(session).includes('managerEmployeeId'), false, 'المدير بترتيبه مش برقمه')
+  assert.deepEqual([expectStatus(await request(users.cal, 'GET', C + `?departmentId=${org.sales.id}`), 200).rows.length, expectStatus(await request(users.cal, 'GET', C + `?departmentId=${org.bDepartment.id}`), 200).rows.length,
+    expectStatus(await request(users.cal, 'GET', C + `?branchId=${org.branchA.id}`), 200).rows.length, (await request(users.cal, 'GET', C + '?branchId=x')).status], [2, 0, 2, 400])
+
+  // التعديل: درجة صالحة وسبب إجباري، ومش نفس الدرجة، وبصلاحيته وفي نطاقه
+  const calibrate = (user, id, body) => request(user, 'POST', R + `/${id}/calibrate`, body)
+  for (const [body, message] of [[{ score: 101, reason: 'سبب واضح' }, rules.REVIEW_CALIBRATION_SCORE], [{ score: '70.123', reason: 'سبب واضح' }, rules.REVIEW_CALIBRATION_SCORE], [{ score: -1, reason: 'سبب واضح' }, rules.REVIEW_CALIBRATION_SCORE],
+    [{ reason: 'سبب واضح' }, rules.REVIEW_CALIBRATION_SCORE], [{ score: 60 }, rules.REVIEW_CALIBRATION_REASON], [{ score: 60, reason: ' ا ' }, rules.REVIEW_CALIBRATION_REASON], [{ score: 70, reason: 'سبب واضح' }, rules.REVIEW_CALIBRATION_SAME]]) {
+    assert.deepEqual(answer(await calibrate(users.cal, rep, body)), [400, message], JSON.stringify(body))
+  }
+  assert.deepEqual([(await calibrate(users.hrA, rep, { score: 60, reason: 'سبب واضح' })).status, answer(await calibrate(users.calB, rep, { score: 60, reason: 'سبب واضح' })), answer(await calibrate(users.cal, boss, { score: 60, reason: 'سبب واضح' })),
+    answer(await calibrate(users.cal, 987654, { score: 60, reason: 'سبب واضح' }))], [403, [404, rules.REVIEW_NOT_FOUND], [400, rules.REVIEW_CALIBRATION_STAGE], [404, rules.REVIEW_NOT_FOUND]])
+  // موظف اتنقل لفرع ب: الحكم بفرعه الحالي
+  await repo('Employee').update({ id: emps.rep.id }, { branchId: org.branchB.id })
+  try { assert.deepEqual(answer(await calibrate(users.cal, rep, { score: 60, reason: 'سبب واضح' })), [404, rules.REVIEW_NOT_FOUND]) } finally { await repo('Employee').update({ id: emps.rep.id }, { branchId: org.branchA.id }) }
+  assert.deepEqual([await repo('ReviewResponse').count({ where: { relation: 'CAL' } }), await audits('REVIEW_CALIBRATED')], [0, 0])
+  const calibrated = expectStatus(await calibrate(users.cal, rep, { score: '65.5', reason: '  توحيد   المعيار بين الأقسام ' }), 200)
+  const row = calibrated.rows.find(entry => entry.id === rep)
+  assert.deepEqual([row.managerScore, row.finalScore, row.band, row.adjustments.map(entry => [entry.before, entry.after, entry.reason, entry.byName])], [70, 65.5, 'C', [[70, 65.5, 'توحيد المعيار بين الأقسام', 'حساب cal']]])
+  assert.deepEqual([await audits('REVIEW_CALIBRATED'), (await repo('ReviewAssignment').findOneByOrFail({ id: rep })).status], [1, 'COMPLETED'], 'المعايرة مابتحرّكش الحالة')
+  // الموظف لسه مش شايف حاجة؛ والمدير شايف الدرجة النهائية بعد المعايرة
+  assert.deepEqual([expectStatus(await request(users.rep, 'GET', R + '/' + rep), 200).finalScore, expectStatus(await request(users.boss, 'GET', R + '/' + rep), 200).finalScore], [null, 65.5])
+
+  // بعد الاعتماد مفيش معايرة؛ وبعد الإعلان مفيش غير باعتراض اتقبل
+  expectStatus(await request(users.hrA, 'POST', R + `/cycles/${cycle}/advance`, { to: 'APPROVED' }), 200)
+  assert.deepEqual(answer(await calibrate(users.cal, rep, { score: 60, reason: 'سبب واضح' })), [400, rules.REVIEW_CALIBRATION_STAGE])
+  assert.equal(expectStatus(await request(users.hrA, 'POST', R + `/cycles/${cycle}/advance`, { to: 'ANNOUNCED' }), 200).moved, 2)
+  assert.deepEqual(answer(await calibrate(users.cal, rep, { score: 60, reason: 'سبب واضح' })), [400, rules.REVIEW_CALIBRATION_STAGE])
+  const announced = expectStatus(await request(users.rep, 'GET', R + '/' + rep), 200)
+  assert.deepEqual([announced.managerScore, announced.finalScore, announced.objection, announced.canObject, Math.round((new Date(announced.objectionUntil) - Date.now()) / 86400000)], [70, 65.5, null, true, rules.REVIEW_OBJECTION_DAYS])
+  assert.deepEqual([expectStatus(await request(users.boss, 'GET', R + '/' + rep), 200).canObject, expectStatus(await request(users.hrA, 'GET', R + '/' + rep), 200).canObject], [false, false], 'الاعتراض لصاحب التقييم بس')
+
+  // الاعتراض: تقييم مقدّم الطلب المعلن بس — تقييم غيره زي اللي مش موجود، واللي لسه ماتعلنش بدري
+  for (const [user, reviewId, message] of [[users.rep, peer, rules.REVIEW_OBJECTION_TARGET], [users.rep, 987654, rules.REVIEW_OBJECTION_TARGET], [users.rep, 'x', rules.REVIEW_OBJECTION_TARGET], [users.boss, boss, rules.REVIEW_OBJECTION_EARLY]]) {
+    assert.deepEqual(answer(await object(user, { reason: 'الدرجة أقل من شغلي', reviewId })), [400, message], String(reviewId))
+  }
+  assert.deepEqual(await objections(), [], 'المرفوض مابيسيبش مسودة')
+  // المهلة: اعتراض بعد 14 يوم من الإعلان مرفوض
+  await repo('ReviewResponse').update({ assignmentId: peer, relation: 'PUB' }, { submittedAt: new Date(Date.now() - 15 * 86400000) })
+  assert.deepEqual([answer(await object(users.peer, { reason: 'الدرجة أقل من شغلي', reviewId: peer })), expectStatus(await request(users.peer, 'GET', R + '/' + peer), 200).canObject], [[400, rules.REVIEW_OBJECTION_LATE], false])
+  // اعتراضين مع بعض على نفس التقييم: واحد بس بيعدّي
+  const race = await Promise.all([object(users.rep, { reason: 'الدرجة أقل من شغلي', reviewId: state.rep }), object(users.rep, { reason: 'الدرجة أقل من شغلي', reviewId: state.rep })])
+  assert.deepEqual([race.map(response => response.status).sort(), race.map(messageOf).filter(Boolean), await objections()], [[201, 409], [rules.REVIEW_OBJECTION_EXISTS], [[emps.rep.id, state.rep, false]]])
+  // الاعتراض على تقييم الدورة التانية: اسم الدورة بيثبّته الخادم (فوق اللي جاي من العميل)
+  const filed = expectStatus(await object(users.rep, { reason: 'الدرجة اتعدّلت من غير ما أعرف السبب', reviewId: String(rep), reviewCycle: 'اسم مزيّف' }), 201)
+  assert.deepEqual(JSON.parse((await repo('Request').findOneByOrFail({ id: filed.id })).payload), { reason: 'الدرجة اتعدّلت من غير ما أعرف السبب', reviewId: rep, reviewCycle: 'تقييم المعايرة' })
+  assert.deepEqual(answer(await object(users.rep, { reason: 'اعتراض تاني', reviewId: rep })), [409, rules.REVIEW_OBJECTION_EXISTS])
+  // من غير رقم تقييم: سجل عادي زي الأول
+  const plain = expectStatus(await object(users.peer, { reason: 'اعتراض عام' }), 201)
+  assert.deepEqual(JSON.parse((await repo('Request').findOneByOrFail({ id: plain.id })).payload), { reason: 'اعتراض عام' })
+  // الموظف والمدير وإدارة الأداء شايفين حالة الاعتراض؛ والمعايرة لسه مقفولة لحد ما يتقبل
+  const pending = expectStatus(await request(users.rep, 'GET', R + '/' + rep), 200)
+  assert.deepEqual([pending.objection.requestId, pending.canObject, expectStatus(await request(users.boss, 'GET', R + '/' + rep), 200).objection.requestId], [filed.id, false, filed.id])
+  const waiting = expectStatus(await request(users.cal, 'GET', C), 200).rows.map(entry => [entry.employeeName, entry.objection?.requestId ?? null, entry.canCalibrate])
+  assert.deepEqual(waiting, [['مندوب أول', filed.id, false], ['مندوب تاني', null, false]])
+  assert.deepEqual(answer(await calibrate(users.cal, rep, { score: 72, reason: 'بعد الاعتراض' })), [400, rules.REVIEW_CALIBRATION_STAGE])
+  // الاعتراض اتقبل في سلسلته ← المعايرة بتتفتح على التقييم ده بس، وتعديلها بيتسجّل بمرجع الطلب
+  expectStatus(await request(users.approver, 'POST', `/requests/${filed.id}/act`, { action: 'APPROVE' }), 201)
+  const accepted = expectStatus(await request(users.rep, 'GET', R + '/' + rep), 200).objection
+  assert.deepEqual([accepted.statusLabel, expectStatus(await request(users.cal, 'GET', C), 200).rows.map(entry => entry.canCalibrate)], ['اتقبل', [true, false]])
+  const fixed = expectStatus(await calibrate(users.cal, rep, { score: 72, reason: 'بعد الاعتراض' }), 200).rows.find(entry => entry.id === rep)
+  assert.deepEqual([fixed.finalScore, fixed.status, fixed.adjustments.map(entry => [entry.before, entry.after])], [72, 'ANNOUNCED', [[70, 65.5], [65.5, 72]]])
+  const log = await repo('ReviewResponse').find({ where: { assignmentId: rep, relation: 'CAL' }, order: { id: 'ASC' } })
+  assert.deepEqual(log.map(entry => [JSON.parse(entry.answers).objectionRequestId, Number(entry.score), entry.submittedByUserId]), [[null, 65.5, users.cal.id], [filed.id, 72, users.cal.id]])
+  assert.deepEqual([expectStatus(await request(users.rep, 'GET', R + '/' + rep), 200).finalScore, await audits('REVIEW_CALIBRATED')], [72, 2])
 })

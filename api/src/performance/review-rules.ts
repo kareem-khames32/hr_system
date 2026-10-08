@@ -182,3 +182,57 @@ export function reviewScore(template: ReviewTemplateShape, answers: ReviewAnswer
   }
   return weights > 0 ? Math.round((weighted / weights) * 100) / 100 : null
 }
+
+// ===== B3.8-أ: المعايرة والاعتراض =====
+
+export const REVIEW_CALIBRATE_PERMISSION = 'performance.calibrate'
+export const REVIEW_CALIBRATION_SCORE = 'الدرجة بعد المعايرة: رقم من 0 لـ100 (بكسرين عشريين بالكتير)'
+export const REVIEW_CALIBRATION_REASON = 'سبب التعديل مطلوب (من 3 لـ300 حرف)'
+export const REVIEW_CALIBRATION_STAGE = 'المعايرة بعد تسليم المدير وقبل الاعتماد — أو بعد اعتراض اتقبل على تقييم معلن'
+export const REVIEW_CALIBRATION_CHANGED = 'حالة التقييم اتغيّرت — افتح المعايرة تاني'
+export const REVIEW_CALIBRATION_SAME = 'الدرجة زي ما هي — مفيش تعديل'
+export const REVIEW_OBJECTION_TYPE = 'APPRAISAL_OBJECTION'
+export const REVIEW_OBJECTION_DAYS = 14
+export const REVIEW_OBJECTION_TARGET = 'التقييم المعترض عليه غير موجود'
+export const REVIEW_OBJECTION_EARLY = 'النتيجة لسه ماتعلنتش — الاعتراض بعد الإعلان'
+export const REVIEW_OBJECTION_LATE = `مهلة الاعتراض (${REVIEW_OBJECTION_DAYS} يوم من الإعلان) خلصت`
+export const REVIEW_OBJECTION_EXISTS = 'فيه اعتراض اتقدّم على التقييم ده قبل كده'
+
+/** التقديرات من الدرجة (من 100) ومعاها التوزيع الاسترشادي (نسبة من 100) — استرشاد وتحذير بس، مش منع */
+export const REVIEW_BANDS = [
+  { key: 'A', label: 'ممتاز', min: 90, guide: 10 },
+  { key: 'B', label: 'جيد جدًا', min: 75, guide: 20 },
+  { key: 'C', label: 'جيد', min: 60, guide: 40 },
+  { key: 'D', label: 'مقبول', min: 50, guide: 20 },
+  { key: 'E', label: 'ضعيف', min: 0, guide: 10 },
+] as const
+export type ReviewBandKey = (typeof REVIEW_BANDS)[number]['key']
+/** أقل عدد تقييمات يطلع عليه تحذير التوزيع (مجموعة صغيرة مالهاش توزيع) */
+export const REVIEW_GUIDE_MIN = 5
+
+export function reviewBand(score: number | null | undefined): ReviewBandKey | null {
+  if (score === null || score === undefined || !Number.isFinite(score)) return null
+  return (REVIEW_BANDS.find((band) => score >= band.min) ?? REVIEW_BANDS[REVIEW_BANDS.length - 1]).key
+}
+
+/** توزيع درجات على التقديرات: العدد والنسبة، والنسبة الاسترشادية، وهل عدّتها (تحذير) */
+export function bandDistribution(scores: Array<number | null>) {
+  const rated = scores.filter((value): value is number => value !== null && Number.isFinite(value))
+  return REVIEW_BANDS.map((band) => {
+    const count = rated.filter((value) => reviewBand(value) === band.key).length
+    const percent = rated.length ? Math.round((count / rated.length) * 1000) / 10 : 0
+    return { key: band.key, label: band.label, count, percent, guide: band.guide, over: rated.length >= REVIEW_GUIDE_MIN && percent > band.guide }
+  })
+}
+
+export function cleanCalibratedScore(raw: unknown): string {
+  const value = typeof raw === 'number' ? raw : typeof raw === 'string' && /^\d{1,3}(\.\d{1,2})?$/.test(raw.trim()) ? Number(raw.trim()) : NaN
+  if (!Number.isFinite(value) || value < 0 || value > 100 || Math.abs(Math.round(value * 100) - value * 100) > 1e-6) throw new BadRequestException(REVIEW_CALIBRATION_SCORE)
+  return value.toFixed(2)
+}
+
+export function cleanCalibrationReason(raw: unknown): string {
+  const value = typeof raw === 'string' ? raw.replace(/\s+/g, ' ').trim() : ''
+  if (value.length < 3 || value.length > 300) throw new BadRequestException(REVIEW_CALIBRATION_REASON)
+  return value
+}

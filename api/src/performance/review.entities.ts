@@ -11,7 +11,8 @@ export const REVIEW_ASSIGNMENT_STATUSES = ['OPEN', 'COMPLETED', 'APPROVED', 'ANN
 export type ReviewAssignmentStatus = (typeof REVIEW_ASSIGNMENT_STATUSES)[number]
 export type ReviewRelation = 'SELF' | 'MANAGER'
 // B3.7-ب: إقرار الموظف بنتيجته بيتسجّل صف رد بعلاقة ACK (تعليقه وتاريخه) — من غير عمود جديد على التكليف
-export type ReviewResponseRelation = ReviewRelation | 'ACK'
+// B3.8-أ: وصف الإعلان (PUB: لحظته، لمهلة الاعتراض) وكل تعديل معايرة (CAL: قبل وبعد والسبب ومين) — برضه صفوف رد
+export type ReviewResponseRelation = ReviewRelation | 'ACK' | 'PUB' | 'CAL'
 
 @Entity('review_templates')
 export class ReviewTemplate {

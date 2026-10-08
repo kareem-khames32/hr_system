@@ -94,3 +94,45 @@ test('RU-03: launching and submitting under the row lock with the judgment after
   for (const fixed of ["@Get('templates')", "@Get('cycles')", "@Get('mine')", "@Get('team')"]) assert.ok(controller.indexOf(fixed) < controller.indexOf("@Get(':id')"), fixed + ' قبل ‎:id')
   assert.doesNotMatch(read('api/src/performance/review.entities.ts'), /default:|CreateDateColumn/, 'من غير افتراضي (زي الترحيلات)')
 })
+
+test('RU-04: calibration bands, guide distribution and cleaners; the adjustment judged again under the locks in the objection order; the objection staged by the request under the assignment lock', () => {
+  // التقديرات بحدودها
+  assert.deepEqual([100, 90, 89.99, 75, 74.99, 60, 59.99, 50, 49.99, 0, null, undefined, NaN].map(value => rules.reviewBand(value)), ['A', 'A', 'B', 'B', 'C', 'C', 'D', 'D', 'E', 'E', null, null, null])
+  assert.equal(rules.REVIEW_BANDS.reduce((sum, band) => sum + band.guide, 0), 100, 'التوزيع الاسترشادي مجموعه 100')
+  // التحذير: من 5 تقييمات، ولما النسبة تعدّي الاسترشادية — والفاضي مابيتعدّش
+  const small = rules.bandDistribution([95, 95, 95, null])
+  assert.deepEqual(small.map(band => [band.key, band.count, band.percent, band.over]), [['A', 3, 100, false], ['B', 0, 0, false], ['C', 0, 0, false], ['D', 0, 0, false], ['E', 0, 0, false]])
+  const wide = rules.bandDistribution([95, 92, 80, 70, 65, 62, 61, 55, 40, null])
+  assert.deepEqual(wide.map(band => [band.key, band.count, band.percent, band.over]), [['A', 2, 22.2, true], ['B', 1, 11.1, false], ['C', 4, 44.4, true], ['D', 1, 11.1, false], ['E', 1, 11.1, true]])
+  assert.deepEqual([rules.cleanCalibratedScore(70), rules.cleanCalibratedScore('65.5'), rules.cleanCalibratedScore(' 100 '), rules.cleanCalibratedScore(0), rules.cleanCalibratedScore(70.07)], ['70.00', '65.50', '100.00', '0.00', '70.07'])
+  for (const bad of [101, -1, '70.123', 70.123, 'x', '', null, undefined, NaN, {}, '1e2']) refuses(() => rules.cleanCalibratedScore(bad), 'score ' + String(bad))
+  assert.equal(rules.cleanCalibrationReason('  توحيد   المعيار '), 'توحيد المعيار')
+  for (const bad of ['', 'اب', ' ا ', null, 5, 'س'.repeat(301)]) refuses(() => rules.cleanCalibrationReason(bad), 'reason')
+
+  const service = read('api/src/performance/reviews.service.ts')
+  const calibrate = service.slice(service.indexOf('async calibrate('), service.indexOf('// ===== التقييم نفسه'))
+  const order = ['this.assertCalibrator(user)', 'cleanCalibratedScore(input.score)', 'await this.calibratorSees(em0, user, seen, seenCycle)', 'throw new BadRequestException(REVIEW_CALIBRATION_STAGE)', 'this.ds.transaction(',
+    'getRepository(Request).findOne({ where: { id: objection.requestId }, lock:', 'getRepository(ReviewAssignment).findOne({ where: { id: assignmentId }, lock:', 'assignment.status !== seen.status',
+    'await this.calibratorSees(em, user, assignment, cycle)', 'before === next', "relation: 'CAL'", 'update({ id: assignment.id }, { finalScore: next })', "action: 'REVIEW_CALIBRATED'"].map(part => calibrate.indexOf(part))
+  assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), JSON.stringify(order))
+  assert.doesNotMatch(calibrate.slice(calibrate.indexOf('this.ds.transaction(')), /this\.resolver\.|em0\./, 'جوه المعاملة بـem بس ومن غير خدمة تانية')
+  const session = service.slice(service.indexOf('async calibration('), service.indexOf('async calibrate('))
+  assert.doesNotMatch(session.slice(session.indexOf('return {')), /managerEmployeeId:|employeeId:/, 'الجلسة بترجّع المدير بترتيبه والموظف باسمه — من غير أرقام')
+  assert.match(service, /if \(rawTo === 'ANNOUNCED'\) \{\n\s+const now = new Date\(\)\n\s+await em\.getRepository\(ReviewResponse\)\.insert\(mine\.map/, 'الإعلان بيسجّل لحظته')
+
+  const staging = read('api/src/performance/review-objections.ts')
+  const stage = staging.slice(staging.indexOf('export async function stageReviewObjection('))
+  const stageOrder = ["lock: { mode: 'pessimistic_write' }", 'assignment.employeeId !== req.requesterId', "assignment.status !== 'ANNOUNCED'", "req.status === 'DRAFT'", 'await objectionOf(em, assignment, req.id)', 'reviewCycle: cycle?.name'].map(part => stage.indexOf(part))
+  assert.ok(stageOrder.every((at, index) => at > 0 && (index === 0 || at > stageOrder[index - 1])), JSON.stringify(stageOrder))
+  assert.doesNotMatch(staging, /this\.|DataSource/, 'كله بـem اللي التقديم ماسكه')
+  const requests = read('api/src/requests/requests.service.ts')
+  assert.match(requests, /if \(type\.code === REVIEW_OBJECTION_TYPE\) req\.payload = JSON\.stringify\(await stageReviewObjection\(em, req\)\)/)
+  assert.match(requests, /\[REVIEW_OBJECTION_TYPE\]: \[\.\.\.REVIEW_OBJECTION_CLIENT_KEYS, \.\.\.REVIEW_OBJECTION_STAGED_KEYS\]/)
+
+  const controller = read('api/src/performance/reviews.controller.ts')
+  assert.equal(controller.split("@Perm('performance.calibrate')").length - 1, 3, 'دورات المعايرة وجلستها وتعديلها بصلاحيتها')
+  assert.ok(controller.indexOf("@Get('calibration')") < controller.indexOf("@Get(':id')"), 'المسار الثابت قبل ‎:id')
+  const { PERMISSIONS, PERMISSION_MODULES, ROLE_PRESETS } = require('../src/auth/permissions')
+  assert.deepEqual(['performance.calibrate' in PERMISSIONS, PERMISSION_MODULES.find(unit => unit.key === 'performance').permissions, ROLE_PRESETS.find(role => role.code === 'hr_manager').permissions.includes('performance.calibrate'),
+    ROLE_PRESETS.find(role => role.code === 'employee').permissions.includes('performance.calibrate')], [true, ['performance.manage', 'performance.calibrate'], true, false])
+})

@@ -7,8 +7,9 @@ import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { ClipboardCheck } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
+import { createRequest } from '@/lib/api'
 import { formatDate } from '@/lib/dates'
-import { acknowledgeReview, fetchReviewForm, submitReview, type ApiReviewForm, type ReviewAnswers, type ReviewEvidence, type ReviewResponseView } from '@/lib/reviews-api'
+import { REVIEW_OBJECTION_TYPE, acknowledgeReview, fetchReviewForm, submitReview, type ApiReviewForm, type ReviewAnswers, type ReviewEvidence, type ReviewResponseView } from '@/lib/reviews-api'
 
 const STATUS_WORDS: Record<string, string> = { present: 'حاضر', late: 'متأخر', absent: 'غايب', early_leave: 'انصراف مبكر', leave: 'إجازة', partial_leave: 'إجازة جزئية', holiday: 'عطلة',
   missing_punch: 'بصمة ناقصة', mission: 'مأمورية', remote: 'عن بُعد', exempt: 'معفي' }
@@ -21,6 +22,8 @@ export default function ReviewFormPage() {
   const [answers, setAnswers] = useState<ReviewAnswers>({ sections: {}, goals: {} })
   const [comment, setComment] = useState('')
   const [ack, setAck] = useState('')
+  const [objecting, setObjecting] = useState(false)
+  const [objectionReason, setObjectionReason] = useState('')
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
@@ -53,6 +56,13 @@ export default function ReviewFormPage() {
       setBusy(false)
     }
   }
+  // B3.8: الاعتراض طلب «اعتراض على تقييم أداء» مربوط بالتقييم ده — بيمشي في سلسلة الطلب، وحالته بترجع هنا
+  const object = () => run(async () => {
+    await createRequest(REVIEW_OBJECTION_TYPE, { reason: objectionReason.trim(), reviewId: id }, true)
+    setObjecting(false)
+    setObjectionReason('')
+    return fetchReviewForm(id)
+  })
   const submit = () => {
     // الفاضي مابيتبعتش (بند اختياري من غير إجابة)
     const sections: ReviewAnswers['sections'] = {}
@@ -126,6 +136,39 @@ export default function ReviewFormPage() {
                   <button onClick={() => run(() => acknowledgeReview(id, ack.trim() || undefined))} disabled={busy} className="btn-primary text-sm disabled:opacity-50">
                     أقرّ بالاطلاع
                   </button>
+                </div>
+              )}
+              {form.objection && (
+                <p className="text-sm text-amber-800 bg-amber-50 rounded-xl p-3" data-objection>
+                  فيه اعتراض على التقييم ده — حالته: {form.objection.statusLabel}{' '}
+                  <Link href={`/requests?request=${form.objection.requestId}`} className="text-primary-600 hover:underline">
+                    (الطلب رقم {form.objection.requestId})
+                  </Link>
+                </p>
+              )}
+              {form.canObject && (
+                <div className="bg-gray-50 rounded-xl p-4 space-y-3" data-object>
+                  <p className="text-sm text-gray-700">
+                    مش موافق على النتيجة؟ قدّم اعتراض بسببه — بيمشي في سلسلة اعتماده، ومرة واحدة على التقييم
+                    {form.objectionUntil ? ` (لحد ${formatDate(form.objectionUntil)})` : ''}.
+                  </p>
+                  {objecting ? (
+                    <>
+                      <textarea className="input w-full text-sm" rows={3} maxLength={1000} placeholder="سبب الاعتراض" value={objectionReason} onChange={(e) => setObjectionReason(e.target.value)} />
+                      <div className="flex items-center gap-2">
+                        <button onClick={object} disabled={busy || objectionReason.trim().length < 3} className="btn-primary text-sm disabled:opacity-50">
+                          تقديم الاعتراض
+                        </button>
+                        <button onClick={() => setObjecting(false)} className="btn-secondary text-sm">
+                          إلغاء
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <button onClick={() => setObjecting(true)} className="btn-secondary text-sm">
+                      اعتراض على التقييم
+                    </button>
+                  )}
                 </div>
               )}
               {form.acknowledgement && (

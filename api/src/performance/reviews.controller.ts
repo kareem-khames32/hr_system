@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Patch, Post, UseGuards } from '@nestjs/common'
+import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common'
 import { IsOptional } from 'class-validator'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
@@ -29,6 +29,10 @@ class AdvanceDto {
 }
 class AcknowledgeDto {
   @IsOptional() comment?: unknown
+}
+class CalibrateDto {
+  @IsOptional() score?: unknown
+  @IsOptional() reason?: unknown
 }
 class SubmitDto {
   @IsOptional() answers?: unknown
@@ -101,6 +105,19 @@ export class ReviewsController {
     return this.reviews.assignments(user, id)
   }
 
+  // B3.8-أ: المعايرة — دوراتها، وجلسة دورة (بمجموعة اختيارية: قسم أو فرع)
+  @Perm('performance.calibrate')
+  @Get('calibration')
+  calibrationCycles(@CurrentUser() user: JwtPayload) {
+    return this.reviews.calibrationCycles(user)
+  }
+
+  @Perm('performance.calibrate')
+  @Get('cycles/:id/calibration')
+  calibration(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Query('departmentId') departmentId?: string, @Query('branchId') branchId?: string) {
+    return this.reviews.calibration(user, id, { departmentId, branchId })
+  }
+
   @Get('mine')
   mine(@CurrentUser() user: JwtPayload) {
     return this.reviews.mine(user)
@@ -121,6 +138,14 @@ export class ReviewsController {
   @HttpCode(200)
   acknowledge(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: AcknowledgeDto) {
     return this.reviews.acknowledge(user, id, dto.comment)
+  }
+
+  // B3.8-أ: تعديل معايرة على درجة تقييم (بسبب إجباري)
+  @Perm('performance.calibrate')
+  @Post(':id/calibrate')
+  @HttpCode(200)
+  calibrate(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: CalibrateDto) {
+    return this.reviews.calibrate(user, id, dto)
   }
 
   @Post(':id/submit')

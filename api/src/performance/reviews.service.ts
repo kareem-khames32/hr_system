@@ -5,15 +5,19 @@ import { AttendanceDay } from '../attendance/attendance.entities'
 import { recordAudit } from '../audit/audit'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, inBranchScope, userHasPerm } from '../auth/guards'
+import { User } from '../auth/user.entity'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { ApproverResolver } from '../requests/approver-resolver.service'
+import { Request } from '../requests/entities/request.entity'
 import { Task } from '../tasks/task.entity'
 import { PerformanceGoal } from './goal.entities'
 import { goalsReady } from './goal-rules'
 import { ReviewAssignment, ReviewCycle, ReviewResponse, ReviewTemplate, type ReviewRelation } from './review.entities'
+import { OBJECTION_ACCEPTED, OBJECTION_STATUS_LABELS, objectionDeadline, objectionOf, objectionsOf } from './review-objections'
 import {
+  REVIEW_BANDS, REVIEW_CALIBRATE_PERMISSION, REVIEW_CALIBRATION_CHANGED, REVIEW_CALIBRATION_SAME, REVIEW_CALIBRATION_STAGE, bandDistribution, cleanCalibratedScore, cleanCalibrationReason, reviewBand,
   REVIEWS_MIGRATION_MISSING, REVIEW_CYCLE_KIND_LABELS, REVIEW_CYCLE_NOT_FOUND, REVIEW_CYCLE_STATUS_LABELS, REVIEW_NOT_FOUND, REVIEW_STATUS_LABELS, REVIEW_SUBMITTED, REVIEW_TEMPLATE_NOT_FOUND,
   REVIEW_TEXT_MAX, cleanAnswers, cleanCycleAudience, cleanCycleDates, cleanCycleKind, cleanRatingMax, cleanReviewName, cleanSections, parseTemplate, reviewScore, reviewsReady,
   type ReviewGoalRef, type ReviewTemplateShape,
@@ -47,6 +51,9 @@ export class ReviewsService {
   }
   private assertManager(user: JwtPayload) {
     if (!userHasPerm(user, REVIEWS_PERMISSION)) throw new ForbiddenException('الإجراء ده لصاحب صلاحية إدارة الأداء')
+  }
+  private assertCalibrator(user: JwtPayload) {
+    if (!userHasPerm(user, REVIEW_CALIBRATE_PERMISSION)) throw new ForbiddenException('الإجراء ده لصاحب صلاحية معايرة التقييمات')
   }
   /** الدورة في نطاق فروع الحساب: حساب من غير قيد فروع شايف الكل؛ وحساب الفروع شايف الدورة اللي كل فروعها من فروعه (دورة «كل الشركة» مش له) */
   private cycleInScope(user: JwtPayload, cycle: ReviewCycle): boolean {
@@ -229,6 +236,12 @@ export class ReviewsService {
       if (!mine.length) return 0
       // بشرط الحالة: تكليف اتحرك في النص مابيتكتبش فوقه
       const written = await em.getRepository(ReviewAssignment).update({ id: In(mine), status: from }, { status: rawTo })
+      // B3.8-أ: لحظة الإعلان لكل تكليف (مهلة الاعتراض منها). «معتمد» مابيتحركش غير من هنا وتحت قفل الدورة، فالمجموعة ثابتة
+      if (rawTo === 'ANNOUNCED') {
+        const now = new Date()
+        await em.getRepository(ReviewResponse).insert(mine.map((assignmentId) => ({ assignmentId, relation: 'PUB' as const, answers: '{}', evidence: null, score: null, comment: null,
+          submittedByUserId: user.sub, submittedAt: now })))
+      }
       await recordAudit(em, { category: 'SETTINGS', action: rawTo === 'APPROVED' ? 'REVIEW_CYCLE_APPROVED' : 'REVIEW_CYCLE_ANNOUNCED', entityType: 'review_cycle', entityId: cycle.id, actorUserId: user.sub,
         branchId: null, summary: `دورة التقييم «${cycle.name}»: ${rawTo === 'APPROVED' ? 'اعتماد' : 'إعلان'} ${written.affected ?? mine.length} تقييم`, after: { status: rawTo, count: written.affected ?? mine.length } })
       return written.affected ?? mine.length
@@ -273,6 +286,123 @@ export class ReviewsService {
         status: row.status, statusLabel: REVIEW_STATUS_LABELS[row.status] ?? row.status, selfSubmitted: !!row.selfSubmittedAt, managerSubmitted: !!row.managerSubmittedAt,
         selfScore: score(row.selfScore), managerScore: score(row.managerScore), finalScore: score(row.finalScore) }
     }) }
+  }
+
+  // ===== B3.8-أ: المعايرة =====
+
+  /** تكليف في نطاق اللي بيعاير: دورته في نطاق فروعه، والموظف بفرعه الحالي في نطاقه */
+  private async calibratorSees(em: EntityManager, user: JwtPayload, assignment: ReviewAssignment, cycle: ReviewCycle): Promise<boolean> {
+    if (!this.cycleInScope(user, cycle)) return false
+    const employee = await em.getRepository(Employee).findOne({ where: { id: assignment.employeeId } })
+    return !!employee && inBranchScope(branchScopeOf(user), employee.branchId)
+  }
+
+  /** الدورات اللي اتطلقت في نطاق الحساب (اختيار دورة المعايرة) */
+  async calibrationCycles(user: JwtPayload) {
+    this.assertCalibrator(user)
+    const em = this.ds.manager
+    if (!(await reviewsReady(em))) return { available: false, message: REVIEWS_MIGRATION_MISSING, cycles: [] }
+    const rows = (await em.getRepository(ReviewCycle).find({ where: { status: In(['ACTIVE', 'CLOSED']) }, order: { id: 'DESC' } })).filter((row) => this.cycleInScope(user, row))
+    return { available: true, bands: REVIEW_BANDS, cycles: rows.map((row) => ({ id: row.id, name: row.name, kindLabel: REVIEW_CYCLE_KIND_LABELS[row.kind] ?? row.kind, status: row.status,
+      statusLabel: REVIEW_CYCLE_STATUS_LABELS[row.status] ?? row.status, periodStart: day(row.periodStart), periodEnd: day(row.periodEnd) })) }
+  }
+
+  /**
+   * جلسة معايرة دورة: التقييمات اللي المدير سلّمها (لموظفين فرعهم الحالي في نطاق الحساب)، بمجموعة اختيارية (قسم أو فرع): درجة المدير والدرجة
+   * النهائية وتقديرها، وسجل تعديلات المعايرة، وجدول توزيع التقديرات لكل مدير، والتوزيع الكلي جنب الاسترشادي (تحذير بس).
+   */
+  async calibration(user: JwtPayload, cycleId: number, filter: { departmentId?: unknown; branchId?: unknown } = {}) {
+    this.assertCalibrator(user)
+    const em = this.ds.manager
+    await this.assertReady(em)
+    const group = (raw: unknown, label: string): number | null => {
+      if (raw === undefined || raw === null || raw === '') return null
+      const value = Number(raw)
+      if (!Number.isSafeInteger(value) || value < 1) throw new BadRequestException(`${label} غير صالح`)
+      return value
+    }
+    const departmentId = group(filter.departmentId, 'القسم'), branchId = group(filter.branchId, 'الفرع')
+    const cycle = await em.getRepository(ReviewCycle).findOne({ where: { id: cycleId } })
+    if (!cycle || cycle.status === 'DRAFT' || !this.cycleInScope(user, cycle)) throw new NotFoundException(REVIEW_CYCLE_NOT_FOUND)
+    const scope = branchScopeOf(user)
+    const all = (await em.getRepository(ReviewAssignment).find({ where: { cycleId }, order: { id: 'ASC' } })).filter((row) => row.status !== 'OPEN')
+    const people = new Map((all.length ? await em.getRepository(Employee).find({ where: { id: In([...new Set(all.flatMap((row) => [row.employeeId, row.managerEmployeeId ?? row.employeeId]))]) } }) : []).map((row) => [row.id, row]))
+    // الموظف بفرعه وقسمه الحاليين
+    const visible = all.filter((row) => inBranchScope(scope, people.get(row.employeeId)?.branchId ?? null))
+    const departments = new Map((visible.length ? await em.getRepository(Department).find({ where: { id: In([...new Set(visible.map((row) => people.get(row.employeeId)?.departmentId ?? 0))]) } }) : []).map((row) => [row.id, row.name]))
+    const branches = new Map((visible.length ? await em.getRepository(Branch).find({ where: { id: In([...new Set(visible.map((row) => people.get(row.employeeId)?.branchId ?? 0))]) } }) : []).map((row) => [row.id, row.name]))
+    const rows = visible.filter((row) => (departmentId === null || people.get(row.employeeId)?.departmentId === departmentId) && (branchId === null || people.get(row.employeeId)?.branchId === branchId))
+    const log = rows.length ? await em.getRepository(ReviewResponse).find({ where: { assignmentId: In(rows.map((row) => row.id)), relation: 'CAL' }, order: { id: 'ASC' } }) : []
+    const actors = new Map((log.length ? await em.getRepository(User).find({ where: { id: In([...new Set(log.map((row) => row.submittedByUserId))]) } }) : []).map((row) => [row.id, row.displayName]))
+    const objections = await objectionsOf(em, [...new Set(rows.map((row) => row.employeeId))])
+    // المديرين بترتيب ظهورهم؛ المدير اللي فرعه الحالي برّه النطاق بيتعدّ من غير اسم (ومن غير رقم)
+    const managerIds = [...new Set(rows.map((row) => row.managerEmployeeId ?? 0))]
+    const managerName = (id: number): string | null => { const manager = people.get(id); return manager && inBranchScope(scope, manager.branchId) ? manager.fullName : null }
+    const announced = (row: ReviewAssignment) => row.status === 'ANNOUNCED' || row.status === 'ACKNOWLEDGED'
+    return {
+      cycle: { id: cycle.id, name: cycle.name, status: cycle.status, statusLabel: REVIEW_CYCLE_STATUS_LABELS[cycle.status] ?? cycle.status },
+      bands: REVIEW_BANDS,
+      groups: {
+        departments: [...departments].map(([id, name]) => ({ id, name })).sort((left, right) => left.name.localeCompare(right.name, 'ar')),
+        branches: [...branches].map(([id, name]) => ({ id, name })).sort((left, right) => left.name.localeCompare(right.name, 'ar')),
+      },
+      rows: rows.map((row) => {
+        const employee = people.get(row.employeeId), final = score(row.finalScore), band = reviewBand(final), objection = objections.get(row.id) ?? null
+        return { id: row.id, employeeName: employee?.fullName ?? '—', departmentName: employee?.departmentId != null ? departments.get(employee.departmentId) ?? null : null,
+          branchName: employee?.branchId != null ? branches.get(employee.branchId) ?? null : null, manager: managerIds.indexOf(row.managerEmployeeId ?? 0),
+          status: row.status, statusLabel: REVIEW_STATUS_LABELS[row.status] ?? row.status, managerScore: score(row.managerScore), finalScore: final,
+          band, bandLabel: REVIEW_BANDS.find((entry) => entry.key === band)?.label ?? null,
+          adjustments: log.filter((entry) => entry.assignmentId === row.id).map((entry) => {
+            const change = JSON.parse(entry.answers) as { before?: string | null; after?: string }
+            return { before: score(change.before ?? null), after: score(change.after ?? entry.score), reason: entry.comment ?? '', byName: actors.get(entry.submittedByUserId) ?? null, at: entry.submittedAt }
+          }),
+          objection: objection ? { requestId: objection.requestId, status: objection.status, statusLabel: OBJECTION_STATUS_LABELS[objection.status] ?? objection.status } : null,
+          canCalibrate: row.status === 'COMPLETED' || (announced(row) && !!objection && OBJECTION_ACCEPTED.includes(objection.status)) }
+      }),
+      managers: managerIds.map((id, index) => {
+        const scores = rows.filter((row) => (row.managerEmployeeId ?? 0) === id).map((row) => score(row.finalScore))
+        const rated = scores.filter((value): value is number => value !== null)
+        return { index, name: id ? managerName(id) : null, hasManager: id !== 0, count: scores.length, average: rated.length ? Math.round((rated.reduce((sum, value) => sum + value, 0) / rated.length) * 100) / 100 : null,
+          bands: bandDistribution(scores).map((band) => ({ key: band.key, count: band.count })) }
+      }),
+      distribution: bandDistribution(rows.map((row) => score(row.finalScore))),
+    }
+  }
+
+  /**
+   * تعديل معايرة على درجة تقييم — بسبب إجباري وبيتسجّل (قبل، بعد، السبب، مين، إمتى) صف رد CAL وسطر تدقيق. قبل الاعتماد («المدير سلّم»)، أو على
+   * تقييم معلن اعتراضه اتقبل. الأقفال بنفس ترتيب تقديم الاعتراض: صف الطلب ثم صف التكليف، والحكم كله بيتعاد تحتها.
+   */
+  async calibrate(user: JwtPayload, assignmentId: number, input: { score?: unknown; reason?: unknown }) {
+    this.assertCalibrator(user)
+    const next = cleanCalibratedScore(input.score), reason = cleanCalibrationReason(input.reason)
+    const em0 = this.ds.manager
+    await this.assertReady(em0)
+    const seen = await em0.getRepository(ReviewAssignment).findOne({ where: { id: assignmentId } })
+    const seenCycle = seen ? await em0.getRepository(ReviewCycle).findOne({ where: { id: seen.cycleId } }) : null
+    if (!seen || !seenCycle || !(await this.calibratorSees(em0, user, seen, seenCycle))) throw new NotFoundException(REVIEW_NOT_FOUND)
+    const published = seen.status === 'ANNOUNCED' || seen.status === 'ACKNOWLEDGED'
+    const objection = published ? await objectionOf(em0, seen) : null
+    if (published ? !objection || !OBJECTION_ACCEPTED.includes(objection.status) : seen.status !== 'COMPLETED') throw new BadRequestException(REVIEW_CALIBRATION_STAGE)
+    await this.ds.transaction(async (em) => {
+      if (objection) {
+        const request = await em.getRepository(Request).findOne({ where: { id: objection.requestId }, lock: { mode: 'pessimistic_write' } })
+        if (!request || request.requesterId !== seen.employeeId || !OBJECTION_ACCEPTED.includes(request.status)) throw new ConflictException(REVIEW_CALIBRATION_CHANGED)
+      }
+      const assignment = await em.getRepository(ReviewAssignment).findOne({ where: { id: assignmentId }, lock: { mode: 'pessimistic_write' } })
+      if (!assignment || assignment.status !== seen.status) throw new ConflictException(REVIEW_CALIBRATION_CHANGED)
+      const cycle = await em.getRepository(ReviewCycle).findOne({ where: { id: assignment.cycleId } })
+      // الموظف اتنقل برّه نطاق اللي بيعاير في النص = غير موجود
+      if (!cycle || !(await this.calibratorSees(em, user, assignment, cycle))) throw new NotFoundException(REVIEW_NOT_FOUND)
+      const before = assignment.finalScore === null || assignment.finalScore === undefined ? null : Number(assignment.finalScore).toFixed(2)
+      if (before === next) throw new BadRequestException(REVIEW_CALIBRATION_SAME)
+      await em.getRepository(ReviewResponse).insert({ assignmentId: assignment.id, relation: 'CAL', answers: JSON.stringify({ before, after: next, objectionRequestId: objection?.requestId ?? null }),
+        evidence: null, score: next, comment: reason, submittedByUserId: user.sub, submittedAt: new Date() })
+      await em.getRepository(ReviewAssignment).update({ id: assignment.id }, { finalScore: next })
+      await recordAudit(em, { category: 'SETTINGS', action: 'REVIEW_CALIBRATED', entityType: 'review_assignment', entityId: assignment.id, actorUserId: user.sub, branchId: assignment.branchId,
+        summary: `معايرة تقييم في دورة «${cycle.name}»: ${before ?? '—'} ← ${next} — ${reason}`, before: { finalScore: before }, after: { finalScore: next, reason, objectionRequestId: objection?.requestId ?? null } })
+    })
+    return this.calibration(user, seen.cycleId)
   }
 
   // ===== التقييم نفسه (الموظف ومديره) =====
@@ -367,6 +497,9 @@ export class ReviewsService {
       return row && allowed ? { answers: JSON.parse(row.answers), score: score(row.score), comment: row.comment ?? null, submittedAt: row.submittedAt, evidence: row.evidence ? JSON.parse(row.evidence) : null } : null
     }
     const mine = relation === 'self' ? shown('SELF') : relation === 'manager' ? shown('MANAGER') : null
+    // B3.8-أ: اعتراض الموظف على نتيجته المعلنة (طلب «اعتراض على تقييم أداء» المربوط بالتقييم) ومهلته
+    const objection = announced ? await objectionOf(em, assignment) : null
+    const objectionUntil = announced ? await objectionDeadline(em, assignment.id) : null
     return {
       ...this.listView(assignment, cycle, employee?.fullName ?? null, relation === 'self' ? 'self' : 'manager'), relation, template,
       goals: await this.goalsOf(em, assignment.employeeId, cycle),
@@ -376,6 +509,9 @@ export class ReviewsService {
       // B3.7-ب: إقرار الموظف بالنتيجة المعلنة
       acknowledgement: (() => { const row = responses.find((response) => response.relation === 'ACK'); return row ? { comment: row.comment ?? null, at: row.submittedAt } : null })(),
       canAcknowledge: relation === 'self' && assignment.status === 'ANNOUNCED',
+      objection: objection ? { requestId: objection.requestId, status: objection.status, statusLabel: OBJECTION_STATUS_LABELS[objection.status] ?? objection.status } : null,
+      objectionUntil,
+      canObject: relation === 'self' && announced && !objection && (!objectionUntil || Date.now() <= objectionUntil.getTime()),
       canSubmit: cycle.status === 'ACTIVE' && ((relation === 'self' && !assignment.selfSubmittedAt) || (relation === 'manager' && !assignment.managerSubmittedAt)),
     }
   }

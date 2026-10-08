@@ -104,6 +104,8 @@ import { onePersonControlEnabled } from '../payroll/one-person-controls'
 import { assertPersonalDataKeys, PERSONAL_DATA_HANDLER, validatePersonalDataRequest } from './personal-data-requests'
 import { DOCUMENT_RENEWAL_HANDLER, DOCUMENT_RENEWAL_STAGED_KEYS, documentRenewalFields, documentRenewalTypeNames, stageDocumentRenewal } from '../assets/document-renewal'
 import { POSITION_REQUEST_HANDLER, POSITION_REQUEST_STAGED_KEYS, positionRequestFields, positionRequestTitles, stagePositionRequest } from '../positions/position-requests'
+import { REVIEW_OBJECTION_CLIENT_KEYS, REVIEW_OBJECTION_STAGED_KEYS, stageReviewObjection } from '../performance/review-objections'
+import { REVIEW_OBJECTION_TYPE } from '../performance/review-rules'
 import { REQUISITION_CLIENT_KEYS, REQUISITION_HANDLER, REQUISITION_STAGED_KEYS, requisitionFields, requisitionTitles, stageRequisition } from '../recruitment/requisition-requests'
 import { recordOutboxEvent } from '../queue/outbox'
 // CR36-B01 وCR37-B01: مرجع المسير في إضافي تفاصيل الطلب ونص أحداثه بقاعدة رؤية المسير
@@ -141,6 +143,8 @@ const CATEGORY_PAYLOAD_KEYS: Record<string, string[]> = {
   letters: ['purpose', 'destination'],
 }
 const TYPE_PAYLOAD_KEYS: Record<string, string[]> = {
+  // B3.8-أ: «اعتراض على تقييم أداء» المربوط بتقييم — رقم التقييم من العميل، واسم الدورة الخادم بيثبّته عند كل تقديم
+  [REVIEW_OBJECTION_TYPE]: [...REVIEW_OBJECTION_CLIENT_KEYS, ...REVIEW_OBJECTION_STAGED_KEYS],
   // المعرّف مرجع الحساب، والاسم للعرض (يُثبَّتان عند التقديم من الكتالوج)
   PERMISSION: ['permissionType', 'permissionTypeId'],
   CUSTODY_REQUEST: ['assetIds'],
@@ -566,6 +570,8 @@ export class RequestsService {
     if (type.destinationHandler === POSITION_REQUEST_HANDLER) req.payload = JSON.stringify(await stagePositionRequest(em, req))
     // B3.2-أ: «احتياج توظيف»: نفس فحوص الاعتماد النهائي بدري، وقسم الوظيفة بيتثبّت على الطلب من قسم مقدّمه دلوقتي — عند كل تقديم وإعادة تقديم
     if (type.destinationHandler === REQUISITION_HANDLER) req.payload = JSON.stringify(await stageRequisition(em, req))
+    // B3.8-أ: «اعتراض على تقييم أداء» — لو متقدّم من شاشة التقييم (reviewId) بيتربط بتقييم معلن لمقدّمه، تحت قفل صف التكليف؛ من غيره سجل عادي
+    if (type.code === REVIEW_OBJECTION_TYPE) req.payload = JSON.stringify(await stageReviewObjection(em, req))
     // B2.15-ب: «تجديد مستند» — الحكم على النوع والتاريخ وتثبيت كود النوع، عند كل تقديم وإعادة تقديم
     if (type.destinationHandler === DOCUMENT_RENEWAL_HANDLER) req.payload = JSON.stringify(await stageDocumentRenewal(em, req))
     if (type.destinationHandler === 'custody_transfer') {

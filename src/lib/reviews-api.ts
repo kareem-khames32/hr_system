@@ -56,6 +56,29 @@ export interface ApiReviewForm extends ApiReviewRow {
   self: ReviewResponseView | null; manager: ReviewResponseView | null
   acknowledgement: { comment: string | null; at: string } | null
   canSubmit: boolean; canAcknowledge: boolean
+  /** B3.8: اعتراض الموظف على نتيجته المعلنة (طلب في سلسلته) ومهلته */
+  objection: ReviewObjection | null; objectionUntil: string | null; canObject: boolean
+}
+export interface ReviewObjection { requestId: number; status: string; statusLabel: string }
+
+// B3.8: المعايرة
+export interface ReviewBand { key: string; label: string; min: number; guide: number }
+export interface ApiCalibrationCycle { id: number; name: string; kindLabel: string; status: ReviewCycleStatus; statusLabel: string; periodStart: string; periodEnd: string }
+export interface ApiCalibrationRow {
+  id: number; employeeName: string; departmentName: string | null; branchName: string | null
+  /** ترتيب المدير في جدول التوزيع (مش رقمه) */
+  manager: number
+  status: ReviewStatus; statusLabel: string; managerScore: number | null; finalScore: number | null; band: string | null; bandLabel: string | null
+  adjustments: Array<{ before: number | null; after: number | null; reason: string; byName: string | null; at: string }>
+  objection: ReviewObjection | null; canCalibrate: boolean
+}
+export interface ApiCalibration {
+  cycle: { id: number; name: string; status: ReviewCycleStatus; statusLabel: string }
+  bands: ReviewBand[]
+  groups: { departments: Array<{ id: number; name: string }>; branches: Array<{ id: number; name: string }> }
+  rows: ApiCalibrationRow[]
+  managers: Array<{ index: number; name: string | null; hasManager: boolean; count: number; average: number | null; bands: Array<{ key: string; count: number }> }>
+  distribution: Array<{ key: string; label: string; count: number; percent: number; guide: number; over: boolean }>
 }
 
 const json = (method: string, body: unknown): RequestInit => ({ method, body: JSON.stringify(body) })
@@ -76,3 +99,9 @@ export const fetchTeamReviews = () => apiFetch<{ available: boolean; reviews: Ap
 export const fetchReviewForm = (id: number) => apiFetch<ApiReviewForm>(`${R}/${id}`)
 export const submitReview = (id: number, answers: ReviewAnswers, comment?: string) => apiFetch<ApiReviewForm>(`${R}/${id}/submit`, json('POST', { answers, ...(comment ? { comment } : {}) }))
 export const acknowledgeReview = (id: number, comment?: string) => apiFetch<ApiReviewForm>(`${R}/${id}/acknowledge`, json('POST', comment ? { comment } : {}))
+export const fetchCalibrationCycles = () => apiFetch<{ available: boolean; message?: string; cycles: ApiCalibrationCycle[] }>(`${R}/calibration`)
+export const fetchCalibration = (cycleId: number, group: { departmentId?: number; branchId?: number } = {}) =>
+  apiFetch<ApiCalibration>(`${R}/cycles/${cycleId}/calibration${group.departmentId ? `?departmentId=${group.departmentId}` : group.branchId ? `?branchId=${group.branchId}` : ''}`)
+export const calibrateReview = (id: number, score: string, reason: string) => apiFetch<ApiCalibration>(`${R}/${id}/calibrate`, json('POST', { score, reason }))
+/** نوع الطلب الموجود «اعتراض على تقييم أداء» — من شاشة التقييم بيتربط بيه (reviewId) */
+export const REVIEW_OBJECTION_TYPE = 'APPRAISAL_OBJECTION'

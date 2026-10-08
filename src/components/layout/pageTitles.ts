@@ -97,6 +97,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/performance/goals', 'الأهداف'],
   ['/performance/cycles', 'دورات التقييم'],
   ['/performance/templates', 'نماذج التقييم'],
+  ['/performance/calibration', 'المعايرة'],
   [/^\/performance\/[^/]+/, 'تقييم الأداء'],
   ['/performance', 'التقييمات'],
   ['/training/my-courses', 'دوراتي'],

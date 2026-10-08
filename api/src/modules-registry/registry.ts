@@ -313,7 +313,7 @@ export const MODULES = {
   performance: moduleDef({
     nameAr: 'إدارة الأداء', group: 'talent', dependsOn: ['org', 'employees'], softUses: ['tasks'], preset: 'standard', defaultEnabled: false,
     description: 'أهداف الموظفين والأقسام والشركة، ودورات التقييم: نماذج بأقسام موزونة، تقييم ذاتي وتقييم المدير بأدلة من النظام، ودرجة محسوبة بالأوزان',
-    permissions: ['performance.manage'],
+    permissions: ['performance.manage', 'performance.calibrate'],
     // B3.7-ب: التقييمات ودوراتها ونماذجها ونموذج التقييم بقوا حقيقيين (كانوا شاشات عرض)؛ «تقييم جديد» لسه شاشة عرض
     routes: ['/performance/goals', '/performance', '/performance/cycles', '/performance/templates', '/performance/*'],
   }),

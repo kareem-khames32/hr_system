@@ -219,6 +219,8 @@ const adminMenuDefs: MenuItem[] = [
       // B3.7: الدورات والنماذج لإدارة الأداء
       { label: 'دورات التقييم', href: '/performance/cycles', perm: 'performance.manage' },
       { label: 'نماذج التقييم', href: '/performance/templates', perm: 'performance.manage' },
+      // B3.8: المعايرة بصلاحيتها
+      { label: 'المعايرة', href: '/performance/calibration', perm: 'performance.calibrate' },
     ],
   },
   {
