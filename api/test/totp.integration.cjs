@@ -562,3 +562,109 @@ test('TP-07 (CRP3F): a stale account or role save cannot write over a promotion,
   assert.equal(typeof changed.accessToken, 'string')
   expect(await http('GET', '/auth/me', undefined, bearer(changed.accessToken)), 200)
 })
+
+test('TP-08 (CRP3G): a password change issues its session from the account as it is now, and a role being assigned is pinned until the save', async () => {
+  const account = async (key, extra = {}) => {
+    P[key] = passwordOf()
+    U[key] = await repo('User').save({ email: `${key}@totp.invalid`, displayName: `حساب ${key}`, role: 'employee', permissions: '[]', isActive: true, branchId: B.a.id,
+      passwordHash: await bcrypt.hash(P[key], 10), ...extra })
+  }
+  const done = response => { assert.ok([200, 201].includes(response.status), JSON.stringify(response.body)); return response.body }
+  const root = bearer(await signIn('admin'))
+  const manager = bearer(expect(await login('adminA'), 201).accessToken)
+  const usersController = app.get(require('../src/auth/users.controller').UsersController)
+  const authService = app.get(require('../src/auth/auth.service').AuthService)
+  const stored = async key => repo('User').findOneByOrFail({ id: U[key].id })
+
+  // ===== B01: الحساب اتسحب منه دوره وتغيير كلمة المرور في الطريق — الجلسة الجديدة بالدور الحالي =====
+  await account('chief', { role: 'super_admin', branchId: null })
+  const chief = bearer(expect(await login('chief'), 201).accessToken)
+  expect(await http('GET', '/users', undefined, chief), 200)
+  // سياسة كلمة السر بتتفحص بعد قراية صف الحساب وقبل الكتابة: هناك مدير نظام تاني بينزّل الحساب لموظف
+  const policy = authService.security, realAssert = policy.assertPassword
+  let demoted = false
+  policy.assertPassword = async function (...args) {
+    if (!demoted) { demoted = true; done(await http('PATCH', `/users/${U.chief.id}`, { role: 'employee', branchId: B.a.id }, root)) }
+    return realAssert.apply(this, args)
+  }
+  const next = passwordOf()
+  let changed
+  try { changed = await http('POST', '/auth/change-password', { currentPassword: P.chief, newPassword: next }, chief) } finally { policy.assertPassword = realAssert }
+  assert.equal(demoted, true)
+  // التوكن القديم مات مع التنزيل (401)، أو التغيير كمّل بجلسة الحساب الحالي — في الحالتين مفيش جلسة مدير نظام
+  if (changed.status === 200) {
+    P.chief = next
+    assert.deepEqual([changed.body.user.role, changed.body.user.permissions.includes('*')], ['employee', false])
+    const claims = jwt.verify(changed.body.accessToken)
+    assert.deepEqual([claims.role, claims.permissions.includes('*'), claims.tokenVersion], ['employee', false, (await stored('chief')).tokenVersion])
+    assert.equal((await http('GET', '/users', undefined, bearer(changed.body.accessToken))).status, 403, 'جلسة موظف مش بتفتح شاشة المستخدمين')
+    expect(await http('GET', '/auth/me', undefined, bearer(changed.body.accessToken)), 200)
+  } else {
+    assert.equal(changed.status, 401, JSON.stringify(changed.body))
+  }
+  assert.equal((await stored('chief')).role, 'employee')
+
+  // ===== B02 (أ): إسناد دور لحساب، والدور اترقّى بعد حكم الصلاحيات وقبل الحفظ =====
+  const role = done(await http('POST', '/roles', { code: 'tp08_role', nameAr: 'دور اختبار التثبيت', permissions: [] }, root))
+  await account('assignee')
+  const realResolve = usersController.auth.resolvePermissions
+  let promoted = false
+  // الحكم بيحسب صلاحيات الحساب بالدور المقترح؛ بعد الحساب ده مدير النظام بيضيف صلاحية إدارية للدور
+  const promoteAfterJudgment = async function (user, ...rest) {
+    const permissions = await realResolve.call(this, user, ...rest)
+    if (!promoted && user?.role === role.code) {
+      promoted = true
+      done(await http('PATCH', `/roles/${role.id}`, { permissions: ['settings.manage'] }, root))
+    }
+    return permissions
+  }
+  usersController.auth.resolvePermissions = promoteAfterJudgment
+  let assigned
+  try { assigned = await http('PATCH', `/users/${U.assignee.id}`, { role: role.code }, manager) } finally { usersController.auth.resolvePermissions = realResolve }
+  assert.equal(promoted, true)
+  assert.deepEqual(answer(assigned), [409, 'الدور المختار اتغيّرت صلاحياته — حدّث الصفحة وحاول تاني'])
+  assert.deepEqual([(await stored('assignee')).role, (await stored('assignee')).tokenVersion], ['employee', 0], 'الحساب ماخدش الدور ولا اتلمس')
+  // والطلب الجديد بيتحكم على الحزمة الحالية: مرفوض (منح صلاحية إدارية لمدير النظام بس)
+  assert.equal((await http('PATCH', `/users/${U.assignee.id}`, { role: role.code }, manager)).status, 403)
+  // ومدير النظام بيسنده عادي
+  assert.equal(done(await http('PATCH', `/users/${U.assignee.id}`, { role: role.code }, root)).role, role.code)
+
+  // ===== B02 (ب): إنشاء حساب بدور اترقّى بعد الحكم =====
+  const other = done(await http('POST', '/roles', { code: 'tp08_new', nameAr: 'دور حساب جديد', permissions: [] }, root))
+  let grown = false
+  usersController.auth.resolvePermissions = async function (user, ...rest) {
+    const permissions = await realResolve.call(this, user, ...rest)
+    if (!grown && user?.role === other.code) {
+      grown = true
+      done(await http('PATCH', `/roles/${other.id}`, { permissions: ['audit.view'] }, root))
+    }
+    return permissions
+  }
+  let createdAccount
+  try {
+    createdAccount = await http('POST', '/users', { email: 'made@totp.invalid', displayName: 'حساب جديد بدور اتغيّر', password: passwordOf(), role: other.code, branchId: B.a.id }, manager)
+  } finally { usersController.auth.resolvePermissions = realResolve }
+  assert.equal(grown, true)
+  assert.deepEqual(answer(createdAccount), [409, 'الدور المختار اتغيّرت صلاحياته — حدّث الصفحة وحاول تاني'])
+  assert.equal(await repo('User').count({ where: { email: 'made@totp.invalid' } }), 0)
+  // ومن غير تغيير: الإنشاء بدور غير إداري عادي
+  const plainRole = done(await http('POST', '/roles', { code: 'tp08_plain', nameAr: 'دور عادي', permissions: [] }, root))
+  const made = done(await http('POST', '/users', { email: 'plain-made@totp.invalid', displayName: 'حساب جديد عادي', password: passwordOf(), role: plainRole.code, branchId: B.a.id }, manager))
+  assert.deepEqual([made.role, 'passwordHash' in made], [plainRole.code, false])
+
+  // ===== نفس الصنف: كلمة سر مؤقتة لحساب اترقّى بعد الحكم =====
+  await account('reset')
+  const before = (await stored('reset')).passwordHash
+  const realPolicy = usersController.security.assertPassword
+  let raised = false
+  usersController.security.assertPassword = async function (...args) {
+    if (!raised) { raised = true; done(await http('PUT', `/users/${U.reset.id}/permissions`, { grants: ['settings.manage'], revokes: [] }, root)) }
+    return realPolicy.apply(this, args)
+  }
+  let temporary
+  try { temporary = await http('POST', '/users/temporary-password', { userIds: [U.reset.id], password: passwordOf() }, manager) } finally { usersController.security.assertPassword = realPolicy }
+  assert.equal(raised, true)
+  assert.deepEqual(answer(temporary), [409, 'بيانات الحساب اتغيّرت — حدّث الصفحة وحاول تاني'])
+  assert.equal((await stored('reset')).passwordHash, before, 'كلمة السر زي ما هي')
+  assert.equal((await http('POST', '/users/temporary-password', { userIds: [U.reset.id], password: passwordOf() }, manager)).status, 403, 'والحكم الجديد بيرفض: الحساب بقى أقوى من المنفّذ')
+})

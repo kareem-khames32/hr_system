@@ -18,7 +18,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common'
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm'
-import { DataSource, In, Not, Repository } from 'typeorm'
+import { DataSource, In, Not, Repository, type EntityManager } from 'typeorm'
 import * as bcrypt from 'bcryptjs'
 import {
   ArrayMaxSize,
@@ -199,6 +199,8 @@ export const SCOPE_ALL_BRANCHES_ACCOUNT_LOCKED = 'الحساب ده نطاقه �
 // ونفس المنطق للفروع المختارة بعلامات صح: حساب فروع يدّي فروع جوه نطاقه بس، ومايديرش حساب نطاقه فيه فرع برّه نطاقه
 // (وإلا مدير الفرع 2 يعيّن كلمة مرور لحساب على الفرع 2 و3 ويدخل بيه على الفرع 3)
 export const SCOPE_BRANCHES_OUTSIDE_ACTOR = 'تقدر تدّي فروع جوه نطاقك بس'
+/** الدور المطلوب إسناده اتغيّرت حزمته أو حالته بعد ما الإسناد اتحكم عليه — CRP3G */
+export const ASSIGNED_ROLE_CHANGED = 'الدور المختار اتغيّرت صلاحياته — حدّث الصفحة وحاول تاني'
 /** الحساب اتغيّر (دوره أو صلاحياته أو نطاقه أو حالته) بعد ما التعديل اتحكم عليه — CRP3F */
 export const ACCOUNT_CHANGED_MEANWHILE = 'بيانات الحساب اتغيّرت — حدّث الصفحة وحاول تاني'
 export const SCOPE_WIDER_ACCOUNT_LOCKED = 'الحساب ده نطاقه فيه فروع برّه نطاقك — تعديله لحساب نطاقه يغطي كل فروعه'
@@ -293,6 +295,17 @@ export class UsersController {
   // الدور القابل للإسناد = موجود في جدول roles ومفعّل (المخصصة مسموحة)
   // — fallback للـ presets لو الجدول لسه ما اتبذرش. مطابقة حرفية للكود المخزَّن
   // (البحث في القاعدة لا يفرّق حالة الأحرف) → لا يُحفظ إلا الكود القانوني
+  /**
+   * CRP3G-B02: حزمة الدور وحالته كنص للمقارنة (دور من غير صف = حزمته الأساسية في الكود). من غير مدير معاملة: القراية اللي الحكم بيتبني
+   * عليها؛ وبمدير معاملة: صف الدور بيتقفل لآخرها، فتعديل حزمته يا ثبت قبلنا فنشوفه، يا بيستنى الحفظ
+   */
+  private async roleStamp(code: string, em?: EntityManager): Promise<string> {
+    const row = em
+      ? await em.getRepository(Role).findOne({ where: { code }, lock: { mode: 'pessimistic_write' } })
+      : await this.roles.findOne({ where: { code } })
+    return row ? JSON.stringify([row.permissions, row.isActive === true]) : 'PRESET'
+  }
+
   private async assertAssignableRole(code: string) {
     const row = await this.roles.findOne({ where: { code } })
     const ok = row
@@ -526,8 +539,13 @@ export class UsersController {
             passwordChangedAt,
             tokenVersion: () => 'tokenVersion + 1',
           })
-          .where('id = :id', { id: target.id })
+          // CRP3G (مسح الصنف): حق المنفّذ اتحكم فوق على صلاحيات الحساب وقت القراية — حساب اترقّى أو اتغيّر بعدها إصداره اتحرك، فالكتابة
+          // بشرط الإصدار اللي اتحكم عليه؛ مااتكتبش = 409 والدفعة كلها بترجع
+          .where('id = :id AND tokenVersion = :seen', { id: target.id, seen: target.tokenVersion ?? 0 })
           .execute()
+          .then((written) => {
+            if (!written.affected) throw new ConflictException(ACCOUNT_CHANGED_MEANWHILE)
+          })
         // B2.1: الكلمة المؤقتة في سجل التدقيق (إنها اتحطت بس — من غير أي قيمة)
         await recordAudit(em, { category: 'PERMISSIONS', action: 'TEMP_PASSWORD_SET', entityType: 'user', entityId: target.id, actorUserId: actor.sub,
           branchId: target.branchId ?? null, summary: `كلمة سر مؤقتة للحساب ${target.email}`, after: { mustChangePassword } })
@@ -546,6 +564,8 @@ export class UsersController {
     if (actor.role !== 'super_admin' && dto.scopeAllBranches === true) {
       throw new ForbiddenException(SCOPE_ALL_BRANCHES_SUPER_ADMIN_ONLY)
     }
+    // CRP3G-B02: حزمة الدور المطلوب وحالته زي ما هيتحكم عليهم — بيتقارنوا بصف الدور تحت قفله وقت الحفظ
+    const judgedRole = await this.roleStamp(dto.role)
     await this.assertAssignableRole(dto.role)
     const email = dto.email.toLowerCase().trim()
     const dup = await this.users.findOne({ where: { email } })
@@ -584,8 +604,12 @@ export class UsersController {
 
     // B1.3: سياسة كلمة السر (NIST)
     await this.security.assertPassword(dto.password, { email, displayName: dto.displayName })
-    const saved = await this.users.save(
-      this.users.create({
+    // CRP3G-B02: الحفظ في معاملة بتقفل صف الدور الأول: حزمته أو حالته اتغيّروا بعد الحكم = 409 (حساب جديد مايطلعش بصلاحية إدارية اتضافت
+    // للدور والطلب في الطريق)
+    const saved = await this.users.manager.transaction(async (em) => {
+      if ((await this.roleStamp(dto.role, em)) !== judgedRole) throw new ConflictException(ASSIGNED_ROLE_CHANGED)
+      return em.getRepository(User).save(
+      em.getRepository(User).create({
         email,
         passwordHash: await bcrypt.hash(dto.password, 10),
         passwordChangedAt: new Date(),
@@ -598,7 +622,8 @@ export class UsersController {
         scopeAllBranches: scopeAll,
         scopeBranchIds,
       })
-    )
+      )
+    })
     const { passwordHash: _ph, ...rest } = saved
     return { ...rest, ...scopeView(saved) }
   }
@@ -714,6 +739,9 @@ export class UsersController {
         'لا يمكنك تعديل دور حسابك أو صلاحياته أو ربطه بنفسك'
       )
     }
+    // CRP3G-B02: الدور المقترح بيتثبّت — حزمته وحالته بيتقروا هنا قبل الحكم، وبيتقارنوا بصفه تحت القفل وقت الحفظ. (دور الحساب الحالي
+    // تعديل حزمته بيحرّك إصدار الحساب نفسه؛ الدور المقترح لسه مش عليه، فإصداره مابيتحركش)
+    const judgedRole = roleChanged ? await this.roleStamp(dto.role as string) : null
     if (roleChanged) await this.assertAssignableRole(dto.role as string)
     // منح users/roles/settings.manage (بالدور أو بصلاحية إضافية) لمدير النظام فقط
     if (actor.role !== 'super_admin' && (roleChanged || permsChanged)) {
@@ -791,6 +819,8 @@ export class UsersController {
     const seenVersion = seen.tokenVersion ?? 0
     const changed = (Object.keys(user) as Array<keyof User>).filter((key) => user[key] !== seen[key])
     const saved = await this.users.manager.transaction(async (em) => {
+      // CRP3G-B02: صف الدور المقترح بيتقفل الأول (نفس ترتيب تعديل الدور: صف الدور ثم صفوف حساباته)، وبعده صف الحساب
+      if (judgedRole !== null && (await this.roleStamp(dto.role as string, em)) !== judgedRole) throw new ConflictException(ASSIGNED_ROLE_CHANGED)
       const fresh = await em.getRepository(User).findOne({ where: { id }, lock: { mode: 'pessimistic_write' } })
       if (!fresh || (fresh.tokenVersion ?? 0) !== seenVersion) throw new ConflictException(ACCOUNT_CHANGED_MEANWHILE)
       if (unlinkedEmployeeId != null) {
