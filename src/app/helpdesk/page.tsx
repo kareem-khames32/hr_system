@@ -10,8 +10,10 @@ import EmptyState from '@/components/EmptyState'
 import { can } from '@/lib/api'
 import { formatDate } from '@/lib/dates'
 import { fetchHelpdeskReport, fetchMyInquiries, rateInquiry, type ApiHelpdeskReport, type ApiInquiry } from '@/lib/helpdesk-api'
+import ArticlesManager from './ArticlesManager'
+import KnowledgePanel from './KnowledgePanel'
 
-type Tab = 'mine' | 'report'
+type Tab = 'mine' | 'report' | 'articles'
 const statusStyle: Record<ApiInquiry['serviceStatus'], string> = {
   OPEN: 'bg-amber-50 text-amber-800', IN_PROGRESS: 'bg-blue-50 text-blue-700', WAITING: 'bg-purple-50 text-purple-700', DONE: 'bg-green-50 text-green-700', CANCELLED: 'bg-gray-100 text-gray-500',
 }
@@ -30,6 +32,7 @@ export default function HelpdeskPage() {
 
   const load = useCallback(() => {
     setError('')
+    if (tab === 'articles') return
     if (tab === 'mine') fetchMyInquiries().then((data) => setRows(data.inquiries)).catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل استفساراتك'))
     else fetchHelpdeskReport(from && to ? { from, to } : undefined).then(setReport).catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل التقرير'))
   }, [tab, from, to])
@@ -66,10 +69,10 @@ export default function HelpdeskPage() {
         </div>
         {manage && (
           <div className="flex items-center gap-2" role="tablist">
-            {(['mine', 'report'] as Tab[]).map((key) => (
+            {(['mine', 'report', 'articles'] as Tab[]).map((key) => (
               <button key={key} role="tab" aria-selected={tab === key} onClick={() => setTab(key)}
                 className={`px-4 py-2 rounded-full text-sm ${tab === key ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>
-                {key === 'mine' ? 'استفساراتي' : 'التقرير'}
+                {key === 'mine' ? 'استفساراتي' : key === 'report' ? 'التقرير' : 'المقالات'}
               </button>
             ))}
           </div>
@@ -79,6 +82,8 @@ export default function HelpdeskPage() {
             {error}
           </div>
         )}
+        {tab === 'mine' && <KnowledgePanel />}
+        {tab === 'articles' && manage && <ArticlesManager />}
         {tab === 'mine' && rows && rows.length === 0 && <EmptyState title="مفيش استفسارات ليك لسه" icon={LifeBuoy} />}
         {tab === 'mine' && rows && rows.length > 0 && (
           <div className="grid gap-3" data-inquiries>

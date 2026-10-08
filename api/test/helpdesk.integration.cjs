@@ -207,3 +207,52 @@ test('HD-02: التقرير بالصلاحية وبنطاق الفروع — ا�
     assert.deepEqual([(await request(users.asker, 'GET', H + '/mine')).status, (await request(users.lead, 'GET', R)).status], [404, 404])
   } finally { expectStatus(await request(users.admin, 'PUT', '/modules/helpdesk', { enabled: true }), 200); modules.invalidate() }
 })
+
+test('HD-03: قاعدة المعرفة — الإدارة بالصلاحية وبنطاق الفروع، والموظف بيشوف المنشور اللي في جمهوره بس (بحث بكلمة أو بنوع استفسار)، ولينك لسياسة من غير تكرار', async () => {
+  const kb = require('../src/helpdesk/knowledge.service')
+  const A = H + '/articles'
+  const branchAudience = branch => ({ mode: 'all', where: { mode: 'branches', ids: [branch.id] } })
+  const article = (extra = {}) => ({ title: 'ليه الراتب اتخصم منه؟', body: 'الخصم بييجي من الغياب أو التأخير. راجع قسيمة الراتب.', typeCode: 'INQUIRY_PAYROLL', keywords: 'خصم غياب قسيمة',
+    audience: branchAudience(org.branchA), isPublished: true, ...extra })
+  const empty = expectStatus(await request(users.asker, 'GET', A), 200)
+  assert.deepEqual([empty.articles, empty.types.map(row => row.code).sort()], [[], ['INQUIRY_GENERAL', 'INQUIRY_PAYROLL']])
+  // الإدارة: بالصلاحية، والقيم، وحساب الفروع بيكتب لفروعه بس
+  assert.deepEqual([(await request(users.asker, 'POST', A, article())).status, (await request(users.asker, 'GET', A + '/manage')).status], [403, 403])
+  for (const [change, message] of [[{ title: 'ا' }, kb.KB_TITLE], [{ body: '  ' }, kb.KB_BODY], [{ typeCode: 'SUGGESTION' }, kb.KB_TYPE], [{ typeCode: 'NOPE' }, kb.KB_TYPE], [{ policyId: 987654 }, kb.KB_POLICY],
+    [{ keywords: 'ك'.repeat(501) }, kb.KB_KEYWORDS], [{ isPublished: 'yes' }, '«منشور» نعم أو لا']]) assert.deepEqual(answer(await request(users.lead, 'POST', A, article(change))), [400, message], JSON.stringify(change).slice(0, 60))
+  for (const audience of [null, branchAudience(org.branchB), { mode: 'all', where: { mode: 'departments', ids: [1] } }]) {
+    assert.deepEqual(answer(await request(users.lead, 'POST', A, article({ audience }))), [403, kb.KB_BRANCH_AUDIENCE], JSON.stringify(audience))
+  }
+  assert.equal(await repo('KbArticle').count(), 0)
+  const policy = await repo('Policy').save({ title: 'لائحة الحضور والانصراف', category: null, audience: null, isMandatory: false, graceDays: 0, graceFrom: null, status: 'PUBLISHED', createdByUserId: users.admin.id,
+    createdAt: new Date(), withdrawnAt: null, withdrawnByUserId: null })
+  const mine = expectStatus(await request(users.lead, 'POST', A, article({ policyId: policy.id })), 201)
+  assert.deepEqual([mine.title, mine.typeName, mine.keywords, mine.audience, mine.policyTitle, mine.isPublished],
+    ['ليه الراتب اتخصم منه؟', 'استفسار عن الراتب', 'خصم غياب قسيمة', { ...branchAudience(org.branchA), ids: [] }, 'لائحة الحضور والانصراف', true])
+  const general = expectStatus(await request(users.admin, 'POST', A, { title: 'إزاي أقدّم طلب؟', body: 'من شاشة الطلبات اختار النوع واملأ الخانات.', isPublished: true }), 201)
+  const draft = expectStatus(await request(users.admin, 'POST', A, { title: 'مقال لسه مسودة', body: 'نص المسودة' }), 201)
+  const other = expectStatus(await request(users.admin, 'POST', A, article({ title: 'مقال فرع ب', audience: branchAudience(org.branchB) })), 201)
+  assert.deepEqual([general.audience, general.typeCode, draft.isPublished], [null, null, false])
+  // قايمة الإدارة بنطاق الفروع: حساب فرع أ شايف مقالات فروعه بس
+  assert.deepEqual([expectStatus(await request(users.lead, 'GET', A + '/manage'), 200).articles.map(row => row.id), expectStatus(await request(users.admin, 'GET', A + '/manage'), 200).articles.length], [[mine.id], 4])
+
+  // الموظف: المنشور اللي في جمهوره بس — بكلمة، وبنوع (مقالات النوع الأول وبعدها العامة)
+  const titles = async (user, query = '') => expectStatus(await request(user, 'GET', A + query), 200).articles.map(row => row.title)
+  assert.deepEqual([await titles(users.asker), await titles(users.asker, '?typeCode=INQUIRY_PAYROLL'), await titles(users.asker, '?typeCode=INQUIRY_GENERAL'), await titles(users.asker, `?q=${encodeURIComponent('غياب')}`),
+    await titles(users.asker, `?q=${encodeURIComponent('مش موجود')}`), await titles(users.b1), (await request(users.asker, 'GET', A + '?q=' + 'x'.repeat(101))).status],
+  [['إزاي أقدّم طلب؟', 'ليه الراتب اتخصم منه؟'], ['ليه الراتب اتخصم منه؟', 'إزاي أقدّم طلب؟'], ['إزاي أقدّم طلب؟'], ['ليه الراتب اتخصم منه؟'], [], ['مقال فرع ب', 'إزاي أقدّم طلب؟'], 400])
+  const listed = expectStatus(await request(users.asker, 'GET', A), 200).articles.find(row => row.id === mine.id)
+  assert.deepEqual([listed.typeName, listed.hasPolicy, listed.excerpt.startsWith('الخصم بييجي'), 'body' in listed, 'audience' in listed], ['استفسار عن الراتب', true, true, false, false])
+  // القراءة: مقال برّه الجمهور، أو مسودة، أو مش موجود = نفس الرد
+  const read = expectStatus(await request(users.asker, 'GET', A + '/' + mine.id), 200)
+  assert.deepEqual([read.title, read.body.includes('قسيمة الراتب'), read.policy], ['ليه الراتب اتخصم منه؟', true, { id: policy.id, title: 'لائحة الحضور والانصراف' }])
+  for (const hidden of [other.id, draft.id, 987654]) assert.deepEqual(answer(await request(users.asker, 'GET', A + '/' + hidden)), [404, kb.KB_NOT_FOUND], String(hidden))
+  assert.equal((await request(users.nobody ?? users.agent, 'GET', A + '/' + general.id)).status, 404, 'حساب من غير ملف موظف مالوش جمهور')
+  // التعديل: في نطاق الحساب وإلا «غير موجود»، وبالخانات اللي اتبعتت بس؛ والسحب بيخفيه
+  assert.deepEqual([answer(await request(users.leadB, 'PATCH', A + '/' + mine.id, { title: 'تغيير' })), answer(await request(users.lead, 'PATCH', A + '/' + general.id, { title: 'تغيير' })),
+    answer(await request(users.lead, 'PATCH', A + '/' + mine.id, { audience: null }))], [[404, kb.KB_NOT_FOUND], [404, kb.KB_NOT_FOUND], [403, kb.KB_BRANCH_AUDIENCE]])
+  const edited = expectStatus(await request(users.lead, 'PATCH', A + '/' + mine.id, { keywords: ' خصم  تأخير ', policyId: null }), 200)
+  assert.deepEqual([edited.title, edited.keywords, edited.policyId, edited.typeCode, edited.isPublished], ['ليه الراتب اتخصم منه؟', 'خصم تأخير', null, 'INQUIRY_PAYROLL', true])
+  expectStatus(await request(users.lead, 'PATCH', A + '/' + mine.id, { isPublished: false }), 200)
+  assert.deepEqual([await titles(users.asker), (await request(users.asker, 'GET', A + '/' + mine.id)).status], [['إزاي أقدّم طلب؟'], 404])
+})

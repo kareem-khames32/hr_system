@@ -112,6 +112,8 @@ const EXCEPTIONS = {
   'ReviewRewardsController.mine': 'SERVICE_CHECK', // GET /performance/rewards/mine — B3.8-ب: الاقتراحات الموجّهة للحساب (المدير المباشر)
   'ReviewRewardsController.submit': 'SERVICE_CHECK', // POST /performance/rewards/:id/submit — B3.8-ب: المدير الموجّه له الاقتراح بيقدّم المكافأة (وموديول المكافآت بيحكم)
   'TrainingController.teamMissing': 'SERVICE_CHECK', // GET /training/mandatory/team — B3.9-ج: التدريب الإلزامي الناقص عند مرؤوسين الحساب المباشرين
+  'HelpdeskController.article': 'SERVICE_CHECK', // GET /helpdesk/articles/:id — B3.10-ب: مقال منشور في جمهور موظف الحساب
+  'HelpdeskController.articles': 'SERVICE_CHECK', // GET /helpdesk/articles — B3.10-ب: بحث قاعدة المعرفة (المنشور اللي في جمهور موظف الحساب)
   'HelpdeskController.mine': 'SELF', // GET /helpdesk/mine — B3.10: استفسارات الموظف نفسه بحالة خدمتها
   'HelpdeskController.rate': 'SELF', // POST /helpdesk/:id/rate — B3.10: تقييم الموظف لخدمة استفساره (صاحبه بس)
   'TrainingController.mine': 'SELF', // GET /training/mine — B3.9: تسجيلات الموظف نفسه في التدريب

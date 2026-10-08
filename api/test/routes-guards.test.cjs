@@ -135,8 +135,9 @@ test('RG-03: قايمة الاستثناءات من غير بنود قديمة،
   // B3.9: +2 SELF («دوراتي» وتقييم الموظف لتدريبه)
   // B3.9-ج: +1 SERVICE_CHECK (التدريب الإلزامي الناقص عند فريق المدير)
   // B3.10: +2 SELF («استفساراتي» وتقييم الموظف للخدمة)
-  assert.deepEqual(counts, { PUBLIC_OK: 15, SELF: 58, AUTH_ANY_OK: 11, SERVICE_CHECK: 114 })
-  assert.equal(handlers.filter(handler => handler.perms.length === 0).length, 198)
+  // B3.10-ب: +2 SERVICE_CHECK (قراءة قاعدة المعرفة: بحث ومقال — بجمهور المقال)
+  assert.deepEqual(counts, { PUBLIC_OK: 15, SELF: 58, AUTH_ANY_OK: 11, SERVICE_CHECK: 116 })
+  assert.equal(handlers.filter(handler => handler.perms.length === 0).length, 200)
   // من غير حارس دخول = العام بس
   const open = handlers.filter(handler => !guarded(handler, JwtAuthGuard)).map(handler => handler.id).sort()
   assert.deepEqual(open, Object.keys(EXCEPTIONS).filter(id => EXCEPTIONS[id] === 'PUBLIC_OK').sort())

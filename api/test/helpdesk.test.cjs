@@ -63,3 +63,28 @@ test('HU-02: a new closed module owning the inquiry types, the category and the 
   assert.doesNotMatch(read('api/src/helpdesk/helpdesk.entities.ts'), /default:|CreateDateColumn/, 'من غير افتراضي (زي الترحيل)')
   assert.ok(read('src/app/helpdesk/page.tsx').includes('fetchMyInquiries()'))
 })
+
+test('HU-03: knowledge base — article values, search matching, the reader limited to published articles in the viewer audience, and management within the branch scope under the row lock', () => {
+  const kb = require('../src/helpdesk/knowledge.service')
+  assert.deepEqual([kb.cleanArticleTitle('  ليه   الراتب؟ '), kb.cleanArticleBody(' نص\r\nسطر '), kb.cleanArticleKeywords('  خصم   غياب '), kb.cleanArticleKeywords('   '), kb.cleanArticleKeywords(undefined)],
+    ['ليه الراتب؟', 'نص\nسطر', 'خصم غياب', null, null])
+  for (const bad of ['ا', '', null, 'ع'.repeat(201)]) refuses(() => kb.cleanArticleTitle(bad), 'title')
+  for (const bad of ['', '   ', null, 'ن'.repeat(20001)]) refuses(() => kb.cleanArticleBody(bad), 'body')
+  for (const bad of [5, 'ك'.repeat(501)]) refuses(() => kb.cleanArticleKeywords(bad), 'keywords')
+  const article = { title: 'ليه الراتب اتخصم؟', body: 'الخصم من الغياب أو التأخير', keywords: 'Payslip قسيمة' }
+  assert.deepEqual(['', '  ', 'الراتب', 'التأخير', 'payslip', 'قسيمة', 'إجازة'].map(term => kb.articleMatches(article, term)), [true, true, true, true, true, true, false])
+  const service = read('api/src/helpdesk/knowledge.service.ts')
+  const readable = service.slice(service.indexOf('private async readable('), service.indexOf('private async typeNames('))
+  assert.match(readable, /find\(\{ where: \{ isPublished: true \}/, 'المنشور بس')
+  assert.match(readable, /rows\.filter\(\(row\) => this\.inAudience\(row, employee, user\.role, positions\)\)/, 'وفي جمهور موظف الحساب')
+  assert.match(service, /announcementAudienceIntact\(row\.audience\) && requestAudienceAllows\(row\.audience, subject, 'submit'\)/, 'نفس مقيّم جمهور الإعلانات')
+  const update = service.slice(service.indexOf('async update('), service.indexOf('private async managed('))
+  const order = ['this.assertManager(user)', 'this.ds.transaction(', "lock: { mode: 'pessimistic_write' }", '!announcementAudienceInScope(row.audience, branchScopeOf(user))', 'await this.fields(em, user, input, row)'].map(part => update.indexOf(part))
+  assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), JSON.stringify(order))
+  assert.match(service, /if \(!announcementAudienceInScope\(audience, branchScopeOf\(user\)\)\) throw new ForbiddenException\(KB_BRANCH_AUDIENCE\)/)
+  assert.doesNotMatch(service, /default:|CreateDateColumn|\.save\(/, 'من غير افتراضي، والكتابة بالخانات')
+  const controller = read('api/src/helpdesk/helpdesk.controller.ts')
+  assert.equal(controller.split("@Perm('helpdesk.manage')").length - 1, 4, 'التقرير وإدارة المقالات بالصلاحية')
+  assert.ok(controller.indexOf("@Get('articles/manage')") < controller.indexOf("@Get('articles/:id')"), 'المسار الثابت قبل ‎:id')
+  assert.ok(read('src/app/helpdesk/KnowledgePanel.tsx').includes('searchArticles(term.trim(), typeCode)') && read('src/app/helpdesk/ArticlesManager.tsx').includes('fetchManagedArticles()'))
+})
