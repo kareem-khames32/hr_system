@@ -4,7 +4,7 @@ import { DataSource, In, IsNull, type EntityManager } from 'typeorm'
 import { announcementAudienceInScope, announcementAudienceIntact, announcementAudienceJson } from '../announcements/announcement-rules'
 import { localDateOf } from '../attendance/attendance.service'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, userHasPerm } from '../auth/guards'
+import { branchScopeOf, inBranchScope, userHasPerm } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
@@ -14,7 +14,7 @@ import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { audienceNeedsPositions, requestAudienceAllows, type AudiencePositions, type AudienceSubject } from '../requests/request-audience'
 import {
   SURVEYS_MIGRATION_MISSING, SURVEYS_PERMISSION, SURVEY_ANSWERED, SURVEY_BRANCH_AUDIENCE, SURVEY_CLOSE_DATE, SURVEY_COMMENT_MIN_KEY, SURVEY_EMPTY_AUDIENCE, SURVEY_KIND_LABELS, SURVEY_NOT_DRAFT,
-  SURVEY_NOT_FOUND, SURVEY_NOT_OPEN, SURVEY_STATUS_LABELS, Survey, SurveyInvitation, SurveyResponse, cleanMinGroup, cleanSurveyAnswers, cleanSurveyKind, cleanSurveyQuestions, cleanSurveyTitle,
+  SURVEY_NOT_FOUND, SURVEY_NOT_OPEN, SURVEY_RESULTS_AFTER_CLOSE, SURVEY_STATUS_LABELS, Survey, SurveyInvitation, SurveyResponse, cleanMinGroup, cleanSurveyAnswers, cleanSurveyKind, cleanSurveyQuestions, cleanSurveyTitle,
   commentMin, parseSurveyQuestions, summarize, surveysReady, visibleGroups, type SurveyAnswers,
 } from './survey-rules'
 
@@ -176,6 +176,8 @@ export class SurveysService {
     const em = this.ds.manager
     const row = await this.managed(em, user, id)
     if (row.status === 'DRAFT') throw new BadRequestException(SURVEY_NOT_OPEN)
+    // Codex P3K-B13: النتايج بعد القفل بس — قراءتها قبل رد وبعده بتكشف الرد ده بالطرح
+    if (row.status !== 'CLOSED') throw new BadRequestException(SURVEY_RESULTS_AFTER_CLOSE)
     const questions = parseSurveyQuestions(row.questions)
     const responses = await em.getRepository(SurveyResponse).find({ where: { surveyId: id } })
     const counts = (await this.counts(em, [id])).get(id) ?? { invited: 0, responded: 0 }
@@ -185,16 +187,21 @@ export class SurveysService {
     const byDepartment = new Map<number, SurveyAnswers[]>()
     for (const entry of parsed) byDepartment.set(entry.departmentId, [...(byDepartment.get(entry.departmentId) ?? []), entry.answers])
     const shown = visibleGroups([...byDepartment].map(([key, list]) => ({ key, count: list.length })), row.minGroup)
-    const names = new Map((shown.filter(Boolean).length ? await em.getRepository(Department).find({ where: { id: In(shown.filter(Boolean)) } }) : []).map((entry) => [entry.id, entry.name]))
+    // اسم القسم بحكم فرعه الحالي: قسم اتنقل برّه نطاق قارئ النتايج مابيتسمّاش
+    const scope = branchScopeOf(user)
+    const names = new Map((shown.filter(Boolean).length ? await em.getRepository(Department).find({ where: { id: In(shown.filter(Boolean)) } }) : [])
+      .filter((entry) => inBranchScope(scope, entry.branchId)).map((entry) => [entry.id, entry.name]))
     const limit = Math.max(row.minGroup, commentMin((await em.getRepository(RequestsConfig).findOne({ where: { key: SURVEY_COMMENT_MIN_KEY } }))?.value))
     const showComments = responses.length >= limit
-    return { ...base, visible: true, overall: summarize(questions, parsed.map((entry) => entry.answers)),
-      groups: shown.map((key) => ({ name: key ? names.get(key) ?? '—' : 'من غير قسم', count: byDepartment.get(key)!.length, summary: summarize(questions, byDepartment.get(key)!) })),
+    return { ...base, visible: true, overall: summarize(questions, parsed.map((entry) => entry.answers), row.minGroup),
+      groups: shown.map((key) => ({ name: key ? names.get(key) ?? 'قسم برّه نطاقك' : 'من غير قسم', count: byDepartment.get(key)!.length, summary: summarize(questions, byDepartment.get(key)!, row.minGroup) })),
       commentsHidden: !showComments,
       comments: showComments ? questions.filter((question) => question.type === 'text').map((question) => ({ key: question.key, label: question.label,
         // متلخبطة الترتيب: ترتيب الرد مايدلّش على صاحبه
         texts: parsed.map((entry) => entry.answers[question.key]).filter((value): value is string => typeof value === 'string').map((value) => ({ value, order: Math.random() }))
-          .sort((left, right) => left.order - right.order).map((entry) => entry.value) })) : [] }
+          .sort((left, right) => left.order - right.order).map((entry) => entry.value) }))
+        // والحد على تعليقات كل سؤال: سؤال كتب فيه أقل من الحد مابتتعرضش تعليقاته
+        .filter((entry) => entry.texts.length >= row.minGroup) : [] }
   }
 
   // ===== الموظف =====
@@ -247,7 +254,9 @@ export class SurveysService {
     })
     try {
       await this.ds.getRepository(SurveyResponse).insert({ surveyId: id, departmentId: invitation.departmentId ?? null, branchId: invitation.branchId ?? null,
-        employeeId: survey.isAnonymous === true ? null : invitation.employeeId, answers: JSON.stringify(answers), submittedOn: today })
+        employeeId: survey.isAnonymous === true ? null : invitation.employeeId, answers: JSON.stringify(answers),
+        // Codex P3K-B13: الرد المجهول من غير يومه (يوم فتح الاستبيان لكل الردود): يوم العلامة على الدعوة مايتطابقش بيوم رد
+        submittedOn: survey.isAnonymous === true ? (survey.openedAt ? localDateOf(new Date(survey.openedAt)) : today) : today })
     } catch (error) {
       await this.ds.getRepository(SurveyInvitation).update({ id: invitation.id }, { respondedOn: null })
       throw error

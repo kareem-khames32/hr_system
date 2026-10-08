@@ -9,6 +9,7 @@ import { Employee } from '../employees/employee.entity'
 import { StoredFile } from '../files/stored-file.entity'
 import { ModulesService } from '../modules-registry/modules.service'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
+import { handledCaseIds, handlesCase } from './case-access'
 import { HrCase, HrCaseEvent, HrCaseParty, type CaseEventKind, type CasePartyRole } from './case.entities'
 import {
   CASES_MIGRATION_MISSING, CASES_PERMISSION, CASE_ATTACHMENT_INVALID, CASE_CLOSED, CASE_FILE_NOT_FOUND, CASE_UPLOAD_RULE, CASE_CONFLICT, CASE_DUE_PROCESS, CASE_EMPLOYEE, CASE_EVENT_LABELS, CASE_EVENT_PARTY, CASE_HANDLER, CASE_KIND_LABELS, CASE_NOT_DECIDED,
@@ -33,7 +34,8 @@ export class CasesService {
   private async handled(em: EntityManager, user: JwtPayload, id: number, lock = false): Promise<HrCase> {
     await this.assertReady(em)
     const row = await em.getRepository(HrCase).findOne({ where: { id }, ...(lock ? { lock: { mode: 'pessimistic_write' as const } } : {}) })
-    if (!row || !(await em.getRepository(HrCaseParty).count({ where: { caseId: id, role: 'HANDLER', userId: user.sub } }))) throw new NotFoundException(CASE_NOT_FOUND)
+    // Codex P3K-B11: العضوية بالهوية الحالية (موظف الحساب دلوقتي، ومن غير تعارض مصالح) — case-access.ts
+    if (!row || !(await handlesCase(em, user, id))) throw new NotFoundException(CASE_NOT_FOUND)
     return row
   }
 
@@ -49,11 +51,13 @@ export class CasesService {
   private async assertNoConflict(em: EntityManager, caseId: number) {
     const parties = await em.getRepository(HrCaseParty).find({ where: { caseId } })
     const respondentIds = parties.filter((row) => row.role === 'RESPONDENT' && row.employeeId != null).map((row) => row.employeeId as number)
-    const handlerUserIds = parties.filter((row) => row.role === 'HANDLER' && row.userId != null).map((row) => row.userId as number)
-    if (!respondentIds.length || !handlerUserIds.length) return
+    const handlerRows = parties.filter((row) => row.role === 'HANDLER' && row.userId != null)
+    if (!respondentIds.length || !handlerRows.length) return
     const respondents = await em.getRepository(Employee).find({ where: { id: In(respondentIds) } })
-    const handlers = await em.getRepository(User).find({ where: { id: In(handlerUserIds) } })
-    if (caseConflict(respondents, handlers.map((row) => row.employeeId))) throw new BadRequestException(CASE_CONFLICT)
+    const accounts = new Map((await em.getRepository(User).find({ where: { id: In(handlerRows.map((row) => row.userId as number)) } })).map((row) => [row.id, row.employeeId ?? null]))
+    // العضويات السارية بس: صف حساب اتغيّر ربطه مابقاش مطّلع أصلًا (case-access.ts)، فمايوقّفش شغل باقي المطّلعين
+    const current = handlerRows.filter((row) => (accounts.get(row.userId as number) ?? null) === (row.employeeId ?? null)).map((row) => row.employeeId)
+    if (caseConflict(respondents, current)) throw new BadRequestException(CASE_CONFLICT)
   }
 
   private event(em: EntityManager, caseId: number, kind: CaseEventKind, body: string, userId: number, employeeId: number | null = null, fileId: number | null = null) {
@@ -65,7 +69,7 @@ export class CasesService {
   /** رفع مرفق قضية (/files/upload): لحساب مطّلع على قضية واحدة على الأقل، والموديول مفتوح له */
   async assertCanUpload(user: JwtPayload) {
     const em = this.ds.manager
-    if (!(await this.modules.allowedFor('cases', user)) || !(await casesReady(em)) || !(await em.getRepository(HrCaseParty).count({ where: { role: 'HANDLER', userId: user.sub } }))) {
+    if (!(await this.modules.allowedFor('cases', user)) || !(await casesReady(em)) || !(await handledCaseIds(em, user)).size) {
       throw new ForbiddenException(CASE_UPLOAD_RULE)
     }
   }
@@ -79,7 +83,7 @@ export class CasesService {
       if (!!user.sub && file.uploadedBy === user.sub) return
       throw missing
     }
-    if (!(await em.getRepository(HrCaseParty).count({ where: { caseId: file.entityId, role: 'HANDLER', userId: user.sub } }))) throw missing
+    if (!(await handlesCase(em, user, file.entityId))) throw missing
   }
 
   /** ربط مرفق بقضية تحت قفل صفها: ملف «قضية» رفعه الحساب نفسه ولسه مااتربطش — كتابة مشروطة، فالملف مايتربطش مرتين */
@@ -103,8 +107,8 @@ export class CasesService {
   async list(user: JwtPayload) {
     const em = this.ds.manager
     if (!(await casesReady(em))) return { available: false, message: CASES_MIGRATION_MISSING, canOpen: false, cases: [] }
-    const mine = await em.getRepository(HrCaseParty).find({ where: { role: 'HANDLER', userId: user.sub } })
-    const rows = mine.length ? await em.getRepository(HrCase).find({ where: { id: In(mine.map((row) => row.caseId)) }, order: { id: 'DESC' } }) : []
+    const mine = [...(await handledCaseIds(em, user))]
+    const rows = mine.length ? await em.getRepository(HrCase).find({ where: { id: In(mine) }, order: { id: 'DESC' } }) : []
     return { available: true, canOpen: userHasPerm(user, CASES_PERMISSION), cases: rows.map((row) => ({ ...this.summary(row), investigating: row.investigatorUserId === user.sub })) }
   }
 
@@ -121,7 +125,7 @@ export class CasesService {
         outcomeNote: null, openedByUserId: user.sub, openedAt: now, decidedAt: null, closedAt: null })
       const caseId = made.identifiers[0].id as number
       const party = (role: CasePartyRole, employeeId: number | null, userId: number | null) => ({ caseId, role, employeeId, userId, addedByUserId: user.sub, addedAt: now })
-      await em.getRepository(HrCaseParty).insert([party('HANDLER', null, user.sub), ...(complainant ? [party('COMPLAINANT', complainant.id, null)] : []), ...(respondent ? [party('RESPONDENT', respondent.id, null)] : [])])
+      await em.getRepository(HrCaseParty).insert([party('HANDLER', user.employeeId ?? null, user.sub), ...(complainant ? [party('COMPLAINANT', complainant.id, null)] : []), ...(respondent ? [party('RESPONDENT', respondent.id, null)] : [])])
       await this.assertNoConflict(em, caseId)
       await recordAudit(em, { category: 'SETTINGS', action: 'CASE_OPENED', entityType: 'hr_case', entityId: caseId, actorUserId: user.sub, branchId: null, summary: `فتح ملف قضية رقم ${caseId}`, after: { kind } })
       return caseId
@@ -170,8 +174,12 @@ export class CasesService {
     return this.act(user, id, async (em, row) => {
       if (row.status === 'CLOSED') throw new BadRequestException(CASE_CLOSED)
       const account = await this.accountOf(em, user, employeeId)
-      if (!(await em.getRepository(HrCaseParty).count({ where: { caseId: row.id, role: 'HANDLER', userId: account.id } }))) {
-        await em.getRepository(HrCaseParty).insert({ caseId: row.id, role: 'HANDLER', employeeId: null, userId: account.id, addedByUserId: user.sub, addedAt: new Date() })
+      // العضوية بموظف الحساب دلوقتي: صف قديم لنفس الحساب (كان مربوط بموظف تاني) بيتحدّث بقرار الإضافة ده
+      const existing = await em.getRepository(HrCaseParty).findOne({ where: { caseId: row.id, role: 'HANDLER', userId: account.id } })
+      if (!existing) {
+        await em.getRepository(HrCaseParty).insert({ caseId: row.id, role: 'HANDLER', employeeId: account.employeeId ?? null, userId: account.id, addedByUserId: user.sub, addedAt: new Date() })
+      } else if ((existing.employeeId ?? null) !== (account.employeeId ?? null)) {
+        await em.getRepository(HrCaseParty).update({ id: existing.id }, { employeeId: account.employeeId ?? null, addedByUserId: user.sub, addedAt: new Date() })
       }
       await this.assertNoConflict(em, row.id)
       if (investigator) {

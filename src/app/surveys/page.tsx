@@ -122,7 +122,7 @@ export default function SurveysPage() {
                           فتح
                         </button>
                       )}
-                      {row.status !== 'DRAFT' && (
+                      {row.status === 'CLOSED' && (
                         <button onClick={() => show(row.id)} disabled={busy === row.id} className="text-primary-600 hover:underline text-xs ml-3 disabled:opacity-50">
                           النتايج
                         </button>
@@ -152,8 +152,8 @@ function Summary({ rows }: { rows: SurveySummaryRow[] }) {
       {rows.map((row) => (
         <li key={row.key} className="text-gray-700">
           <span className="font-medium">{row.label}</span>{' '}
-          {row.type === 'choice' ? (row.counts ?? []).map((entry) => `${entry.option}: ${entry.count}`).join(' · ') : `متوسط ${row.average ?? '—'}${row.type === 'enps' ? ` · eNPS ${row.enps ?? '—'}` : ''}`}
-          <span className="text-xs text-gray-400"> ({row.answered} إجابة)</span>
+          {row.hidden ? <span className="text-xs text-gray-400">إجاباته أقل من الحد الأدنى — مش معروضة</span> : row.type === 'choice' ? (row.counts ?? []).map((entry) => `${entry.option}: ${entry.count}`).join(' · ') : `متوسط ${row.average ?? '—'}${row.type === 'enps' ? ` · eNPS ${row.enps ?? '—'}` : ''}`}
+          {!row.hidden && <span className="text-xs text-gray-400"> ({row.answered} إجابة)</span>}
         </li>
       ))}
     </ul>

@@ -153,7 +153,10 @@ export class TrainingPlansService {
       else if ((row.status === 'ENROLLED' || row.status === 'ATTENDED') && !cancelled.has(row.sessionId) && state.get(key) !== 'done') state.set(key, 'open')
     }
     const departmentIds = [...new Set(people.map((row) => row.departmentId).filter((id): id is number => id != null))]
-    const names = new Map((departmentIds.length ? await em.getRepository(Department).find({ where: { id: In(departmentIds) } }) : []).map((row) => [row.id, row.name]))
+    // Codex P3K-B09: القسم بفرعه الحالي هو: قسم اتنقل برّه نطاق الحساب مابيتسمّاش حتى لو موظفه لسه في النطاق
+    const nameScope = branchScopeOf(user)
+    const names = new Map((departmentIds.length ? await em.getRepository(Department).find({ where: { id: In(departmentIds) } }) : [])
+      .filter((row) => inBranchScope(nameScope, row.branchId)).map((row) => [row.id, row.name]))
     const found = new Map<string, { employeeName: string; departmentName: string | null; courseName: string; enrolled: boolean }>()
     for (const requirement of requirements) {
       for (const employee of people) {

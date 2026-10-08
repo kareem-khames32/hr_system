@@ -333,9 +333,13 @@ export class ReviewsService {
     const people = new Map((all.length ? await em.getRepository(Employee).find({ where: { id: In([...new Set(all.flatMap((row) => [row.employeeId, row.managerEmployeeId ?? row.employeeId]))]) } }) : []).map((row) => [row.id, row]))
     // الموظف بفرعه وقسمه الحاليين
     const visible = all.filter((row) => inBranchScope(scope, people.get(row.employeeId)?.branchId ?? null))
-    const departments = new Map((visible.length ? await em.getRepository(Department).find({ where: { id: In([...new Set(visible.map((row) => people.get(row.employeeId)?.departmentId ?? 0))]) } }) : []).map((row) => [row.id, row.name]))
+    // Codex P3K-B08-02: القسم بفرعه الحالي هو: قسم اتنقل برّه نطاق الحساب مابيتسمّاش (ولا رقمه) حتى لو موظفه لسه في النطاق
+    const departments = new Map((visible.length ? await em.getRepository(Department).find({ where: { id: In([...new Set(visible.map((row) => people.get(row.employeeId)?.departmentId ?? 0))]) } }) : [])
+      .filter((row) => inBranchScope(scope, row.branchId)).map((row) => [row.id, row.name]))
     const branches = new Map((visible.length ? await em.getRepository(Branch).find({ where: { id: In([...new Set(visible.map((row) => people.get(row.employeeId)?.branchId ?? 0))]) } }) : []).map((row) => [row.id, row.name]))
-    const rows = visible.filter((row) => (departmentId === null || people.get(row.employeeId)?.departmentId === departmentId) && (branchId === null || people.get(row.employeeId)?.branchId === branchId))
+    // التصفية بقسم مش من أقسام النطاق = ولا صف (القسم المخفي مايتخمّنش برقمه)
+    const rows = visible.filter((row) => (departmentId === null || (departments.has(departmentId) && people.get(row.employeeId)?.departmentId === departmentId))
+      && (branchId === null || people.get(row.employeeId)?.branchId === branchId))
     const log = rows.length ? await em.getRepository(ReviewResponse).find({ where: { assignmentId: In(rows.map((row) => row.id)), relation: 'CAL' }, order: { id: 'ASC' } }) : []
     const actors = new Map((log.length ? await em.getRepository(User).find({ where: { id: In([...new Set(log.map((row) => row.submittedByUserId))]) } }) : []).map((row) => [row.id, row.displayName]))
     const objections = await objectionsOf(em, [...new Set(rows.map((row) => row.employeeId))])

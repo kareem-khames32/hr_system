@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
+import { createHash } from 'crypto'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { Column, DataSource, Entity, In, PrimaryGeneratedColumn, type EntityManager } from 'typeorm'
 import { recordAudit } from '../audit/audit'
@@ -8,6 +9,7 @@ import { Employee } from '../employees/employee.entity'
 import { DeductionType } from '../payroll/typed-deductions.entities'
 import { TypedDeductionsService } from '../payroll/typed-deductions.service'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
+import { handlesCase } from './case-access'
 import { HrCase, HrCaseEvent, HrCaseParty } from './case.entities'
 import { casesReady } from './case-rules'
 
@@ -82,9 +84,10 @@ export class EmployeePenalty {
   @Column({ type: 'date' })
   incidentDate: string
 
-  // ACTIVE ساري / CANCELLED ملغى (مابيتحسبش في التكرار)
+  // ACTIVE ساري / CANCELLED ملغى (مابيتحسبش في التكرار) / PENDING حجز جزاء خصم لحد ما طلب خصمه يثبت (مابيتحسبش، وبيوقّف توقيع تاني لنفس
+  // الموظف والمخالفة لحد ما يتحسم)
   @Column({ type: 'nvarchar', length: 20 })
-  status: 'ACTIVE' | 'CANCELLED'
+  status: 'ACTIVE' | 'CANCELLED' | 'PENDING'
 
   @Column({ type: 'int' })
   createdByUserId: number
@@ -113,6 +116,18 @@ export const PENALTY_EMPLOYEE = 'الموظف غير موجود'
 export const PENALTY_DATE = 'تاريخ الواقعة تاريخ صحيح مش في المستقبل'
 export const PENALTY_PERIOD = 'شهر المسير المستهدف (YYYY-MM) مطلوب لجزاء الخصم'
 export const PENALTY_CHANGED = 'رقم التكرار أو الجزاء اتغيّر عن اللي اتعرض — راجع المعاينة تاني'
+export const PENALTY_IN_PROGRESS = 'فيه جزاء لنفس الموظف والمخالفة لسه بيتسجّل — استنى لحظة وجرّب تاني'
+/** حجز جزاء خصم أقدم من كده ومالوش طلب خصم = محاولة اتقطعت قبل ما الخصم يتعمل: بيتشال */
+export const PENALTY_PENDING_MINUTES = 10
+/** علامة دايمة في سبب طلب الخصم: الجزاء بيلاقي بيها خصمه لو الرد وقع بعد ما الطلب ثبت (مايتعملش مرتين) */
+export const penaltyMarker = (penaltyId: number): string => `(جزاء رقم ${penaltyId})`
+/**
+ * Codex P3K-B12-01: بصمة اللي المعاينة عرضته — المخالفة ورقم التكرار والجزاء وأيامه ونوع الخصم ومدة احتساب التكرار. التوقيع لازم يبعتها زي
+ * ما هي: أي تغيير في اللائحة أو التكرار أو المدة بين المعاينة والتوقيع = 409.
+ */
+export function penaltyFingerprint(violation: Pick<PenaltyViolation, 'id' | 'deductionTypeId'>, occurrence: number, step: PenaltyStep, windowDays: number): string {
+  return createHash('sha256').update(JSON.stringify([violation.id, occurrence, step.action, step.days ?? null, violation.deductionTypeId ?? null, windowDays])).digest('hex').slice(0, 32)
+}
 export const PENALTY_CASE = 'القضية مش متاحة لتنفيذ الجزاء: لازم تكون مطّلع عليها، واتقرر فيها بإنذار أو جزاء، والموظف مشكو في حقه فيها'
 export const PENALTY_CANCELLED = 'الجزاء ده ملغى'
 export const PENALTY_CANCEL_REASON = 'سبب الإلغاء مطلوب (من 3 لـ500 حرف)'
@@ -172,7 +187,7 @@ export const penaltyLabel = (step: PenaltyStep): string => (step.days ? `${PENAL
 const dayBefore = (date: string, days: number): string => new Date(Date.parse(`${date}T00:00:00Z`) - days * 86400000).toISOString().slice(0, 10)
 
 export interface ViolationInput { category?: unknown; name?: unknown; steps?: unknown; deductionTypeId?: unknown; isActive?: unknown }
-export interface ApplyInput { employeeId?: unknown; violationId?: unknown; incidentDate?: unknown; targetPeriod?: unknown; caseId?: unknown; note?: unknown; expectedOccurrence?: unknown }
+export interface ApplyInput { employeeId?: unknown; violationId?: unknown; incidentDate?: unknown; targetPeriod?: unknown; caseId?: unknown; note?: unknown; expectedFingerprint?: unknown }
 
 @Injectable()
 export class PenaltiesService {
@@ -246,8 +261,13 @@ export class PenaltiesService {
   private async judge(em: EntityManager, employeeId: number, violation: PenaltyViolation, incidentDate: string) {
     const windowDays = penaltyWindowDays((await em.getRepository(RequestsConfig).findOne({ where: { key: PENALTY_WINDOW_KEY } }))?.value)
     const from = dayBefore(incidentDate, windowDays)
-    const earlier = (await em.getRepository(EmployeePenalty).find({ where: { employeeId, violationId: violation.id, status: 'ACTIVE' } }))
-      .filter((row) => { const at = String(row.incidentDate).slice(0, 10); return at >= from && at <= incidentDate })
+    // الساري، ومعاه الحجز اللي طلب خصمه ثبت فعلًا (هيتثبّت ساري في أول توقيع): المعاينة والتوقيع بيعدّوا نفس العدّ، فبصمة المعاينة بتفضل صح
+    const earlier: EmployeePenalty[] = []
+    for (const row of await em.getRepository(EmployeePenalty).find({ where: { employeeId, violationId: violation.id, status: In(['ACTIVE', 'PENDING']) } })) {
+      const at = String(row.incidentDate).slice(0, 10)
+      if (at < from || at > incidentDate) continue
+      if (row.status === 'ACTIVE' || (await this.deductionOf(em, employeeId, row.id, row.createdByUserId))) earlier.push(row)
+    }
     const occurrence = earlier.length + 1, step = penaltyStepFor(parsePenaltySteps(violation.steps), occurrence)
     if (!step) throw new BadRequestException(PENALTY_VIOLATION_NOT_FOUND)
     return { occurrence, step, windowDays }
@@ -272,7 +292,7 @@ export class PenaltiesService {
     const { employee, violation, incidentDate } = await this.target(em, user, input)
     const { occurrence, step, windowDays } = await this.judge(em, employee.id, violation, incidentDate)
     return { employeeName: employee.fullName, violationName: violation.name, incidentDate, occurrence, occurrenceLabel: occurrenceLabel(occurrence), action: step.action, days: step.days, label: penaltyLabel(step),
-      windowDays, needsPeriod: step.action === 'DEDUCT_DAYS' }
+      windowDays, needsPeriod: step.action === 'DEDUCT_DAYS', fingerprint: penaltyFingerprint(violation, occurrence, step, windowDays) }
   }
 
   /** قضية الجزاء: الحساب مطّلع عليها، واتقرر فيها بإنذار أو جزاء، والموظف مشكو في حقه فيها — وإلا رسالة واحدة */
@@ -282,14 +302,38 @@ export class PenaltiesService {
     const row = id && (await casesReady(em)) ? await em.getRepository(HrCase).findOne({ where: { id } }) : null
     const parties = row ? await em.getRepository(HrCaseParty).find({ where: { caseId: row.id } }) : []
     const allowed = !!row && (row.status === 'DECIDED' || row.status === 'CLOSED') && (row.outcome === 'WARNING' || row.outcome === 'PENALTY')
-      && parties.some((entry) => entry.role === 'HANDLER' && entry.userId === user.sub) && parties.some((entry) => entry.role === 'RESPONDENT' && entry.employeeId === employeeId)
+      && (await handlesCase(em, user, row.id)) && parties.some((entry) => entry.role === 'RESPONDENT' && entry.employeeId === employeeId)
     if (!allowed) throw new BadRequestException(PENALTY_CASE)
     return row
   }
 
+  /** طلب الخصم اللي اتعمل لجزاء — بعلامته في السبب، لنفس الموظف، ومن نفس الحساب اللي وقّع الجزاء (طلب يدوي من حساب تاني بنفس النص مايتلقطش) — أو null */
+  private async deductionOf(em: EntityManager, employeeId: number, penaltyId: number, creatorUserId: number): Promise<number | null> {
+    const rows: Array<{ id: number }> = await em.query(
+      'SELECT TOP (1) [id] FROM [deduction_requests] WHERE [employeeId] = @0 AND [creatorUserId] = @2 AND CHARINDEX(@1, [reason]) > 0 ORDER BY [id]', [employeeId, penaltyMarker(penaltyId), creatorUserId])
+    return rows[0] ? Number(rows[0].id) : null
+  }
+
   /**
-   * توقيع جزاء: التكرار بيتحسب تحت قفل صف الموظف، ولازم يطابق اللي اتعرض في المعاينة (وإلا 409). الصف بيتسجّل (ومعاه حدث في ملف القضية لو
-   * مربوط)، وبعد المعاملة جزاء الخصم بيعمل خصم مصنّف بخدمة الخصومات نفسها (نطاقها وسقفها وسلسلتها) — لو رفضت، الصف بيتشال والرفض بيطلع.
+   * Codex P3K-B12-02: حجوزات لسه مااكتملتش لنفس الموظف والمخالفة (جزاء خصم طلبه بيتعمل برّه المعاملة) بتتحسم قبل أي حكم جديد، تحت قفل صف
+   * الموظف: طلب خصمه موجود = بيتثبّت ساري؛ مش موجود والحجز قديم = محاولة اتقطعت وبيتشال؛ ولسه جديد = التوقيع التاني بيستنى (409) بدل
+   * ما يحسبه سابقة أو يتجاهله.
+   */
+  private async settlePending(em: EntityManager, employeeId: number, violationId: number) {
+    const pending = await em.getRepository(EmployeePenalty).find({ where: { employeeId, violationId, status: 'PENDING' } })
+    for (const row of pending) {
+      const deductionId = await this.deductionOf(em, employeeId, row.id, row.createdByUserId)
+      if (deductionId) await em.getRepository(EmployeePenalty).update({ id: row.id, status: 'PENDING' }, { status: 'ACTIVE', deductionRequestId: deductionId })
+      else if (Date.now() - new Date(row.createdAt).getTime() > PENALTY_PENDING_MINUTES * 60000) {
+        await em.getRepository(EmployeePenalty).createQueryBuilder().delete().where('id = :id AND status = :status', { id: row.id, status: 'PENDING' }).execute()
+      } else throw new ConflictException(PENALTY_IN_PROGRESS)
+    }
+  }
+
+  /**
+   * توقيع جزاء: التكرار بيتحسب تحت قفل صف الموظف، وبصمة اللي اتعرض في المعاينة لازم تطابق (وإلا 409). الصف بيتسجّل (ومعاه حدث في ملف القضية
+   * لو مربوط). جزاء الخصم بيتسجّل «حجز» الأول، وبعد المعاملة بيعمل خصم مصنّف بخدمة الخصومات نفسها (نطاقها وسقفها وسلسلتها) وبيتثبّت ساري
+   * مربوط بيه — لو رفضت، الحجز بيتشال والرفض بيطلع؛ ولو الرد وقع بعد ما الطلب ثبت، الجزاء بيلاقيه بعلامته وبيتربط (مايتعملش مرتين).
    */
   async apply(user: JwtPayload, input: ApplyInput) {
     this.assertManager(user)
@@ -299,31 +343,36 @@ export class PenaltiesService {
       // قفل صف الموظف الأول: الحكم كله (النطاق بفرعه الحالي، والمخالفة، والتكرار) بيتاخد بعده — نقل في النص مايعدّيش بحكم قديم
       if (typeof input.employeeId === 'number' && Number.isSafeInteger(input.employeeId)) await em.getRepository(Employee).findOne({ where: { id: input.employeeId }, lock: { mode: 'pessimistic_write' } })
       const { employee, violation, incidentDate } = await this.target(em, user, input)
-      const { occurrence, step } = await this.judge(em, employee.id, violation, incidentDate)
-      if (input.expectedOccurrence !== occurrence) throw new ConflictException(PENALTY_CHANGED)
+      await this.settlePending(em, employee.id, violation.id)
+      const { occurrence, step, windowDays } = await this.judge(em, employee.id, violation, incidentDate)
+      if (typeof input.expectedFingerprint !== 'string' || input.expectedFingerprint !== penaltyFingerprint(violation, occurrence, step, windowDays)) throw new ConflictException(PENALTY_CHANGED)
       const targetPeriod = typeof input.targetPeriod === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(input.targetPeriod) ? input.targetPeriod : null
       if (step.action === 'DEDUCT_DAYS' && !targetPeriod) throw new BadRequestException(PENALTY_PERIOD)
       const linked = await this.caseOf(em, user, input.caseId, employee.id)
       const inserted = await em.getRepository(EmployeePenalty).insert({ employeeId: employee.id, violationId: violation.id, occurrence, action: step.action, days: step.days === null ? null : step.days.toFixed(2),
-        caseId: linked?.id ?? null, deductionRequestId: null, note, incidentDate, status: 'ACTIVE', createdByUserId: user.sub, createdAt: new Date(), cancelledByUserId: null, cancelledAt: null, cancelReason: null })
+        caseId: linked?.id ?? null, deductionRequestId: null, note, incidentDate, status: step.action === 'DEDUCT_DAYS' ? 'PENDING' : 'ACTIVE', createdByUserId: user.sub, createdAt: new Date(), cancelledByUserId: null, cancelledAt: null, cancelReason: null })
       const id = inserted.identifiers[0].id as number
       const text = `${violation.name} — ${occurrenceLabel(occurrence)}: ${penaltyLabel(step)}`
       await recordAudit(em, { category: 'SETTINGS', action: 'PENALTY_APPLIED', entityType: 'employee_penalty', entityId: id, actorUserId: user.sub, branchId: employee.branchId,
         summary: `جزاء على موظف رقم ${employee.id}: ${text}`, after: { violationId: violation.id, occurrence, action: step.action, days: step.days, caseId: linked?.id ?? null } })
       return { id, employeeId: employee.id, deductionTypeId: violation.deductionTypeId, step, incidentDate, targetPeriod, caseId: linked?.id ?? null, text,
-        reason: `جزاء من لائحة الجزاءات: ${text}${linked ? ` (ملف قضية رقم ${linked.id})` : ''}` }
+        reason: `جزاء من لائحة الجزاءات ${penaltyMarker(id)}: ${text}${linked ? ` (ملف قضية رقم ${linked.id})` : ''}` }
     })
     if (made.step.action === 'DEDUCT_DAYS') {
-      let deduction: { id: number }
+      let deductionId: number | null
       try {
-        deduction = await this.deductions.create(user, { employeeId: made.employeeId, deductionTypeId: made.deductionTypeId as number, inputValue: String(made.step.days), incidentDate: made.incidentDate,
-          reason: made.reason, targetPeriod: made.targetPeriod as string })
+        deductionId = (await this.deductions.create(user, { employeeId: made.employeeId, deductionTypeId: made.deductionTypeId as number, inputValue: String(made.step.days), incidentDate: made.incidentDate,
+          reason: made.reason, targetPeriod: made.targetPeriod as string })).id
       } catch (error) {
-        // الخصومات رفضت (نطاق، سقف، فترة مقفولة…): الجزاء مااتوقّعش — الصف بيتشال ورفضها بيطلع زي ما هو
-        await this.ds.getRepository(EmployeePenalty).createQueryBuilder().delete().where('id = :id AND deductionRequestId IS NULL', { id: made.id }).execute()
-        throw error
+        // الرد وقع: الطلب ممكن يكون ثبت قبلها (بعلامة الجزاء في سببه) — ساعتها بيتربط. غير كده الخصومات رفضت (نطاق، سقف، فترة مقفولة…):
+        // الجزاء مااتوقّعش — الحجز بيتشال ورفضها بيطلع زي ما هو
+        deductionId = await this.deductionOf(this.ds.manager, made.employeeId, made.id, user.sub)
+        if (!deductionId) {
+          await this.ds.getRepository(EmployeePenalty).createQueryBuilder().delete().where('id = :id AND status = :status', { id: made.id, status: 'PENDING' }).execute()
+          throw error
+        }
       }
-      await this.ds.getRepository(EmployeePenalty).update({ id: made.id }, { deductionRequestId: deduction.id })
+      await this.ds.getRepository(EmployeePenalty).update({ id: made.id, status: 'PENDING' }, { deductionRequestId: deductionId, status: 'ACTIVE' })
     }
     // حدث التنفيذ في ملف القضية بعد ما الجزاء (وخصمه) يثبت — الخط الزمني بيتزوّد بس، فمابيتكتبش قبل كده
     if (made.caseId) {
@@ -341,7 +390,7 @@ export class PenaltiesService {
       const step: PenaltyStep = { action: row.action, days: row.days === null || row.days === undefined ? null : Number(row.days) }
       return { id: row.id, ...(withEmployee ? { employeeId: row.employeeId, employeeName: people.get(row.employeeId)?.fullName ?? '—' } : {}), violationName: violations.get(row.violationId)?.name ?? '—',
         category: violations.get(row.violationId)?.category ?? null, occurrence: row.occurrence, occurrenceLabel: occurrenceLabel(row.occurrence), action: row.action, days: step.days, label: penaltyLabel(step),
-        incidentDate: String(row.incidentDate).slice(0, 10), status: row.status, statusLabel: row.status === 'ACTIVE' ? 'ساري' : 'ملغى', caseId: row.caseId ?? null, deductionRequestId: row.deductionRequestId ?? null,
+        incidentDate: String(row.incidentDate).slice(0, 10), status: row.status, statusLabel: row.status === 'ACTIVE' ? 'ساري' : row.status === 'PENDING' ? 'قيد التسجيل' : 'ملغى', caseId: row.caseId ?? null, deductionRequestId: row.deductionRequestId ?? null,
         note: row.note ?? null, cancelReason: row.cancelReason ?? null, createdAt: row.createdAt }
     })
   }

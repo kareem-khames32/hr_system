@@ -56,7 +56,7 @@ export default function PenaltiesPage() {
   const look = () => run(async () => { setPreview(await previewPenalty(target())); return '' })
   const confirm = () => run(async () => {
     if (!preview) return ''
-    const made = await applyPenalty({ ...target(), expectedOccurrence: preview.occurrence, ...(preview.needsPeriod ? { targetPeriod: period } : {}), ...(caseId.trim() ? { caseId: Number(caseId) } : {}), ...(note.trim() ? { note: note.trim() } : {}) })
+    const made = await applyPenalty({ ...target(), expectedFingerprint: preview.fingerprint, ...(preview.needsPeriod ? { targetPeriod: period } : {}), ...(caseId.trim() ? { caseId: Number(caseId) } : {}), ...(note.trim() ? { note: note.trim() } : {}) })
     setPreview(null)
     setNote('')
     load()

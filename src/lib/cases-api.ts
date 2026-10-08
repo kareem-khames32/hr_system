@@ -54,6 +54,8 @@ export interface ApiPenaltyCatalog {
 export interface ViolationBody { category?: string; name?: string; steps?: Array<{ action: PenaltyAction; days?: number }>; deductionTypeId?: number | null; isActive?: boolean }
 export interface ApiPenaltyPreview {
   employeeName: string; violationName: string; incidentDate: string; occurrence: number; occurrenceLabel: string; action: PenaltyAction; days: number | null; label: string; windowDays: number; needsPeriod: boolean
+  /** بصمة اللي اتعرض: التوقيع بيبعتها، ولو اللائحة أو التكرار اتغيّروا الخادم بيرفض */
+  fingerprint: string
 }
 export interface ApiPenalty {
   id: number; employeeId?: number; employeeName?: string; violationName: string; category: string | null; occurrence: number; occurrenceLabel: string; action: PenaltyAction; days: number | null; label: string
@@ -65,7 +67,7 @@ export const fetchViolations = () => apiFetch<ApiPenaltyCatalog>(`${P}/violation
 export const createViolation = (body: ViolationBody) => apiFetch<ApiPenaltyCatalog>(`${P}/violations`, json(body))
 export const updateViolation = (id: number, body: ViolationBody) => apiFetch<ApiPenaltyCatalog>(`${P}/violations/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
 export const previewPenalty = (body: PenaltyTarget) => apiFetch<ApiPenaltyPreview>(`${P}/preview`, json(body))
-export const applyPenalty = (body: PenaltyTarget & { expectedOccurrence: number; targetPeriod?: string; caseId?: number; note?: string }) => apiFetch<ApiPenalty>(P, json(body))
+export const applyPenalty = (body: PenaltyTarget & { expectedFingerprint: string; targetPeriod?: string; caseId?: number; note?: string }) => apiFetch<ApiPenalty>(P, json(body))
 export const fetchPenalties = (employeeId?: number) => apiFetch<{ available: boolean; message?: string; penalties: ApiPenalty[] }>(`${P}${employeeId ? `?employeeId=${employeeId}` : ''}`)
 export const cancelPenalty = (id: number, reason: string) => apiFetch<ApiPenalty>(`${P}/${id}/cancel`, json({ reason }))
 export const fetchMyPenalties = () => apiFetch<{ penalties: ApiPenalty[] }>(`${P}/mine`)

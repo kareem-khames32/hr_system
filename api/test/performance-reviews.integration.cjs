@@ -330,6 +330,15 @@ test('RV-05: المعايرة والاعتراض — تعديل بسبب قبل 
   assert.deepEqual(session.distribution.map(band => [band.key, band.count, band.percent, band.guide, band.over]), [['A', 1, 50, 10, false], ['B', 0, 0, 20, false], ['C', 1, 50, 40, false], ['D', 0, 0, 20, false], ['E', 0, 0, 10, false]])
   assert.deepEqual(session.groups, { departments: [{ id: org.sales.id, name: 'قسم المبيعات' }], branches: [{ id: org.branchA.id, name: 'فرع التقييم أ' }] })
   assert.deepEqual(JSON.stringify(session).includes('managerEmployeeId'), false, 'المدير بترتيبه مش برقمه')
+  // Codex P3K-B08-02: قسم الموظفين اتنقل لفرع ب واتغيّر اسمه (الموظفين لسه في فرع أ): معاير فرع أ بيشوف صفوفهم من غير اسم القسم ولا رقمه،
+  // والتصفية برقم القسم المخفي مابترجّعش حاجة
+  await repo('Department').update({ id: org.sales.id }, { branchId: org.branchB.id, name: 'SECRET-B قسم فرع ب' })
+  try {
+    const moved = expectStatus(await request(users.cal, 'GET', C), 200)
+    assert.deepEqual([moved.rows.map(row => [row.employeeName, row.departmentName]), moved.groups.departments, JSON.stringify(moved).includes('SECRET-B'),
+      expectStatus(await request(users.cal, 'GET', C + `?departmentId=${org.sales.id}`), 200).rows],
+    [[['مندوب أول', null], ['مندوب تاني', null]], [], false, []])
+  } finally { await repo('Department').update({ id: org.sales.id }, { branchId: org.branchA.id, name: 'قسم المبيعات' }) }
   assert.deepEqual([expectStatus(await request(users.cal, 'GET', C + `?departmentId=${org.sales.id}`), 200).rows.length, expectStatus(await request(users.cal, 'GET', C + `?departmentId=${org.bDepartment.id}`), 200).rows.length,
     expectStatus(await request(users.cal, 'GET', C + `?branchId=${org.branchA.id}`), 200).rows.length, (await request(users.cal, 'GET', C + '?branchId=x')).status], [2, 0, 2, 400])
 

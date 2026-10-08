@@ -360,6 +360,12 @@ test('TR-05: ميزانية الأقسام وتقرير التكلفة مقاب�
     [false, [['السلامة المهنية', 'فني سلامة', 'قسم المبيعات', true], ['السلامة المهنية', 'فني سلامة', null, false]]])
   assert.deepEqual(seen.missing.map(row => [row.employeeName, row.departmentName, row.courseName, row.enrolled]).sort(),
     [['فني جديد', 'قسم المبيعات', 'السلامة المهنية', false], ['متدرب تالت', null, 'السلامة المهنية', true]].sort())
+  // Codex P3K-B09: قسم الموظف اتنقل لفرع ب واتغيّر اسمه (الموظف لسه في فرع أ): موارد فرع أ بتشوفه ناقص بإلزام الشركة من غير اسم قسمه
+  await repo('Department').update({ id: org.sales.id }, { branchId: org.branchB.id, name: 'SECRET-B قسم فرع ب' })
+  try {
+    const moved = expectStatus(await request(users.hrA, 'GET', Q), 200)
+    assert.deepEqual([moved.missing.find(row => row.employeeName === 'فني جديد')?.departmentName, JSON.stringify(moved).includes('SECRET-B'), moved.requirements.map(row => row.departmentName)], [null, false, [null]])
+  } finally { await repo('Department').update({ id: org.sales.id }, { branchId: org.branchA.id, name: 'قسم المبيعات' }) }
   // فرع ب: شايف إلزام الشركة بس وناقصه عند موظفينه
   const seenB = expectStatus(await request(users.hrB, 'GET', Q), 200)
   assert.deepEqual([seenB.requirements.map(row => [row.jobTitle, row.departmentName, row.canRemove]), seenB.missing.map(row => row.employeeName)], [[['فني سلامة', null, false]], ['موظف فرع ب']])

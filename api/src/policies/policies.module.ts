@@ -11,5 +11,7 @@ import { Policy, PolicyAcknowledgement, PolicyVersion } from './policy.entities'
   imports: [TypeOrmModule.forFeature([Policy, PolicyVersion, PolicyAcknowledgement])],
   controllers: [PoliciesController],
   providers: [PolicyGate, PoliciesService, { provide: APP_INTERCEPTOR, useClass: PolicyGateInterceptor }],
+  // مرجع السياسة بحكم قارئه لمقالات قاعدة المعرفة (B3.10)
+  exports: [PoliciesService],
 })
 export class PoliciesModule {}

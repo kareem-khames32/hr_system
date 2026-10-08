@@ -152,8 +152,10 @@ test('RU-05: reward suggestions — the rule values, no bonus written by the sug
   const claim = submit.slice(submit.indexOf('this.ds.transaction('), submit.indexOf('const bandLabel'))
   assert.match(claim, /await this\.owned\(em, user, id, true\)\n\s+if \(row\.status !== 'SUGGESTED'\) throw new ConflictException\(REWARD_TAKEN\)\n\s+await em\.getRepository\(ReviewRewardSuggestion\)\.update\(\{ id: row\.id \}, \{ status: 'CLAIMED'/)
   assert.doesNotMatch(claim, /this\.bonuses\./, 'طلب المكافأة برّه معاملة الحجز')
-  const submitOrder = ["seen.status !== 'SUGGESTED'", 'this.ds.transaction(', 'made = await this.bonuses.create(user,', "{ id: claimed.id, status: 'CLAIMED' }, { status: 'SUGGESTED'", 'throw error',
-    "{ id: claimed.id, status: 'CLAIMED' }, { status: 'SUBMITTED', bonusRequestId: made.id }"].map(part => submit.indexOf(part))
+  // Codex P3K-B08-01: علامة الاقتراح مفتاح عدم التكرار — الموجود بيتربط قبل الإنشاء، والرد اللي وقع بعد الحفظ بيتربط بدل ما يرجّع الحجز
+  const submitOrder = ["seen.status !== 'SUGGESTED'", 'this.ds.transaction(', 'const marker = rewardMarker(claimed.id)', 'let madeId = await existing()', 'madeId = (await this.bonuses.create(user,', '        madeId = await existing()',
+    "{ id: claimed.id, status: 'CLAIMED' }, { status: 'SUGGESTED'", 'throw error', "{ id: claimed.id, status: 'CLAIMED' }, { status: 'SUBMITTED', bonusRequestId: madeId }"].map(part => submit.indexOf(part))
+  assert.match(submit, /CHARINDEX\(@1, \[reason\]\) > 0/, 'بحث حرفي عن العلامة (مش LIKE: القوسين مش نمط)')
   assert.ok(submitOrder.every((at, index) => at > 0 && (index === 0 || at > submitOrder[index - 1])), JSON.stringify(submitOrder))
   const controller = read('api/src/performance/review-rewards.controller.ts')
   assert.match(controller, /@RequireModule\('performance'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)\n@Controller\('performance\/rewards'\)/)

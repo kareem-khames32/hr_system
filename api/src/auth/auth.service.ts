@@ -27,7 +27,7 @@ import { newCsrfToken } from './session-cookie'
 import { UserSessionsService } from './user-sessions.service'
 import { TotpService } from './totp.service'
 import { TOTP_CHALLENGE_MARK, TOTP_FACTOR_CHANGED } from './totp'
-import { preboardingActive, preboardingUntilOf } from './preboarding'
+import { PREBOARDING_SESSION_ROLE, preboardingActive, preboardingUntilOf } from './preboarding'
 
 // حمولة التوكن — الدور والفرع هما أساس عزل البيانات
 export interface JwtPayload {
@@ -482,6 +482,8 @@ export class AuthService {
     // بصلاحياته من أول دخول بعد المباشرة)
     const preboardingUntil = await preboardingUntilOf(user)
     const permissions = preboardingUntil ? [] : await this.resolvePermissions(user)
+    // Codex P3K-B01: ومن غير دور الحساب كمان — سلطة الدور باسمه (خطوة HR، مهام الدور) مابتفضلش مع الجلسة المقيدة
+    const role = preboardingUntil ? PREBOARDING_SESSION_ROLE : user.role
     const mustChangePassword = !!user.mustChangePassword
     // «كل الفروع» من عمود القاعدة بقيمته الحرفية فقط (bit → true)؛ مدير النظام نطاقه كامل بدوره فمايتكتبش له
     const scopeAllBranches = user.role !== 'super_admin' && user.scopeAllBranches === true
@@ -506,7 +508,7 @@ export class AuthService {
     const payload: JwtPayload = {
       sub: user.id,
       email: user.email,
-      role: user.role,
+      role,
       branchId: user.branchId ?? null,
       employeeId: user.employeeId ?? null,
       permissions,
@@ -526,7 +528,7 @@ export class AuthService {
         id: user.id,
         email: user.email,
         displayName: user.displayName,
-        role: user.role,
+        role,
         branchId: user.branchId,
         employeeId: user.employeeId,
         permissions,

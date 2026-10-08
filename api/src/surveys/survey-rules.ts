@@ -119,6 +119,7 @@ export const SURVEY_QUESTIONS = 'الأسئلة: من 1 لـ30 — كل سؤال
 export const SURVEY_CLOSE_DATE = 'آخر يوم للرد تاريخ صحيح مش فايت'
 export const SURVEY_NOT_DRAFT = 'الاستبيان اتفتح: مابيتعدّلش — اقفله واعمل واحد جديد'
 export const SURVEY_NOT_OPEN = 'الاستبيان مش مفتوح'
+export const SURVEY_RESULTS_AFTER_CLOSE = 'النتايج بتتعرض بعد قفل الاستبيان — عرضها وهو مفتوح بيكشف رد اللي يرد بعد كده'
 export const SURVEY_EMPTY_AUDIENCE = 'مفيش موظفين في جمهور الاستبيان'
 export const SURVEY_ANSWERS = 'الإجابات ناقصة أو غير صالحة: كل سؤال مطلوب لازم يتجاوب بقيمة من نوعه'
 export const SURVEY_ANSWERED = 'ردّك اتسجّل قبل كده'
@@ -215,9 +216,14 @@ export function enpsScore(values: number[]): number | null {
 }
 
 /** ملخص إجابات مجموعة لكل سؤال: المتوسط والتوزيع (تقدير)، الدرجة (eNPS)، العدّ (اختيار). التعليقات النصية مش هنا */
-export function summarize(questions: SurveyQuestion[], answers: SurveyAnswers[]) {
+/**
+ * ملخص إجابات مجموعة. Codex P3K-B13: الحد الأدنى على إجابات **كل سؤال**: سؤال (اختياري) جاوب عليه أقل من الحد مابيتعرضش له لا متوسط ولا
+ * توزيع ولا عدد (`hidden`) — عدد الردود الكلي مش كفاية.
+ */
+export function summarize(questions: SurveyQuestion[], answers: SurveyAnswers[], minGroup: number) {
   return questions.filter((question) => question.type !== 'text').map((question) => {
     const values = answers.map((entry) => entry[question.key]).filter((value) => value !== undefined)
+    if (values.length < minGroup) return { key: question.key, label: question.label, type: question.type, hidden: true as const }
     if (question.type === 'choice') {
       return { key: question.key, label: question.label, type: question.type, answered: values.length, counts: (question.options ?? []).map((option) => ({ option, count: values.filter((value) => value === option).length })) }
     }

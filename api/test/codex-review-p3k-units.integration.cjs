@@ -1,0 +1,2 @@
+'use strict'
+for(const name of ['announcements','branch-separation','candidate-applications','candidate-hire-required','cases','dependents','helpdesk','modules-registry','modules-ui','onboarding-templates','performance-goals','performance-reviews','policies-ui','preboarding','probation','recruitment-jobs','report-day-range-ui','routes-guards','scheduled-jobs','session-cookie','surveys','tasks-ui','training'])require('./'+name+'.test.cjs')

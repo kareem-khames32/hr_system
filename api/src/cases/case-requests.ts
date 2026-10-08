@@ -27,8 +27,12 @@ export async function executeCaseRequest(em: EntityManager, req: Request, type: 
   const made = await em.getRepository(HrCase).insert({ kind: KIND_OF[type.code] ?? 'OTHER', title: String(type.nameAr).slice(0, 200), description: text || null, branchId: req.branchId ?? null, requestId: req.id,
     investigatorUserId: null, status: 'OPEN', outcome: null, outcomeNote: null, openedByUserId: 0, openedAt: now, decidedAt: null, closedAt: null })
   const caseId = made.identifiers[0].id as number
+  // Codex P3K-B11: عضوية المطّلع بموظف حسابه وقت الإضافة (الوصول بيتحكم بالهوية الحالية — case-access.ts)
+  const accounts: Array<{ id: number; employeeId: number | null }> = await em.query(
+    `SELECT [id], [employeeId] FROM [users] WHERE [id] IN (${approvers.map((_, index) => `@${index}`).join(', ')})`, approvers.map((row) => Number(row.approverId)))
+  const employeeOf = new Map(accounts.map((row) => [Number(row.id), row.employeeId == null ? null : Number(row.employeeId)]))
   await em.getRepository(HrCaseParty).insert([
-    ...approvers.map((row) => ({ caseId, role: 'HANDLER' as const, employeeId: null, userId: Number(row.approverId), addedByUserId: 0, addedAt: now })),
+    ...approvers.map((row) => ({ caseId, role: 'HANDLER' as const, employeeId: employeeOf.get(Number(row.approverId)) ?? null, userId: Number(row.approverId), addedByUserId: 0, addedAt: now })),
     { caseId, role: 'COMPLAINANT' as const, employeeId: req.requesterId, userId: null, addedByUserId: 0, addedAt: now },
   ])
   return { ref: `CASE-${caseId}`, completed: true }

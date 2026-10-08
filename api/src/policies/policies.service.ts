@@ -440,6 +440,21 @@ export class PoliciesService {
       acknowledgedVersionNo: item.acknowledged?.versionNo ?? null, acknowledgedAt: item.acknowledged?.acknowledgedAt ?? null }
   }
 
+  /**
+   * Codex P3K-B10: مرجع سياسة (رقمها وعنوانها) زي ما الحساب ده يقدر يشوفه: منشورة هو في جمهورها ولها نسخة سارية، أو ظاهرة له كصاحب
+   * إدارة أو تقرير السياسات (حساب الفروع: ليها حد في نطاقه). غير كده null — نفس رد السياسة اللي مش موجودة. وجود السياسة مش حق
+   * الاطلاع على عنوانها.
+   */
+  async referenceFor(user: JwtPayload, policyId: number): Promise<{ id: number; title: string } | null> {
+    const em = this.ds.manager
+    if (!Number.isSafeInteger(policyId) || policyId < 1 || !(await policySchemaReady(em))) return null
+    const policy = await em.getRepository(Policy).findOne({ where: { id: policyId } })
+    if (!policy) return null
+    const visible = (this.reads(user) && (await this.visibleTo(em, user, [policy])).length > 0)
+      || (await this.statesFor(em, user)).items.some(item => item.policy.id === policy.id)
+    return visible ? { id: policy.id, title: policy.title } : null
+  }
+
   /** «سياساتي»: السياسات المنشورة اللي أنا في جمهورها وحالتي مع كل واحدة */
   async mine(user: JwtPayload) {
     const em = this.ds.manager

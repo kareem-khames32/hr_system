@@ -51,12 +51,16 @@ test('SU-02: eNPS and the summary, groups shown without one that lets a hidden g
   assert.deepEqual([rules.enpsScore([]), rules.enpsScore([10, 9, 8, 7, 6, 0]), rules.enpsScore([10, 10]), rules.enpsScore([0, 6]), rules.enpsScore([7, 8]), rules.enpsScore([9, 9, 3])], [null, 0, 100, -100, 0, 33])
 
   const questions = rules.cleanSurveyQuestions(QUESTIONS)
-  assert.deepEqual(rules.summarize(questions, [{ q1: 5, q2: 10, q3: 'المرتب', q4: 'تمام' }, { q1: 4, q2: 6 }, { q1: 3, q2: 9, q3: 'المرتب' }]), [
+  const three = [{ q1: 5, q2: 10, q3: 'المرتب', q4: 'تمام' }, { q1: 4, q2: 6 }, { q1: 3, q2: 9, q3: 'المرتب' }]
+  assert.deepEqual(rules.summarize(questions, three, 2), [
     { key: 'q1', label: 'راضي عن شغلك؟', type: 'rating', answered: 3, average: 4 },
     { key: 'q2', label: 'ترشّح الشركة لصاحبك؟', type: 'enps', answered: 3, average: 8.33, enps: 33 },
     { key: 'q3', label: 'أكتر حاجة عاجباك', type: 'choice', answered: 2, counts: [{ option: 'الفريق', count: 0 }, { option: 'المرتب', count: 2 }] },
   ], 'النص مش في الملخص')
-  assert.deepEqual(rules.summarize(questions, [])[0], { key: 'q1', label: 'راضي عن شغلك؟', type: 'rating', answered: 0, average: null })
+  // Codex P3K-B13: الحد على إجابات كل سؤال — السؤال اللي جاوب عليه أقل من الحد من غير متوسط ولا توزيع ولا عدد
+  assert.deepEqual(rules.summarize(questions, three, 3).map(row => [row.key, row.hidden, 'answered' in row, 'counts' in row]), [['q1', undefined, true, false], ['q2', undefined, true, false], ['q3', true, false, false]])
+  assert.deepEqual([rules.summarize(questions, three, 4).every(row => row.hidden === true && Object.keys(row).length === 4), rules.summarize(questions, [], 3)[0]],
+    [true, { key: 'q1', label: 'راضي عن شغلك؟', type: 'rating', hidden: true }])
 
   const groups = (counts, min) => rules.visibleGroups(counts.map((count, index) => ({ key: index + 1, count })), min)
   assert.deepEqual(groups([10, 8, 5], 5), [1, 2, 3], 'كله فوق الحد')
@@ -96,6 +100,13 @@ test('SU-03: a new closed module, a two-stage answer with no link from the respo
   // النتايج: تحت الحد مفيش حاجة، والتفصيل بالمجموعات المعروضة بس
   const results = service.slice(service.indexOf('  async results('), service.indexOf('  // ===== الموظف ====='))
   assert.match(results, /if \(responses\.length < row\.minGroup\) return \{ \.\.\.base, visible: false, overall: \[\], groups: \[\], comments: \[\], commentsHidden: true \}/)
+  // Codex P3K-B13: النتايج بعد القفل بس، والحد على كل سؤال وكل تعليقات سؤال، واسم القسم بفرعه الحالي، والرد المجهول من غير يومه
+  assert.match(results, /if \(row\.status !== 'CLOSED'\) throw new BadRequestException\(SURVEY_RESULTS_AFTER_CLOSE\)/)
+  assert.deepEqual([(results.match(/summarize\(questions, /g) ?? []).length, results.includes('overall: summarize(questions, parsed.map((entry) => entry.answers), row.minGroup)'),
+    results.includes('summary: summarize(questions, byDepartment.get(key)!, row.minGroup)')], [2, true, true], 'الإجمالي وكل مجموعة بحد كل سؤال')
+  assert.match(results, /\.filter\(\(entry\) => entry\.texts\.length >= row\.minGroup\)/)
+  assert.match(results, /\.filter\(\(entry\) => inBranchScope\(scope, entry\.branchId\)\)\.map\(\(entry\) => \[entry\.id, entry\.name\]\)/)
+  assert.match(respond, /submittedOn: survey\.isAnonymous === true \? \(survey\.openedAt \? localDateOf\(new Date\(survey\.openedAt\)\) : today\) : today/)
   assert.match(results, /visibleGroups\(/)
   assert.doesNotMatch(results, /employeeId/, 'النتايج من غير موظف')
   // الإدارة بنطاق الفروع وإلا غير موجود
@@ -112,6 +123,7 @@ test('SU-03: a new closed module, a two-stage answer with no link from the respo
   assert.match(page, /const manage = can\('surveys\.manage'\)/)
   assert.match(page, /if \(manage\) fetchSurveys\(\)/, 'قايمة الإدارة مابتتطلبش من غير الصلاحية')
   assert.match(page, /!data\.visible &&/)
+  assert.match(page, /\{row\.status === 'CLOSED' && \(\n\s+<button onClick=\{\(\) => show\(row\.id\)\}/, 'النتايج بعد القفل بس')
   assert.match(form, /form\?\.isAnonymous && !done && !form\.answered/)
   assert.doesNotMatch(page + form, /employeeName|employeeId/, 'الواجهة مابتعرضش صاحب رد')
 })

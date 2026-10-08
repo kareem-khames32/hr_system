@@ -3,6 +3,7 @@
 // ولا رسالة بريد حقيقية.
 //  SV-01) الإدارة: الموديول مقفول افتراضيًا؛ القيم (الأسئلة، الحد الأدنى، آخر يوم)؛ جمهور حساب الفروع؛ المسودة بتتعدّل والمفتوح لأ؛ والفتح بيعمل
 //         دعوة لكل موظف حالي في الجمهور بمجموعته.
+//  (CRP3K / Codex P3K-B13) النتايج بعد القفل بس، وسؤال جاوب عليه أقل من الحد مابيتعرضش، واسم قسم اتنقل برّه النطاق مابيتسمّاش، والرد المجهول من غير يومه.
 //  SV-02) السرية الحقيقية: الرد المجهول صف من غير موظف ولا ساعة ولا رابط بالدعوة (والدعوة باليوم بس)، ومن غير سطر تدقيق؛ مرة واحدة حتى مع
 //         ضغطتين مع بعض؛ والنتايج: 4 ردود مابتعرضش، 6 بتعرض، ومجموعة أقل من الحد مابتظهرش ولا تتحسب بالطرح؛ والتعليقات بحدها.
 //  SV-03) الاستبيان بالاسم بيسجّل الموظف؛ والمقفول واللي فات آخر يومه مابيتردّش عليهم.
@@ -160,6 +161,8 @@ test('SV-02: السرية الحقيقية — الرد المجهول من غي
     assert.deepEqual(answer(await respond(d1[0], id, bad)), [400, rules.SURVEY_ANSWERS], JSON.stringify(bad).slice(0, 60))
   }
   assert.deepEqual([await repo('SurveyResponse').count(), await repo('SurveyInvitation').count({ where: { surveyId: id } }) - (await repo('SurveyInvitation').find({ where: { surveyId: id } })).filter(row => row.respondedOn === null).length], [0, 0])
+  const openedDay = localDateOf(new Date(Date.now() - 3 * 86400000))
+  await repo('Survey').update({ id }, { openedAt: new Date(`${openedDay}T09:00:00`) })
   const auditBefore = Number((await ds.query('SELECT COUNT(*) AS [n] FROM [audit_log]'))[0].n)
   assert.deepEqual(expectStatus(await respond(d1[0], id, good(5, 10, 'الرواتب', ' الرواتب محتاجة مراجعة ')), 200), { received: true })
   assert.deepEqual(answer(await respond(d1[0], id, good())), [409, rules.SURVEY_ANSWERED])
@@ -173,34 +176,58 @@ test('SV-02: السرية الحقيقية — الرد المجهول من غي
   assert.deepEqual(await columns('survey_invitations'), ['id:int', 'surveyId:int', 'employeeId:int', 'departmentId:int', 'branchId:int', 'respondedOn:date', 'createdAt:datetime2'])
   const stored = await repo('SurveyResponse').find({ where: { surveyId: id }, order: { id: 'ASC' } })
   assert.deepEqual([stored.map(row => [row.employeeId, row.departmentId, row.branchId, String(row.submittedOn).slice(0, 10)]), JSON.parse(stored[0].answers)],
-    [[[null, org.sales.id, org.branchA.id, today], [null, org.sales.id, org.branchA.id, today]], { q1: 5, q2: 10, q3: 'الرواتب', q4: 'الرواتب محتاجة مراجعة' }])
+    [[[null, org.sales.id, org.branchA.id, openedDay], [null, org.sales.id, org.branchA.id, openedDay]], { q1: 5, q2: 10, q3: 'الرواتب', q4: 'الرواتب محتاجة مراجعة' }], 'يوم الرد المجهول = يوم فتح الاستبيان لكل الردود')
   assert.deepEqual((await repo('SurveyInvitation').find({ where: { surveyId: id, employeeId: d1[0].employeeId } })).map(row => String(row.respondedOn).slice(0, 10)), [today])
   assert.equal(Number((await ds.query('SELECT COUNT(*) AS [n] FROM [audit_log]'))[0].n), auditBefore, 'ولا سطر تدقيق للرد')
   assert.deepEqual(expectStatus(await request(d1[0], 'GET', S + '/mine'), 200).surveys, [], 'اللي رد مابيتطلبش منه تاني')
 
-  // 4 ردود (أقل من الحد 5): مفيش نتايج خالص
+  // النتايج بعد القفل بس: وهو مفتوح مرفوضة (قراءتها قبل رد وبعده بتكشف الرد ده بالطرح)
   await respond(d1[2], id, good(3, 7, 'التدريب', 'محتاجين تدريب أكتر')); await respond(d1[3], id, good(4, 6, 'المواصلات'))
-  const few = expectStatus(await request(users.hr, 'GET', `${S}/${id}/results`), 200)
+  assert.deepEqual(answer(await request(users.hr, 'GET', `${S}/${id}/results`)), [400, rules.SURVEY_RESULTS_AFTER_CLOSE])
+
+  // جولة: استبيان بنفس الأسئلة + سؤال اختياري، بيتفتح ويترد عليه ويتقفل
+  const round = async (title, pairs) => {
+    const made = expectStatus(await request(users.hr, 'POST', S, { title, kind: 'SATISFACTION', audience: branchAudience(org.branchA), questions: [...questions(), { label: 'سؤال اختياري', type: 'rating', required: false }] }), 201)
+    expectStatus(await request(users.hr, 'POST', `${S}/${made.id}/open`), 200)
+    for (const [user, answers] of pairs) expectStatus(await respond(user, made.id, answers), 200)
+    assert.deepEqual(answer(await request(users.hr, 'GET', `${S}/${made.id}/results`)), [400, rules.SURVEY_RESULTS_AFTER_CLOSE], title)
+    expectStatus(await request(users.hr, 'POST', `${S}/${made.id}/close`), 200)
+    return made.id
+  }
+  const resultsOf = async (surveyId, user = users.hr) => expectStatus(await request(user, 'GET', `${S}/${surveyId}/results`), 200)
+  const ratings = [5, 4, 3, 4, 5, 2], enps = [10, 9, 7, 6, 9, 10], choices = ['الرواتب', 'التدريب', 'التدريب', 'المواصلات', 'الرواتب', 'التدريب'], texts = ['الرواتب محتاجة مراجعة', undefined, 'محتاجين تدريب أكتر']
+  const sales = d1.map((user, index) => [user, { ...good(ratings[index], enps[index], choices[index], texts[index]), ...(index === 0 ? { q5: 2 } : {}) }])
+
+  // «خلص لما»: 4 ردود (أقل من الحد 5) مابتعرضش نتايج خالص
+  const few = await resultsOf(await round('جولة أربع ردود', sales.slice(0, 4)))
   assert.deepEqual([few.total, few.visible, few.overall, few.groups, few.comments, few.survey.responded], [4, false, [], [], [], 4])
-  // 6 ردود: بتعرض — الإجمالي وقسم المبيعات (6)، والتعليقات لسه تحت حدها (10)
-  await respond(d1[4], id, good(5, 9, 'الرواتب')); await respond(d1[5], id, good(2, 10, 'التدريب'))
-  const six = expectStatus(await request(users.hr, 'GET', `${S}/${id}/results`), 200)
-  const raced = JSON.parse(stored[1].answers)
-  const ratings = [5, raced.q1, 3, 4, 5, 2], enps = [10, raced.q2, 7, 6, 9, 10]
+  // و6 بتعرض: الإجمالي وقسم المبيعات (6)، والتعليقات لسه تحت حدها (10) — والسؤال الاختياري اللي جاوب عليه واحد بس من غير أي رقم
+  const sixId = await round('جولة ست ردود', sales), six = await resultsOf(sixId)
   const average = Math.round((ratings.reduce((sum, value) => sum + value, 0) / 6) * 100) / 100
-  assert.deepEqual([six.total, six.visible, six.overall.map(row => [row.key, row.type, row.answered]), six.overall[0].average, six.overall[1].enps, six.overall[2].counts, six.groups.map(row => [row.name, row.count]), six.commentsHidden, six.comments],
-    [6, true, [['q1', 'rating', 6], ['q2', 'enps', 6], ['q3', 'choice', 6]], average, rules.enpsScore(enps), [{ option: 'الرواتب', count: 2 }, { option: 'التدريب', count: 3 + (raced.q3 === 'التدريب' ? 0 : 0) }, { option: 'المواصلات', count: 1 }],
-      [['قسم المبيعات', 6]], true, []])
+  assert.deepEqual([six.total, six.visible, six.overall.map(row => [row.key, row.type, row.answered, row.hidden]), six.overall[0].average, six.overall[1].enps, six.overall[2].counts, six.groups.map(row => [row.name, row.count]), six.commentsHidden, six.comments],
+    [6, true, [['q1', 'rating', 6, undefined], ['q2', 'enps', 6, undefined], ['q3', 'choice', 6, undefined], ['q5', 'rating', undefined, true]], average, rules.enpsScore(enps),
+      [{ option: 'الرواتب', count: 2 }, { option: 'التدريب', count: 3 }, { option: 'المواصلات', count: 1 }], [['قسم المبيعات', 6]], true, []])
+  assert.deepEqual([six.overall[3], six.groups[0].summary[3]], [{ key: 'q5', label: 'سؤال اختياري', type: 'rating', hidden: true }, { key: 'q5', label: 'سؤال اختياري', type: 'rating', hidden: true }], 'إجابة واحدة: ولا متوسط ولا عدد')
   assert.equal(JSON.stringify(six).includes('موظف الاستبيان'), false, 'من غير أسماء')
+  // التعليقات: حد الإعداد اتوصل (5) بس السؤال كتب فيه اتنين بس (أقل من الحد الأدنى) — مابتتعرضش
+  await repo('RequestsConfig').save({ key: rules.SURVEY_COMMENT_MIN_KEY, value: '5' })
+  const sparse = await resultsOf(sixId)
+  assert.deepEqual([sparse.commentsHidden, sparse.comments], [false, []])
+  await repo('RequestsConfig').save({ key: rules.SURVEY_COMMENT_MIN_KEY, value: '10' })
+  // قسم المبيعات اتنقل لفرع برّه نطاق قارئ النتايج: مجموعته من غير اسمه — واللي نطاقه الشركة كلها بيشوف الاسم
+  await repo('Department').update({ id: org.sales.id }, { branchId: org.branchB.id })
+  try {
+    assert.deepEqual([(await resultsOf(sixId)).groups.map(row => [row.name, row.count]), (await resultsOf(sixId, users.admin)).groups.map(row => row.name)], [[['قسم برّه نطاقك', 6]], ['قسم المبيعات']])
+  } finally { await repo('Department').update({ id: org.sales.id }, { branchId: org.branchA.id }) }
+
   // قسم الدعم رد (4 — أقل من الحد): مابيظهرش؛ ولأن طرحه من الإجمالي يكشفه، قسم المبيعات بيتخفى كمان — والإجمالي لسه ظاهر
-  for (const user of d2) await respond(user, id, good(1, 3, 'المواصلات', 'مفيش مواصلات'))
-  const ten = expectStatus(await request(users.hr, 'GET', `${S}/${id}/results`), 200)
-  assert.deepEqual([ten.total, ten.visible, ten.groups, ten.overall[0].answered, ten.commentsHidden], [10, true, [], 10, false])
-  // التعليقات وصلت حدها (10): بتتعرض من غير مجموعة ولا ترتيب
+  const tenId = await round('جولة عشر ردود', [...sales, ...d2.map(user => [user, good(1, 3, 'المواصلات', 'مفيش مواصلات')])]), ten = await resultsOf(tenId)
+  assert.deepEqual([ten.total, ten.visible, ten.groups, ten.overall[0].answered, ten.overall[3], ten.commentsHidden], [10, true, [], 10, { key: 'q5', label: 'سؤال اختياري', type: 'rating', hidden: true }, false])
+  // التعليقات وصلت حدها (10) وكتب فيها 6: بتتعرض من غير مجموعة ولا ترتيب
   assert.deepEqual([ten.comments.map(row => row.key), [...ten.comments[0].texts].sort()], [['q4'], ['الرواتب محتاجة مراجعة', 'محتاجين تدريب أكتر', 'مفيش مواصلات', 'مفيش مواصلات', 'مفيش مواصلات', 'مفيش مواصلات'].sort()])
   // الحد إعداد: 11 ← التعليقات بتتخفى تاني
   await repo('RequestsConfig').save({ key: rules.SURVEY_COMMENT_MIN_KEY, value: '11' })
-  assert.deepEqual([expectStatus(await request(users.hr, 'GET', `${S}/${id}/results`), 200).commentsHidden, (await request(users.hrB, 'GET', `${S}/${id}/results`)).status, (await request(d1[0], 'GET', `${S}/${id}/results`)).status], [true, 404, 403])
+  assert.deepEqual([(await resultsOf(tenId)).commentsHidden, (await request(users.hrB, 'GET', `${S}/${tenId}/results`)).status, (await request(d1[0], 'GET', `${S}/${tenId}/results`)).status], [true, 404, 403])
 })
 
 test('SV-03: الاستبيان بالاسم بيسجّل الموظف؛ والمقفول واللي فات آخر يومه مابيتردّش عليهم؛ والموديول المقفول', async () => {
@@ -217,8 +244,8 @@ test('SV-03: الاستبيان بالاسم بيسجّل الموظف؛ وال�
   assert.deepEqual([expectStatus(await request(users.hr, 'POST', `${S}/${state.id}/close`), 200).status, answer(await request(users.hr, 'POST', `${S}/${state.id}/close`))], ['CLOSED', [400, rules.SURVEY_NOT_OPEN]])
   const late = await member({ departmentId: org.sales.id })
   assert.equal((await respond(late, state.id, { q1: 4, q2: 9, q3: 'التدريب' })).status, 404, 'اللي اتعيّن بعد الفتح مالوش دعوة')
-  // والنتايج لسه بتتقري بعد القفل
-  assert.equal(expectStatus(await request(users.hr, 'GET', `${S}/${state.id}/results`), 200).total, 10)
+  // والنتايج بتتقري بعد القفل (4 ردود: تحت الحد)
+  assert.deepEqual([expectStatus(await request(users.hr, 'GET', `${S}/${state.id}/results`), 200).total, expectStatus(await request(users.hr, 'GET', `${S}/${state.id}/results`), 200).visible], [4, false])
   expectStatus(await request(users.admin, 'PUT', '/modules/surveys', { enabled: false }), 200); modules.invalidate()
   try { assert.deepEqual([(await request(d1[0], 'GET', S + '/mine')).status, (await request(users.hr, 'GET', S)).status], [404, 404]) }
   finally { expectStatus(await request(users.admin, 'PUT', '/modules/surveys', { enabled: true }), 200); modules.invalidate() }

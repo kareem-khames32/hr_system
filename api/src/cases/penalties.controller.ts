@@ -20,7 +20,7 @@ class ApplyDto {
   @IsOptional() targetPeriod?: unknown
   @IsOptional() caseId?: unknown
   @IsOptional() note?: unknown
-  @IsOptional() expectedOccurrence?: unknown
+  @IsOptional() expectedFingerprint?: unknown
 }
 class CancelDto {
   @IsOptional() reason?: unknown
