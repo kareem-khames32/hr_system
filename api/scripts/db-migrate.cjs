@@ -30,6 +30,26 @@ const FILE_NAME = /^\d{8}_\d{3}_[a-z0-9_]+\.(sql|cjs)$/
 // نفس نمط api/src/auth/jwt-secret.ts (الاختبار يتأكد من التطابق) + اسم البروفة
 const DISPOSABLE_DATABASE = /^hr_[a-z0-9]+(?:_[a-z0-9]+)*_(?:test|race)_[a-f0-9]{16}$/
 const REHEARSAL_DATABASE = /^hr_migrate_rehearsal_\d{14}_[a-f0-9]{8}$/
+// B6.1: قاعدة عميل جديدة (نسخة مستقلة لكل عميل): hr_c_<اسم> — مسموحة بس بوضع «قاعدة جديدة» (fresh) من أمر التجهيز
+const CUSTOMER_DATABASE = /^hr_c_[a-z0-9]+(?:_[a-z0-9]+){0,5}$/
+// ملفات مكتوبة لقاعدة «قبل الرواتب» من غير حارس وجود: أثرها شكل بس (أعمدة وجداول وفهارس وقيود متعرّفة في الكيانات)، والقاعدة الجديدة بتاخده من
+// مزامنة الكيانات. في وضع «قاعدة جديدة» بتتسجّل في الدفتر (scope = baseline) من غير تنفيذ — بالاسم والبصمة، والقايمة مقفولة: أي ملف جديد لازم يعدّي
+// على قاعدة فاضية لوحده. (042: تحديثاته على صفوف موجودة ونوع «امتحانات» — بذرة العميل بتحط أنواع الإجازات بشكلها النهائي.)
+const BASELINE_COVERED = Object.freeze({
+  '20260912_001_settlement_payroll_boundary': '7bb03d8552178dc54a5f723fbdf5154d99324ef57807bcfed7211a6e1c635495',
+  '20260912_002_membership_claims_events': '3ade660dc18ef4068582e4794798dbf82f32cc3743882693e73c590e1ac443f4',
+  '20260912_003_attendance_exemptions': '1697fcf7f0b2bcda7636f4be0df7ff9e1c32cfd6a13a7c54ffa56cc8fb242ad9',
+  '20260913_004_attendance_flex_history': '6855dc2daa288c590bb83637f97cb3cce2cad1765c01ee97a33359c301b08fbb',
+  '20260913_005_overtime_workflow': '3a68ff6e6f8bd19c38f0b5cf3dcf9f3d1bf565879b2f25bb9c147ad7fa9f571f',
+  '20260913_006_payroll_policy_drafts': '0446e0b17d832e8081e464e96a6ac143a7b5d1fae78620cd7f3229eadf2b40e5',
+  '20260913_007_payroll_policy_settings': '1e983f3b6bc8fb1b8fb6b0f4e22740221ff02f198803de1fbe884f14b4188d7e',
+  '20260913_008_payroll_policy_definitions': '1d7e0684a7dfe9ac851d89a93278c9116612d653f3c66f9831cb5a52d4782bd3',
+  '20260913_009_loan_installment_ledger': '5a675b1542f9d148acde7cf42e11c34310466206bd4fb0126efa2122911aa18e',
+  '20260913_010_payroll_collection_policy': 'bd55de179fd7174c75426793424775b17cb02cbcc19cecff7921203432efaccd',
+  '20260913_011_payroll_salary_history': 'cbd5b1c3ee1318f5620dc97735c30f567d31be1cf2f6f2ebb2c00b3ab21ded3f',
+  '20260914_012_payroll_salary_reference_period': 'fac25cf8b2e4fadff68983c981eb500b4bd0f20aaa4b294ac34a20924e71c4d3',
+  '20260916_042_leave_types_screen': '2b4d1b7105371479ea4cbae98d0ae0d60150a40d402576993797616c32f039ce',
+})
 // ALTER COLUMN مسموح فقط بتصريح صريح في الملف؛ والفحص الفعلي يرفض أي تضييق أو تغيير نوع غير حافظ للقيم
 const ALLOW_ALTER_COLUMN = /^\s*--\s*hr-migrate:\s*allow-alter-column\b/im
 
@@ -512,7 +532,7 @@ function readEnv() {
   return dotenv.parse(fs.readFileSync(path.join(apiRoot, '.env')))
 }
 
-function classifyTarget(database, { company = false, companyDatabase }) {
+function classifyTarget(database, { company = false, companyDatabase, fresh = false }) {
   if (typeof database !== 'string' || !/^[A-Za-z0-9_]+$/.test(database)) throw new Error('اسم قاعدة البيانات غير صالح')
   if (/^hr_review_pre_payroll_/i.test(database)) throw new Error('قاعدة المراجعة hr_review_pre_payroll_* محظورة على هذا المُرحّل')
   if (database === companyDatabase) {
@@ -523,6 +543,8 @@ function classifyTarget(database, { company = false, companyDatabase }) {
     if (company) throw new Error('--company مخصص لقاعدة الشركة المضبوطة في api/.env فقط')
     return 'disposable'
   }
+  // B6.1: قاعدة عميل جديدة — بس لما المنادي يطلب وضع «قاعدة جديدة» صراحةً
+  if (fresh === true && !company && CUSTOMER_DATABASE.test(database)) return 'fresh'
   throw new Error(`القاعدة ${database} غير مسموحة: قاعدة الشركة (${companyDatabase}) مع --company، أو قاعدة مؤقتة hr_<اسم>_test_<16 hex> / hr_migrate_rehearsal_*`)
 }
 
@@ -835,7 +857,7 @@ async function plan(options = {}) {
   const analysis = analyze(files)
   const database = options.database || env.DB_DATABASE
   const companyDatabase = env.DB_DATABASE
-  const mode = database === companyDatabase ? 'company' : classifyTarget(database, { companyDatabase })
+  const mode = database === companyDatabase ? 'company' : classifyTarget(database, { companyDatabase, fresh: options.fresh === true })
   const ds = await openDataSource(env, database, options.schemaDiff !== false)
   try {
     const rows = await ledgerRows(ds)
@@ -881,7 +903,7 @@ async function apply(options = {}) {
   const companyDatabase = env.DB_DATABASE
   const database = options.database || (options.company ? companyDatabase : undefined)
   if (!database) throw new Error('حدد --company لقاعدة الشركة أو --database <قاعدة مؤقتة>')
-  const mode = classifyTarget(database, { company: !!options.company, companyDatabase })
+  const mode = classifyTarget(database, { company: !!options.company, companyDatabase, fresh: options.fresh === true })
   const files = discover(options.base)
   const analysis = analyze(files)
   if (analysis.problems.length) throw new Error('الترحيل موقوف قبل أي اتصال:\n- ' + analysis.problems.join('\n- '))
@@ -891,7 +913,23 @@ async function apply(options = {}) {
   const needEntities = options.schemaDiff !== false || files.some(file => file.kind === 'cjs')
   const ds = await openDataSource(env, database, needEntities)
   try {
-    const rowsBefore = await ledgerRows(ds)
+    let rowsBefore = await ledgerRows(ds)
+    if (options.fresh === true) {
+      // B6.1: قاعدة جديدة متزامنة من الكيانات — لسه من غير دفتر ولا مسير، ومش قاعدة الشركة. الملفات «المغطّاة بالأساس» بتتسجّل من غير تنفيذ.
+      if (mode === 'company') throw new Error('وضع القاعدة الجديدة لا يعمل على قاعدة الشركة')
+      if (rowsBefore && rowsBefore.length) throw new Error('وضع القاعدة الجديدة موقوف: القاعدة لها دفتر ترحيلات (التطبيق العادي هو المسار)')
+      const [state] = await ds.query('SELECT (SELECT COUNT(*) FROM dbo.payroll_runs) AS runs, (SELECT COUNT(*) FROM dbo.employees) AS employees')
+      if (Number(state.runs) > 0 || Number(state.employees) > 1) throw new Error('وضع القاعدة الجديدة موقوف: القاعدة فيها موظفين أو مسيرات')
+      const coveredFiles = files.filter(file => Object.prototype.hasOwnProperty.call(BASELINE_COVERED, file.version))
+      const stale = coveredFiles.filter(file => BASELINE_COVERED[file.version] !== file.checksum).map(file => file.relative)
+      if (stale.length || coveredFiles.length !== Object.keys(BASELINE_COVERED).length) {
+        throw new Error('وضع القاعدة الجديدة موقوف: قايمة «مغطّاة بالأساس» لا تطابق ملفات الترحيل — ' + (stale.join(', ') || 'ملف ناقص'))
+      }
+      await ensureLedger(ds)
+      for (const file of coveredFiles) await ds.query(`INSERT INTO dbo.${LEDGER} (version, checksum, scope) VALUES (@0, @1, N'baseline')`, [file.version, file.checksum])
+      record.baselineCovered = coveredFiles.map(file => file.relative)
+      rowsBefore = await ledgerRows(ds)
+    }
     const status = ledgerStatus(files, rowsBefore)
     if (status.changed.length) throw new Error('ملفات مطبقة تغيّر محتواها (لا تعدّل ملفًا مطبقًا؛ أضف ملفًا جديدًا): ' + status.changed.join(', '))
     if (status.unknown.length) throw new Error('الدفتر فيه إصدارات بلا ملفات: ' + status.unknown.join(', '))
@@ -1073,7 +1111,7 @@ async function main() {
 module.exports = { stripComments, splitBatches, splitStatements, executionUnits, LEGACY_STATEMENT_FILES, forbiddenStatements, forbiddenScript, scanJavaScript,
   droppedPermanentTables, foldLiteralConcatenation, columnChangeProblem, backupFreshnessProblems, throwCodes, duplicateThrowCodes, discover, analyze, classifyTarget,
   ledgerStatus, compareCounts, plan, apply, verify, rehearse, runtime, masterPool, openDataSource, verifyCompanyBackup, takeCompanyBackup, databaseWriteState,
-  restoreCopy, dropCopy, rehearsalName, stageLiveCopy, docker, sqlIsNative, sqlVisibleSha, sqlPutFile, sqlGetFile, sqlRemoveFile, fileSha256, DISPOSABLE_DATABASE, REHEARSAL_DATABASE, LEDGER, COMPANY_BACKUP, FREEZE_BACKUP_DIR, SQL_CONTAINER, APP_NAME }
+  restoreCopy, dropCopy, rehearsalName, stageLiveCopy, docker, sqlIsNative, sqlVisibleSha, sqlPutFile, sqlGetFile, sqlRemoveFile, fileSha256, DISPOSABLE_DATABASE, REHEARSAL_DATABASE, CUSTOMER_DATABASE, BASELINE_COVERED, LEDGER, COMPANY_BACKUP, FREEZE_BACKUP_DIR, SQL_CONTAINER, APP_NAME }
 
 if (require.main === module) {
   main().catch(error => {
