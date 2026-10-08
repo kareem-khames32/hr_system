@@ -167,7 +167,8 @@ test('actual configured chain retains managerial route and server-derived execut
   const value = await staged({}, payload({ increase_pct: '0' })), service = Object.create(RequestsService.prototype)
   const chain = { id: 1, code: 'SALARY', branchId: null, isActive: true }
   const steps = [{ id: 1, stepOrder: 1, approverRole: 'hr' }, { id: 2, stepOrder: 2, approverRole: 'executive', thresholdField: 'increase_pct', thresholdOp: '>=', thresholdValue: 10 }]
-  service.resolver = { resolveApproverEmployee: async () => null }
+  // CRP5D: حل السلسلة بياخد نسخة المحلّل المربوطة بمعاملته (inManager)
+  service.resolver = { inManager() { return this }, resolveApproverEmployee: async () => null }
   const em = { getRepository(entity) {
     if (entity.name === 'ApprovalChain') return { findOne: async ({ where }) => where.id ? chain : null }
     if (entity.name === 'ApprovalStep') return { find: async () => steps }

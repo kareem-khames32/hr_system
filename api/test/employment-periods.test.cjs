@@ -207,7 +207,8 @@ test('EU-05: مفيش كاتب لرصيد الإجازات برّه قفل صف 
   const leaves = read('requests/leave-balances.service.ts')
   // بوابة الفحص بتحسب على صف افتراضي ومابتحفظش؛ وإنشاء الصف الناقص (ensureAt) من مكانين بس، الاتنين على مخزن معاملة ماسكة صف الموظف
   const gate = body(leaves, '  async assertSufficient(', '\n  async adjust(')
-  assert.ok(gate.includes('await this.entryAt(this.balances, employeeId, balanceType, segment.start, ctx)') && !gate.includes('ensureAt(') && !/\.save\(/.test(gate))
+  // CRP5D: البوابة بتقرا بمستودع مدير المعاملة لو المنادي بعته (`repo`)، وغير كده المحقون — ولسه مابتحفظش
+  assert.ok(gate.includes('await this.entryAt(repo, employeeId, balanceType, segment.start, ctx)') && !gate.includes('ensureAt(') && !/\.save\(/.test(gate))
   assert.ok(!/\.save\(/.test(body(leaves, '  private async entryAt(', '\n  // بوابة الاعتماد تمرر 31 ديسمبر')))
   assert.deepEqual([...leaves.matchAll(/this\.ensureAt\(([^,]+),/g)].map(match => match[1]), ['repo', 'repo'])
   const deduct = body(leaves, '  async deduct(', '\n  // الإرجاع: يعكس بترتيب عكسي')

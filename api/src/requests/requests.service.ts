@@ -861,7 +861,7 @@ export class RequestsService {
         // الأثر الرجعي بحدّ من الإعدادات؛ الأقدم منه للموارد البشرية بس (LEV-20).
         // النوع لو حدد حدّه (ممنوع/أقصى أيام) بيغلب الإعداد العام ويتفحص تحت مع الإشعار
         if (!leaveTypeDef || leaveTypeBackdateLimit(leaveTypeDef) === null) {
-          const maxBack = await this.leaveBalances.maxBackdateDays()
+          const maxBack = await this.leaveBalances.maxBackdateDays(em)
           const oldest = localDateOf(new Date(Date.now() - maxBack * 86400000))
           if (
             String(p.fromDate) < oldest &&
@@ -1250,7 +1250,8 @@ export class RequestsService {
         balanceType,
         d,
         onDate,
-        pending[year] ?? 0
+        pending[year] ?? 0,
+        em
       )
     }
   }
@@ -1315,21 +1316,23 @@ export class RequestsService {
         ? loanAmountThresholdMet(payload.amount, step.thresholdOp, exactThresholds.get(step.id)) : this.thresholdMet(step, payload))
 
     const resolved: ResolvedStep[] = []
+    // Codex P5D-B01: الهيكل بيتقري بمدير المعاملة نفسها (المنادي ماسك اتصالها) — من غير اتصال تاني من المخزن
+    const resolver = this.resolver.inManager(em)
     // خطوات «مدير المدير المباشر» اللي وقعت على المدير المباشر نفسه لأنه رأس الشركة
     const topSteps = new Set<ResolvedStep>()
     for (const s of active) {
       const skipLevel = s.approverRole === 'manager_of_direct_manager'
-        ? await this.resolver.managerOfDirectManagerOf(req.requesterId)
+        ? await resolver.managerOfDirectManagerOf(req.requesterId)
         : null
       // «مدير الإدارة»: المعتمد أو سبب الإيقاف برسالة بتسمّي القسم أو الإدارة
       const administration = s.approverRole === 'administration_manager_of_requester'
-        ? await this.resolver.administrationManagerOf(req.requesterId, viewer)
+        ? await resolver.administrationManagerOf(req.requesterId, viewer)
         : null
       const approverEmployeeId = skipLevel
         ? skipLevel.approverId
         : administration
           ? administration.approverId
-          : await this.resolver.resolveApproverEmployee(
+          : await resolver.resolveApproverEmployee(
               s.approverRole,
               req.requesterId,
               payload,
@@ -1344,7 +1347,7 @@ export class RequestsService {
         continue
       }
       if (skipLevel && !approverEmployeeId) {
-        throw new BadRequestException(await this.skipLevelMissingMessage(skipLevel.directManagerId, viewer))
+        throw new BadRequestException(await this.skipLevelMissingMessage(skipLevel.directManagerId, viewer, em))
       }
       if (administration?.blocked) throw new BadRequestException(administration.blocked)
       if (['direct_manager_of_requester', 'department_manager_of_requester', 'administration_manager_of_requester',
@@ -1357,7 +1360,7 @@ export class RequestsService {
         throw new BadRequestException('«مدير المدير المباشر» طلع مقدّم الطلب نفسه — راجع المدير المسجّل في ملف مديره المباشر أو عدّل سلسلة الاعتماد')
       }
       // دايرة أطول في المديرين المسجّلين (X مديره Y، وY مديره Z، وZ مديره X): «مدير المدير» طالع مرؤوس لمقدّم الطلب
-      if (skipLevel && approverEmployeeId && await this.resolver.reportsTo(approverEmployeeId, req.requesterId)) {
+      if (skipLevel && approverEmployeeId && await resolver.reportsTo(approverEmployeeId, req.requesterId)) {
         throw new BadRequestException('«مدير المدير المباشر» تابع لمقدّم الطلب نفسه في سلسلة المديرين المسجّلين (الهيكل فيه دايرة) — راجع المديرين المسجّلين في الملفات أو عدّل سلسلة الاعتماد')
       }
       const dueAt = s.slaDays
@@ -1394,9 +1397,9 @@ export class RequestsService {
 
   // رسالة «مدير المدير المباشر» الناقص: باسم المدير المباشر اللي محتاج مدير في ملفه
   // اسم المدير بيظهر لو فرعه جوه نطاق اللي بيقدّم الطلب (viewer) بس — نفس حجب رسايل «مدير الإدارة» (مراجعة Codex الجولة 13)
-  private async skipLevelMissingMessage(directManagerId: number | null, viewer?: BranchScope) {
+  private async skipLevelMissingMessage(directManagerId: number | null, viewer: BranchScope | undefined, em: EntityManager) {
     if (!directManagerId) return 'لا يوجد مدير مباشر لمقدّم الطلب — أكمل الهيكل التنظيمي أو عدّل سلسلة الاعتماد'
-    const manager = await this.employees.findOne({ where: { id: directManagerId }, select: { id: true, fullName: true, branchId: true } })
+    const manager = await em.getRepository(Employee).findOne({ where: { id: directManagerId }, select: { id: true, fullName: true, branchId: true } })
     if (!manager || (viewer !== undefined && !inBranchScope(viewer, manager.branchId))) {
       return 'مفيش «مدير المدير المباشر»: «المدير المباشر» لمقدّم الطلب مالوش مدير مسجّل في ملفه — سجّله، أو عدّل سلسلة الاعتماد'
     }
