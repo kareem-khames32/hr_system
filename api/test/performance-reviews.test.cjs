@@ -82,7 +82,15 @@ test('RU-03: launching and submitting under the row lock with the judgment after
   assert.match(service, /return !!branches && branches\.length > 0 && branches\.every\(\(id\) => inBranchScope\(scope, id\)\)/, 'دورة «كل الشركة» مش لحساب الفروع')
   const controller = read('api/src/performance/reviews.controller.ts')
   assert.match(controller, /@RequireModule\('performance'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)\n@Controller\('performance\/reviews'\)/)
-  assert.equal(controller.split("@Perm('performance.manage')").length - 1, 8, 'النماذج والدورات بالصلاحية')
+  assert.equal(controller.split("@Perm('performance.manage')").length - 1, 9, 'النماذج والدورات (والاعتماد والإعلان) بالصلاحية')
+  // B3.7-ب: الاعتماد والإعلان تحت قفل صف الدورة وبشرط الحالة؛ والإقرار لصاحب التكليف تحت قفل صفه
+  const advance = service.slice(service.indexOf('async advance('), service.indexOf('async acknowledge('))
+  const advanceOrder = ['await this.lockedCycle(em, user, id)', 'update({ id: In(mine), status: from }, { status: rawTo })', 'await recordAudit('].map(part => advance.indexOf(part))
+  assert.ok(advanceOrder.every((at, index) => at > 0 && (index === 0 || at > advanceOrder[index - 1])), JSON.stringify(advanceOrder))
+  const acknowledge = service.slice(service.indexOf('async acknowledge('), service.indexOf('/** تكليفات دورة لإدارة الأداء'))
+  const ackOrder = ["lock: { mode: 'pessimistic_write' }", 'assignment.employeeId !== user.employeeId) throw new NotFoundException(REVIEW_NOT_FOUND)', "if (assignment.status !== 'ANNOUNCED') throw new BadRequestException",
+    "relation: 'ACK'", "update({ id: assignment.id }, { status: 'ACKNOWLEDGED' })"].map(part => acknowledge.indexOf(part))
+  assert.ok(ackOrder.every((at, index) => at > 0 && (index === 0 || at > ackOrder[index - 1])), JSON.stringify(ackOrder))
   for (const fixed of ["@Get('templates')", "@Get('cycles')", "@Get('mine')", "@Get('team')"]) assert.ok(controller.indexOf(fixed) < controller.indexOf("@Get(':id')"), fixed + ' قبل ‎:id')
   assert.doesNotMatch(read('api/src/performance/review.entities.ts'), /default:|CreateDateColumn/, 'من غير افتراضي (زي الترحيلات)')
 })

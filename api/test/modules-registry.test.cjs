@@ -144,10 +144,11 @@ test('MR-03: صاحب مسار الواجهة — أطول نمط بيكسب، �
 
   // الشاشات الوهمية: ورا الميزة، ومسار العرض الأدق بيكسب على مسار الموديول
   const demo = (pathname, module) => assert.deepEqual(owner(pathname), { module, feature: DEMO_SCREENS_FEATURE }, pathname)
-  demo('/performance', null)
-  // B3.6: شاشة الأهداف بقت حقيقية تبع موديول الأداء (باقي شاشات /performance لسه شاشات عرض)
-  assert.deepEqual(registry.routeOwner('/performance/goals'), { module: 'performance', feature: null })
-  demo('/performance/cycles', null)
+  // B3.6 وB3.7: شاشات الأداء بقت حقيقية تبع موديوله (الأهداف، التقييمات، نموذج التقييم، الدورات، النماذج)؛ «تقييم جديد» لسه شاشة عرض
+  for (const route of ['/performance/goals', '/performance', '/performance/15', '/performance/cycles', '/performance/templates']) {
+    assert.deepEqual(registry.routeOwner(route), { module: 'performance', feature: null }, route)
+  }
+  demo('/performance/new', 'performance')
   demo('/training/my-courses', null)
   demo('/reports/custom', 'reports')
   demo('/recruitment/add', 'recruitment')
@@ -166,7 +167,10 @@ test('MR-03: صاحب مسار الواجهة — أطول نمط بيكسب، �
   assert.equal(registry.routeAvailable('/recruitment/applicants', basic), true)
   assert.equal(registry.routeAvailable('/something-new', basic), true)
   const withDemo = registry.enabledSnapshot(state({}, { [DEMO_SCREENS_FEATURE]: true }))
-  assert.equal(registry.routeAvailable('/performance', withDemo), true)
+  // شاشة عرض من غير موديول بتفتح بالميزة؛ وشاشة الأداء الحقيقية بموديولها (المقفول افتراضيًا) مش بميزة العرض
+  assert.equal(registry.routeAvailable('/training', withDemo), true)
+  assert.equal(registry.routeAvailable('/performance', withDemo), false)
+  assert.equal(registry.routeAvailable('/performance', registry.enabledSnapshot(state({ performance: true }))), true)
   assert.equal(registry.routeAvailable('/recruitment/add', withDemo), true)
   // التوظيف مقفول: شاشاته الحقيقية والوهمية مقفولة حتى مع ميزة العرض
   const demoNoRecruitment = registry.enabledSnapshot(state({ recruitment: false }, { [DEMO_SCREENS_FEATURE]: true }))

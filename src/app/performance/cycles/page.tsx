@@ -1,435 +1,330 @@
 'use client'
 
-import { useState } from 'react'
+// B3.7: «دورات التقييم» (لإدارة الأداء) — دورة بنموذجها وفترتها وجمهورها ← إطلاق (تكليف لكل موظف بمديره) ← متابعة التسليم ← اعتماد النتايج وإعلانها.
+// (كانت شاشة عرض ببيانات وهمية؛ بقت على الخادم.)
+import { useCallback, useEffect, useState } from 'react'
+import Link from 'next/link'
+import { Plus, RefreshCcw, X } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import EmptyState from '@/components/EmptyState'
-import {
-  Search,
-  Plus,
-  Calendar,
-  Clock,
-  Users,
-  Target,
-  CheckCircle2,
-  AlertCircle,
-  Edit2,
-  Trash2,
-  Play,
-  Pause,
-  Settings,
-  BarChart3,
-  X,
-} from 'lucide-react'
+import { fetchBranches, fetchDepartments, type ApiBranch, type ApiDepartment } from '@/lib/api'
 import { formatDate } from '@/lib/dates'
+import {
+  REVIEW_CYCLE_KIND_LABELS, advanceReviewCycle, closeReviewCycle, createReviewCycle, fetchCycleAssignments, fetchReviewCycles, fetchReviewTemplates, launchReviewCycle,
+  type ApiCycleAssignment, type ApiReviewCycle, type ApiReviewTemplate, type ReviewAudienceMode, type ReviewCycleKind, type ReviewCycleStatus,
+} from '@/lib/reviews-api'
 
-interface ReviewCycle {
-  id: string
-  name: string
-  type: 'quarterly' | 'annual' | 'probation' | 'custom'
-  startDate: string
-  endDate: string
-  status: 'upcoming' | 'active' | 'completed' | 'draft'
-  totalEmployees: number
-  completedReviews: number
-  pendingReviews: number
-  templateId: string
-  templateName: string
-}
+const statusStyle: Record<ReviewCycleStatus, string> = { DRAFT: 'bg-gray-100 text-gray-700', ACTIVE: 'bg-green-50 text-green-700', CLOSED: 'bg-gray-100 text-gray-500' }
 
-const reviewCycles: ReviewCycle[] = [
-  {
-    id: '1',
-    name: 'تقييم الربع الأول 2024',
-    type: 'quarterly',
-    startDate: '2024-01-01',
-    endDate: '2024-01-31',
-    status: 'active',
-    totalEmployees: 156,
-    completedReviews: 89,
-    pendingReviews: 67,
-    templateId: '1',
-    templateName: 'النموذج القياسي',
-  },
-  {
-    id: '2',
-    name: 'تقييم الربع الرابع 2023',
-    type: 'quarterly',
-    startDate: '2023-12-01',
-    endDate: '2023-12-31',
-    status: 'completed',
-    totalEmployees: 150,
-    completedReviews: 150,
-    pendingReviews: 0,
-    templateId: '1',
-    templateName: 'النموذج القياسي',
-  },
-  {
-    id: '3',
-    name: 'التقييم السنوي 2023',
-    type: 'annual',
-    startDate: '2024-01-15',
-    endDate: '2024-02-15',
-    status: 'upcoming',
-    totalEmployees: 156,
-    completedReviews: 0,
-    pendingReviews: 156,
-    templateId: '2',
-    templateName: 'التقييم السنوي الشامل',
-  },
-  {
-    id: '4',
-    name: 'تقييم فترة التجربة - يناير',
-    type: 'probation',
-    startDate: '2024-01-20',
-    endDate: '2024-01-30',
-    status: 'upcoming',
-    totalEmployees: 8,
-    completedReviews: 0,
-    pendingReviews: 8,
-    templateId: '3',
-    templateName: 'نموذج فترة التجربة',
-  },
-]
+export default function ReviewCyclesPage() {
+  const [cycles, setCycles] = useState<ApiReviewCycle[] | null>(null)
+  const [canCompany, setCanCompany] = useState(false)
+  const [notice, setNotice] = useState('')
+  const [error, setError] = useState('')
+  const [info, setInfo] = useState('')
+  const [adding, setAdding] = useState(false)
+  const [busy, setBusy] = useState(0)
+  const [open, setOpen] = useState<{ cycle: ApiReviewCycle; assignments: ApiCycleAssignment[] } | null>(null)
 
-const typeLabels = {
-  quarterly: 'ربع سنوي',
-  annual: 'سنوي',
-  probation: 'فترة التجربة',
-  custom: 'مخصص',
-}
+  const load = useCallback(() => {
+    setError('')
+    fetchReviewCycles()
+      .then((data) => { setCycles(data.cycles); setCanCompany(data.canCompany); setNotice(data.available ? '' : data.message ?? '') })
+      .catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل الدورات'))
+  }, [])
+  useEffect(load, [load])
 
-const statusLabels = {
-  upcoming: 'قادم',
-  active: 'نشط',
-  completed: 'مكتمل',
-  draft: 'مسودة',
-}
-
-const statusColors = {
-  upcoming: 'bg-blue-100 text-blue-700',
-  active: 'bg-success-50 text-success-700',
-  completed: 'bg-gray-100 text-gray-600',
-  draft: 'bg-warning-50 text-warning-700',
-}
-
-export default function PerformanceCyclesPage() {
-  const [searchTerm, setSearchTerm] = useState('')
-  const [filterStatus, setFilterStatus] = useState('all')
-  const [showModal, setShowModal] = useState(false)
-
-  const filteredCycles = reviewCycles.filter((cycle) => {
-    const matchesSearch = cycle.name.includes(searchTerm)
-    const matchesStatus = filterStatus === 'all' || cycle.status === filterStatus
-    return matchesSearch && matchesStatus
-  })
-
-  const stats = {
-    total: reviewCycles.length,
-    active: reviewCycles.filter((c) => c.status === 'active').length,
-    upcoming: reviewCycles.filter((c) => c.status === 'upcoming').length,
-    completed: reviewCycles.filter((c) => c.status === 'completed').length,
+  const run = async (cycle: ApiReviewCycle, work: () => Promise<string>) => {
+    setBusy(cycle.id)
+    setError('')
+    setInfo('')
+    try {
+      setInfo(await work())
+      load()
+      if (open?.cycle.id === cycle.id) setOpen(await fetchCycleAssignments(cycle.id))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'تعذر تنفيذ الإجراء')
+    } finally {
+      setBusy(0)
+    }
+  }
+  const show = async (cycle: ApiReviewCycle) => {
+    setError('')
+    try {
+      setOpen(await fetchCycleAssignments(cycle.id))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'تعذر تحميل التكليفات')
+    }
   }
 
   return (
     <MainLayout>
       <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">دورات التقييم</h1>
-            <p className="text-gray-500 mt-1">إدارة دورات تقييم الأداء</p>
+            <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
+              <RefreshCcw size={24} className="text-primary-600" />
+              دورات التقييم
+            </h1>
+            <p className="text-gray-500 mt-1">
+              دورة بنموذجها وجمهورها ← إطلاق ← متابعة التسليم ← اعتماد وإعلان ·{' '}
+              <Link href="/performance/templates" className="text-primary-600 hover:underline">
+                نماذج التقييم
+              </Link>
+            </p>
           </div>
-          <button
-            onClick={() => setShowModal(true)}
-            className="btn-primary flex items-center gap-2"
-          >
-            <Plus size={18} />
-            إنشاء دورة جديدة
-          </button>
+          {cycles && !notice && (
+            <button onClick={() => setAdding(true)} className="btn-primary flex items-center gap-2">
+              <Plus size={18} />
+              دورة جديدة
+            </button>
+          )}
         </div>
-
-        {/* Stats */}
-        <div className="grid grid-cols-4 gap-4">
-          <div className="card flex items-center gap-4">
-            <div className="w-12 h-12 bg-primary-100 rounded-2xl flex items-center justify-center">
-              <Calendar size={24} className="text-primary-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-500">إجمالي الدورات</p>
-              <p className="text-2xl font-bold text-gray-800">{stats.total}</p>
-            </div>
+        {error && (
+          <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-4">
+            {error}
           </div>
-          <div className="card flex items-center gap-4">
-            <div className="w-12 h-12 bg-success-50 rounded-2xl flex items-center justify-center">
-              <Play size={24} className="text-success-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-500">نشطة الآن</p>
-              <p className="text-2xl font-bold text-gray-800">{stats.active}</p>
-            </div>
+        )}
+        {info && (
+          <div role="status" className="bg-green-50 text-green-800 rounded-xl p-4">
+            {info}
           </div>
-          <div className="card flex items-center gap-4">
-            <div className="w-12 h-12 bg-blue-100 rounded-2xl flex items-center justify-center">
-              <Clock size={24} className="text-blue-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-500">قادمة</p>
-              <p className="text-2xl font-bold text-gray-800">{stats.upcoming}</p>
-            </div>
+        )}
+        {notice && (
+          <div role="status" className="bg-amber-50 text-amber-800 rounded-xl p-4">
+            {notice}
           </div>
-          <div className="card flex items-center gap-4">
-            <div className="w-12 h-12 bg-gray-100 rounded-2xl flex items-center justify-center">
-              <CheckCircle2 size={24} className="text-gray-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-500">مكتملة</p>
-              <p className="text-2xl font-bold text-gray-800">{stats.completed}</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Filters */}
-        <div className="card">
-          <div className="flex items-center gap-4">
-            <div className="relative flex-1">
-              <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input
-                type="text"
-                placeholder="بحث عن دورة..."
-                className="input pr-10 w-full"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </div>
-            <select
-              value={filterStatus}
-              onChange={(e) => setFilterStatus(e.target.value)}
-              className="input w-48"
-            >
-              <option value="all">كل الحالات</option>
-              <option value="active">نشطة</option>
-              <option value="upcoming">قادمة</option>
-              <option value="completed">مكتملة</option>
-              <option value="draft">مسودة</option>
-            </select>
-          </div>
-        </div>
-
-        {filteredCycles.length === 0 && <EmptyState title="لا توجد دورات تقييم مطابقة للبحث أو الفلاتر" />}
-
-        {/* Cycles List */}
-        <div className="space-y-4">
-          {filteredCycles.map((cycle) => {
-            const progress = cycle.totalEmployees > 0
-              ? Math.round((cycle.completedReviews / cycle.totalEmployees) * 100)
-              : 0
-
-            return (
-              <div key={cycle.id} className="card hover:shadow-lg transition-shadow">
-                <div className="flex items-start justify-between">
-                  <div className="flex items-start gap-4">
-                    <div
-                      className={`w-14 h-14 rounded-2xl flex items-center justify-center ${
-                        cycle.status === 'active'
-                          ? 'bg-success-50'
-                          : cycle.status === 'upcoming'
-                          ? 'bg-blue-50'
-                          : 'bg-gray-100'
-                      }`}
-                    >
-                      <Calendar
-                        size={28}
-                        className={
-                          cycle.status === 'active'
-                            ? 'text-success-600'
-                            : cycle.status === 'upcoming'
-                            ? 'text-blue-600'
-                            : 'text-gray-500'
-                        }
-                      />
-                    </div>
-                    <div>
-                      <h3 className="font-bold text-gray-800 text-lg">{cycle.name}</h3>
-                      <div className="flex items-center gap-4 mt-1">
-                        <span className="text-sm text-gray-500">
-                          {typeLabels[cycle.type]}
-                        </span>
-                        <span className="text-sm text-gray-500">
-                          النموذج: {cycle.templateName}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  <span className={`px-4 py-1.5 rounded-full text-sm font-medium ${statusColors[cycle.status]}`}>
-                    {statusLabels[cycle.status]}
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-4 gap-4 mt-6">
-                  <div className="p-3 bg-gray-50 rounded-xl">
-                    <div className="flex items-center gap-2 text-gray-500 text-sm mb-1">
-                      <Calendar size={16} />
-                      تاريخ البداية
-                    </div>
-                    <p className="font-bold text-gray-800">
-                      {formatDate(cycle.startDate)}
+        )}
+        {cycles && !notice && cycles.length === 0 && <EmptyState title="مفيش دورات تقييم لسه" icon={RefreshCcw} />}
+        {cycles && cycles.length > 0 && (
+          <div className="grid gap-4" data-cycles>
+            {cycles.map((cycle) => (
+              <div key={cycle.id} className="card space-y-3">
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div>
+                    <h2 className="text-lg font-bold text-gray-800">{cycle.name}</h2>
+                    <p className="text-xs text-gray-500 mt-1">
+                      {cycle.kindLabel} · {cycle.templateName ?? '—'} · {formatDate(cycle.periodStart)} – {formatDate(cycle.periodEnd)} · الذاتي قبل {formatDate(cycle.selfDueDate)} · المدير قبل{' '}
+                      {formatDate(cycle.managerDueDate)}
                     </p>
                   </div>
-                  <div className="p-3 bg-gray-50 rounded-xl">
-                    <div className="flex items-center gap-2 text-gray-500 text-sm mb-1">
-                      <Clock size={16} />
-                      تاريخ النهاية
-                    </div>
-                    <p className="font-bold text-gray-800">
-                      {formatDate(cycle.endDate)}
-                    </p>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded-xl">
-                    <div className="flex items-center gap-2 text-gray-500 text-sm mb-1">
-                      <Users size={16} />
-                      الموظفين
-                    </div>
-                    <p className="font-bold text-gray-800">{cycle.totalEmployees}</p>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded-xl">
-                    <div className="flex items-center gap-2 text-gray-500 text-sm mb-1">
-                      <Target size={16} />
-                      التقدم
-                    </div>
-                    <p className="font-bold text-gray-800">
-                      {cycle.completedReviews}/{cycle.totalEmployees}
-                    </p>
-                  </div>
+                  <span className={`inline-block px-2 py-0.5 rounded-full text-xs ${statusStyle[cycle.status]}`}>{cycle.statusLabel}</span>
                 </div>
-
-                {/* Progress Bar */}
-                <div className="mt-4">
-                  <div className="flex items-center justify-between text-sm mb-2">
-                    <span className="text-gray-500">نسبة الإكمال</span>
-                    <span className="font-medium text-gray-700">{progress}%</span>
-                  </div>
-                  <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all ${
-                        progress === 100
-                          ? 'bg-success-500'
-                          : progress > 50
-                          ? 'bg-primary-500'
-                          : 'bg-warning-500'
-                      }`}
-                      style={{ width: `${progress}%` }}
-                    />
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-3 mt-4 pt-4 border-t border-gray-100">
-                  <button className="btn-secondary flex items-center gap-2">
-                    <BarChart3 size={16} />
-                    عرض التقارير
-                  </button>
-                  <button className="btn-secondary flex items-center gap-2">
-                    <Settings size={16} />
-                    الإعدادات
-                  </button>
-                  <button className="btn-secondary flex items-center gap-2">
-                    <Edit2 size={16} />
-                    تعديل
-                  </button>
-                  {cycle.status === 'upcoming' && (
-                    <button className="btn-primary flex items-center gap-2">
-                      <Play size={16} />
-                      بدء الدورة
+                {cycle.status !== 'DRAFT' && (
+                  <p className="text-sm text-gray-600 tabular-nums">
+                    {cycle.counts.total} موظف · سلّموا الذاتي {cycle.counts.self} · المديرين سلّموا {cycle.counts.manager}
+                    {cycle.counts.noManager > 0 ? ` · من غير مقيِّم ${cycle.counts.noManager}` : ''}
+                  </p>
+                )}
+                <div className="flex items-center gap-2 flex-wrap">
+                  {cycle.status === 'DRAFT' && (
+                    <button onClick={() => run(cycle, async () => { const launched = await launchReviewCycle(cycle.id); return `الدورة اتطلقت لـ${launched.counts.total} موظف.` })} disabled={busy === cycle.id} className="btn-primary text-sm disabled:opacity-50">
+                      إطلاق
                     </button>
                   )}
-                  {cycle.status === 'active' && (
-                    <button className="btn-secondary flex items-center gap-2 text-warning-600">
-                      <Pause size={16} />
-                      إيقاف مؤقت
+                  {cycle.status !== 'DRAFT' && (
+                    <>
+                      <button onClick={() => show(cycle)} className="btn-secondary text-sm">
+                        التكليفات
+                      </button>
+                      <button onClick={() => run(cycle, async () => `اتعتمد ${(await advanceReviewCycle(cycle.id, 'APPROVED')).moved} تقييم.`)} disabled={busy === cycle.id} className="btn-secondary text-sm disabled:opacity-50">
+                        اعتماد اللي اتسلّم
+                      </button>
+                      <button onClick={() => run(cycle, async () => `اتعلن ${(await advanceReviewCycle(cycle.id, 'ANNOUNCED')).moved} تقييم للموظفين.`)} disabled={busy === cycle.id} className="btn-secondary text-sm disabled:opacity-50">
+                        إعلان المعتمد
+                      </button>
+                    </>
+                  )}
+                  {cycle.status === 'ACTIVE' && (
+                    <button onClick={() => run(cycle, async () => { await closeReviewCycle(cycle.id); return 'الدورة اتقفلت — مفيش تسليم بعد كده.' })} disabled={busy === cycle.id} className="btn-secondary text-sm disabled:opacity-50">
+                      قفل التسليم
                     </button>
                   )}
                 </div>
               </div>
-            )
-          })}
-        </div>
-
-        {/* Modal */}
-        {showModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-2xl w-full max-w-lg mx-4">
-              <div className="flex items-center justify-between p-6 border-b border-gray-100">
-                <h2 className="text-xl font-bold text-gray-800">إنشاء دورة تقييم جديدة</h2>
-                <button
-                  onClick={() => setShowModal(false)}
-                  className="p-2 hover:bg-gray-100 rounded-lg"
-                >
-                  <X size={20} className="text-gray-500" />
-                </button>
-              </div>
-
-              <div className="p-6 space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    اسم الدورة
-                  </label>
-                  <input
-                    type="text"
-                    className="input w-full"
-                    placeholder="مثال: تقييم الربع الأول 2024"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    نوع الدورة
-                  </label>
-                  <select className="input w-full">
-                    <option value="quarterly">ربع سنوي</option>
-                    <option value="annual">سنوي</option>
-                    <option value="probation">فترة التجربة</option>
-                    <option value="custom">مخصص</option>
-                  </select>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      تاريخ البداية
-                    </label>
-                    <input type="date" className="input w-full" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      تاريخ النهاية
-                    </label>
-                    <input type="date" className="input w-full" />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    نموذج التقييم
-                  </label>
-                  <select className="input w-full">
-                    <option value="1">النموذج القياسي</option>
-                    <option value="2">التقييم السنوي الشامل</option>
-                    <option value="3">نموذج فترة التجربة</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3 p-6 border-t border-gray-100">
-                <button onClick={() => setShowModal(false)} className="flex-1 btn-secondary">
-                  إلغاء
-                </button>
-                <button onClick={() => setShowModal(false)} className="flex-1 btn-primary">
-                  إنشاء الدورة
-                </button>
-              </div>
-            </div>
+            ))}
           </div>
         )}
       </div>
+      {adding && <CycleModal canCompany={canCompany} onClose={() => setAdding(false)} onDone={() => { setAdding(false); load() }} />}
+      {open && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-label="تكليفات الدورة">
+          <div className="bg-white rounded-2xl w-full max-w-3xl mx-4 max-h-[90vh] overflow-auto">
+            <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+              <h2 className="text-xl font-bold text-gray-800">{open.cycle.name}</h2>
+              <button onClick={() => setOpen(null)} className="p-2 hover:bg-gray-100 rounded-lg" aria-label="إغلاق">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6 overflow-x-auto">
+              <table className="w-full text-sm" data-assignments>
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-3 py-2 text-right font-medium text-gray-600">الموظف</th>
+                    <th className="px-3 py-2 text-right font-medium text-gray-600">المقيِّم</th>
+                    <th className="px-3 py-2 text-right font-medium text-gray-600">الذاتي</th>
+                    <th className="px-3 py-2 text-right font-medium text-gray-600">المدير</th>
+                    <th className="px-3 py-2 text-right font-medium text-gray-600">الحالة</th>
+                    <th className="px-3 py-2" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {open.assignments.map((row) => (
+                    <tr key={row.id}>
+                      <td className="px-3 py-2 text-gray-800">{row.employeeName}</td>
+                      <td className="px-3 py-2 text-gray-600">{row.hasManager ? row.managerName ?? 'مدير' : <span className="text-amber-700">من غير مقيِّم</span>}</td>
+                      <td className="px-3 py-2 tabular-nums">{row.selfScore ?? (row.selfSubmitted ? 'سلّم' : '—')}</td>
+                      <td className="px-3 py-2 tabular-nums">{row.managerScore ?? (row.managerSubmitted ? 'سلّم' : '—')}</td>
+                      <td className="px-3 py-2 text-gray-600">{row.statusLabel}</td>
+                      <td className="px-3 py-2 text-left">
+                        <Link href={`/performance/${row.id}`} className="text-primary-600 hover:underline">
+                          فتح
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
     </MainLayout>
+  )
+}
+
+function CycleModal({ canCompany, onClose, onDone }: { canCompany: boolean; onClose: () => void; onDone: () => void }) {
+  const [templates, setTemplates] = useState<ApiReviewTemplate[]>([])
+  const [branches, setBranches] = useState<ApiBranch[]>([])
+  const [departments, setDepartments] = useState<ApiDepartment[]>([])
+  const [name, setName] = useState('')
+  const [kind, setKind] = useState<ReviewCycleKind>('ANNUAL')
+  const [templateId, setTemplateId] = useState('')
+  const [periodStart, setPeriodStart] = useState('')
+  const [periodEnd, setPeriodEnd] = useState('')
+  const [selfDueDate, setSelfDueDate] = useState('')
+  const [managerDueDate, setManagerDueDate] = useState('')
+  const [audienceMode, setAudienceMode] = useState<ReviewAudienceMode>(canCompany ? 'COMPANY' : 'DEPARTMENTS')
+  const [audienceIds, setAudienceIds] = useState<number[]>([])
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    fetchReviewTemplates().then((data) => setTemplates(data.templates.filter((row) => row.isActive))).catch(() => setTemplates([]))
+    fetchBranches().then(setBranches).catch(() => setBranches([]))
+    fetchDepartments().then(setDepartments).catch(() => setDepartments([]))
+  }, [])
+
+  const options = audienceMode === 'BRANCHES' ? branches.map((row) => ({ id: row.id, name: row.name })) : audienceMode === 'DEPARTMENTS' ? departments.map((row) => ({ id: row.id, name: row.name })) : []
+  const toggle = (id: number) => setAudienceIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]))
+  const datesOk = periodStart !== '' && periodEnd !== '' && periodEnd >= periodStart && selfDueDate !== '' && managerDueDate !== '' && managerDueDate >= selfDueDate
+  const valid = name.trim().length >= 3 && templateId !== '' && datesOk && (audienceMode === 'COMPANY' || audienceIds.length > 0)
+
+  const submit = async () => {
+    setSaving(true)
+    setError('')
+    try {
+      await createReviewCycle({ name: name.trim(), kind, templateId: Number(templateId), periodStart, periodEnd, selfDueDate, managerDueDate, audienceMode, ...(audienceMode === 'COMPANY' ? {} : { audienceIds }) })
+      onDone()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'تعذر حفظ الدورة')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-label="دورة تقييم جديدة">
+      <div className="bg-white rounded-2xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-auto">
+        <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+          <div>
+            <h2 className="text-xl font-bold text-gray-800">دورة تقييم جديدة</h2>
+            <p className="text-sm text-gray-500 mt-1">بتتعمل «مسودة» — التكليفات بتتعمل وقت الإطلاق</p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg" aria-label="إغلاق">
+            <X size={20} />
+          </button>
+        </div>
+        <div className="p-6 space-y-4">
+          {error && (
+            <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 text-sm">
+              {error}
+            </div>
+          )}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <label className="block text-sm text-gray-700 sm:col-span-2">
+              اسم الدورة
+              <input className="input w-full mt-1" maxLength={200} value={name} onChange={(e) => setName(e.target.value)} />
+            </label>
+            <label className="block text-sm text-gray-700">
+              النوع
+              <select className="input w-full mt-1" value={kind} onChange={(e) => setKind(e.target.value as ReviewCycleKind)}>
+                {(Object.keys(REVIEW_CYCLE_KIND_LABELS) as ReviewCycleKind[]).map((key) => (
+                  <option key={key} value={key}>
+                    {REVIEW_CYCLE_KIND_LABELS[key]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <label className="block text-sm text-gray-700">
+            نموذج التقييم
+            <select className="input w-full mt-1" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
+              <option value="">اختر النموذج</option>
+              {templates.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {templates.length === 0 && <p className="text-xs text-amber-700">مفيش نماذج متاحة — اعمل نموذج من «نماذج التقييم» الأول.</p>}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <label className="block text-sm text-gray-700">
+              فترة التقييم من
+              <input type="date" className="input w-full mt-1" value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} />
+            </label>
+            <label className="block text-sm text-gray-700">
+              إلى
+              <input type="date" className="input w-full mt-1" min={periodStart} value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} />
+            </label>
+            <label className="block text-sm text-gray-700">
+              آخر يوم للذاتي
+              <input type="date" className="input w-full mt-1" value={selfDueDate} onChange={(e) => setSelfDueDate(e.target.value)} />
+            </label>
+            <label className="block text-sm text-gray-700">
+              آخر يوم للمدير
+              <input type="date" className="input w-full mt-1" min={selfDueDate} value={managerDueDate} onChange={(e) => setManagerDueDate(e.target.value)} />
+            </label>
+          </div>
+          <label className="block text-sm text-gray-700">
+            الجمهور
+            <select className="input w-full mt-1" value={audienceMode} onChange={(e) => { setAudienceMode(e.target.value as ReviewAudienceMode); setAudienceIds([]) }}>
+              {canCompany && <option value="COMPANY">كل الشركة</option>}
+              <option value="BRANCHES">فروع محددة</option>
+              <option value="DEPARTMENTS">أقسام محددة</option>
+            </select>
+          </label>
+          {audienceMode !== 'COMPANY' && (
+            <div className="border border-gray-200 rounded-lg max-h-40 overflow-auto divide-y divide-gray-100">
+              {options.map((row) => (
+                <label key={row.id} className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 cursor-pointer hover:bg-gray-50">
+                  <input type="checkbox" checked={audienceIds.includes(row.id)} onChange={() => toggle(row.id)} />
+                  {row.name}
+                </label>
+              ))}
+              {options.length === 0 && <p className="px-3 py-2 text-sm text-gray-500">مفيش اختيارات في نطاقك.</p>}
+            </div>
+          )}
+        </div>
+        <div className="p-6 border-t border-gray-100 flex justify-end gap-2">
+          <button onClick={onClose} className="btn-secondary">
+            إلغاء
+          </button>
+          <button onClick={submit} disabled={!valid || saving} title="الاسم والنموذج والتواريخ والجمهور مطلوبين" className="btn-primary disabled:opacity-50">
+            حفظ
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }

@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { InjectDataSource } from '@nestjs/typeorm'
 import { Between, DataSource, In, type EntityManager } from 'typeorm'
 import { AttendanceDay } from '../attendance/attendance.entities'
+import { recordAudit } from '../audit/audit'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, inBranchScope, userHasPerm } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
@@ -210,6 +211,50 @@ export class ReviewsService {
     return (await this.cycleViews(this.ds.manager, [await this.ds.getRepository(ReviewCycle).findOneOrFail({ where: { id } })]))[0]
   }
 
+  /**
+   * B3.7-ب: اعتماد نتايج الدورة أو إعلانها للموظفين — لإدارة الأداء، تحت قفل صف الدورة: الاعتماد بينقل التكليفات اللي المدير سلّمها («المدير سلّم» ←
+   * «معتمد»)، والإعلان بينقل المعتمدة («معتمد» ← «معلن») — للموظفين اللي فرعهم الحالي في نطاق الحساب بس. الدورة لازم تكون اتطلقت.
+   */
+  async advance(user: JwtPayload, id: number, rawTo: unknown) {
+    this.assertManager(user)
+    if (rawTo !== 'APPROVED' && rawTo !== 'ANNOUNCED') throw new BadRequestException('الخطوة: APPROVED أو ANNOUNCED')
+    const from = rawTo === 'APPROVED' ? 'COMPLETED' : 'APPROVED'
+    const moved = await this.ds.transaction(async (em) => {
+      const cycle = await this.lockedCycle(em, user, id)
+      if (cycle.status === 'DRAFT') throw new BadRequestException('الدورة لسه مسودة')
+      const rows = await em.getRepository(ReviewAssignment).find({ where: { cycleId: cycle.id, status: from } })
+      const scope = branchScopeOf(user)
+      const people = new Map((rows.length ? await em.getRepository(Employee).find({ where: { id: In(rows.map((row) => row.employeeId)) } }) : []).map((row) => [row.id, row]))
+      const mine = rows.filter((row) => inBranchScope(scope, people.get(row.employeeId)?.branchId ?? null)).map((row) => row.id)
+      if (!mine.length) return 0
+      // بشرط الحالة: تكليف اتحرك في النص مابيتكتبش فوقه
+      const written = await em.getRepository(ReviewAssignment).update({ id: In(mine), status: from }, { status: rawTo })
+      await recordAudit(em, { category: 'SETTINGS', action: rawTo === 'APPROVED' ? 'REVIEW_CYCLE_APPROVED' : 'REVIEW_CYCLE_ANNOUNCED', entityType: 'review_cycle', entityId: cycle.id, actorUserId: user.sub,
+        branchId: null, summary: `دورة التقييم «${cycle.name}»: ${rawTo === 'APPROVED' ? 'اعتماد' : 'إعلان'} ${written.affected ?? mine.length} تقييم`, after: { status: rawTo, count: written.affected ?? mine.length } })
+      return written.affected ?? mine.length
+    })
+    return { moved, ...(await this.assignments(user, id)) }
+  }
+
+  /**
+   * B3.7-ب: إقرار الموظف بنتيجة تقييمه المعلنة (بتعليق اختياري) — صاحب التكليف بس، مرة واحدة، تحت قفل صف التكليف. الإقرار مش موافقة: الاعتراض
+   * مساره لوحده (B3.8).
+   */
+  async acknowledge(user: JwtPayload, assignmentId: number, rawComment: unknown) {
+    const comment = optionalText(rawComment, REVIEW_TEXT_MAX, 'تعليق الإقرار')
+    await this.ds.transaction(async (em) => {
+      await this.assertReady(em)
+      const assignment = await em.getRepository(ReviewAssignment).findOne({ where: { id: assignmentId }, lock: { mode: 'pessimistic_write' } })
+      if (!assignment || !user.employeeId || assignment.employeeId !== user.employeeId) throw new NotFoundException(REVIEW_NOT_FOUND)
+      if (assignment.status === 'ACKNOWLEDGED') throw new ConflictException('الإقرار اتسجّل قبل كده')
+      if (assignment.status !== 'ANNOUNCED') throw new BadRequestException('النتيجة لسه ماتعلنتش')
+      const now = new Date()
+      await em.getRepository(ReviewResponse).insert({ assignmentId: assignment.id, relation: 'ACK', answers: '{}', evidence: null, score: null, comment, submittedByUserId: user.sub, submittedAt: now })
+      await em.getRepository(ReviewAssignment).update({ id: assignment.id }, { status: 'ACKNOWLEDGED' })
+    })
+    return this.form(user, assignmentId)
+  }
+
   /** تكليفات دورة لإدارة الأداء: الموظف ومديره وحالته ودرجاته — للموظفين اللي فرعهم الحالي في نطاق الحساب */
   async assignments(user: JwtPayload, cycleId: number) {
     this.assertManager(user)
@@ -316,7 +361,7 @@ export class ReviewsService {
     const employee = await em.getRepository(Employee).findOne({ where: { id: assignment.employeeId } })
     const responses = await em.getRepository(ReviewResponse).find({ where: { assignmentId: assignment.id } })
     const announced = assignment.status === 'ANNOUNCED' || assignment.status === 'ACKNOWLEDGED'
-    const shown = (kind: ReviewRelation) => {
+    const shown = (kind: 'SELF' | 'MANAGER') => {
       const row = responses.find((response) => response.relation === kind)
       const allowed = kind === 'SELF' ? true : relation !== 'self' || announced
       return row && allowed ? { answers: JSON.parse(row.answers), score: score(row.score), comment: row.comment ?? null, submittedAt: row.submittedAt, evidence: row.evidence ? JSON.parse(row.evidence) : null } : null
@@ -328,6 +373,9 @@ export class ReviewsService {
       // اللي سلّم شايف الأدلة زي ما اتجمّدت مع رده؛ واللي لسه بيكتب شايفها حيّة
       evidence: mine?.evidence ?? (await this.evidenceOf(em, assignment.employeeId, cycle)),
       self: shown('SELF'), manager: shown('MANAGER'),
+      // B3.7-ب: إقرار الموظف بالنتيجة المعلنة
+      acknowledgement: (() => { const row = responses.find((response) => response.relation === 'ACK'); return row ? { comment: row.comment ?? null, at: row.submittedAt } : null })(),
+      canAcknowledge: relation === 'self' && assignment.status === 'ANNOUNCED',
       canSubmit: cycle.status === 'ACTIVE' && ((relation === 'self' && !assignment.selfSubmittedAt) || (relation === 'manager' && !assignment.managerSubmittedAt)),
     }
   }

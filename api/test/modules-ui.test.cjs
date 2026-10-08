@@ -84,7 +84,7 @@ test('MU-01: كل شاشة لها صاحب (موديول أو ميزة شاشا�
   assert.deepEqual(unowned, [], `شاشات من غير صاحب في سجل الموديولات: ${unowned.join(', ')}`)
   // الشاشات الوهمية بالظبط — أي شاشة ببيانات عرض جديدة لازم تتسجّل، وأي شاشة حقيقية ماتتحسبش وهمية
   assert.deepEqual(pages.filter(route => owners[route].feature === registry.DEMO_SCREENS_FEATURE), [
-    '/performance', '/performance/5', '/performance/cycles', '/performance/new', '/performance/templates',
+    '/performance/new',
     '/recruitment/5', '/recruitment/add', '/reports/custom',
     '/training', '/training/5', '/training/add', '/training/certificates', '/training/my-courses'])
   // أمثلة من كل موديول (المطابقة الكاملة في modules-registry.test.cjs)
@@ -114,7 +114,12 @@ test('MU-02: القايمة الجانبية من السجل — الوهمي و
   // شاشات العرض مفتوحة: مجموعتا الأداء والتدريب بيرجعوا
   modules.invalidateModules(); localStorage.clear(); sessionStorage.clear()
   view = menu(admin, state({}, DEMO_ON))
-  for (const label of ['إدارة الأداء', 'التدريب والتطوير', 'التوظيف']) assert.ok(view.has(label), label)
+  for (const label of ['التدريب والتطوير', 'التوظيف']) assert.ok(view.has(label), label)
+  // B3.7: مجموعة «إدارة الأداء» بقت شاشات حقيقية: بتظهر بموديولها (المقفول افتراضيًا)، مش بميزة شاشات العرض
+  assert.ok(!view.has('إدارة الأداء'), 'الأداء مقفول: ميزة العرض مابتفتحهوش')
+  modules.invalidateModules(); localStorage.clear(); sessionStorage.clear()
+  assert.ok(menu(admin, state({ performance: true })).has('إدارة الأداء'), 'الأداء مفتوح')
+  modules.invalidateModules(); localStorage.clear(); sessionStorage.clear()
 
   // موظف عادي والرواتب (ومعاها السلف) والعهد مقفولين: بنودهم مختفية من بوابته، والباقي زي ما هو
   modules.invalidateModules(); localStorage.clear(); sessionStorage.clear()
@@ -130,7 +135,7 @@ test('MU-02: القايمة الجانبية من السجل — الوهمي و
   modules.invalidateModules(); localStorage.clear(); sessionStorage.clear()
   view = menu(admin, state({ payroll: false, recruitment: false, offboarding: false }, DEMO_ON))
   for (const label of ['الرواتب', 'التوظيف', 'إنهاء الخدمة', 'صرف الرواتب']) assert.ok(!view.has(label), `${label} مقفول`)
-  for (const label of ['إدارة الموظفين', 'الحضور والانصراف', 'الإجازات', 'التقارير', 'الإعدادات', 'إدارة الأداء']) assert.ok(view.has(label), label)
+  for (const label of ['إدارة الموظفين', 'الحضور والانصراف', 'الإجازات', 'التقارير', 'الإعدادات', 'التدريب والتطوير']) assert.ok(view.has(label), label)
 
   // من غير حالة مقروءة (أول رسم): افتراضي السجل — القايمة ماتفضاش
   modules.invalidateModules(); localStorage.clear(); sessionStorage.clear()

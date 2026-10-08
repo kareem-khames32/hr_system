@@ -216,8 +216,9 @@ const adminMenuDefs: MenuItem[] = [
       { label: 'التقييمات', href: '/performance' },
       { label: 'تقييم جديد', href: '/performance/new' },
       { label: 'الأهداف', href: '/performance/goals' },
-      { label: 'دورات التقييم', href: '/performance/cycles' },
-      { label: 'نماذج التقييم', href: '/performance/templates' },
+      // B3.7: الدورات والنماذج لإدارة الأداء
+      { label: 'دورات التقييم', href: '/performance/cycles', perm: 'performance.manage' },
+      { label: 'نماذج التقييم', href: '/performance/templates', perm: 'performance.manage' },
     ],
   },
   {
@@ -474,6 +475,8 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
       { id: 'my-interviews', label: 'مقابلاتي', icon: <ClipboardList size={20} />, href: '/my/interviews' },
       // B3.6: أهداف الموظف وفريقه (بتظهر لما موديول الأداء مفتوح) — نفس شاشة «الأهداف»
       { id: 'my-goals', label: 'الأهداف', icon: <Target size={20} />, href: '/performance/goals' },
+      // B3.7: تقييمات الموظف وتقييم فريقه — نفس شاشة «التقييمات»
+      { id: 'my-reviews', label: 'التقييمات', icon: <ClipboardList size={20} />, href: '/performance' },
       { id: 'my-attendance', label: 'حضوري', icon: <Clock size={20} />, href: '/my/attendance' },
       { id: 'my-leaves', label: 'إجازاتي وأرصدتي', icon: <Calendar size={20} />, href: '/my/leaves' },
       { id: 'my-payslips', label: 'قسائم راتبي', icon: <Wallet size={20} />, href: '/my/payslips' },

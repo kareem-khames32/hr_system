@@ -36,7 +36,9 @@ test('PU-01: title, kind, weight, values, period, reason and the employee stamp'
 
 test('PU-02: a new closed module with its permission, the judgment before the transaction and the locks inside it, and the routes', () => {
   const module = MODULES.performance
-  assert.deepEqual([module.defaultEnabled, module.permissions, module.routes, module.dependsOn], [false, ['performance.manage'], ['/performance/goals'], ['org', 'employees']])
+  // B3.7-ب: + شاشات التقييم (التقييمات، نموذج التقييم، الدورات، النماذج)
+  assert.deepEqual([module.defaultEnabled, module.permissions, module.routes, module.dependsOn],
+    [false, ['performance.manage'], ['/performance/goals', '/performance', '/performance/cycles', '/performance/templates', '/performance/*'], ['org', 'employees']])
   const { PERMISSIONS, PERMISSION_MODULES, ROLE_PRESETS } = require('../src/auth/permissions')
   assert.deepEqual(['performance.manage' in PERMISSIONS, PERMISSION_MODULES.find(unit => unit.key === 'performance').permissions,
     ROLE_PRESETS.find(role => role.code === 'hr_manager').permissions.includes('performance.manage'), ROLE_PRESETS.find(role => role.code === 'employee').permissions.includes('performance.manage')],

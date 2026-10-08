@@ -24,6 +24,12 @@ class CycleDto {
   @IsOptional() audienceMode?: unknown
   @IsOptional() audienceIds?: unknown
 }
+class AdvanceDto {
+  @IsOptional() to?: unknown
+}
+class AcknowledgeDto {
+  @IsOptional() comment?: unknown
+}
 class SubmitDto {
   @IsOptional() answers?: unknown
   @IsOptional() comment?: unknown
@@ -81,6 +87,14 @@ export class ReviewsController {
     return this.reviews.close(user, id)
   }
 
+  // B3.7-ب: اعتماد نتايج الدورة أو إعلانها للموظفين
+  @Perm('performance.manage')
+  @Post('cycles/:id/advance')
+  @HttpCode(200)
+  advance(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: AdvanceDto) {
+    return this.reviews.advance(user, id, dto.to)
+  }
+
   @Perm('performance.manage')
   @Get('cycles/:id/assignments')
   assignments(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number) {
@@ -100,6 +114,13 @@ export class ReviewsController {
   @Get(':id')
   form(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number) {
     return this.reviews.form(user, id)
+  }
+
+  // B3.7-ب: إقرار الموظف بنتيجته المعلنة
+  @Post(':id/acknowledge')
+  @HttpCode(200)
+  acknowledge(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: AcknowledgeDto) {
+    return this.reviews.acknowledge(user, id, dto.comment)
   }
 
   @Post(':id/submit')

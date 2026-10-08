@@ -314,8 +314,8 @@ export const MODULES = {
     nameAr: 'إدارة الأداء', group: 'talent', dependsOn: ['org', 'employees'], softUses: ['tasks'], preset: 'standard', defaultEnabled: false,
     description: 'أهداف الموظفين والأقسام والشركة، ودورات التقييم: نماذج بأقسام موزونة، تقييم ذاتي وتقييم المدير بأدلة من النظام، ودرجة محسوبة بالأوزان',
     permissions: ['performance.manage'],
-    // B3.7-أ: دورات التقييم اتبنت في الخادم؛ شاشاتها (التقييمات، الدورات، النماذج) لسه شاشات عرض لحد الجزء (ب)
-    routes: ['/performance/goals'],
+    // B3.7-ب: التقييمات ودوراتها ونماذجها ونموذج التقييم بقوا حقيقيين (كانوا شاشات عرض)؛ «تقييم جديد» لسه شاشة عرض
+    routes: ['/performance/goals', '/performance', '/performance/cycles', '/performance/templates', '/performance/*'],
   }),
   // B2.11: الوظائف المعتمدة — وظيفة في وحدة بعدد معتمد، وتقرير «معتمد / مشغول / شاغر». موديول جديد = مقفول لحد ما الشركة تفعّله
   // (أول موديول defaultEnabled: false: مفيش حاجة كانت شغالة قبله)
@@ -354,7 +354,7 @@ export const isFeatureKey = (value: unknown): value is string => typeof value ==
  * النجمة = جزء واحد من المسار (رقم سجل)، والمسارات الثابتة تحت نفس الأب بتكسب عليها.
  */
 export const DEMO_SCREENS_FEATURE = 'platform.demo_screens'
-export const DEMO_ROUTES = ['/performance', '/training', '/recruitment/add', '/recruitment/*', '/reports/custom']
+export const DEMO_ROUTES = ['/performance/new', '/training', '/recruitment/add', '/recruitment/*', '/reports/custom']
 
 const segmentsOf = (path: string) => path.split('?')[0].split('#')[0].split('/').filter(Boolean)
 

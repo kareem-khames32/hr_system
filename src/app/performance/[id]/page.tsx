@@ -1,314 +1,284 @@
 'use client'
 
-import { useState } from 'react'
-import { useParams } from 'next/navigation'
+// B3.7: نموذج التقييم — الأقسام الموزونة (أهداف الفترة، وبنود التقدير والنص) ولوحة الأدلة من النظام جنبها. تسليم مرة واحدة؛ والنتيجة للموظف بعد
+// الإعلان، وبيقرّ بيها بتعليق. (كانت شاشة عرض ببيانات وهمية؛ بقت على الخادم.)
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useParams } from 'next/navigation'
+import { ClipboardCheck } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
-import {
-  ArrowRight,
-  User,
-  Calendar,
-  Target,
-  Star,
-  TrendingUp,
-  MessageSquare,
-  CheckCircle2,
-  Clock,
-  Award,
-  FileText,
-  Edit2,
-  Building2,
-  Briefcase,
-} from 'lucide-react'
 import { formatDate } from '@/lib/dates'
+import { acknowledgeReview, fetchReviewForm, submitReview, type ApiReviewForm, type ReviewAnswers, type ReviewEvidence, type ReviewResponseView } from '@/lib/reviews-api'
 
-const reviewData = {
-  id: '1',
-  employeeName: 'أحمد محمد علي',
-  employeeId: 'EMP001',
-  position: 'مطور برمجيات أول',
-  department: 'تقنية المعلومات',
-  manager: 'محمد أحمد الشمري',
-  reviewPeriod: 'الربع الرابع 2023',
-  reviewDate: '2024-01-15',
-  status: 'completed',
-  overallScore: 4.2,
+const STATUS_WORDS: Record<string, string> = { present: 'حاضر', late: 'متأخر', absent: 'غايب', early_leave: 'انصراف مبكر', leave: 'إجازة', partial_leave: 'إجازة جزئية', holiday: 'عطلة',
+  missing_punch: 'بصمة ناقصة', mission: 'مأمورية', remote: 'عن بُعد', exempt: 'معفي' }
 
-  categories: [
-    { name: 'الإنتاجية', score: 4.5, weight: 25 },
-    { name: 'جودة العمل', score: 4.0, weight: 25 },
-    { name: 'العمل الجماعي', score: 4.3, weight: 20 },
-    { name: 'المبادرة', score: 4.0, weight: 15 },
-    { name: 'الالتزام', score: 4.5, weight: 15 },
-  ],
+export default function ReviewFormPage() {
+  const params = useParams<{ id: string }>()
+  const id = Number(params?.id)
+  const [form, setForm] = useState<ApiReviewForm | null>(null)
+  const [error, setError] = useState('')
+  const [answers, setAnswers] = useState<ReviewAnswers>({ sections: {}, goals: {} })
+  const [comment, setComment] = useState('')
+  const [ack, setAck] = useState('')
+  const [busy, setBusy] = useState(false)
 
-  goals: [
-    { id: '1', title: 'إنهاء مشروع المنصة الجديدة', status: 'completed', progress: 100 },
-    { id: '2', title: 'تحسين أداء النظام بنسبة 30%', status: 'completed', progress: 100 },
-    { id: '3', title: 'تدريب الفريق على التقنيات الجديدة', status: 'in_progress', progress: 75 },
-    { id: '4', title: 'توثيق جميع العمليات التقنية', status: 'in_progress', progress: 60 },
-  ],
+  useEffect(() => {
+    if (!Number.isSafeInteger(id) || id < 1) {
+      setError('التقييم غير موجود')
+      return
+    }
+    fetchReviewForm(id).then(setForm).catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل التقييم'))
+  }, [id])
 
-  strengths: [
-    'مهارات تقنية عالية',
-    'القدرة على حل المشكلات المعقدة',
-    'التزام بالمواعيد النهائية',
-    'تعاون ممتاز مع الفريق',
-  ],
+  const setItem = (section: string, item: string, value: { rating?: number; text?: string }) =>
+    setAnswers((prev) => ({ ...prev, sections: { ...prev.sections, [section]: { ...(prev.sections[section] ?? {}), [item]: value } } }))
+  const setGoal = (goalId: number, value: { rating?: number; comment?: string }) =>
+    setAnswers((prev) => ({ ...prev, goals: { ...prev.goals, [goalId]: { ...(prev.goals[goalId] ?? { rating: 0 }), ...value } } }))
 
-  improvements: [
-    'تحسين مهارات التواصل مع الأقسام الأخرى',
-    'المشاركة أكثر في الاجتماعات',
-    'تطوير مهارات القيادة',
-  ],
+  // كل بند مطلوب اتجاوب، وكل هدف اتقدّر (نفس حكم الخادم)
+  const complete = !!form && form.template.sections.every((section) =>
+    section.kind === 'GOALS'
+      ? form.goals.every((goal) => (answers.goals[goal.id]?.rating ?? 0) >= 1)
+      : section.items.every((item) => !item.required || (item.type === 'rating' ? (answers.sections[section.key]?.[item.key]?.rating ?? 0) >= 1 : (answers.sections[section.key]?.[item.key]?.text ?? '').trim() !== '')))
 
-  managerComments: 'أحمد موظف متميز وملتزم. أظهر تحسناً ملحوظاً في الأداء خلال هذا الربع. يحتاج للعمل على مهارات التواصل مع الأقسام الأخرى.',
-  employeeComments: 'أشكر الإدارة على الدعم المستمر. سأعمل على تحسين نقاط الضعف المذكورة.',
-}
+  const run = async (work: () => Promise<ApiReviewForm>) => {
+    setBusy(true)
+    setError('')
+    try {
+      setForm(await work())
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'تعذر تنفيذ الإجراء')
+    } finally {
+      setBusy(false)
+    }
+  }
+  const submit = () => {
+    // الفاضي مابيتبعتش (بند اختياري من غير إجابة)
+    const sections: ReviewAnswers['sections'] = {}
+    for (const [sectionKey, items] of Object.entries(answers.sections)) {
+      for (const [itemKey, value] of Object.entries(items)) {
+        if ((value.rating ?? 0) >= 1 || (value.text ?? '').trim() !== '') (sections[sectionKey] ??= {})[itemKey] = value.rating ? { rating: value.rating } : { text: (value.text ?? '').trim() }
+      }
+    }
+    const goals: ReviewAnswers['goals'] = {}
+    for (const [goalId, value] of Object.entries(answers.goals)) goals[goalId] = { rating: value.rating, ...(value.comment?.trim() ? { comment: value.comment.trim() } : {}) }
+    void run(() => submitReview(id, { sections, goals }, comment.trim() || undefined))
+  }
 
-const getScoreColor = (score: number) => {
-  if (score >= 4.5) return 'text-success-600'
-  if (score >= 3.5) return 'text-blue-600'
-  if (score >= 2.5) return 'text-warning-600'
-  return 'text-red-600'
-}
-
-const getScoreBgColor = (score: number) => {
-  if (score >= 4.5) return 'bg-success-50'
-  if (score >= 3.5) return 'bg-blue-50'
-  if (score >= 2.5) return 'bg-warning-50'
-  return 'bg-red-50'
-}
-
-const getScoreLabel = (score: number) => {
-  if (score >= 4.5) return 'ممتاز'
-  if (score >= 3.5) return 'جيد جداً'
-  if (score >= 2.5) return 'جيد'
-  if (score >= 1.5) return 'مقبول'
-  return 'ضعيف'
-}
-
-export default function PerformanceDetailsPage() {
-  const params = useParams()
+  const scale = form ? Array.from({ length: form.template.ratingMax }, (_, index) => index + 1) : []
+  const Rating = ({ value, onPick }: { value: number; onPick: (rating: number) => void }) => (
+    <div className="flex items-center gap-1 flex-wrap">
+      {scale.map((rating) => (
+        <button
+          key={rating}
+          onClick={() => onPick(rating)}
+          aria-pressed={value === rating}
+          aria-label={`${rating} من ${form?.template.ratingMax}`}
+          className={`w-9 h-9 rounded-lg border text-sm font-bold ${value === rating ? 'border-primary-500 bg-primary-600 text-white' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+        >
+          {rating}
+        </button>
+      ))}
+    </div>
+  )
 
   return (
     <MainLayout>
       <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Link
-              href="/performance"
-              className="p-2 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors"
-            >
-              <ArrowRight size={20} className="text-gray-600" />
+        <div>
+          <p className="text-sm text-gray-500">
+            <Link href="/performance" className="text-primary-600 hover:underline">
+              التقييمات
             </Link>
-            <div>
-              <h1 className="text-2xl font-bold text-gray-800">تقييم الأداء</h1>
-              <p className="text-gray-500">{reviewData.reviewPeriod}</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            {/* «تصدير PDF» أُزيل: التقييم ببيانات عرض بلا باك ولا مولّد PDF */}
-            <button className="btn-primary flex items-center gap-2">
-              <Edit2 size={18} />
-              تعديل التقييم
-            </button>
-          </div>
+          </p>
+          <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2 mt-1">
+            <ClipboardCheck size={24} className="text-primary-600" />
+            {form ? `${form.relation === 'self' ? 'تقييمي' : form.employeeName ?? 'تقييم'} — ${form.cycleName}` : 'تقييم الأداء'}
+          </h1>
+          {form && (
+            <p className="text-gray-500 mt-1">
+              {form.kindLabel} · {formatDate(form.periodStart)} – {formatDate(form.periodEnd)} · {form.statusLabel}
+            </p>
+          )}
         </div>
-
-        {/* Employee Info */}
-        <div className="card">
-          <div className="flex items-start justify-between">
-            <div className="flex items-start gap-4">
-              <div className="w-16 h-16 bg-primary-100 rounded-2xl flex items-center justify-center text-primary-600 font-bold text-2xl">
-                {reviewData.employeeName.charAt(0)}
-              </div>
-              <div>
-                <h2 className="text-xl font-bold text-gray-800">{reviewData.employeeName}</h2>
-                <p className="text-primary-600 font-medium">{reviewData.position}</p>
-                <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
-                  <span className="flex items-center gap-1">
-                    <Building2 size={14} />
-                    {reviewData.department}
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <User size={14} />
-                    المدير: {reviewData.manager}
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <Calendar size={14} />
-                    {formatDate(reviewData.reviewDate)}
-                  </span>
+        {error && (
+          <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-4">
+            {error}
+          </div>
+        )}
+        {form && (
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            <div className="xl:col-span-2 space-y-4">
+              {form.finalScore !== null && (
+                <div className="card flex items-center justify-between gap-3 flex-wrap">
+                  <div>
+                    <p className="text-sm text-gray-500">الدرجة النهائية</p>
+                    <p className="text-3xl font-bold text-gray-800 tabular-nums">{form.finalScore} / 100</p>
+                  </div>
+                  {form.selfScore !== null && <p className="text-sm text-gray-500 tabular-nums">التقييم الذاتي: {form.selfScore} / 100</p>}
                 </div>
-              </div>
-            </div>
-            <div className={`text-center p-4 rounded-2xl ${getScoreBgColor(reviewData.overallScore)}`}>
-              <p className={`text-4xl font-bold ${getScoreColor(reviewData.overallScore)}`}>
-                {reviewData.overallScore}
-              </p>
-              <p className="text-sm text-gray-600 mt-1">من 5</p>
-              <p className={`text-sm font-medium mt-1 ${getScoreColor(reviewData.overallScore)}`}>
-                {getScoreLabel(reviewData.overallScore)}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-3 gap-6">
-          {/* Categories Scores */}
-          <div className="col-span-2 space-y-6">
-            <div className="card">
-              <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                <Star size={20} className="text-primary-500" />
-                التقييم حسب المعايير
-              </h3>
-              <div className="space-y-4">
-                {reviewData.categories.map((category) => (
-                  <div key={category.name}>
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-medium text-gray-700">{category.name}</span>
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm text-gray-500">الوزن: {category.weight}%</span>
-                        <span className={`font-bold ${getScoreColor(category.score)}`}>
-                          {category.score}/5
-                        </span>
+              )}
+              {form.canAcknowledge && (
+                <div className="bg-purple-50 rounded-xl p-4 space-y-3" data-acknowledge>
+                  <p className="text-sm font-medium text-purple-900">نتيجتك اتعلنت. أقرّ إنك اطلعت عليها (الإقرار مش موافقة — الاعتراض له مساره).</p>
+                  <textarea className="input w-full text-sm" rows={2} maxLength={2000} placeholder="تعليقك (اختياري)" value={ack} onChange={(e) => setAck(e.target.value)} />
+                  <button onClick={() => run(() => acknowledgeReview(id, ack.trim() || undefined))} disabled={busy} className="btn-primary text-sm disabled:opacity-50">
+                    أقرّ بالاطلاع
+                  </button>
+                </div>
+              )}
+              {form.acknowledgement && (
+                <p className="text-sm text-gray-600">
+                  الموظف أقرّ بالاطلاع يوم {formatDate(form.acknowledgement.at)}
+                  {form.acknowledgement.comment ? ` — «${form.acknowledgement.comment}»` : ''}
+                </p>
+              )}
+              {form.canSubmit ? (
+                <>
+                  {form.template.sections.map((section) => (
+                    <div key={section.key} className="card space-y-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <h2 className="text-lg font-bold text-gray-800">{section.title}</h2>
+                        <span className="text-xs text-gray-500">الوزن {section.weight}%</span>
                       </div>
+                      {section.kind === 'GOALS' && form.goals.length === 0 && <p className="text-sm text-gray-500">مفيش أهداف سارية في فترة الدورة — القسم ده مش هيدخل في الدرجة.</p>}
+                      {section.kind === 'GOALS' &&
+                        form.goals.map((goal) => (
+                          <div key={goal.id} className="space-y-2">
+                            <p className="text-sm text-gray-800">
+                              {goal.title} <span className="text-xs text-gray-500">· وزن {goal.weight}%{goal.targetValue !== null ? ` · ${goal.actualValue ?? '0.00'} من ${goal.targetValue} ${goal.unit ?? ''}` : ''}</span>
+                            </p>
+                            <Rating value={answers.goals[goal.id]?.rating ?? 0} onPick={(rating) => setGoal(goal.id, { rating })} />
+                            <input className="input w-full text-sm" maxLength={2000} placeholder="تعليق على الهدف (اختياري)" value={answers.goals[goal.id]?.comment ?? ''} onChange={(e) => setGoal(goal.id, { comment: e.target.value })} />
+                          </div>
+                        ))}
+                      {section.items.map((item) => (
+                        <div key={item.key} className="space-y-2">
+                          <p className="text-sm text-gray-800">
+                            {item.label}
+                            {item.required ? '' : <span className="text-xs text-gray-400"> (اختياري)</span>}
+                          </p>
+                          {item.type === 'rating' ? (
+                            <Rating value={answers.sections[section.key]?.[item.key]?.rating ?? 0} onPick={(rating) => setItem(section.key, item.key, { rating })} />
+                          ) : (
+                            <textarea className="input w-full text-sm" rows={2} maxLength={2000} value={answers.sections[section.key]?.[item.key]?.text ?? ''} onChange={(e) => setItem(section.key, item.key, { text: e.target.value })} />
+                          )}
+                        </div>
+                      ))}
                     </div>
-                    <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full ${
-                          category.score >= 4.5
-                            ? 'bg-success-500'
-                            : category.score >= 3.5
-                            ? 'bg-blue-500'
-                            : category.score >= 2.5
-                            ? 'bg-warning-500'
-                            : 'bg-red-500'
-                        }`}
-                        style={{ width: `${(category.score / 5) * 100}%` }}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Goals */}
-            <div className="card">
-              <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                <Target size={20} className="text-primary-500" />
-                الأهداف
-              </h3>
-              <div className="space-y-3">
-                {reviewData.goals.map((goal) => (
-                  <div key={goal.id} className="p-4 bg-gray-50 rounded-xl">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-medium text-gray-800">{goal.title}</span>
-                      <span
-                        className={`px-3 py-1 rounded-full text-xs font-medium ${
-                          goal.status === 'completed'
-                            ? 'bg-success-50 text-success-700'
-                            : 'bg-warning-50 text-warning-700'
-                        }`}
-                      >
-                        {goal.status === 'completed' ? 'مكتمل' : 'قيد التنفيذ'}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
-                        <div
-                          className={`h-full rounded-full ${
-                            goal.progress === 100 ? 'bg-success-500' : 'bg-primary-500'
-                          }`}
-                          style={{ width: `${goal.progress}%` }}
-                        />
-                      </div>
-                      <span className="text-sm font-medium text-gray-600">{goal.progress}%</span>
+                  ))}
+                  <div className="card space-y-3">
+                    <label className="block text-sm text-gray-700">
+                      تعليق عام (اختياري)
+                      <textarea className="input w-full mt-1" rows={3} maxLength={2000} value={comment} onChange={(e) => setComment(e.target.value)} />
+                    </label>
+                    <p className="text-xs text-gray-500">التقييم بيتسلّم مرة واحدة ومابيتعدّلش، ولوحة الأدلة بتتحفظ معاه زي ما هي دلوقتي.</p>
+                    <div className="flex justify-end">
+                      <button onClick={submit} disabled={!complete || busy} title="كل بند مطلوب لازم يتجاوب، وكل هدف يتقدّر" className="btn-primary disabled:opacity-50">
+                        {form.relation === 'self' ? 'تسليم تقييمي الذاتي' : 'تسليم التقييم'}
+                      </button>
                     </div>
                   </div>
-                ))}
-              </div>
+                </>
+              ) : (
+                !form.self && !form.manager && <div className="card text-sm text-gray-600">مفيش تقييم مسلّم تقدر تشوفه دلوقتي.</div>
+              )}
+              {form.self && <ResponseCard title={form.relation === 'self' ? 'تقييمي الذاتي' : 'التقييم الذاتي للموظف'} response={form.self} form={form} />}
+              {form.manager && <ResponseCard title="تقييم المدير" response={form.manager} form={form} />}
             </div>
-
-            {/* Comments */}
-            <div className="card">
-              <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                <MessageSquare size={20} className="text-primary-500" />
-                التعليقات
-              </h3>
-              <div className="space-y-4">
-                <div className="p-4 bg-blue-50 rounded-xl">
-                  <p className="text-sm font-medium text-blue-800 mb-2">تعليق المدير</p>
-                  <p className="text-gray-700">{reviewData.managerComments}</p>
-                </div>
-                <div className="p-4 bg-gray-50 rounded-xl">
-                  <p className="text-sm font-medium text-gray-800 mb-2">تعليق الموظف</p>
-                  <p className="text-gray-700">{reviewData.employeeComments}</p>
-                </div>
-              </div>
-            </div>
+            <EvidencePanel evidence={form.evidence} />
           </div>
-
-          {/* Sidebar */}
-          <div className="space-y-6">
-            {/* Strengths */}
-            <div className="card">
-              <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                <TrendingUp size={20} className="text-success-500" />
-                نقاط القوة
-              </h3>
-              <div className="space-y-2">
-                {reviewData.strengths.map((strength, index) => (
-                  <div key={index} className="flex items-start gap-2 p-3 bg-success-50 rounded-xl">
-                    <CheckCircle2 size={18} className="text-success-600 mt-0.5 flex-shrink-0" />
-                    <span className="text-sm text-gray-700">{strength}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Areas for Improvement */}
-            <div className="card">
-              <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                <Award size={20} className="text-warning-500" />
-                فرص التحسين
-              </h3>
-              <div className="space-y-2">
-                {reviewData.improvements.map((improvement, index) => (
-                  <div key={index} className="flex items-start gap-2 p-3 bg-warning-50 rounded-xl">
-                    <Clock size={18} className="text-warning-600 mt-0.5 flex-shrink-0" />
-                    <span className="text-sm text-gray-700">{improvement}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Score Legend */}
-            <div className="card">
-              <h3 className="font-bold text-gray-800 mb-4">مقياس التقييم</h3>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between p-2 bg-success-50 rounded-lg">
-                  <span className="text-sm text-gray-700">ممتاز</span>
-                  <span className="text-sm font-medium text-success-700">4.5 - 5.0</span>
-                </div>
-                <div className="flex items-center justify-between p-2 bg-blue-50 rounded-lg">
-                  <span className="text-sm text-gray-700">جيد جداً</span>
-                  <span className="text-sm font-medium text-blue-700">3.5 - 4.4</span>
-                </div>
-                <div className="flex items-center justify-between p-2 bg-warning-50 rounded-lg">
-                  <span className="text-sm text-gray-700">جيد</span>
-                  <span className="text-sm font-medium text-warning-700">2.5 - 3.4</span>
-                </div>
-                <div className="flex items-center justify-between p-2 bg-red-50 rounded-lg">
-                  <span className="text-sm text-gray-700">يحتاج تحسين</span>
-                  <span className="text-sm font-medium text-red-700">أقل من 2.5</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        )}
       </div>
     </MainLayout>
+  )
+}
+
+function ResponseCard({ title, response, form }: { title: string; response: ReviewResponseView; form: ApiReviewForm }) {
+  return (
+    <div className="card space-y-3" data-response>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-lg font-bold text-gray-800">{title}</h2>
+        <span className="text-sm text-gray-700 tabular-nums">{response.score !== null ? `${response.score} / 100` : 'من غير درجة'}</span>
+      </div>
+      {form.template.sections.map((section) => (
+        <div key={section.key}>
+          <p className="text-sm font-medium text-gray-700">{section.title}</p>
+          <ul className="mt-1 space-y-1 text-sm text-gray-600">
+            {section.kind === 'GOALS' &&
+              (response.evidence?.goals ?? form.goals).filter((goal) => response.answers.goals[goal.id]).map((goal) => (
+                <li key={goal.id}>
+                  {goal.title}: <span className="tabular-nums font-medium text-gray-800">{response.answers.goals[goal.id].rating} / {form.template.ratingMax}</span>
+                  {response.answers.goals[goal.id].comment ? ` — ${response.answers.goals[goal.id].comment}` : ''}
+                </li>
+              ))}
+            {section.items.map((item) => {
+              const answer = response.answers.sections[section.key]?.[item.key]
+              return answer ? (
+                <li key={item.key}>
+                  {item.label}: {answer.rating !== undefined ? <span className="tabular-nums font-medium text-gray-800">{answer.rating} / {form.template.ratingMax}</span> : <span className="whitespace-pre-line">{answer.text}</span>}
+                </li>
+              ) : null
+            })}
+          </ul>
+        </div>
+      ))}
+      {response.comment && <p className="text-sm text-gray-700 whitespace-pre-line border-t border-gray-100 pt-3">{response.comment}</p>}
+      <p className="text-xs text-gray-400">اتسلّم يوم {formatDate(response.submittedAt)}</p>
+    </div>
+  )
+}
+
+function EvidencePanel({ evidence }: { evidence: ReviewEvidence }) {
+  return (
+    <aside className="card space-y-4 h-fit" data-evidence>
+      <div>
+        <h2 className="text-lg font-bold text-gray-800">أدلة من النظام</h2>
+        <p className="text-xs text-gray-500 mt-1">
+          للفترة {formatDate(evidence.period.from)} – {formatDate(evidence.period.to)} · للقراءة بس
+        </p>
+      </div>
+      <div>
+        <p className="text-sm font-medium text-gray-700">الحضور</p>
+        <ul className="mt-1 text-sm text-gray-600 space-y-1 tabular-nums">
+          <li>أيام مسجّلة: {evidence.attendance.days}</li>
+          {Object.entries(evidence.attendance.byStatus).map(([status, count]) => (
+            <li key={status}>
+              {STATUS_WORDS[status] ?? status}: {count}
+            </li>
+          ))}
+          <li>
+            أيام تأخير: {evidence.attendance.lateDays} ({evidence.attendance.lateMinutes} دقيقة)
+          </li>
+        </ul>
+      </div>
+      <div>
+        <p className="text-sm font-medium text-gray-700">المهام اللي ميعادها في الفترة</p>
+        <ul className="mt-1 text-sm text-gray-600 space-y-1 tabular-nums">
+          <li>الكل: {evidence.tasks.total}</li>
+          <li>خلصت: {evidence.tasks.done}</li>
+          <li>متأخرة: {evidence.tasks.overdue}</li>
+        </ul>
+      </div>
+      <div>
+        <p className="text-sm font-medium text-gray-700">الأهداف</p>
+        {evidence.goals.length === 0 ? (
+          <p className="mt-1 text-sm text-gray-500">مفيش أهداف في الفترة.</p>
+        ) : (
+          <ul className="mt-1 text-sm text-gray-600 space-y-1">
+            {evidence.goals.map((goal) => (
+              <li key={goal.id}>
+                {goal.title}
+                <span className="text-xs text-gray-500 tabular-nums">
+                  {' '}
+                  · وزن {goal.weight}%{goal.targetValue !== null ? ` · ${goal.actualValue ?? '0.00'} من ${goal.targetValue} ${goal.unit ?? ''}` : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </aside>
   )
 }

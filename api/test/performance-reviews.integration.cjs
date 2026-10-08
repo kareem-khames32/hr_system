@@ -5,6 +5,7 @@
 //         فرع تاني = غير موجودة)، والإطلاق: تكليف لكل موظف شغال في الجمهور بمديره المباشر، ونسخة النموذج بتتجمّد، ومرة واحدة.
 //  RV-02) التقييم: الموظف بيسلّم تقييمه الذاتي ومديره المقيِّم بيسلّم تقييمه — مرة واحدة؛ الإجابات على النموذج المتجمّد وأهداف الفترة؛ الدرجة بالأوزان
 //         (أرقام معروفة)؛ لوحة الأدلة (حضور، مهام، أهداف) بتتجمّد مع الرد؛ والموظف مايشوفش تقييم مديره قبل الإعلان؛ واللي مالوش حق = غير موجود.
+//  RV-04) (ب) الاعتماد والإعلان والإقرار: إدارة الأداء بتعتمد اللي المدير سلّمه ثم تعلنه؛ الموظف بيشوف تقييم مديره ودرجته بعد الإعلان بس، وبيقرّ مرة واحدة.
 //  RV-03) إدارة الأداء: تكليفات الدورة بدرجاتها بنطاق الفروع، وقفل الدورة بيوقّف التسليم، والموديول المقفول بيقفل المسارات.
 // Run (من api/): node --test test/performance-reviews.integration.cjs
 const { test, before, after } = require('node:test')
@@ -260,4 +261,37 @@ test('RV-03: إدارة الأداء — تكليفات الدورة بدرجا�
   try {
     assert.deepEqual([(await request(users.rep, 'GET', R + '/mine')).status, (await request(users.hrA, 'GET', R + '/cycles')).status], [404, 404])
   } finally { expectStatus(await request(users.admin, 'PUT', '/modules/performance', { enabled: true }), 200); modules.invalidate() }
+})
+
+test('RV-04: الاعتماد والإعلان والإقرار — المدير سلّم ← معتمد ← معلن ← الموظف أقرّ، وتقييم المدير بيظهر للموظف بعد الإعلان بس', async () => {
+  const advance = (user, to) => request(user, 'POST', R + '/cycles/' + state.cycle + '/advance', { to })
+  const audits = async action => Number((await ds.query('SELECT COUNT(*) AS [n] FROM [audit_log] WHERE [action] = @0', [action]))[0].n)
+  const statusOf = async id => (await repo('ReviewAssignment').findOneByOrFail({ id })).status
+  assert.deepEqual([answer(await advance(users.hrB, 'APPROVED')), (await advance(users.boss, 'APPROVED')).status, (await advance(users.hrA, 'DONE')).status], [[404, rules.REVIEW_CYCLE_NOT_FOUND], 403, 400])
+  // الإعلان قبل الاعتماد مابينقلش حاجة؛ والإقرار قبل الإعلان مرفوض
+  assert.equal(expectStatus(await advance(users.hrA, 'ANNOUNCED'), 200).moved, 0)
+  assert.deepEqual(answer(await request(users.rep, 'POST', R + '/' + state.rep + '/acknowledge', {})), [400, 'النتيجة لسه ماتعلنتش'])
+  // الاعتماد: اللي المدير سلّمه بس (تكليف واحد)؛ والمفتوح بيفضل مفتوح
+  const approved = expectStatus(await advance(users.hrA, 'APPROVED'), 200)
+  assert.deepEqual([approved.moved, await statusOf(state.rep), await statusOf(state.peer), await audits('REVIEW_CYCLE_APPROVED')], [1, 'APPROVED', 'OPEN', 1])
+  assert.deepEqual([expectStatus(await advance(users.hrA, 'APPROVED'), 200).moved, await audits('REVIEW_CYCLE_APPROVED')], [0, 1], 'تاني مرة مفيش حاجة تتنقل ولا سطر تدقيق')
+  // معتمد بس لسه ماتعلنش: الموظف مش شايف تقييم مديره
+  const hidden = expectStatus(await request(users.rep, 'GET', R + '/' + state.rep), 200)
+  assert.deepEqual([hidden.status, hidden.manager, hidden.finalScore, hidden.canAcknowledge], ['APPROVED', null, null, false])
+  // الإعلان
+  assert.deepEqual([expectStatus(await advance(users.hrA, 'ANNOUNCED'), 200).moved, await statusOf(state.rep), await audits('REVIEW_CYCLE_ANNOUNCED')], [1, 'ANNOUNCED', 1])
+  const shown = expectStatus(await request(users.rep, 'GET', R + '/' + state.rep), 200)
+  assert.deepEqual([shown.status, shown.statusLabel, shown.manager.score, shown.manager.comment, shown.managerScore, shown.finalScore, shown.canAcknowledge, shown.acknowledgement],
+    ['ANNOUNCED', 'معلن', 70, 'محتاج يركّز على العقود', 70, 70, true, null])
+  assert.deepEqual(expectStatus(await request(users.rep, 'GET', R + '/mine'), 200).reviews.map(row => [row.managerScore, row.finalScore]), [[70, 70]])
+  // الإقرار: صاحب التكليف بس، مرة واحدة، بتعليقه
+  for (const stranger of [users.boss, users.peer, users.hrA]) assert.deepEqual(answer(await request(stranger, 'POST', R + '/' + state.rep + '/acknowledge', {})), [404, rules.REVIEW_NOT_FOUND], stranger.email)
+  assert.equal((await request(users.rep, 'POST', R + '/' + state.rep + '/acknowledge', { comment: 'ت'.repeat(2001) })).status, 400)
+  const acknowledged = expectStatus(await request(users.rep, 'POST', R + '/' + state.rep + '/acknowledge', { comment: ' اطلعت على التقييم ' }), 200)
+  assert.deepEqual([acknowledged.status, acknowledged.statusLabel, acknowledged.acknowledgement.comment, acknowledged.canAcknowledge], ['ACKNOWLEDGED', 'الموظف أقرّ', 'اطلعت على التقييم', false])
+  assert.deepEqual(answer(await request(users.rep, 'POST', R + '/' + state.rep + '/acknowledge', {})), [409, 'الإقرار اتسجّل قبل كده'])
+  // المدير وإدارة الأداء شايفين الإقرار؛ والقايمة عند إدارة الأداء بالحالة الجديدة
+  assert.equal(expectStatus(await request(users.boss, 'GET', R + '/' + state.rep), 200).acknowledgement.comment, 'اطلعت على التقييم')
+  assert.deepEqual(expectStatus(await request(users.hrA, 'GET', R + '/cycles/' + state.cycle + '/assignments'), 200).assignments.map(row => row.status), ['OPEN', 'ACKNOWLEDGED', 'OPEN'])
+  assert.deepEqual((await repo('ReviewResponse').find({ where: { assignmentId: state.rep }, order: { id: 'ASC' } })).map(row => row.relation), ['SELF', 'MANAGER', 'ACK'])
 })
