@@ -76,3 +76,22 @@ test('PG-03: the web app sends a pre-boarding account to its documents, lists th
   assert.match(sidebar, /if \(preboardingUntil\(currentUser\)\) return portalItems\.filter\(\(item\) => !!item\.href && preboardingPathAllowed\(item\.href\) && available\(item\.href\)\)/)
   assert.match(read('src/lib/api.ts'), /preboardingUntil\?: string/)
 })
+
+test('Codex P3L-B01: a pre-boarding session sees only the task that awaits itself — no manager, assigner or task-admin authority', async () => {
+  const { taskAccess } = require('../src/tasks/task-rules')
+  const until = new Date(Date.now() + 5 * 86400000), ymd = `${until.getFullYear()}-${String(until.getMonth() + 1).padStart(2, '0')}-${String(until.getDate()).padStart(2, '0')}`
+  const structure = { directManagerOf: async () => 7, isUnder: async () => true }
+  const task = extra => ({ id: 1, assigneeEmployeeId: 9, assigneeRole: null, branchId: 1, createdByUserId: 3, isPersonal: false, ...extra })
+  const manager = { sub: 3, role: 'employee', employeeId: 7, branchId: 1, permissions: [] }
+  // جلسة عادية: المدير المباشر بيشوف، واللي كلّف بيها ومسؤولها تحته بيديرها
+  assert.deepEqual(await taskAccess(manager, task(), structure), { visible: true, work: false, manage: true })
+  // نفس الحساب قبل المباشرة: ولا حاجة — حتى بصلاحية إدارة المهام لو التوكن شايلها
+  for (const session of [{ ...manager, preboardingUntil: ymd }, { ...manager, preboardingUntil: ymd, permissions: ['tasks.manage', 'tasks.view_all'] }]) {
+    assert.deepEqual(await taskAccess(session, task(), structure), { visible: false, work: false, manage: false })
+    assert.deepEqual(await taskAccess(session, task({ isPersonal: true }), structure), { visible: false, work: false, manage: false })
+    // ومهمته هو بتفضل له
+    assert.deepEqual(await taskAccess(session, task({ assigneeEmployeeId: 7 }), structure), { visible: true, work: true, manage: false })
+  }
+  // تاريخ المباشرة جه: الجلسة رجعت عادية
+  assert.equal((await taskAccess({ ...manager, preboardingUntil: '2020-01-01' }, task(), structure)).visible, true)
+})

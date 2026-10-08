@@ -159,7 +159,19 @@ test('PB-02: with the feature open the session carries the start date and no per
   assert.notEqual((await http('POST', `/tasks/${roleTask.id}/status`, { status: 'DONE' }, bearer(manager.accessToken))).status, 201)
   assert.equal((await repo('Task').findOneByOrFail({ id: roleTask.id })).status, 'OPEN')
   expect(await get(manager.accessToken, `/tasks/${ownTask.id}`), 200)
-  await repo('Task').delete({ id: require('../node_modules/typeorm').In([roleTask.id, ownTask.id]) })
+  // Codex P3L-B01: ومهمة موظف تحته في الهيكل (أو كلّف بيها هو): الجلسة قبل المباشرة «لنفسه» — لا قراءة ولا تنفيذ ولا في قايمته
+  const report = await repo('Employee').save({ employeeCode: 'PB_REPORT', fullName: 'موظف تحت المدير', branchId: B.a.id, managerEmployeeId: U.manager.employeeId, status: 'active', isActive: true, joinDate: '2020-01-01' })
+  const reportTask = await taskRow({ title: 'مهمة خاصة بموظف تحت المدير', description: 'تفاصيل شغل موظف تاني', assigneeRole: null, assigneeEmployeeId: report.id })
+  const assignedByHim = await taskRow({ title: 'مهمة كلّف بيها المدير قبل كده', assigneeRole: null, assigneeEmployeeId: report.id, createdByUserId: U.manager.id })
+  for (const task of [reportTask, assignedByHim]) {
+    const refused = await get(manager.accessToken, `/tasks/${task.id}`)
+    assert.deepEqual([refused.status, JSON.stringify(refused.body).includes('موظف')], [404, false], task.title)
+    assert.notEqual((await http('POST', `/tasks/${task.id}/status`, { status: 'DONE' }, bearer(manager.accessToken))).status, 201)
+    assert.equal((await repo('Task').findOneByOrFail({ id: task.id })).status, 'OPEN')
+  }
+  assert.doesNotMatch(JSON.stringify(expect(await get(manager.accessToken, '/tasks/mine'), 200)), /موظف تحت المدير|كلّف بيها المدير/)
+  await repo('Task').delete({ id: require('../node_modules/typeorm').In([roleTask.id, ownTask.id, reportTask.id, assignedByHim.id]) })
+  await repo('Employee').delete({ id: report.id })
   assert.deepEqual([(await get(manager.accessToken, '/employees')).body.code, (await get(manager.accessToken, '/onboarding/templates')).body.code], [rules.PREBOARDING_ONLY, rules.PREBOARDING_ONLY])
   const documents = expect(await get(manager.accessToken, '/documents'), 200)
   assert.doesNotMatch(JSON.stringify(documents), /SECRET-PB/, 'مستنداته هو بس')

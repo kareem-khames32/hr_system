@@ -119,6 +119,7 @@ export const SURVEY_QUESTIONS = 'الأسئلة: من 1 لـ30 — كل سؤال
 export const SURVEY_CLOSE_DATE = 'آخر يوم للرد تاريخ صحيح مش فايت'
 export const SURVEY_NOT_DRAFT = 'الاستبيان اتفتح: مابيتعدّلش — اقفله واعمل واحد جديد'
 export const SURVEY_NOT_OPEN = 'الاستبيان مش مفتوح'
+export const SURVEY_BUSY = 'فيه رد بيتسجّل دلوقتي — جرّب القفل تاني بعد لحظة'
 export const SURVEY_RESULTS_AFTER_CLOSE = 'النتايج بتتعرض بعد قفل الاستبيان — عرضها وهو مفتوح بيكشف رد اللي يرد بعد كده'
 export const SURVEY_EMPTY_AUDIENCE = 'مفيش موظفين في جمهور الاستبيان'
 export const SURVEY_ANSWERS = 'الإجابات ناقصة أو غير صالحة: كل سؤال مطلوب لازم يتجاوب بقيمة من نوعه'
@@ -220,10 +221,10 @@ export function enpsScore(values: number[]): number | null {
  * ملخص إجابات مجموعة. Codex P3K-B13: الحد الأدنى على إجابات **كل سؤال**: سؤال (اختياري) جاوب عليه أقل من الحد مابيتعرضش له لا متوسط ولا
  * توزيع ولا عدد (`hidden`) — عدد الردود الكلي مش كفاية.
  */
-export function summarize(questions: SurveyQuestion[], answers: SurveyAnswers[], minGroup: number) {
+export function summarize(questions: SurveyQuestion[], answers: SurveyAnswers[], minGroup: number, alsoHidden?: ReadonlySet<string>) {
   return questions.filter((question) => question.type !== 'text').map((question) => {
     const values = answers.map((entry) => entry[question.key]).filter((value) => value !== undefined)
-    if (values.length < minGroup) return { key: question.key, label: question.label, type: question.type, hidden: true as const }
+    if (values.length < minGroup || alsoHidden?.has(question.key)) return { key: question.key, label: question.label, type: question.type, hidden: true as const }
     if (question.type === 'choice') {
       return { key: question.key, label: question.label, type: question.type, answered: values.length, counts: (question.options ?? []).map((option) => ({ option, count: values.filter((value) => value === option).length })) }
     }
@@ -231,6 +232,26 @@ export function summarize(questions: SurveyQuestion[], answers: SurveyAnswers[],
     const average = numbers.length ? Math.round((numbers.reduce((sum, value) => sum + value, 0) / numbers.length) * 100) / 100 : null
     return { key: question.key, label: question.label, type: question.type, answered: numbers.length, average, ...(question.type === 'enps' ? { enps: enpsScore(numbers) } : {}) }
   })
+}
+
+/**
+ * Codex P3L-B02: الإخفاء التكميلي **لكل سؤال** بين المجموعات المعروضة. لكل سؤال: «المخفي» = إجاباته في المجموعات اللي مش معروضة (others)
+ * + إجاباته في المجموعات المعروضة اللي ملخصه فيها مخفي (أقل من الحد). لو المخفي ده فيه إجابات ومجموعها أقل من الحد، بيتحسب بطرح ملخصات
+ * المجموعات المعروضة من ملخص الإجمالي — فملخص السؤال بيتخفى في أصغر مجموعة معروضة كمان، وهكذا لحد ما المخفي يوصل الحد أو مايفضلش معروض.
+ * بيرجّع لكل سؤال المجموعات اللي ملخصه لازم يتخفى فيها زيادة.
+ */
+export function complementaryHidden(questions: SurveyQuestion[], groups: Array<{ key: number; answers: SurveyAnswers[] }>, others: SurveyAnswers[], minGroup: number): Map<string, Set<number>> {
+  const answered = (list: SurveyAnswers[], key: string) => list.filter((entry) => entry[key] !== undefined).length
+  const result = new Map<string, Set<number>>()
+  for (const question of questions.filter((entry) => entry.type !== 'text')) {
+    const rows = groups.map((group) => ({ key: group.key, count: answered(group.answers, question.key) }))
+    const visible = rows.filter((row) => row.count >= minGroup).sort((left, right) => left.count - right.count || left.key - right.key)
+    let pool = answered(others, question.key) + rows.filter((row) => row.count < minGroup).reduce((sum, row) => sum + row.count, 0)
+    const hide = new Set<number>()
+    while (pool > 0 && pool < minGroup && visible.length) { const next = visible.shift()!; pool += next.count; hide.add(next.key) }
+    if (hide.size) result.set(question.key, hide)
+  }
+  return result
 }
 
 /**

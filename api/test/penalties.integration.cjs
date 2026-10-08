@@ -255,25 +255,50 @@ test('PN-03: بصمة المعاينة بتغطّي الجزاء نفسه، وج
   assert.deepEqual([firstMade.occurrence, firstMade.days, firstMade.status, firstMade.deductionRequestId > 0, (await rows()).map(row => [row.id === reserved.id, row.status]), await deductions()],
     [1, 2, 'ACTIVE', true, [[false, 'ACTIVE']], 1])
 
-  // حجز قديم طلب خصمه ثبت فعلًا (الرد وقع قبل الربط): بيتثبّت ساري مربوط بطلبه وبيتحسب سابقة — من غير طلب تاني
-  const orphan = await repo('EmployeePenalty').save({ employeeId: fresh.id, violationId: violation.id, occurrence: 2, action: 'DEDUCT_DAYS', days: '3.00', caseId: null, deductionRequestId: null, note: null,
-    incidentDate: dayAgo(4), status: 'PENDING', createdByUserId: users.hr.id, createdAt: new Date(Date.now() - 3600000), cancelledByUserId: null, cancelledAt: null, cancelReason: null })
-  const source = await repo('DeductionRequest').findOneByOrFail({ id: firstMade.deductionRequestId })
-  const { id: _id, ...copy } = source
-  const persisted = await repo('DeductionRequest').save({ ...copy, reason: `جزاء من لائحة الجزاءات ${rules.penaltyMarker(orphan.id)}: ترك العمل من غير إذن` })
-  // طلب بنفس العلامة من حساب تاني (مش اللي وقّع الجزاء) مابيتحسبش طلب الجزاء
-  const spoof = await repo('DeductionRequest').save({ ...copy, creatorUserId: users.admin.id, reason: `نص يدوي ${rules.penaltyMarker(orphan.id)}` })
-  await repo('DeductionRequest').update({ id: persisted.id }, { creatorUserId: users.admin.id })
-  assert.equal((await preview({ incidentDate: dayAgo(2) })).occurrence, 2, 'الحجز من غير طلب من صاحبه مش سابقة')
-  await repo('DeductionRequest').update({ id: persisted.id }, { creatorUserId: users.hr.id })
-  await repo('DeductionRequest').delete({ id: spoof.id })
+  // Codex P3L: الخصم وتثبيت الجزاء ساري في معاملة واحدة — مفيش بحث بنص السبب، ومفيش كاتب قديم بيثبّت أثره بعد ما حجزه اتشال
+  const money = app.get(require('../src/payroll/typed-deductions.service').TypedDeductionsService), createMoney = money.create
+  const latch = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
+  await repo('RequestsConfig').save({ key: 'deductions.duplicate_window_hours', value: '0' })
+  {
+    // P3L-B03 (P04): خصم يدوي بقيمة تانية شايل علامة الحجز في سببه مابيتربطش بالجزاء — التوقيع اللي خصمه فشل بيتشال حجزه وخطؤه بيطلع
+    const entered = latch(), release = latch(); let hit = false
+    money.create = async function (...args) { if (!hit) { hit = true; entered.resolve(); await release.promise; throw new Error('synthetic failure before the deduction is saved') } return createMoney.apply(this, args) }
+    try {
+      const second = await preview({ incidentDate: dayAgo(4) })
+      const suspended = apply(second.fingerprint, { incidentDate: dayAgo(4) })
+      await entered.promise
+      const reservation = await repo('EmployeePenalty').findOneByOrFail({ employeeId: fresh.id, status: 'PENDING' })
+      const manual = expectStatus(await request(users.hr, 'POST', '/deductions', { employeeId: fresh.id, deductionTypeId: state.daysType, inputValue: '1', incidentDate: dayAgo(4), targetPeriod: period,
+        reason: `خصم يدوي مالوش علاقة ${rules.penaltyMarker(reservation.id)}` }), 201)
+      release.resolve()
+      const failed = await suspended
+      assert.deepEqual([failed.status, await repo('EmployeePenalty').findOneBy({ id: reservation.id }), await repo('EmployeePenalty').count({ where: { deductionRequestId: manual.id } }),
+        (await rows()).map(row => row.status), await deductions()], [500, null, 0, ['ACTIVE'], 2], 'الطلب اليدوي مااتربطش، والحجز اتشال')
+    } finally { release.resolve(); money.create = createMoney }
+  }
+  {
+    // P3L-B05 (P03): توقيع اتأخر لحد ما حجزه عدّى المدة واتشال بتوقيع تاني — خصم المتأخر بيرجع لأن ربطه مشروط بوجود حجزه: جزاء واحد وخصم واحد
+    const entered = latch(), release = latch(); let hit = false
+    money.create = async function (...args) { if (!hit) { hit = true; entered.resolve(); await release.promise } return createMoney.apply(this, args) }
+    try {
+      const shownLate = await preview({ incidentDate: dayAgo(4) })
+      const late = apply(shownLate.fingerprint, { incidentDate: dayAgo(4) })
+      await entered.promise
+      const old = await repo('EmployeePenalty').findOneByOrFail({ employeeId: fresh.id, status: 'PENDING' })
+      await repo('EmployeePenalty').update({ id: old.id }, { createdAt: new Date(Date.now() - (rules.PENALTY_PENDING_MINUTES + 1) * 60000) })
+      const current2 = await preview({ incidentDate: dayAgo(4) })
+      const winner = expectStatus(await apply(current2.fingerprint, { incidentDate: dayAgo(4) }), 201)
+      assert.equal(await repo('EmployeePenalty').findOneBy({ id: old.id }), null, 'الحجز القديم اتشال')
+      release.resolve()
+      const lost = await late
+      assert.deepEqual([answer(lost), winner.occurrence, (await rows()).map(row => [row.status, row.deductionRequestId != null]), await deductions(),
+        await repo('EmployeePenalty').count({ where: { deductionRequestId: winner.deductionRequestId } })],
+      [[409, rules.PENALTY_EXPIRED], 2, [['ACTIVE', true], ['ACTIVE', true]], 3, 1], 'خصم المتأخر رجع: 3 طلبات (الأول، اليدوي، الفايز)')
+    } finally { release.resolve(); money.create = createMoney }
+  }
+  // الحجز مابيتحسبش سابقة في المعاينة ولا في التوقيع (العدّ واحد: الساري بس)
   const third = await preview({ incidentDate: dayAgo(2) })
-  // المعاينة بتحسب الحجز اللي طلبه ثبت سابقة (زي التوقيع بالظبط) ومن غير ما تكتب
-  assert.deepEqual([third.occurrence, third.days, (await repo('EmployeePenalty').findOneByOrFail({ id: orphan.id })).status], [3, 3, 'PENDING'])
-  // والتوقيع بيثبّت الحجز ساري مربوط بطلبه (من غير طلب تاني له) وبيوقّع الجزاء الجديد بالتكرار التالت
-  const thirdMade = expectStatus(await apply(third.fingerprint, { incidentDate: dayAgo(2) }), 201)
-  const settled = await repo('EmployeePenalty').findOneByOrFail({ id: orphan.id })
-  assert.deepEqual([settled.status, settled.deductionRequestId, thirdMade.occurrence, thirdMade.deductionRequestId !== persisted.id, await deductions()], ['ACTIVE', persisted.id, 3, true, 3])
+  assert.equal(third.occurrence, 3)
 
   // طلب الخصم ثبت والرد وقع (فشل قراءة بعد الحفظ): الجزاء بيلاقي طلبه بعلامته وبيتربط — ونفس الطلب مايتعملش تاني
   const service = app.get(require('../src/cases/penalties.service').PenaltiesService)
@@ -284,7 +309,7 @@ test('PN-03: بصمة المعاينة بتغطّي الجزاء نفسه، وج
     const fourth = await preview({ incidentDate: dayAgo(1) })
     const linked = expectStatus(await apply(fourth.fingerprint, { incidentDate: dayAgo(1) }), 201)
     const request4 = await repo('DeductionRequest').findOneByOrFail({ id: linked.deductionRequestId })
-    assert.deepEqual([calls, linked.status, linked.occurrence, request4.reason.includes(rules.penaltyMarker(linked.id)), await deductions(), (await rows()).map(row => row.status)], [1, 'ACTIVE', 4, true, 4, ['ACTIVE', 'ACTIVE', 'ACTIVE', 'ACTIVE']])
+    assert.deepEqual([calls, linked.status, linked.occurrence, request4.reason.includes(rules.penaltyMarker(linked.id)), await deductions(), (await rows()).map(row => row.status)], [1, 'ACTIVE', 3, true, 4, ['ACTIVE', 'ACTIVE', 'ACTIVE']])
   } finally { service.deductions.create = original }
   // والرفض الحقيقي قبل الحفظ لسه بيشيل الحجز
   const fifth = await preview({ incidentDate: dayAgo(0) })

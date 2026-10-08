@@ -445,8 +445,8 @@ export class PoliciesService {
    * إدارة أو تقرير السياسات (حساب الفروع: ليها حد في نطاقه). غير كده null — نفس رد السياسة اللي مش موجودة. وجود السياسة مش حق
    * الاطلاع على عنوانها.
    */
-  async referenceFor(user: JwtPayload, policyId: number): Promise<{ id: number; title: string } | null> {
-    const em = this.ds.manager
+  async referenceFor(user: JwtPayload, policyId: number, em: EntityManager = this.ds.manager): Promise<{ id: number; title: string } | null> {
+    // Codex P3L-B06: اللي بينده من جوه معاملة بيبعت مديرها — القراءة باتصال تاني وهو ماسك اتصال بتجوّع المخزن
     if (!Number.isSafeInteger(policyId) || policyId < 1 || !(await policySchemaReady(em))) return null
     const policy = await em.getRepository(Policy).findOne({ where: { id: policyId } })
     if (!policy) return null

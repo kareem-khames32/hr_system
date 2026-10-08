@@ -631,7 +631,7 @@ export class TypedDeductionsService {
   }
 
   // ===== الإنشاء الفردي (DD-05) =====
-  async create(user: JwtPayload, dto: CreateDeductionDto) {
+  async create(user: JwtPayload, dto: CreateDeductionDto, hooks?: { afterSave?: (em: EntityManager, requestId: number) => Promise<void> }) {
     const id = await this.manager.transaction(async em => {
       await this.assertMoneyRequestVisible(em, user, 'PAYROLL_DEDUCTION', 'الخصم')
       const ctx = await this.context(em, user, dto)
@@ -650,6 +650,9 @@ export class TypedDeductionsService {
       if (!evaluation.ok) throw this.exception(evaluation)
       const saved = await this.persist(em, user, ctx, evaluation, null)
       if (hasHrOverride(user)) await this.approveInstantly(em, user, saved, ctx, evaluation)
+      // Codex P3L-B03: صاحب الطلب (اقتراح تقييم، جزاء من اللائحة) بيكتب ربطه هنا جوه نفس المعاملة — الطلب وربطه بيثبتوا مع بعض أو مايثبتوش.
+      // الخطّاف من كود الخادم بس (المتحكم مابيبعتوش)، ولو رمى خطأ الطلب كله بيرجع
+      await hooks?.afterSave?.(em, saved.id)
       return saved.id
     })
     return this.detail(user, id)

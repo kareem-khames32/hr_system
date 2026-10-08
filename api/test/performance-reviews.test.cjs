@@ -150,12 +150,14 @@ test('RU-05: reward suggestions — the rule values, no bonus written by the sug
   assert.doesNotMatch(suggest.slice(suggest.indexOf('this.ds.transaction(')), /this\.bonuses\.|this\.modules\./, 'جوه المعاملة من غير خدمة تانية')
   const submit = service.slice(service.indexOf('async submit('), service.indexOf('/** صرف النظر عن اقتراح'))
   const claim = submit.slice(submit.indexOf('this.ds.transaction('), submit.indexOf('const bandLabel'))
-  assert.match(claim, /await this\.owned\(em, user, id, true\)\n\s+if \(row\.status !== 'SUGGESTED'\) throw new ConflictException\(REWARD_TAKEN\)\n\s+await em\.getRepository\(ReviewRewardSuggestion\)\.update\(\{ id: row\.id \}, \{ status: 'CLAIMED'/)
+  assert.match(claim, /await this\.owned\(em, user, id, true\)\n\s+if \(row\.status !== 'SUGGESTED' && !claimStale\(row\)\) throw new ConflictException\(REWARD_TAKEN\)\n\s+await em\.getRepository\(ReviewRewardSuggestion\)\.update\(\{ id: row\.id \}, \{ status: 'CLAIMED'/)
   assert.doesNotMatch(claim, /this\.bonuses\./, 'طلب المكافأة برّه معاملة الحجز')
-  // Codex P3K-B08-01: علامة الاقتراح مفتاح عدم التكرار — الموجود بيتربط قبل الإنشاء، والرد اللي وقع بعد الحفظ بيتربط بدل ما يرجّع الحجز
-  const submitOrder = ["seen.status !== 'SUGGESTED'", 'this.ds.transaction(', 'const marker = rewardMarker(claimed.id)', 'let madeId = await existing()', 'madeId = (await this.bonuses.create(user,', '        madeId = await existing()',
-    "{ id: claimed.id, status: 'CLAIMED' }, { status: 'SUGGESTED'", 'throw error', "{ id: claimed.id, status: 'CLAIMED' }, { status: 'SUBMITTED', bonusRequestId: madeId }"].map(part => submit.indexOf(part))
-  assert.match(submit, /CHARINDEX\(@1, \[reason\]\) > 0/, 'بحث حرفي عن العلامة (مش LIKE: القوسين مش نمط)')
+  // Codex P3L-B03/B04: ربط الاقتراح جوه معاملة المكافأة (afterSave) بكتابة مشروطة بحجز المحاولة دي — ومفيش بحث بنص السبب
+  const submitOrder = ["seen.status !== 'SUGGESTED' && !claimStale(seen)", 'this.ds.transaction(', 'CONVERT(varchar(33), [decidedAt], 126) AS [token]', 'await this.bonuses.create(user,', 'afterSave: async (em, requestId) =>',
+    ".set({ status: 'SUBMITTED', bonusRequestId: requestId })", 'if (!linked.affected) throw new ConflictException(REWARD_TAKEN)', "[status] = N'SUBMITTED'", ".set({ status: 'SUGGESTED', decidedByUserId: null, decidedAt: null })", 'throw error']
+    .map(part => submit.indexOf(part))
+  assert.doesNotMatch(submit, /CHARINDEX|LIKE|\[reason\]|existing\(\)/, 'العلامة في السبب وصف بس — محدش بيدوّر بيها')
+  assert.match(service, /const CLAIM_MINE = `id = :id AND status = :status AND decidedByUserId = :user AND CONVERT\(varchar\(33\), decidedAt, 126\) = :token`/)
   assert.ok(submitOrder.every((at, index) => at > 0 && (index === 0 || at > submitOrder[index - 1])), JSON.stringify(submitOrder))
   const controller = read('api/src/performance/review-rewards.controller.ts')
   assert.match(controller, /@RequireModule\('performance'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)\n@Controller\('performance\/rewards'\)/)

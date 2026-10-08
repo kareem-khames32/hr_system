@@ -14,8 +14,8 @@ import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { audienceNeedsPositions, requestAudienceAllows, type AudiencePositions, type AudienceSubject } from '../requests/request-audience'
 import {
   SURVEYS_MIGRATION_MISSING, SURVEYS_PERMISSION, SURVEY_ANSWERED, SURVEY_BRANCH_AUDIENCE, SURVEY_CLOSE_DATE, SURVEY_COMMENT_MIN_KEY, SURVEY_EMPTY_AUDIENCE, SURVEY_KIND_LABELS, SURVEY_NOT_DRAFT,
-  SURVEY_NOT_FOUND, SURVEY_NOT_OPEN, SURVEY_RESULTS_AFTER_CLOSE, SURVEY_STATUS_LABELS, Survey, SurveyInvitation, SurveyResponse, cleanMinGroup, cleanSurveyAnswers, cleanSurveyKind, cleanSurveyQuestions, cleanSurveyTitle,
-  commentMin, parseSurveyQuestions, summarize, surveysReady, visibleGroups, type SurveyAnswers,
+  SURVEY_BUSY, SURVEY_NOT_FOUND, SURVEY_NOT_OPEN, SURVEY_RESULTS_AFTER_CLOSE, SURVEY_STATUS_LABELS, Survey, SurveyInvitation, SurveyResponse, cleanMinGroup, cleanSurveyAnswers, cleanSurveyKind, cleanSurveyQuestions, cleanSurveyTitle,
+  commentMin, complementaryHidden, parseSurveyQuestions, summarize, surveysReady, visibleGroups, type SurveyAnswers,
 } from './survey-rules'
 
 export interface SurveyInput { title?: unknown; kind?: unknown; audience?: unknown; isAnonymous?: unknown; minGroup?: unknown; questions?: unknown; closeDate?: unknown }
@@ -160,6 +160,16 @@ export class SurveysService {
   async close(user: JwtPayload, id: number) {
     this.assertManager(user)
     await this.ds.transaction(async (em) => {
+      // Codex P3L-B02: القفل بياخد قفل صف الاستبيان نفسه اللي الرد ماسكه لحد ما صف الرد يتكتب — فبيستنى الردود الجارية (بالدور، لحد 5 ثواني)
+      // وبعده مفيش رد بيتضاف. رد واقف أطول من كده = 409 «جرّب تاني» بدل ما الطلب يقع بمهلة الاتصال. المهلة والقفل في نفس الجملة: المهلة
+      // بتنتهي مع الجملة (مابتفضلش على الاتصال)، والقفل بيفضل لآخر المعاملة
+      try {
+        await em.query('SET LOCK_TIMEOUT 5000; SELECT [id] FROM [surveys] WITH (UPDLOCK, ROWLOCK) WHERE [id] = @0', [id])
+      } catch (error) {
+        const failure = error as { number?: number; driverError?: { number?: number } }
+        if (Number(failure?.driverError?.number ?? failure?.number) === 1222) throw new ConflictException(SURVEY_BUSY)
+        throw error
+      }
       const row = await this.managed(em, user, id, true)
       if (row.status !== 'OPEN') throw new BadRequestException(SURVEY_NOT_OPEN)
       await em.getRepository(Survey).update({ id: row.id }, { status: 'CLOSED', closedAt: new Date() })
@@ -187,6 +197,10 @@ export class SurveysService {
     const byDepartment = new Map<number, SurveyAnswers[]>()
     for (const entry of parsed) byDepartment.set(entry.departmentId, [...(byDepartment.get(entry.departmentId) ?? []), entry.answers])
     const shown = visibleGroups([...byDepartment].map(([key, list]) => ({ key, count: list.length })), row.minGroup)
+    // Codex P3L-B02: الإخفاء التكميلي لكل سؤال — ملخص سؤال في مجموعة مخفية مايتحسبش بطرح المعروض من الإجمالي
+    const shownKeys = new Set(shown)
+    const extra = complementaryHidden(questions, shown.map((key) => ({ key, answers: byDepartment.get(key)! })), parsed.filter((entry) => !shownKeys.has(entry.departmentId)).map((entry) => entry.answers), row.minGroup)
+    const hiddenIn = (group: number) => new Set([...extra].filter(([, groups]) => groups.has(group)).map(([question]) => question))
     // اسم القسم بحكم فرعه الحالي: قسم اتنقل برّه نطاق قارئ النتايج مابيتسمّاش
     const scope = branchScopeOf(user)
     const names = new Map((shown.filter(Boolean).length ? await em.getRepository(Department).find({ where: { id: In(shown.filter(Boolean)) } }) : [])
@@ -194,7 +208,7 @@ export class SurveysService {
     const limit = Math.max(row.minGroup, commentMin((await em.getRepository(RequestsConfig).findOne({ where: { key: SURVEY_COMMENT_MIN_KEY } }))?.value))
     const showComments = responses.length >= limit
     return { ...base, visible: true, overall: summarize(questions, parsed.map((entry) => entry.answers), row.minGroup),
-      groups: shown.map((key) => ({ name: key ? names.get(key) ?? 'قسم برّه نطاقك' : 'من غير قسم', count: byDepartment.get(key)!.length, summary: summarize(questions, byDepartment.get(key)!, row.minGroup) })),
+      groups: shown.map((key) => ({ name: key ? names.get(key) ?? 'قسم برّه نطاقك' : 'من غير قسم', count: byDepartment.get(key)!.length, summary: summarize(questions, byDepartment.get(key)!, row.minGroup, hiddenIn(key)) })),
       commentsHidden: !showComments,
       comments: showComments ? questions.filter((question) => question.type === 'text').map((question) => ({ key: question.key, label: question.label,
         // متلخبطة الترتيب: ترتيب الرد مايدلّش على صاحبه
@@ -237,9 +251,9 @@ export class SurveysService {
   }
 
   /**
-   * الرد على استبيان — على مرحلتين منفصلتين: (1) معاملة: الاستبيان مفتوح (تحت قفل صفه)، وعلامة «رد» على دعوة الموظف بكتابة مشروطة باليوم بس
-   * (مرة واحدة). (2) معاملة تانية: صف الرد بمجموعة الدعوة — من غير رقم الدعوة ولا ساعة، ومن غير موظف في الاستبيان المجهول. لو (2) وقعت،
-   * العلامة بترجع. ومفيش سطر تدقيق للرد.
+   * الرد على استبيان — معاملة واحدة تحت قفل صف الاستبيان: الاستبيان مفتوح، وعلامة «رد» على دعوة الموظف بكتابة مشروطة باليوم بس (مرة واحدة)،
+   * وصف الرد بمجموعة الدعوة — من غير رقم الدعوة ولا ساعة، ومن غير موظف في الاستبيان المجهول. ومفيش سطر تدقيق للرد.
+   * Codex P3L-B02: القفل (close) بياخد نفس قفل الصف فبيستنى أي رد جاري، وبعده مفيش رد بيتضاف — النتايج بعد القفل ثابتة.
    */
   async respond(user: JwtPayload, id: number, rawAnswers: unknown) {
     const { survey, invitation } = await this.invited(this.ds.manager, user, id)
@@ -251,16 +265,11 @@ export class SurveysService {
       if (!fresh || !this.openNow(fresh)) throw new BadRequestException(SURVEY_NOT_OPEN)
       const marked = await em.getRepository(SurveyInvitation).update({ id: invitation.id, respondedOn: IsNull() }, { respondedOn: today })
       if (!marked.affected) throw new ConflictException(SURVEY_ANSWERED)
-    })
-    try {
-      await this.ds.getRepository(SurveyResponse).insert({ surveyId: id, departmentId: invitation.departmentId ?? null, branchId: invitation.branchId ?? null,
-        employeeId: survey.isAnonymous === true ? null : invitation.employeeId, answers: JSON.stringify(answers),
+      await em.getRepository(SurveyResponse).insert({ surveyId: id, departmentId: invitation.departmentId ?? null, branchId: invitation.branchId ?? null,
+        employeeId: fresh.isAnonymous === true ? null : invitation.employeeId, answers: JSON.stringify(answers),
         // Codex P3K-B13: الرد المجهول من غير يومه (يوم فتح الاستبيان لكل الردود): يوم العلامة على الدعوة مايتطابقش بيوم رد
-        submittedOn: survey.isAnonymous === true ? (survey.openedAt ? localDateOf(new Date(survey.openedAt)) : today) : today })
-    } catch (error) {
-      await this.ds.getRepository(SurveyInvitation).update({ id: invitation.id }, { respondedOn: null })
-      throw error
-    }
+        submittedOn: fresh.isAnonymous === true ? (fresh.openedAt ? localDateOf(new Date(fresh.openedAt)) : today) : today })
+    })
     return { received: true }
   }
 }

@@ -202,7 +202,7 @@ export class KnowledgeService {
     const policyIds = [...new Set(rows.map((row) => row.policyId).filter((id): id is number => id != null))]
     const policies = new Map<number, string>()
     for (const policyId of policyIds) {
-      const reference = await this.policies.referenceFor(user, policyId)
+      const reference = await this.policies.referenceFor(user, policyId, em)
       if (reference) policies.set(reference.id, reference.title)
     }
     return { available: true, articles: rows.map((row) => this.manageView(row, types, policies)), types: [...types].map(([code, name]) => ({ code, name })) }
@@ -225,7 +225,7 @@ export class KnowledgeService {
       if (input.policyId === null || input.policyId === '') policyId = null
       else {
         // Codex P3K-B10: الربط بسياسة الحساب نفسه يقدر يشوفها بس — غيرها نفس رد «مش موجودة»
-        const policy = typeof input.policyId === 'number' ? await this.policies.referenceFor(user, input.policyId) : null
+        const policy = typeof input.policyId === 'number' ? await this.policies.referenceFor(user, input.policyId, em) : null
         if (!policy) throw new BadRequestException(KB_POLICY)
         policyId = policy.id
       }
