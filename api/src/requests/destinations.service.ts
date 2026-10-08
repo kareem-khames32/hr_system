@@ -74,6 +74,7 @@ import { executePositionRequest, POSITION_REQUEST_HANDLER } from '../positions/p
 import { executeRequisition, REQUISITION_HANDLER } from '../recruitment/requisition-requests'
 import { DOCUMENT_RENEWAL_HANDLER, executeDocumentRenewal } from '../assets/document-renewal'
 import { TRAINING_REQUEST_HANDLER, executeTrainingRequest } from '../training/training-requests'
+import { CASE_REQUEST_HANDLER, executeCaseRequest } from '../cases/case-requests'
 
 // ناتج تنفيذ الوجهة: المرجع الدائم + هل اكتمل فوراً أم ينتظر (سريان/تأكيد استلام)
 export interface DestinationResult {
@@ -1072,6 +1073,8 @@ export class DestinationsService {
     [DOCUMENT_RENEWAL_HANDLER]: executeDocumentRenewal,
     // B3.9-ب: «طلب تدريب» — الاعتماد النهائي بيسجّل صاحب الطلب في الجلسة (تحت قفل صفها والسعة)
     [TRAINING_REQUEST_HANDLER]: executeTrainingRequest,
+    // B3.11: «شكوى / تظلم / إبلاغ عن مخالفة» — الاعتماد النهائي بيفتح ملف قضية (مقدّم الطلب شاكي، والمعتمدين أول المطّلعين)
+    [CASE_REQUEST_HANDLER]: executeCaseRequest,
     shift_schedule: executeShiftSwap,
     // بيانات شخصية
     employee_record: this.personalDataHandler,

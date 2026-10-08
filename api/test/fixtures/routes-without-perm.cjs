@@ -112,6 +112,17 @@ const EXCEPTIONS = {
   'ReviewRewardsController.mine': 'SERVICE_CHECK', // GET /performance/rewards/mine — B3.8-ب: الاقتراحات الموجّهة للحساب (المدير المباشر)
   'ReviewRewardsController.submit': 'SERVICE_CHECK', // POST /performance/rewards/:id/submit — B3.8-ب: المدير الموجّه له الاقتراح بيقدّم المكافأة (وموديول المكافآت بيحكم)
   'TrainingController.teamMissing': 'SERVICE_CHECK', // GET /training/mandatory/team — B3.9-ج: التدريب الإلزامي الناقص عند مرؤوسين الحساب المباشرين
+  // B3.11: ملفات القضايا — بعضوية القضية نفسها (المطّلعين عليها بس)، مش بصلاحية: صاحب الصلاحية اللي مش متضاف = غير موجودة
+  'CasesController.addEvent': 'SERVICE_CHECK', // POST /cases/:id/events
+  'CasesController.addHandler': 'SERVICE_CHECK', // POST /cases/:id/handlers
+  'CasesController.addParty': 'SERVICE_CHECK', // POST /cases/:id/parties
+  'CasesController.close': 'SERVICE_CHECK', // POST /cases/:id/close
+  'CasesController.decide': 'SERVICE_CHECK', // POST /cases/:id/decision
+  'CasesController.detail': 'SERVICE_CHECK', // GET /cases/:id
+  'CasesController.investigator': 'SERVICE_CHECK', // POST /cases/:id/investigator
+  'CasesController.list': 'SERVICE_CHECK', // GET /cases — القضايا اللي الحساب مطّلع عليها بس
+  'CasesController.mine': 'SELF', // GET /cases/mine — القضايا اللي الموظف نفسه شاكي أو مشكو في حقه فيها (بعد إخطاره)
+  'CasesController.object': 'SELF', // POST /cases/:id/objection — اعتراض المشكو في حقه نفسه
   'HelpdeskController.article': 'SERVICE_CHECK', // GET /helpdesk/articles/:id — B3.10-ب: مقال منشور في جمهور موظف الحساب
   'HelpdeskController.articles': 'SERVICE_CHECK', // GET /helpdesk/articles — B3.10-ب: بحث قاعدة المعرفة (المنشور اللي في جمهور موظف الحساب)
   'HelpdeskController.mine': 'SELF', // GET /helpdesk/mine — B3.10: استفسارات الموظف نفسه بحالة خدمتها
