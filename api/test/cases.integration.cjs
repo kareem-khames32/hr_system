@@ -6,6 +6,8 @@
 //  CS-02) الدورة: محقق ← إخطار ومحضر دفاع ← أدلة وجلسات ← قرار (غير الحفظ مابيعدّيش من غير إخطار ودفاع) ← إقفال؛ والطرف بيشوف اللي له بس
 //         (الشاكي حالة شكواه؛ المشكو في حقه بعد إخطاره)؛ والاعتراض في المهلة ومرة واحدة وبيرجّع المقفولة للمراجعة.
 //  CS-03) من الطلب: «شكوى» بوجهة «فتح ملف قضية» ← الاعتماد النهائي بيفتح ملف واحد: مقدّم الطلب شاكي، والمعتمد أول مطّلع.
+//  CS-05) (CRP3K / Codex P3K-B11) المطّلع شخص مش حساب: حساب اتغيّر ربطه (للمشكو في حقه أو لأي موظف تاني) مابقاش مطّلع في أي باب، وتعارض
+//         المصالح بيتعاد بالهوية الحالية، وإضافته من جديد بقرار مطّلع.
 // Run (من api/): node --test test/cases.integration.cjs
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
@@ -293,4 +295,50 @@ test('CS-04: مرفق الدليل — رفعه للمطّلعين على قضي
   expectStatus(await request(users.admin, 'PUT', '/modules/cases', { enabled: false }), 200); modules.invalidate()
   try { assert.deepEqual([(await upload(users.hr)).status, await download(users.hr, fileId)], [403, 404]) }
   finally { expectStatus(await request(users.admin, 'PUT', '/modules/cases', { enabled: true }), 200); modules.invalidate() }
+})
+
+test('CS-05: المطّلع شخص مش حساب — حساب اتغيّر ربطه مابقاش مطّلع، والتعارض بالهوية الحالية، والإضافة من جديد بقرار مطّلع', async () => {
+  const handlerEmp = await employee({ fullName: 'مطّلع هيتغيّر ربطه' }), respondent = await employee({ fullName: 'مشكو في حقه تاني' })
+  const complainant = await employee({ fullName: 'SECRET-COMPLAINANT شاكي سري' }), stranger = await employee({ fullName: 'موظف تالت' })
+  let handler = await account('handler5', ['cases.investigate'], { employeeId: handlerEmp.id })
+  const made = expectStatus(await request(handler, 'POST', C, { kind: 'VIOLATION', title: 'بلاغ سري', description: 'تفاصيل سرية', complainantEmployeeId: complainant.id, respondentEmployeeId: respondent.id }), 201)
+  const membership = () => repo('HrCaseParty').findOneByOrFail({ caseId: made.id, role: 'HANDLER', userId: handler.id })
+  assert.equal((await membership()).employeeId, handlerEmp.id, 'العضوية متسجّلة بموظف الحساب')
+  // تغيير ربط الحساب (التوكن الجديد شايل الموظف الجديد)
+  const relink = async employeeId => { await repo('User').update({ id: handler.id }, { employeeId }); handler = await repo('User').findOneByOrFail({ id: handler.id }) }
+  const doors = async () => {
+    const read = await request(handler, 'GET', `${C}/${made.id}`)
+    return [read.status, JSON.stringify(read.body).includes('SECRET-COMPLAINANT'), expectStatus(await request(handler, 'GET', C), 200).cases.some(row => row.id === made.id),
+      (await post(handler, made.id, 'events', { kind: 'NOTICE', body: 'إخطار' })).status === 404, (await post(handler, made.id, 'handlers', { employeeId: emps.officer.id })).status === 404]
+  }
+  const open = [200, true, true, false, false], closed = [404, false, false, true, true]
+  assert.deepEqual(await doors(), open)
+
+  // الحساب بقى للمشكو في حقه: ولا باب (قراءة، قايمة، كتابة، إضافة مطّلع) — ومدير النظام اللي مش متضاف زي ما هو
+  await relink(respondent.id)
+  assert.deepEqual([await doors(), (await request(users.admin, 'GET', `${C}/${made.id}`)).status], [closed, 404])
+  // ولأي موظف تاني مالوش علاقة بالقضية: برضه مش مطّلع — العضوية للشخص اللي اتضاف
+  await relink(stranger.id)
+  assert.deepEqual(await doors(), closed)
+  // رجع لصاحبه: مطّلع تاني بنفس الصف
+  await relink(handlerEmp.id)
+  assert.deepEqual((await doors()).slice(0, 3), [200, true, true])
+
+  // تعارض المصالح بالهوية الحالية: المطّلع بقى المدير المباشر للمشكو في حقه
+  await repo('Employee').update({ id: respondent.id }, { managerEmployeeId: handlerEmp.id })
+  assert.deepEqual((await doors()).slice(0, 3), [404, false, false])
+  await repo('Employee').update({ id: respondent.id }, { managerEmployeeId: null })
+  assert.equal((await request(handler, 'GET', `${C}/${made.id}`)).status, 200)
+
+  // مطّلع تاني بيضيف الحساب بهويته الجديدة: الصف بيتحدّث بموظفه الحالي ومابيتكررش؛ والصف القديم مابيوقّفش شغل باقي المطّلعين
+  expectStatus(await post(handler, made.id, 'handlers', { employeeId: emps.hrLead.id }), 200)
+  await relink(stranger.id)
+  assert.equal((await request(handler, 'GET', `${C}/${made.id}`)).status, 404)
+  expectStatus(await post(users.hr, made.id, 'events', { kind: 'NOTICE', body: 'إخطار من مطّلع تاني' }), 200)
+  expectStatus(await post(users.hr, made.id, 'handlers', { employeeId: stranger.id }), 200)
+  assert.deepEqual([(await membership()).employeeId, await repo('HrCaseParty').count({ where: { caseId: made.id, role: 'HANDLER', userId: handler.id } }), (await request(handler, 'GET', `${C}/${made.id}`)).status], [stranger.id, 1, 200])
+  // صف مطّلع حسابه بقى للمشكو في حقه مابيوقّفش إضافة مطّلع جديد بسبب «تعارض»
+  await relink(respondent.id)
+  expectStatus(await post(users.hr, made.id, 'handlers', { employeeId: emps.officer.id }), 200)
+  assert.equal((await request(handler, 'GET', `${C}/${made.id}`)).status, 404)
 })

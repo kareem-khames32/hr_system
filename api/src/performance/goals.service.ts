@@ -72,7 +72,7 @@ export class GoalsService {
     }
   }
 
-  private async views(em: EntityManager, goals: PerformanceGoal[], roleOf: (goal: PerformanceGoal) => GoalRole) {
+  private async views(em: EntityManager, user: JwtPayload, goals: PerformanceGoal[], roleOf: (goal: PerformanceGoal) => GoalRole) {
     if (!goals.length) return []
     const employeeIds = [...new Set(goals.map((goal) => goal.employeeId).filter((id): id is number => id != null))]
     const departmentIds = [...new Set(goals.map((goal) => goal.departmentId).filter((id): id is number => id != null))]
@@ -80,14 +80,19 @@ export class GoalsService {
     const employees = new Map((employeeIds.length ? await em.getRepository(Employee).find({ where: { id: In(employeeIds) } }) : []).map((row) => [row.id, row]))
     const departments = new Map((departmentIds.length ? await em.getRepository(Department).find({ where: { id: In(departmentIds) } }) : []).map((row) => [row.id, row]))
     // عنوان الهدف الأب لو هدف قسم أو شركة (أهداف الموظفين التانيين مابتتعرضش عناوينها)
-    const parents = new Map((parentIds.length ? await em.getRepository(PerformanceGoal).find({ where: { id: In(parentIds) } }) : []).map((row) => [row.id, row]))
+    // Codex P3K-B06: الأب بيتحكم عليه لوحده بحكم قراءته هو (قسمه بفرعه الحالي): اللي مايقدرش يقراه مباشرة مايشوفش رقمه ولا عنوانه
+    // من هدف تابع له
+    const parents = new Map<number, PerformanceGoal>()
+    for (const parent of parentIds.length ? await em.getRepository(PerformanceGoal).find({ where: { id: In(parentIds) } }) : []) {
+      if ((await this.roleOn(user, parent)).role) parents.set(parent.id, parent)
+    }
     return goals.map((goal) => {
       const role = roleOf(goal), parent = goal.parentGoalId != null ? parents.get(goal.parentGoalId) : undefined
       const target = goal.targetValue != null ? Number(goal.targetValue) : null, actual = goal.actualValue != null ? Number(goal.actualValue) : null
       return {
         id: goal.id, ownerType: goal.ownerType, employeeId: goal.employeeId ?? null, employeeName: goal.employeeId != null ? employees.get(goal.employeeId)?.fullName ?? null : null,
         departmentId: goal.departmentId ?? null, departmentName: goal.departmentId != null ? departments.get(goal.departmentId)?.name ?? null : null,
-        parentGoalId: goal.parentGoalId ?? null, parentTitle: parent && parent.ownerType !== 'EMPLOYEE' ? parent.title : null,
+        parentGoalId: parent ? parent.id : null, parentTitle: parent && parent.ownerType !== 'EMPLOYEE' ? parent.title : null,
         kind: goal.kind, kindLabel: GOAL_KIND_LABELS[goal.kind] ?? goal.kind, title: goal.title, description: goal.description ?? null, weight: goal.weight,
         targetValue: amount(goal.targetValue), unit: goal.unit ?? null, actualValue: amount(goal.actualValue),
         // نسبة الإنجاز لما فيه مستهدف موجب: الفعلي ÷ المستهدف
@@ -111,7 +116,7 @@ export class GoalsService {
       ...(await repo.find({ where: { ownerType: 'COMPANY', status: 'ACTIVE' }, order: { id: 'DESC' } })),
     ]
     return { available: true, weightTotal: own.filter((goal) => goal.status === 'ACTIVE').reduce((sum, goal) => sum + goal.weight, 0),
-      goals: await this.views(em, own, () => 'owner'), shared: await this.views(em, shared, () => 'viewer') }
+      goals: await this.views(em, user, own, () => 'owner'), shared: await this.views(em, user, shared, () => 'viewer') }
   }
 
   /** «فريقي»: أهداف المرؤوسين المباشرين (من الهيكل) */
@@ -123,7 +128,7 @@ export class GoalsService {
     const goals = await em.getRepository(PerformanceGoal).find({ where: { ownerType: 'EMPLOYEE', employeeId: In(reports) }, order: { id: 'DESC' } })
     // المرؤوسين الشغالين (لنموذج «هدف لمرؤوس»)
     const people = (await em.getRepository(Employee).find({ where: { id: In(reports) }, order: { fullName: 'ASC' } })).filter((row) => row.isActive !== false && !ENDED.includes(row.status))
-    return { available: true, manager: true, reports: people.map((row) => ({ id: row.id, fullName: row.fullName })), goals: await this.views(em, goals, () => 'manager') }
+    return { available: true, manager: true, reports: people.map((row) => ({ id: row.id, fullName: row.fullName })), goals: await this.views(em, user, goals, () => 'manager') }
   }
 
   /** «كل الأهداف» (بالصلاحية): أهداف موظفين وأقسام نطاق فروع الحساب (بالفرع الحالي)، وأهداف الشركة */
@@ -139,7 +144,7 @@ export class GoalsService {
       ...(departments.length ? await repo.find({ where: { ownerType: 'DEPARTMENT', departmentId: In(departments.map((row) => row.id)) } }) : []),
       ...(await repo.find({ where: scope === null ? { ownerType: 'COMPANY' } : { ownerType: 'COMPANY', status: 'ACTIVE' } })),
     ].sort((a, b) => b.id - a.id)
-    return { available: true, canManageCompany: scope === null, goals: await this.views(em, goals, (goal) => (goal.ownerType === 'COMPANY' && scope !== null ? 'viewer' : 'hr')) }
+    return { available: true, canManageCompany: scope === null, goals: await this.views(em, user, goals, (goal) => (goal.ownerType === 'COMPANY' && scope !== null ? 'viewer' : 'hr')) }
   }
 
   /** هدف وسجله (للي له حق يشوفه، وإلا غير موجود). اسم صاحب السطر لو حسابه في نطاق القارئ أو هو نفسه */
@@ -153,7 +158,7 @@ export class GoalsService {
     const actors = new Map((updates.length ? await em.getRepository(User).find({ where: { id: In([...new Set(updates.map((row) => row.byUserId))]) } }) : []).map((row) => [row.id, row]))
     const scope = branchScopeOf(user)
     return {
-      ...(await this.views(em, [goal], () => role))[0],
+      ...(await this.views(em, user, [goal], () => role))[0],
       updates: updates.map((row) => {
         const actor = actors.get(row.byUserId)
         return { id: row.id, kind: row.kind, actualValue: amount(row.actualValue), note: row.note ?? null, changes: row.changes ? JSON.parse(row.changes) : null, taskId: row.taskId ?? null,

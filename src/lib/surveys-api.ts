@@ -15,7 +15,8 @@ export interface SurveyBody {
   title: string; kind: SurveyKind; audience: SurveyAudience | null; isAnonymous: boolean; minGroup: number; closeDate?: string | null
   questions: Array<{ label: string; type: SurveyQuestionType; required: boolean; options?: string[] }>
 }
-export interface SurveySummaryRow { key: string; label: string; type: SurveyQuestionType; answered: number; average?: number | null; enps?: number | null; counts?: Array<{ option: string; count: number }> }
+/** hidden = السؤال جاوب عليه أقل من الحد الأدنى: من غير أرقام */
+export interface SurveySummaryRow { key: string; label: string; type: SurveyQuestionType; hidden?: boolean; answered?: number; average?: number | null; enps?: number | null; counts?: Array<{ option: string; count: number }> }
 export interface ApiSurveyResults {
   survey: ApiSurvey; total: number; minGroup: number; visible: boolean; overall: SurveySummaryRow[]
   groups: Array<{ name: string; count: number; summary: SurveySummaryRow[] }>; commentsHidden: boolean; comments: Array<{ key: string; label: string; texts: string[] }>

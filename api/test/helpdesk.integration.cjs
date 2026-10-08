@@ -224,8 +224,24 @@ test('HD-03: قاعدة المعرفة — الإدارة بالصلاحية و�
     assert.deepEqual(answer(await request(users.lead, 'POST', A, article({ audience }))), [403, kb.KB_BRANCH_AUDIENCE], JSON.stringify(audience))
   }
   assert.equal(await repo('KbArticle').count(), 0)
-  const policy = await repo('Policy').save({ title: 'لائحة الحضور والانصراف', category: null, audience: null, isMandatory: false, graceDays: 0, graceFrom: null, status: 'PUBLISHED', createdByUserId: users.admin.id,
-    createdAt: new Date(), withdrawnAt: null, withdrawnByUserId: null })
+  // سياسة بنسخة سارية (أو من غيرها) وجمهور
+  const policyRow = async (title, status, audience, published = true) => {
+    const row = await repo('Policy').save({ title, category: null, audience: audience ? JSON.stringify(audience) : null, isMandatory: false, graceDays: 0, graceFrom: null, status, createdByUserId: users.admin.id,
+      createdAt: new Date(), withdrawnAt: null, withdrawnByUserId: null })
+    if (published) await repo('PolicyVersion').save({ policyId: row.id, versionNo: 1, bodyText: 'نص السياسة', fileId: null, contentHash: 'a'.repeat(64), effectiveDate: '2026-01-01', isMaterial: true, publishedAt: new Date(),
+      publishedByUserId: users.admin.id })
+    return row
+  }
+  const policy = await policyRow('لائحة الحضور والانصراف', 'PUBLISHED', null)
+  // Codex P3K-B10: محرر المعرفة بيربط سياسة هو نفسه يقدر يشوفها بس (منشورة وهو في جمهورها) — مسودة، أو لجمهور فرع تاني، نفس رد «مش موجودة»
+  const leadEmployee = await repo('Employee').save({ employeeCode: 'HD-LEAD', fullName: 'محرر المعرفة', branchId: org.branchA.id, joinDate: '2020-01-01', basicSalary: 6000, housingAllowance: 0, transportAllowance: 0,
+    otherAllowance: 0, currency: 'SAR', status: 'active', isActive: true, payMethod: 'cash' })
+  await repo('User').update({ id: users.lead.id }, { employeeId: leadEmployee.id })
+  users.lead = await repo('User').findOneByOrFail({ id: users.lead.id })
+  const hiddenDraft = await policyRow('SECRET-DRAFT لائحة مسودة', 'DRAFT', null, false)
+  const foreign = await policyRow('SECRET-B لائحة فرع ب', 'PUBLISHED', branchAudience(org.branchB))
+  for (const hidden of [hiddenDraft.id, foreign.id]) assert.deepEqual(answer(await request(users.lead, 'POST', A, article({ policyId: hidden }))), [400, kb.KB_POLICY], String(hidden))
+  assert.equal(await repo('KbArticle').count(), 0)
   const mine = expectStatus(await request(users.lead, 'POST', A, article({ policyId: policy.id })), 201)
   assert.deepEqual([mine.title, mine.typeName, mine.keywords, mine.audience, mine.policyTitle, mine.isPublished],
     ['ليه الراتب اتخصم منه؟', 'استفسار عن الراتب', 'خصم غياب قسيمة', { ...branchAudience(org.branchA), ids: [] }, 'لائحة الحضور والانصراف', true])
@@ -247,6 +263,22 @@ test('HD-03: قاعدة المعرفة — الإدارة بالصلاحية و�
   const read = expectStatus(await request(users.asker, 'GET', A + '/' + mine.id), 200)
   assert.deepEqual([read.title, read.body.includes('قسيمة الراتب'), read.policy], ['ليه الراتب اتخصم منه؟', true, { id: policy.id, title: 'لائحة الحضور والانصراف' }])
   for (const hidden of [other.id, draft.id, 987654]) assert.deepEqual(answer(await request(users.asker, 'GET', A + '/' + hidden)), [404, kb.KB_NOT_FOUND], String(hidden))
+  // Codex P3K-B10: مقال عام مربوط بسياسة فرع ب (ربطه اللي يقدر يشوفها): قارئ فرع أ بيقرا المقال من غير مرجع السياسة، وقارئ فرع ب بمرجعها؛
+  // ومحرر فرع أ في قايمة الإدارة مايشوفش رقمها ولا عنوانها (بس عارف إن فيه ربط)، وتعديله للمقال من غير خانة السياسة مابيلمسش الربط
+  const linked = expectStatus(await request(users.admin, 'POST', A, { title: 'سياسة الورديات الليلية', body: 'التفاصيل في السياسة المرتبطة.', isPublished: true, policyId: foreign.id }), 201)
+  assert.deepEqual([linked.policyId, linked.policyTitle], [foreign.id, 'SECRET-B لائحة فرع ب'])
+  const forA = expectStatus(await request(users.asker, 'GET', A + '/' + linked.id), 200), forB = expectStatus(await request(users.b1, 'GET', A + '/' + linked.id), 200)
+  assert.deepEqual([forA.policy, forB.policy, JSON.stringify(forA).includes('SECRET-B')], [null, { id: foreign.id, title: 'SECRET-B لائحة فرع ب' }, false])
+  await repo('KbArticle').update({ id: linked.id }, { audience: (await repo('KbArticle').findOneByOrFail({ id: mine.id })).audience })
+  const managed = expectStatus(await request(users.lead, 'GET', A + '/manage'), 200).articles.find(row => row.id === linked.id)
+  assert.deepEqual([managed.policyId, managed.policyTitle, managed.hasPolicy, JSON.stringify(managed).includes('SECRET-B')], [null, null, true, false])
+  expectStatus(await request(users.lead, 'PATCH', A + '/' + linked.id, { keywords: 'ورديات' }), 200)
+  assert.equal((await repo('KbArticle').findOneByOrFail({ id: linked.id })).policyId, foreign.id, 'الربط زي ما هو')
+  // سياسة اتسحبت بعد الربط: مرجعها بيختفي من القراءة
+  await repo('Policy').update({ id: policy.id }, { status: 'WITHDRAWN' })
+  assert.equal(expectStatus(await request(users.asker, 'GET', A + '/' + mine.id), 200).policy, null)
+  await repo('Policy').update({ id: policy.id }, { status: 'PUBLISHED' })
+  await repo('KbArticle').delete({ id: linked.id })
   assert.equal((await request(users.nobody ?? users.agent, 'GET', A + '/' + general.id)).status, 404, 'حساب من غير ملف موظف مالوش جمهور')
   // التعديل: في نطاق الحساب وإلا «غير موجود»، وبالخانات اللي اتبعتت بس؛ والسحب بيخفيه
   assert.deepEqual([answer(await request(users.leadB, 'PATCH', A + '/' + mine.id, { title: 'تغيير' })), answer(await request(users.lead, 'PATCH', A + '/' + general.id, { title: 'تغيير' })),

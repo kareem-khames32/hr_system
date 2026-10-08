@@ -10,6 +10,12 @@ export const PREBOARDING_ONLY = 'PREBOARDING_ONLY'
 export const preboardingMessage = (until: string): string =>
   `حسابك في بوابة التهيئة لحد تاريخ مباشرتك ${until} — المتاح دلوقتي: مستنداتك، والسياسات، ومهامك`
 
+/**
+ * Codex P3K-B01: دور جلسة بوابة التهيئة. الجلسة المقيدة مابتشيلش دور الحساب (ولا صلاحياته): أحكام كتير بتدّي سلطة باسم الدور نفسه
+ * (زي خطوة الموارد البشرية ومهام دورها)، فالجلسة بتتفتح بدور الموظف العادي لحد أول دخول بعد المباشرة.
+ */
+export const PREBOARDING_SESSION_ROLE = 'employee'
+
 export const ALLOW_PREBOARDING_KEY = 'allowPreboarding'
 /** المسار ده شغال لجلسة في بوابة التهيئة */
 export const AllowPreboarding = () => SetMetadata(ALLOW_PREBOARDING_KEY, true)

@@ -60,6 +60,9 @@ export function cleanRewardValues(raw: unknown): Partial<Record<ReviewBandKey, s
   return values
 }
 
+/** علامة الاقتراح في سبب طلب المكافأة — مفتاح عدم تكرار الطلب */
+export const rewardMarker = (suggestionId: number): string => `(اقتراح تقييم رقم ${suggestionId})`
+
 @Injectable()
 export class ReviewRewardsService {
   constructor(@InjectDataSource() private readonly ds: DataSource, private readonly bonuses: BonusesService, private readonly modules: ModulesService) {}
@@ -198,16 +201,31 @@ export class ReviewRewardsService {
       return row
     })
     const bandLabel = REVIEW_BANDS.find((band) => band.key === claimed.band)?.label ?? claimed.band
-    let made: { id: number }
-    try {
-      made = await this.bonuses.create(user, { employeeId: claimed.employeeId, bonusTypeId: claimed.bonusTypeId, inputValue: plain(claimed.inputValue), targetPeriod: claimed.targetPeriod,
-        reason: `نتيجة دورة التقييم «${cycle?.name ?? claimed.cycleId}» — تقدير ${bandLabel} (${Number(claimed.finalScore)} من 100)` })
-    } catch (error) {
-      await this.ds.getRepository(ReviewRewardSuggestion).update({ id: claimed.id, status: 'CLAIMED' }, { status: 'SUGGESTED', decidedByUserId: null, decidedAt: null })
-      throw error
+    // Codex P3K-B08-01: علامة دايمة في سبب طلب المكافأة = مفتاح عدم التكرار: الاقتراح بيلاقي بيها طلبه لو محاولة اتقطعت بعد ما الطلب ثبت
+    // (الرد وقع، أو الربط ماكملش)، فالطلب مايتعملش مرتين — حتى لو فحص التكرار في المكافآت مقفول
+    const marker = rewardMarker(claimed.id)
+    const existing = async (): Promise<number | null> => {
+      // لنفس الموظف ومن حساب المدير اللي بيقدّم نفسه (طلب يدوي من حساب تاني بنفس النص مايتلقطش)
+      const rows: Array<{ id: number }> = await this.ds.query(
+        'SELECT TOP (1) [id] FROM [bonus_requests] WHERE [employeeId] = @0 AND [creatorUserId] = @2 AND CHARINDEX(@1, [reason]) > 0 ORDER BY [id]', [claimed.employeeId, marker, user.sub])
+      return rows[0] ? Number(rows[0].id) : null
     }
-    await this.ds.getRepository(ReviewRewardSuggestion).update({ id: claimed.id, status: 'CLAIMED' }, { status: 'SUBMITTED', bonusRequestId: made.id })
-    return { bonusRequestId: made.id, ...(await this.mine(user)) }
+    let madeId = await existing()
+    if (!madeId) {
+      try {
+        madeId = (await this.bonuses.create(user, { employeeId: claimed.employeeId, bonusTypeId: claimed.bonusTypeId, inputValue: plain(claimed.inputValue), targetPeriod: claimed.targetPeriod,
+          reason: `نتيجة دورة التقييم «${cycle?.name ?? claimed.cycleId}» — تقدير ${bandLabel} (${Number(claimed.finalScore)} من 100) ${marker}` })).id
+      } catch (error) {
+        // الطلب ثبت قبل ما الرد يقع = بيتربط؛ غير كده المكافآت رفضت قبل الحفظ: الحجز بيرجع والرفض بيطلع زي ما هو
+        madeId = await existing()
+        if (!madeId) {
+          await this.ds.getRepository(ReviewRewardSuggestion).update({ id: claimed.id, status: 'CLAIMED' }, { status: 'SUGGESTED', decidedByUserId: null, decidedAt: null })
+          throw error
+        }
+      }
+    }
+    await this.ds.getRepository(ReviewRewardSuggestion).update({ id: claimed.id, status: 'CLAIMED' }, { status: 'SUBMITTED', bonusRequestId: madeId })
+    return { bonusRequestId: madeId, ...(await this.mine(user)) }
   }
 
   /** صرف النظر عن اقتراح لسه ماتقدّمش: المدير الموجّه له، أو إدارة الأداء في نطاقها */

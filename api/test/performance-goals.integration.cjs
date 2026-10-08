@@ -258,6 +258,19 @@ test('PG-03: الموارد البشرية بالصلاحية وبنطاق ال�
   assert.equal(expectStatus(await act(users.hrA, child.id, 'decision', { decision: 'approve' }), 200).status, 'ACTIVE')
   assert.equal(expectStatus(await make(users.hrA, good({ employeeId: emps.outsider.id, title: 'هدف من الموارد البشرية' })), 201).status, 'ACTIVE')
   assert.deepEqual(answer(await make(users.hrA, good({ employeeId: emps.b1.id }))), [404, 'الموظف غير موجود'])
+  // Codex P3K-B06: قسم الهدف الأب اتنقل لفرع ب وعنوان هدفه اتغيّر — موارد فرع أ لسه شايفة هدف موظفها التابع له، بس من غير رقم الأب ولا عنوانه
+  // (اللي مايقدرش يقرا الأب مباشرة مايشوفوش من هدف تابع)؛ وصاحب الهدف اللي لسه في القسم شايف أبوه
+  await repo('Department').update({ id: org.sales.id }, { branchId: org.branchB.id })
+  await repo('PerformanceGoal').update({ id: department.id }, { title: 'SECRET-B هدف فرع ب' })
+  try {
+    const seenChild = expectStatus(await request(users.hrA, 'GET', '/performance/goals/' + child.id), 200), ownChild = expectStatus(await request(users.rep, 'GET', '/performance/goals/' + child.id), 200)
+    assert.deepEqual([(await request(users.hrA, 'GET', '/performance/goals/' + department.id)).status, seenChild.parentGoalId, seenChild.parentTitle,
+      JSON.stringify(expectStatus(await request(users.hrA, 'GET', '/performance/goals/all'), 200)).includes('SECRET-B'), ownChild.parentGoalId, ownChild.parentTitle],
+    [404, null, null, false, department.id, 'SECRET-B هدف فرع ب'])
+  } finally {
+    await repo('Department').update({ id: org.sales.id }, { branchId: org.branchA.id })
+    await repo('PerformanceGoal').update({ id: department.id }, { title: 'هدف قسم المبيعات' })
+  }
   // الموظف اتنقل لفرع ب: الحكم بفرعه الحالي — موارد فرع أ مابقتش شايفة هدفه، وموارد فرع ب شايفاه
   await repo('Employee').update({ id: emps.rep.id }, { branchId: org.branchB.id })
   try {

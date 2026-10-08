@@ -8,7 +8,7 @@ import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
-import { Policy } from '../policies/policy.entities'
+import { PoliciesService } from '../policies/policies.service'
 import { isCurrentEmployee } from '../reports/metrics'
 import { RequestType } from '../requests/entities/request-type.entity'
 import { audienceNeedsPositions, requestAudienceAllows, type AudiencePositions, type AudienceSubject } from '../requests/request-audience'
@@ -107,7 +107,7 @@ export function articleMatches(article: Pick<KbArticle, 'title' | 'body' | 'keyw
 
 @Injectable()
 export class KnowledgeService {
-  constructor(@InjectDataSource() private readonly ds: DataSource) {}
+  constructor(@InjectDataSource() private readonly ds: DataSource, private readonly policies: PoliciesService) {}
 
   private assertManager(user: JwtPayload) {
     if (!userHasPerm(user, HELPDESK_PERMISSION)) throw new ForbiddenException('الإجراء ده لصاحب صلاحية إدارة مركز الخدمات')
@@ -174,7 +174,8 @@ export class KnowledgeService {
     const em = this.ds.manager
     const row = (await this.readable(em, user)).find((entry) => entry.id === id)
     if (!row) throw new NotFoundException(KB_NOT_FOUND)
-    const policy = row.policyId != null ? await em.getRepository(Policy).findOne({ where: { id: row.policyId } }) : null
+    // Codex P3K-B10: مرجع السياسة بحكم القارئ نفسه (منشورة وهو في جمهورها) — وإلا المقال بيتعرض من غيره
+    const policy = row.policyId != null ? await this.policies.referenceFor(user, row.policyId) : null
     return { id: row.id, title: row.title, body: row.body, typeCode: row.typeCode ?? null, typeName: row.typeCode ? (await this.typeNames(em)).get(row.typeCode) ?? null : null,
       // السياسة نفسها بتتقري من مكتبة السياسات بحكمها — هنا عنوانها ولينك بس
       policy: policy ? { id: policy.id, title: policy.title } : null, updatedAt: row.updatedAt }
@@ -182,9 +183,11 @@ export class KnowledgeService {
 
   // ===== الإدارة =====
 
+  // السياسة المربوطة اللي الحساب مايشوفهاش: من غير رقم ولا عنوان — وhasPolicy بيقول إن فيه ربط (تعديل المقال من غير خانة السياسة مابيلمسوش)
   private manageView(row: KbArticle, types: Map<string, string>, policies: Map<number, string>) {
     return { id: row.id, title: row.title, body: row.body, typeCode: row.typeCode ?? null, typeName: row.typeCode ? types.get(row.typeCode) ?? null : null, keywords: row.keywords ?? null,
-      audience: row.audience ? JSON.parse(row.audience) : null, policyId: row.policyId ?? null, policyTitle: row.policyId != null ? policies.get(row.policyId) ?? null : null, isPublished: row.isPublished === true,
+      audience: row.audience ? JSON.parse(row.audience) : null, policyId: row.policyId != null && policies.has(row.policyId) ? row.policyId : null,
+      policyTitle: row.policyId != null ? policies.get(row.policyId) ?? null : null, hasPolicy: row.policyId != null, isPublished: row.isPublished === true,
       updatedAt: row.updatedAt }
   }
 
@@ -197,7 +200,11 @@ export class KnowledgeService {
     const rows = (await em.getRepository(KbArticle).find({ order: { id: 'DESC' } })).filter((row) => announcementAudienceIntact(row.audience) && announcementAudienceInScope(row.audience, scope))
     const types = await this.typeNames(em)
     const policyIds = [...new Set(rows.map((row) => row.policyId).filter((id): id is number => id != null))]
-    const policies = new Map((policyIds.length ? await em.getRepository(Policy).find({ where: { id: In(policyIds) } }) : []).map((row) => [row.id, row.title]))
+    const policies = new Map<number, string>()
+    for (const policyId of policyIds) {
+      const reference = await this.policies.referenceFor(user, policyId)
+      if (reference) policies.set(reference.id, reference.title)
+    }
     return { available: true, articles: rows.map((row) => this.manageView(row, types, policies)), types: [...types].map(([code, name]) => ({ code, name })) }
   }
 
@@ -217,7 +224,8 @@ export class KnowledgeService {
     if (input.policyId !== undefined) {
       if (input.policyId === null || input.policyId === '') policyId = null
       else {
-        const policy = typeof input.policyId === 'number' && Number.isSafeInteger(input.policyId) ? await em.getRepository(Policy).findOne({ where: { id: input.policyId } }) : null
+        // Codex P3K-B10: الربط بسياسة الحساب نفسه يقدر يشوفها بس — غيرها نفس رد «مش موجودة»
+        const policy = typeof input.policyId === 'number' ? await this.policies.referenceFor(user, input.policyId) : null
         if (!policy) throw new BadRequestException(KB_POLICY)
         policyId = policy.id
       }

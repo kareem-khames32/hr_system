@@ -5,6 +5,8 @@
 //         موظفها له مدير مباشر وتقديره له قيمة، ومرة واحدة. ولا طلب مكافأة ولا قيد في الدفتر بيتعمل من الاقتراح.
 //  RW-02) التقديم: المدير الموجّه له الاقتراح بس هو اللي بيقدّم — طلب مكافأة باسمه بموديول المكافآت وسلسلته، مرة واحدة حتى مع ضغطتين مع بعض؛
 //         رفض المكافآت بيرجّع الاقتراح؛ ولا قيد في الدفتر قبل آخر اعتماد في سلسلة المكافأة؛ وصرف النظر؛ والموديول المقفول.
+//  RW-03) (CRP3K / Codex P3K-B08-01) طلب المكافأة ثبت والرد وقع: الاقتراح بيتربط بطلبه بعلامته، وإعادة المحاولة مابتعملش طلب تاني حتى لو
+//         فحص التكرار في المكافآت مقفول.
 // Run (من api/): node --test test/performance-rewards.integration.cjs
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
@@ -186,7 +188,7 @@ test('RW-02: التقديم — المدير الموجّه له بس، بطلب
   const done = expectStatus(await submit(users.boss, state.repSuggestion), 200)
   const bonus = await repo('BonusRequest').findOneByOrFail({ id: done.bonusRequestId })
   assert.deepEqual([bonus.employeeId, bonus.creatorUserId, bonus.scopeBasis, bonus.status, Number(bonus.estimatedAmount), bonus.targetPeriod, bonus.reason, bonus.obligationId],
-    [emps.rep.id, users.boss.id, 'DIRECT_MANAGER', 'IN_APPROVAL', 500, '2026-12', 'نتيجة دورة التقييم «تقييم السنة» — تقدير ممتاز (95 من 100)', null])
+    [emps.rep.id, users.boss.id, 'DIRECT_MANAGER', 'IN_APPROVAL', 500, '2026-12', `نتيجة دورة التقييم «تقييم السنة» — تقدير ممتاز (95 من 100) ${rewards.rewardMarker(state.repSuggestion)}`, null])
   assert.deepEqual([await count('EmployeeObligation'), done.suggestions.find(row => row.id === state.repSuggestion).status], [0, 'SUBMITTED'], 'ولا قيد قبل اعتماد السلسلة')
   assert.deepEqual(answer(await submit(users.boss, state.repSuggestion)), [409, rewards.REWARD_TAKEN])
   // ضغطتين مع بعض: طلب مكافأة واحد
@@ -226,4 +228,44 @@ test('RW-02: التقديم — المدير الموجّه له بس، بطلب
   try {
     assert.deepEqual([(await request(users.boss, 'GET', R + '/mine')).status, (await request(users.hrA, 'GET', C)).status], [404, 404])
   } finally { expectStatus(await request(users.admin, 'PUT', '/modules/performance', { enabled: true }), 200); modules.invalidate() }
+})
+
+test('RW-03: طلب المكافأة ثبت والرد وقع — الاقتراح بيتربط بطلبه، وإعادة المحاولة مابتعملش طلب تاني حتى لو فحص التكرار مقفول', async () => {
+  const C = R + '/cycles/' + state.cycle
+  const submit = (user, id) => request(user, 'POST', R + `/${id}/submit`)
+  const bonuses = () => repo('BonusRequest').count({ where: { employeeId: emps.lone.id } })
+  assert.equal(expectStatus(await request(users.hrA, 'POST', C, { bonusTypeId: state.type, targetPeriod: '2026-12', values: { A: '500' } }), 200).created, 1)
+  const row = expectStatus(await request(users.other, 'GET', R + '/mine'), 200).suggestions.find(entry => entry.status === 'SUGGESTED')
+  // فحص التكرار في المكافآت مقفول (إعداد مسموح): مفتاح عدم التكرار هو علامة الاقتراح نفسها
+  await repo('RequestsConfig').save({ key: 'bonuses.duplicate_window_hours', value: '0' })
+  const service = app.get(require('../src/performance/review-rewards.service').ReviewRewardsService)
+  const original = service.bonuses.create
+  let calls = 0
+  const before = await bonuses()
+  let firstId
+  // (1) الطلب بيتحفظ وبعدها القراءة بتقع: الرد كان بيرجّع الاقتراح «مقترح» من غير رابط
+  service.bonuses.create = async function (...args) { calls += 1; await original.apply(this, args); throw new Error('read failed after commit') }
+  try {
+    const done = expectStatus(await submit(users.other, row.id), 200)
+    firstId = done.bonusRequestId
+    const stored = await repo('ReviewRewardSuggestion').findOneByOrFail({ id: row.id })
+    const bonus = await repo('BonusRequest').findOneByOrFail({ id: firstId })
+    assert.deepEqual([calls, stored.status, stored.bonusRequestId, await bonuses(), bonus.reason.endsWith(rewards.rewardMarker(row.id)), bonus.employeeId], [1, 'SUBMITTED', firstId, before + 1, true, emps.lone.id])
+    assert.deepEqual([answer(await submit(users.other, row.id)), calls, await bonuses()], [[409, rewards.REWARD_TAKEN], 1, before + 1])
+  } finally { service.bonuses.create = original }
+  // (2) محاولة اتقطعت قبل الربط خالص (الاقتراح رجع «مقترح» وطلبه موجود): التقديم بيربط الموجود ومابيناديش المكافآت تاني
+  await repo('ReviewRewardSuggestion').update({ id: row.id }, { status: 'SUGGESTED', bonusRequestId: null, decidedByUserId: null, decidedAt: null })
+  service.bonuses.create = async function (...args) { calls += 1; return original.apply(this, args) }
+  try {
+    const again = expectStatus(await submit(users.other, row.id), 200)
+    assert.deepEqual([again.bonusRequestId, calls, await bonuses(), (await repo('ReviewRewardSuggestion').findOneByOrFail({ id: row.id })).status], [firstId, 1, before + 1, 'SUBMITTED'])
+  } finally { service.bonuses.create = original }
+  // طلب بنفس العلامة من حساب تاني مابيتلقطش: الاقتراح بيتعمل له طلبه هو (ونافذة التكرار مقفولة)
+  await repo('ReviewRewardSuggestion').update({ id: row.id }, { status: 'SUGGESTED', bonusRequestId: null, decidedByUserId: null, decidedAt: null })
+  await repo('BonusRequest').update({ id: firstId }, { creatorUserId: users.admin.id })
+  const own = expectStatus(await submit(users.other, row.id), 200)
+  assert.deepEqual([own.bonusRequestId !== firstId, await bonuses()], [true, before + 2])
+  // (3) الرفض الحقيقي قبل الحفظ لسه بيرجّع الاقتراح (متغطّي في RW-02): علامة اقتراح تاني مابتلقطش طلب الاقتراح ده
+  assert.notEqual(rewards.rewardMarker(row.id), rewards.rewardMarker(row.id * 10 + 1))
+  assert.equal(`x ${rewards.rewardMarker(row.id * 10 + 1)}`.includes(rewards.rewardMarker(row.id)), false, 'رقم اقتراح مش بادئة لرقم تاني')
 })
