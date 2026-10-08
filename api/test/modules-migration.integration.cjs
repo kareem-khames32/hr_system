@@ -166,7 +166,7 @@ test('MM-1: الملفين LF من غير BOM، من غير عبارة ممنو�
   // الموديولات المزروعة = كل الموديولات الاختيارية اللي كانت في السجل وقت الترحيل بالظبط. واللي اتضاف بعده (B2.11: الوظائف المعتمدة، B2.14: لوحة فريقي)
   // مقفول افتراضيًا ومن غير صف: مش في بذرة 077 (ملف معتمد مابيتعدّلش) وحالته من السجل
   const optional = registry.MODULE_KEYS.filter(key => !registry.MODULES[key].core)
-  const LATER = ['positions', 'manager', 'announcements', 'performance'] // B3.6: + الأداء
+  const LATER = ['positions', 'manager', 'announcements', 'performance', 'training'] // B3.6: + الأداء؛ B3.9: + التدريب
   assert.deepEqual([...optional].sort(), [...BASIC, 'recruitment', ...LATER].sort())
   for (const key of BASIC) assert.equal(registry.MODULES[key].preset, 'basic', key)
   for (const key of optional.filter(key => !LATER.includes(key))) assert.match(seed, new RegExp(`N'${key}'`), `${key} في ترحيل البيانات`)

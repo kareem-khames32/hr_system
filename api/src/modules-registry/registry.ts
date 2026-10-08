@@ -317,6 +317,14 @@ export const MODULES = {
     // B3.7-ب: التقييمات ودوراتها ونماذجها ونموذج التقييم بقوا حقيقيين (كانوا شاشات عرض)؛ «تقييم جديد» لسه شاشة عرض
     routes: ['/performance/goals', '/performance', '/performance/cycles', '/performance/templates', '/performance/*'],
   }),
+  // B3.9: التدريب — كتالوج الدورات والجلسات والتسجيل والشهادة (الخادم أولًا؛ شاشات /training شاشات عرض لحد ما الواجهة تنزل).
+  // موديول جديد = مقفول لحد ما الشركة تفتحه
+  training: moduleDef({
+    nameAr: 'التدريب', group: 'talent', dependsOn: ['employees'], softUses: ['documents'], preset: 'standard', defaultEnabled: false,
+    description: 'كتالوج الدورات، وجلساتها بالسعة والتكلفة، وتسجيل الموظفين وحضورهم وإكمالهم، والشهادة كمستند للموظف بتاريخ انتهائه وتنبيه تجديده',
+    permissions: ['training.manage'],
+    routes: [],
+  }),
   // B2.11: الوظائف المعتمدة — وظيفة في وحدة بعدد معتمد، وتقرير «معتمد / مشغول / شاغر». موديول جديد = مقفول لحد ما الشركة تفعّله
   // (أول موديول defaultEnabled: false: مفيش حاجة كانت شغالة قبله)
   positions: moduleDef({

@@ -1,0 +1,236 @@
+'use strict'
+// B3.9: التدريب على قاعدة SQL مؤقتة عشوائية بتتمسح في الآخر (hr_training_test_<16 hex>)، عبر HTTP بتوكنات موقّعة محليًا ومن غير كلمات مرور.
+// ولا رسالة بريد حقيقية.
+//  TR-01) الموديول مقفول افتراضيًا (404)؛ الكتالوج: القيم (الاسم، النوع، الرابط، المدة، صلاحية الشهادة) والتعديل بالخانات؛ الجلسات: القيم ونطاق
+//         الفروع (جلسة «كل الشركة» لحساب من غير قيد فروع بس، وجلسة فرع تاني = غير موجودة).
+//  TR-02) التسجيل تحت قفل الجلسة: موظفين نطاق الحساب الشغالين بس، والمسجّل بيتعدّى، والسعة بتتحترم حتى مع تسجيلين مع بعض؛ الحضور والإكمال؛
+//         «أكمل» لدورة بشهادة بيسجّل مستند موظف «شهادة تدريب» بانتهائه؛ المقفول مابيتغيّرش؛ الحكم بفرع الموظف الحالي.
+//  TR-03) الموظف: «دوراتي» بشهادته، وتقييم التدريب مرة واحدة بعد الحضور، ومش لتسجيل غيره.
+// Run (من api/): node --test test/training.integration.cjs
+const { test, before, after } = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), crypto = require('node:crypto')
+const apiRoot = path.resolve(__dirname, '..')
+require('../node_modules/ts-node').register({ project: path.join(apiRoot, 'tsconfig.json'), transpileOnly: true })
+require('../node_modules/reflect-metadata')
+const sql = require('../node_modules/mssql')
+const env = require('../node_modules/dotenv').parse(fs.readFileSync(path.join(apiRoot, '.env')))
+const database = `hr_training_test_${crypto.randomBytes(8).toString('hex')}`
+const NAME = /^hr_training_test_[a-f0-9]{16}$/
+const uploads = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-training-files-'))
+const secret = crypto.randomBytes(48).toString('hex')
+const jwt = new (require('../node_modules/@nestjs/jwt').JwtService)({ secret })
+const rules = require('../src/training/training-rules')
+let app, master, ds, base, modules, created = false, employeeNumber = 0
+const org = {}, users = {}, emps = {}, state = {}
+
+function assertDisposable() {
+  assert.match(database, NAME); assert.notEqual(database, env.DB_DATABASE)
+  if (ds) assert.equal(ds.options.database, database)
+}
+const repo = name => { assertDisposable(); return ds.getRepository(name) }
+const payloadOf = user => ({ sub: user.id, email: user.email, role: user.role, branchId: user.branchId ?? null, employeeId: user.employeeId ?? null,
+  tokenVersion: user.tokenVersion ?? 0, scopeAllBranches: user.scopeAllBranches ?? false,
+  permissions: user.role === 'super_admin' ? ['*'] : JSON.parse(user.permissions || '[]') })
+async function request(user, method, route, body) {
+  const response = await fetch(base + route, { method, headers: { 'Content-Type': 'application/json', ...(user ? { Authorization: `Bearer ${jwt.sign(payloadOf(user))}` } : {}) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
+  const text = await response.text()
+  return { status: response.status, body: text ? JSON.parse(text) : null }
+}
+const expectStatus = (response, status) => { assert.equal(response.status, status, JSON.stringify(response.body)); return response.body }
+const messageOf = response => [].concat(response.body?.message ?? []).join('، ')
+const answer = response => [response.status, messageOf(response)]
+const employee = (extra = {}) => repo('Employee').save({ employeeCode: `TR${String(++employeeNumber).padStart(3, '0')}`, fullName: `موظف التدريب ${employeeNumber}`, branchId: org.branchA.id,
+  joinDate: '2020-01-01', basicSalary: 6000, housingAllowance: 0, transportAllowance: 0, otherAllowance: 0, currency: 'SAR', status: 'active', isActive: true, payMethod: 'cash', ...extra })
+const account = (label, permissions, extra = {}) => repo('User').save({ email: `${label}@training.invalid`, displayName: `حساب ${label}`, passwordHash: 'test-only',
+  role: 'employee', branchId: org.branchA.id, permissions: JSON.stringify(permissions), isActive: true, ...extra })
+const course = (extra = {}) => ({ name: 'السلامة المهنية', kind: 'INTERNAL', durationHours: 8, provider: 'إدارة السلامة', givesCertificate: true, certificateValidMonths: 12, ...extra })
+const session = (extra = {}) => ({ courseId: state.course, branchId: org.branchA.id, startDate: '2026-11-01', endDate: '2026-11-02', location: 'قاعة 1', trainer: 'م. سامي', capacity: 2, costPerSeat: '350.5', ...extra })
+const T = '/training'
+
+before(async () => {
+  assert.equal(env.DB_TYPE || 'mssql', 'mssql')
+  assertDisposable()
+  master = await new sql.ConnectionPool({ server: env.DB_HOST || 'localhost', port: Number(env.DB_PORT || 1433), user: env.DB_USERNAME, password: env.DB_PASSWORD,
+    database: 'master', options: { encrypt: false, trustServerCertificate: true }, connectionTimeout: 5000 }).connect()
+  await master.request().query(`CREATE DATABASE [${database}]`); created = true
+  Object.assign(process.env, env, { DB_DATABASE: database, DB_SYNCHRONIZE: 'true', NODE_ENV: 'test', JWT_SECRET: secret, UPLOADS_ROOT: uploads })
+  app = await require('../node_modules/@nestjs/core').NestFactory.create(require('../src/app.module').AppModule, { logger: ['error'], abortOnError: false })
+  // مفيش رسالة بريد حقيقية بتطلع من الاختبار
+  const { MailService } = require('../src/auth/mail.service')
+  const mail = app.get(MailService)
+  mail.isConfigured = () => false
+  mail.send = async () => { throw new Error('no mail in tests') }
+  assert.notEqual(mail.send, MailService.prototype.send)
+  app.setGlobalPrefix('api')
+  app.useGlobalPipes(new (require('../node_modules/@nestjs/common').ValidationPipe)({ whitelist: true, transform: true }))
+  await app.listen(0, '127.0.0.1')
+  for (const cron of app.get(require('../node_modules/@nestjs/schedule').SchedulerRegistry).getCronJobs().values()) cron.stop()
+  app.get(require('../src/attendance/attendance-scheduler.service').AttendanceScheduler).runCatchUp = async () => undefined
+  app.get(require('../src/requests/requests-scheduler.service').RequestsScheduler).catchUp = async () => undefined
+  ds = app.get(require('../node_modules/typeorm').DataSource)
+  assertDisposable()
+  base = `http://127.0.0.1:${app.getHttpServer().address().port}/api`
+  modules = app.get(require('../src/modules-registry/modules.service').ModulesService)
+  await app.get(require('../src/settings/config-defaults.service').ConfigDefaultsService).onApplicationBootstrap()
+
+  org.branchA = await repo('Branch').save({ code: 'TR_A', name: 'فرع التدريب أ', country: 'SA' })
+  org.branchB = await repo('Branch').save({ code: 'TR_B', name: 'فرع التدريب ب السري', country: 'SA' })
+  emps.a1 = await employee({ fullName: 'متدرب أول' })
+  emps.a2 = await employee({ fullName: 'متدرب تاني' })
+  emps.a3 = await employee({ fullName: 'متدرب تالت' })
+  emps.gone = await employee({ fullName: 'موظف منتهي', status: 'terminated', isActive: false })
+  emps.b1 = await employee({ fullName: 'موظف فرع ب', branchId: org.branchB.id })
+  users.admin = await repo('User').save({ email: 'admin@training.invalid', displayName: 'مدير النظام', passwordHash: 'test-only', role: 'super_admin', branchId: null,
+    scopeAllBranches: true, permissions: '[]', isActive: true })
+  users.hrA = await account('hr-a', ['training.manage'])
+  users.hrB = await account('hr-b', ['training.manage'], { branchId: org.branchB.id })
+  users.a1 = await account('a1', [], { employeeId: emps.a1.id })
+  users.a2 = await account('a2', [], { employeeId: emps.a2.id })
+  users.nobody = await account('nobody', [])
+}, { timeout: 180000 })
+
+after(async t => {
+  const errors = []
+  try { if (app) await app.close() } catch (error) { errors.push(error) }
+  try {
+    if (created) {
+      assertDisposable()
+      await master.request().query(`ALTER DATABASE [${database}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [${database}]`)
+    }
+  } catch (error) { errors.push(error) }
+  try { if (master) await master.close() } catch (error) { errors.push(error) }
+  fs.rmSync(uploads, { recursive: true, force: true })
+  if (errors.length) t.diagnostic(errors.map(error => error.message).join(' | '))
+}, { timeout: 60000 })
+
+test('TR-01: الموديول مقفول افتراضيًا؛ الكتالوج بقيمه وتعديله بالخانات؛ والجلسات بقيمها ونطاق الفروع', async () => {
+  assert.deepEqual([(await request(users.hrA, 'GET', T + '/courses')).status, (await request(users.a1, 'GET', T + '/mine')).status], [404, 404], 'مقفول لحد ما الشركة تفتحه')
+  expectStatus(await request(users.admin, 'PUT', '/modules/training', { enabled: true }), 200); modules.invalidate()
+  assert.deepEqual([(await request(users.nobody, 'GET', T + '/courses')).status, (await request(users.a1, 'POST', T + '/courses', course())).status, (await request(users.a1, 'GET', T + '/sessions')).status], [403, 403, 403])
+
+  for (const [change, message] of [[{ name: 'اب' }, rules.TRAINING_NAME], [{ kind: 'LIVE' }, rules.TRAINING_KIND], [{ kind: 'ONLINE' }, rules.TRAINING_URL], [{ url: 'ftp://x' }, rules.TRAINING_URL],
+    [{ durationHours: 0.1 }, rules.TRAINING_DURATION], [{ durationHours: '8.555' }, rules.TRAINING_DURATION], [{ certificateValidMonths: 0 }, rules.TRAINING_VALID_MONTHS], [{ certificateValidMonths: 121 }, rules.TRAINING_VALID_MONTHS],
+    [{ givesCertificate: false, certificateValidMonths: 12 }, rules.TRAINING_VALID_MONTHS], [{ givesCertificate: 'yes' }, 'بتطلّع شهادة: نعم أو لا']]) {
+    assert.deepEqual(answer(await request(users.hrA, 'POST', T + '/courses', course(change))), [400, message], JSON.stringify(change))
+  }
+  assert.equal(await repo('TrainingCourse').count(), 0)
+  const made = expectStatus(await request(users.hrA, 'POST', T + '/courses', course({ name: '  السلامة   المهنية ' })), 201)
+  assert.deepEqual([made.name, made.kind, made.kindLabel, made.durationHours, made.provider, made.givesCertificate, made.certificateValidMonths, made.isActive, made.url],
+    ['السلامة المهنية', 'INTERNAL', 'داخلي', 8, 'إدارة السلامة', true, 12, true, null])
+  state.course = made.id
+  const online = expectStatus(await request(users.hrA, 'POST', T + '/courses', { name: 'مهارات العرض', kind: 'ONLINE', url: 'https://learn.example.invalid/c/1' }), 201)
+  assert.deepEqual([online.givesCertificate, online.certificateValidMonths, online.url], [false, null, 'https://learn.example.invalid/c/1'])
+  state.plain = online.id
+  // التعديل بالخانات اللي اتبعتت بس؛ وإلغاء الشهادة بيشيل صلاحيتها؛ والأونلاين مايتشالش رابطه
+  const renamed = expectStatus(await request(users.hrA, 'PATCH', T + `/courses/${made.id}`, { provider: 'جهة خارجية' }), 200)
+  assert.deepEqual([renamed.name, renamed.provider, renamed.certificateValidMonths, renamed.durationHours], ['السلامة المهنية', 'جهة خارجية', 12, 8])
+  assert.deepEqual([answer(await request(users.hrA, 'PATCH', T + `/courses/${online.id}`, { url: null })), answer(await request(users.hrA, 'PATCH', T + '/courses/987654', { name: 'دورة تانية' }))],
+    [[400, rules.TRAINING_URL], [404, rules.TRAINING_COURSE_NOT_FOUND]])
+  assert.deepEqual(expectStatus(await request(users.hrA, 'GET', T + '/courses'), 200).courses.map(row => row.name), ['مهارات العرض', 'السلامة المهنية'])
+
+  // الجلسات: القيم
+  for (const [change, message] of [[{ startDate: '2026-11-03' }, rules.TRAINING_DATES], [{ endDate: '2026-02-31' }, rules.TRAINING_DATES], [{ capacity: 0 }, rules.TRAINING_CAPACITY], [{ capacity: 2.5 }, rules.TRAINING_CAPACITY],
+    [{ costPerSeat: '-5' }, rules.TRAINING_COST], [{ costPerSeat: '5.555' }, rules.TRAINING_COST], [{ courseId: 987654 }, rules.TRAINING_COURSE_NOT_FOUND], [{ branchId: org.branchB.id }, 'الفرع غير موجود'],
+    [{ branchId: 987654 }, 'الفرع غير موجود'], [{ branchId: null }, 'اختار فرع الجلسة']]) {
+    assert.deepEqual(answer(await request(users.hrA, 'POST', T + '/sessions', session(change))), [400, message], JSON.stringify(change))
+  }
+  const planned = expectStatus(await request(users.hrA, 'POST', T + '/sessions', session()), 201)
+  assert.deepEqual([planned.courseName, planned.branchName, planned.startDate, planned.endDate, planned.capacity, planned.costPerSeat, planned.status, planned.statusLabel, planned.counts, planned.givesCertificate],
+    ['السلامة المهنية', 'فرع التدريب أ', '2026-11-01', '2026-11-02', 2, '350.50', 'PLANNED', 'مجدولة', { seats: 0, attended: 0, completed: 0 }, true])
+  state.session = planned.id
+  // جلسة «كل الشركة» لحساب من غير قيد فروع بس؛ وجلسة فرع ب مش في قايمة فرع أ ولا تفاصيلها
+  state.company = expectStatus(await request(users.admin, 'POST', T + '/sessions', session({ branchId: null, capacity: null, costPerSeat: null })), 201).id
+  state.sessionB = expectStatus(await request(users.hrB, 'POST', T + '/sessions', session({ branchId: org.branchB.id })), 201).id
+  const listA = expectStatus(await request(users.hrA, 'GET', T + '/sessions'), 200)
+  assert.deepEqual([listA.canCompany, listA.sessions.map(row => row.id)], [false, [state.session]])
+  assert.deepEqual(expectStatus(await request(users.admin, 'GET', T + '/sessions'), 200).sessions.map(row => row.id).sort(), [state.session, state.company, state.sessionB].sort())
+  for (const hidden of [state.company, state.sessionB]) {
+    assert.deepEqual([answer(await request(users.hrA, 'GET', T + `/sessions/${hidden}`)), answer(await request(users.hrA, 'PATCH', T + `/sessions/${hidden}`, { location: 'تغيير' })),
+      answer(await request(users.hrA, 'POST', T + `/sessions/${hidden}/enroll`, { employeeIds: [emps.a1.id] }))],
+    [[404, rules.TRAINING_SESSION_NOT_FOUND], [404, rules.TRAINING_SESSION_NOT_FOUND], [404, rules.TRAINING_SESSION_NOT_FOUND]], String(hidden))
+  }
+  // دورة موقوفة: مفيش جلسات جديدة عليها
+  expectStatus(await request(users.hrA, 'PATCH', T + `/courses/${state.plain}`, { isActive: false }), 200)
+  assert.deepEqual(answer(await request(users.hrA, 'POST', T + '/sessions', session({ courseId: state.plain }))), [400, rules.TRAINING_COURSE_NOT_FOUND])
+})
+
+test('TR-02: التسجيل تحت قفل الجلسة بنطاق الفروع والسعة، والحضور والإكمال، والشهادة مستند موظف بانتهائه، والمقفول مابيتغيّرش', async () => {
+  const S = T + `/sessions/${state.session}`
+  const enroll = (user, ids, target = S) => request(user, 'POST', target + '/enroll', { employeeIds: ids })
+  for (const bad of [undefined, [], ['x'], [0], 'نص']) assert.equal((await enroll(users.hrA, bad)).status, 400, JSON.stringify(bad))
+  // موظف فرع تاني، ومنتهي، ومش موجود: نفس الرد — ومفيش حد اتسجّل
+  for (const stranger of [emps.b1.id, emps.gone.id, 987654]) assert.deepEqual(answer(await enroll(users.hrA, [emps.a1.id, stranger])), [400, 'موظف من المختارين غير موجود أو ملفه مش شغال'], String(stranger))
+  assert.equal(await repo('TrainingEnrollment').count(), 0)
+  // السعة 2: تلاتة مع بعض مرفوضين كلهم؛ وتسجيلين مع بعض بيعدّي منهم اللي السعة تكفّيه بس
+  assert.deepEqual(answer(await enroll(users.hrA, [emps.a1.id, emps.a2.id, emps.a3.id])), [400, rules.TRAINING_FULL + ' (الباقي 2)'])
+  const race = await Promise.all([enroll(users.hrA, [emps.a1.id, emps.a2.id]), enroll(users.hrA, [emps.a3.id])])
+  assert.deepEqual(race.map(response => response.status).sort(), [200, 400], JSON.stringify(race.map(messageOf)))
+  await repo('TrainingEnrollment').delete({ sessionId: state.session })
+  const first = expectStatus(await enroll(users.hrA, [emps.a1.id, emps.a2.id]), 200)
+  assert.deepEqual([first.enrolled, first.already, first.session.counts.seats, first.enrollments.map(row => [row.employeeName, row.status, row.statusLabel, row.certificate])],
+    [2, 0, 2, [['متدرب أول', 'ENROLLED', 'مسجّل', null], ['متدرب تاني', 'ENROLLED', 'مسجّل', null]]])
+  assert.deepEqual([expectStatus(await enroll(users.hrA, [emps.a1.id]), 200).already, answer(await enroll(users.hrA, [emps.a3.id]))], [1, [400, rules.TRAINING_FULL + ' (الباقي 0)']])
+  // السعة ماتقلّش عن المسجّلين
+  assert.deepEqual(answer(await request(users.hrA, 'PATCH', S, { capacity: 1 })), [400, 'السعة ماتقلّش عن المسجّلين (2)'])
+  assert.equal(expectStatus(await request(users.hrA, 'PATCH', S, { capacity: 3, trainer: 'م. هاني' }), 200).session.trainer, 'م. هاني')
+
+  // الحضور والإكمال
+  const [e1, e2] = first.enrollments.map(row => row.id)
+  const mark = (user, id, body) => request(user, 'POST', T + `/enrollments/${id}/mark`, body)
+  assert.deepEqual([answer(await mark(users.hrA, e1, { status: 'ENROLLED' })), answer(await mark(users.hrA, e1, { status: 'DONE' })), answer(await mark(users.hrB, e1, { status: 'ATTENDED' })),
+    (await mark(users.a1, e1, { status: 'ATTENDED' })).status, answer(await mark(users.hrA, 987654, { status: 'ATTENDED' }))],
+  [[400, rules.TRAINING_MARK], [400, rules.TRAINING_MARK], [404, rules.TRAINING_ENROLLMENT_NOT_FOUND], 403, [404, rules.TRAINING_ENROLLMENT_NOT_FOUND]])
+  assert.equal(expectStatus(await mark(users.hrA, e1, { status: 'ATTENDED' }), 200).session.counts.attended, 1)
+  // موظف اتنقل لفرع ب: الحكم بفرعه الحالي
+  await repo('Employee').update({ id: emps.a1.id }, { branchId: org.branchB.id })
+  try {
+    assert.deepEqual([answer(await mark(users.hrA, e1, { status: 'COMPLETED' })), expectStatus(await request(users.hrA, 'GET', S), 200).enrollments.map(row => row.employeeName), expectStatus(await request(users.hrA, 'GET', S), 200).hidden],
+      [[404, rules.TRAINING_ENROLLMENT_NOT_FOUND], ['متدرب تاني'], 1])
+  } finally { await repo('Employee').update({ id: emps.a1.id }, { branchId: org.branchA.id }) }
+  // «أكمل» لدورة بشهادة: مستند موظف «شهادة تدريب» — الإصدار آخر يوم في الجلسة والانتهاء بعد 12 شهر
+  const before = await repo('EmployeeDocument').count()
+  const done = expectStatus(await mark(users.hrA, e1, { status: 'COMPLETED', result: ' ناجح 92% ' }), 200)
+  const row = done.enrollments.find(entry => entry.id === e1)
+  assert.deepEqual([row.status, row.result, row.certificate, done.session.counts], ['COMPLETED', 'ناجح 92%', { issueDate: '2026-11-02', expiryDate: '2027-11-02' }, { seats: 2, attended: 1, completed: 1 }])
+  const documents = await repo('EmployeeDocument').find({ where: { employeeId: emps.a1.id } })
+  assert.deepEqual([await repo('EmployeeDocument').count() - before, documents.map(entry => [entry.docType, String(entry.issueDate).slice(0, 10), String(entry.expiryDate).slice(0, 10), entry.notes])],
+    [1, [[rules.TRAINING_CERT_CODE, '2026-11-02', '2027-11-02', 'شهادة دورة «السلامة المهنية»']]])
+  assert.deepEqual((await repo('DocType').find({ where: { code: rules.TRAINING_CERT_CODE } })).map(entry => [entry.nameAr, entry.isActive]), [[rules.TRAINING_CERT_NAME, true]])
+  assert.deepEqual([answer(await mark(users.hrA, e1, { status: 'ABSENT' })), await repo('EmployeeDocument').count() - before], [[409, rules.TRAINING_MARK_FINAL], 1], 'اللي أكمل مابيتغيّرش')
+  // «غاب» بيفضّي المكان وبيتصحّح؛ و«اتلغى» نهائي
+  assert.equal(expectStatus(await mark(users.hrA, e2, { status: 'ABSENT' }), 200).session.counts.seats, 1)
+  assert.equal(expectStatus(await mark(users.hrA, e2, { status: 'ATTENDED' }), 200).session.counts.seats, 2)
+  expectStatus(await mark(users.hrA, e2, { status: 'CANCELLED' }), 200)
+  assert.deepEqual(answer(await mark(users.hrA, e2, { status: 'ATTENDED' })), [409, rules.TRAINING_MARK_FINAL])
+  // اللي اتلغى يتسجّل من جديد؛ ودورة من غير شهادة مابتسجّلش مستند
+  assert.equal(expectStatus(await enroll(users.hrA, [emps.a2.id]), 200).enrolled, 1)
+  await repo('TrainingCourse').update({ id: state.course }, { givesCertificate: false, certificateValidMonths: null })
+  const again = (await repo('TrainingEnrollment').findOneByOrFail({ sessionId: state.session, employeeId: emps.a2.id, status: 'ENROLLED' })).id
+  assert.deepEqual([expectStatus(await mark(users.hrA, again, { status: 'COMPLETED' }), 200).enrollments.find(entry => entry.id === again).certificate, await repo('EmployeeDocument').count() - before], [null, 1])
+  // جلسة اتعملت أو اتلغت: مفيش تسجيل؛ والملغية مفيش تعديل
+  expectStatus(await request(users.hrA, 'PATCH', S, { status: 'DONE' }), 200)
+  assert.equal((await enroll(users.hrA, [emps.a3.id])).status, 400)
+  assert.deepEqual([answer(await request(users.hrA, 'PATCH', S, { status: 'نص' })), expectStatus(await request(users.hrA, 'PATCH', S, { status: 'CANCELLED' }), 200).session.status, answer(await request(users.hrA, 'PATCH', S, { location: 'تغيير' }))],
+    [[400, rules.TRAINING_SESSION_STATUS], 'CANCELLED', [400, rules.TRAINING_SESSION_CLOSED]])
+  state.e1 = e1; state.again = again
+})
+
+test('TR-03: الموظف — «دوراتي» بشهادته، وتقييم التدريب مرة واحدة بعد الحضور، ومش لتسجيل غيره', async () => {
+  const mine = expectStatus(await request(users.a1, 'GET', T + '/mine'), 200)
+  assert.deepEqual([mine.available, mine.enrollments.map(row => [row.id, row.courseName, row.status, row.startDate, row.trainer, row.certificate, row.canRate, row.rating])],
+    [true, [[state.e1, 'السلامة المهنية', 'COMPLETED', '2026-11-01', 'م. هاني', { issueDate: '2026-11-02', expiryDate: '2027-11-02' }, true, null]]])
+  assert.deepEqual(expectStatus(await request(users.nobody, 'GET', T + '/mine'), 200).enrollments, [])
+  const rate = (user, id, body) => request(user, 'POST', T + `/enrollments/${id}/rate`, body)
+  for (const bad of [{}, { rating: 0 }, { rating: 6 }, { rating: 4.5 }, { rating: '5' }]) assert.deepEqual(answer(await rate(users.a1, state.e1, bad)), [400, rules.TRAINING_RATING], JSON.stringify(bad))
+  for (const stranger of [users.a2, users.hrA, users.nobody]) assert.deepEqual(answer(await rate(stranger, state.e1, { rating: 5 })), [404, rules.TRAINING_ENROLLMENT_NOT_FOUND], stranger.email)
+  const rated = expectStatus(await rate(users.a1, state.e1, { rating: 4, comment: ' مفيد ' }), 200).enrollments[0]
+  assert.deepEqual([rated.rating, rated.ratingComment, rated.canRate], [4, 'مفيد', false])
+  assert.deepEqual(answer(await rate(users.a1, state.e1, { rating: 5 })), [409, rules.TRAINING_RATING_STAGE])
+  // إدارة التدريب شايفة التقييم في الجلسة (حساب من غير قيد فروع: الجلسة الملغية لسه بتتقري)
+  assert.deepEqual(expectStatus(await request(users.hrA, 'GET', T + `/sessions/${state.session}`), 200).enrollments.find(row => row.id === state.e1).rating, 4)
+  // والموديول لما يتقفل المسارات بتتقفل
+  expectStatus(await request(users.admin, 'PUT', '/modules/training', { enabled: false }), 200); modules.invalidate()
+  try { assert.equal((await request(users.a1, 'GET', T + '/mine')).status, 404) } finally { expectStatus(await request(users.admin, 'PUT', '/modules/training', { enabled: true }), 200); modules.invalidate() }
+})

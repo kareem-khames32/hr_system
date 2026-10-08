@@ -114,6 +114,8 @@ export const PERMISSIONS: Record<string, string> = {
   // B3.6: إدارة الأداء — الموظف ومديره من غير صلاحية (حقهم من الهيكل)
   'performance.manage': 'إدارة الأداء',
   'performance.calibrate': 'معايرة التقييمات',
+  // B3.9: التدريب — الموظف شايف دوراته وبيقيّمها من غير صلاحية
+  'training.manage': 'إدارة التدريب',
   // B2.11: الوظائف المعتمدة
   'positions.view': 'عرض الوظائف المعتمدة',
   'positions.manage': 'إدارة الوظائف المعتمدة',
@@ -133,6 +135,7 @@ export const PERMISSION_MODULES: Array<{ key: string; labelAr: string; permissio
   { key: 'employees', labelAr: 'الموظفون', permissions: ['employees.view', 'employees.create', 'employees.edit', 'employees.archive', 'employees.view_compensation', 'documents.manage', 'transfers.view'] },
   { key: 'recruitment', labelAr: 'التوظيف', permissions: ['candidates.manage', 'candidates.approve_offers'] },
   { key: 'performance', labelAr: 'إدارة الأداء', permissions: ['performance.manage', 'performance.calibrate'] },
+  { key: 'training', labelAr: 'التدريب', permissions: ['training.manage'] },
   { key: 'positions', labelAr: 'الوظائف المعتمدة', permissions: ['positions.view', 'positions.manage'] },
   { key: 'announcements', labelAr: 'الإعلانات', permissions: ['announcements.manage'] },
   { key: 'org', labelAr: 'الهيكل التنظيمي', permissions: ['org.manage'] },
@@ -186,6 +189,7 @@ export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   'candidates.approve_offers': 'يعتمد عرض العمل (الراتب وتاريخ البدء) أو يرجّعه قبل ما يتبعت للمرشح — واللي عمل العرض مايعتمدوش',
   'positions.view': 'يفتح شاشة «الوظائف المعتمدة»: الوظائف وأعدادها وتقرير «معتمد / مشغول / شاغر» لكل قسم وشاغلي كل وظيفة — في نطاق فروعه',
   'announcements.manage': 'يكتب الإعلانات وينشرها ويسحبها ويشوف مين قراها — حساب الفروع لإعلانات فروعه بس',
+  'training.manage': 'يدير كتالوج الدورات، ويعمل الجلسات لفروع نطاقه، ويسجّل الموظفين ويسجّل حضورهم وإكمالهم — والشهادة بتتسجّل مستند للموظف بانتهائه',
   'performance.calibrate': 'يعدّل درجة تقييم بعد تسليم المدير وقبل الاعتماد (أو بعد اعتراض اتقبل) بسبب إجباري بيتسجّل، ويشوف توزيع التقديرات لكل مدير — لموظفين نطاق فروعه',
   'performance.manage': 'يعمل أهداف الأقسام والشركة، ويشوف ويعتمد ويعدّل أهداف موظفين نطاق فروعه — الموظف ومديره المباشر بيشتغلوا على أهدافهم من غيرها',
   'positions.manage': 'يضيف الوظائف المعتمدة ويعدّل عددها وحالتها، ويربط الموظفين بيها ويفكّهم، ويولّدها من الموظفين الحاليين — في نطاق فروعه (الشاشة نفسها بصلاحية «عرض الوظائف المعتمدة»)',
@@ -380,6 +384,8 @@ export const ROLE_PRESETS: Array<{
       'performance.manage',
       // B3.8-أ: المعايرة
       'performance.calibrate',
+      // B3.9: زي المهام — في حزمة الكود بس (والموديول نفسه مقفول افتراضيًا)
+      'training.manage',
       // خطة المراجعة 24: طلب استثناء الحضور واعتماده وإنهاؤه — لا يعتمد أحد ما أنشأه (فصل مهام في الخدمة).
       // الاعتماد التنفيذي approve_executive يبقى لمدير النظام (ترحيل 20260914_*_c1_attendance_exemption_roles)
       'attendance_exemption.view', 'attendance_exemption.manage', 'attendance_exemption.approve',
