@@ -2,9 +2,9 @@ import type { EntityManager } from 'typeorm'
 import { HOLIDAY_WORK_LABEL, HOLIDAY_WORK_SOURCE_PREFIX } from '../attendance/holiday-work'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf } from '../auth/guards'
-import { PAID_SALARY_COMPONENTS } from '../employees/compensation'
 import { PAYROLL_OBLIGATION_CATEGORY_LABELS } from './payroll-obligation-trace'
 import { hiddenRunPeriodsByEmployee, scrubRunPeriodsDeep } from './payroll-run-visibility'
+import { DEFAULT_SALARY_ITEM_ORDER, readSalaryItemOrder, salaryItemRank, type SalaryItemOrder } from './salary-items'
 
 // بنود الاستحقاقات والاستقطاعات لكل موظف في المسير (طلب المالك 19 سبتمبر): كل بند عمود باسمه بدل «البدلات» و«إضافات أخرى» و«خصومات أخرى».
 // قراءة فقط من المحفوظ مع البند: أعمدة payroll_items + تفصيل breakdown (مكونات الراتب، أيام الحضور، سطور الإجازة) + قيود الدفتر بأسمائها.
@@ -49,26 +49,10 @@ export const PAYROLL_LINE_NAMES = {
 export const PAYROLL_LINE_TOTAL_NAMES = { earnings: 'إجمالي الاستحقاقات', deductions: 'إجمالي الاستقطاعات', net: 'الصافي' } as const
 
 // ترتيب الأعمدة: رتبة البند ثم اسمه (البنود المتغيرة: مكونات الراتب بترتيبها — وآخرها «بدل ضغط العمل» — والبدلات والخصومات بأسمائها)
-const SALARY_CODES: readonly string[] = PAID_SALARY_COMPONENTS.map(component => component.code)
-function lineRank(key: string): number {
-  if (key === 'BASIC') return 0
-  if (key.startsWith('SALARY:')) { const index = SALARY_CODES.indexOf(key.slice(7)); return 10 + (index < 0 ? 9 : index) }
-  if (key === 'SALARY_ALLOWANCES') return 19
-  if (key === 'OVERTIME') return 20
-  if (key === 'HOLIDAY_WORK') return 30
-  if (key.startsWith('ALLOWANCE:')) return 40
-  if (key.startsWith('BONUS:')) return 50
-  if (key.startsWith('CREDIT:')) return 60
-  if (key === 'OTHER_ADDITIONS') return 90
-  const fixed: Record<string, number> = { LATENESS: 100, DEDUCT_PERMISSION: 101, EARLY_LEAVE: 102, SHORTFALL: 103, ABSENCE: 104, UNPAID_LEAVE: 105, SUSPENSION: 106, SICK_LEAVE: 107,
-    OTHER_DEDUCTIONS: 130, LOAN: 140, SOCIAL_INSURANCE: 150 }
-  if (key in fixed) return fixed[key]
-  if (key.startsWith('TYPED:')) return 110
-  if (key.startsWith('DEBIT:')) return 120
-  return 200
-}
-export const comparePayrollLines = (a: Pick<PayrollLine, 'key' | 'name'>, b: Pick<PayrollLine, 'key' | 'name'>) =>
-  lineRank(a.key) - lineRank(b.key) || a.name.localeCompare(b.name, 'ar') || a.key.localeCompare(b.key)
+// B4.3: الرتبة = ترتيب بند السطر في جدول بنود الراتب (salary-items.ts)؛ من غير ترتيب مبعوت = الثابت (بذرة الجدول = نفس الرتب القديمة بالحرف)
+export const comparePayrollLinesBy = (order: SalaryItemOrder) => (a: Pick<PayrollLine, 'key' | 'name'>, b: Pick<PayrollLine, 'key' | 'name'>) =>
+  salaryItemRank(a.key, order) - salaryItemRank(b.key, order) || a.name.localeCompare(b.name, 'ar') || a.key.localeCompare(b.key)
+export const comparePayrollLines = comparePayrollLinesBy(DEFAULT_SALARY_ITEM_ORDER)
 
 // ===== أدوات القروش =====
 const numberOf = (value: unknown): number => {
@@ -97,8 +81,8 @@ class LineBag {
   }
   sum() { return [...this.map.values()].reduce((total, row) => total + row.cents, 0) }
   entries() { return [...this.map.values()] }
-  lines(): PayrollLine[] {
-    return this.entries().filter(row => row.cents !== 0).map(row => ({ key: row.key, name: row.name, amount: money(row.cents) })).sort(comparePayrollLines)
+  lines(order: SalaryItemOrder): PayrollLine[] {
+    return this.entries().filter(row => row.cents !== 0).map(row => ({ key: row.key, name: row.name, amount: money(row.cents) })).sort(comparePayrollLinesBy(order))
   }
 }
 
@@ -181,7 +165,8 @@ function fixedShiftDates(breakdown: Record<string, any>): Set<string> {
  * يقسم بند مسير محفوظ إلى بنود استحقاق واستقطاع بأسمائها. facts = قيود الدفتر المشار إليها (payrollItemObligationIds).
  * مجموع كل مجموعة = أعمدتها المحفوظة بالقرش، والصافي = netPay.
  */
-export function projectPayrollItemLines(item: PayrollLineItem, facts: ReadonlyMap<number, PayrollLineObligationFact> = new Map()): PayrollItemLines {
+export function projectPayrollItemLines(item: PayrollLineItem, facts: ReadonlyMap<number, PayrollLineObligationFact> = new Map(),
+  order: SalaryItemOrder = DEFAULT_SALARY_ITEM_ORDER): PayrollItemLines {
   const breakdown = parseObject(item.breakdown)
   const earnings = new LineBag(), deductions = new LineBag()
 
@@ -247,12 +232,12 @@ export function projectPayrollItemLines(item: PayrollLineItem, facts: ReadonlyMa
   deductions.add('LOAN', PAYROLL_LINE_NAMES.LOAN, cents(item.loanInstallments))
   deductions.add('SOCIAL_INSURANCE', PAYROLL_LINE_NAMES.SOCIAL_INSURANCE, cents(item.socialInsuranceDeduction))
 
-  const earningLines = earnings.lines()
+  const earningLines = earnings.lines(order)
   // الأساسي يظهر دايمًا (حتى لو صفر) عشان صف الموظف وقسيمته يبدأوا بيه
   if (!earningLines.some(line => line.key === 'BASIC')) earningLines.unshift({ key: 'BASIC', name: PAYROLL_LINE_NAMES.BASIC, amount: money(basic) })
   return {
     earnings: earningLines,
-    deductions: deductions.lines(),
+    deductions: deductions.lines(order),
     totals: {
       earnings: money(basic + allowances + cents(item.overtimeAmount) + otherAdditions),
       deductions: money(cents(item.latenessDeduction) + shortfall + cents(item.absenceDeduction) + unpaid + cents(item.loanInstallments) +
@@ -271,11 +256,12 @@ function mergeWithRemainder(target: LineBag, detail: LineBag, column: number, ke
 }
 
 /** أعمدة الجدول: كل بند له مبلغ في صف واحد على الأقل، بالترتيب الثابت (الأساسي أول الاستحقاقات دايمًا لو فيه صفوف). */
-export function payrollLineColumns(rows: ReadonlyArray<Pick<PayrollItemLines, 'earnings' | 'deductions'>>): { earnings: PayrollLineColumn[]; deductions: PayrollLineColumn[] } {
+export function payrollLineColumns(rows: ReadonlyArray<Pick<PayrollItemLines, 'earnings' | 'deductions'>>,
+  order: SalaryItemOrder = DEFAULT_SALARY_ITEM_ORDER): { earnings: PayrollLineColumn[]; deductions: PayrollLineColumn[] } {
   const collect = (pick: (row: Pick<PayrollItemLines, 'earnings' | 'deductions'>) => PayrollLine[]) => {
     const map = new Map<string, PayrollLineColumn>()
     for (const row of rows) for (const line of pick(row)) if (line.amount !== 0 || line.key === 'BASIC') if (!map.has(line.key)) map.set(line.key, { key: line.key, name: line.name })
-    return [...map.values()].sort(comparePayrollLines)
+    return [...map.values()].sort(comparePayrollLinesBy(order))
   }
   return { earnings: collect(row => row.earnings), deductions: collect(row => row.deductions) }
 }
@@ -313,10 +299,13 @@ export async function loadPayrollLineFacts(em: EntityManager, items: ReadonlyArr
  * CR40-B02: القارئ إجباري — كل شاشة بتعرض البنود بتعدّي من هنا (القسيمة، جدول المسير، سطور الشهر، مراجعة الاعتماد).
  * CR41: أسماء سطور كل صف ومفاتيحها من غير فترة أي مسير مخفي للحساب لموظف الصف ده بس (مش اتحاد الصفوف)، فسطر موظف مايتغيرش حسب مسيرات
  * موظف تاني. الأعمدة بتتبني من الصفوف المحجوبة نفسها، فالمفتاح بيطابق بين الصف والعمود. viewer = null = داخلي من غير حجب
+ * B4.3: ترتيب السطور من جدول بنود الراتب (order المبعوت، أو بيتقري هنا). اللي بيبني أعمدة بيقرا الترتيب مرة ويبعته هنا ولـpayrollLineColumns.
  */
-export async function describePayrollItemsLines<T extends PayrollLineItem>(em: EntityManager, items: readonly T[], viewer: JwtPayload | null): Promise<PayrollItemLines[]> {
+export async function describePayrollItemsLines<T extends PayrollLineItem>(em: EntityManager, items: readonly T[], viewer: JwtPayload | null,
+  order?: SalaryItemOrder): Promise<PayrollItemLines[]> {
   const facts = await loadPayrollLineFacts(em, items)
-  const lines = items.map(item => projectPayrollItemLines(item, facts))
+  const sorting = order ?? await readSalaryItemOrder(em)
+  const lines = items.map(item => projectPayrollItemLines(item, facts, sorting))
   if (!viewer) return lines
   const hidden = await hiddenRunPeriodsByEmployee(em, branchScopeOf(viewer), items.map(item => Number(item.employeeId)), viewer.employeeId ?? null)
   return hidden.size ? lines.map((line, index) => scrubRunPeriodsDeep(line, hidden.get(Number(items[index].employeeId)))) : lines

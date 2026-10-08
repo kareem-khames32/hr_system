@@ -27,6 +27,8 @@ const groups: { title: string; description: string; links: SettingsLink[] }[] = 
       { title: 'بيانات الشركة', description: 'الاسم والشعار وبيانات التواصل المستخدمة في المستندات.', href: '/settings/company', permission: 'settings.manage', icon: Building2 },
       // B4.1: كيان لكل دولة بأرقام تسجيله، وربط الفروع بيه
       { title: 'الكيانات القانونية', description: 'كيان لكل دولة بأرقام تسجيله وبنك رواتبه، وربط الفروع بكيان دولتها.', href: '/settings/legal-entities', permission: 'settings.manage', icon: Building2 },
+      // B4.3: وصف بنود القسيمة وترتيبها
+      { title: 'بنود الراتب', description: 'بنود القسيمة: نوعها، وخاضعة للتأمين والضريبة، وترتيبها.', href: '/settings/salary-items', permission: 'settings.manage', icon: Building2 },
       // B4.2: القيم القانونية المؤرخة لكل دولة
       { title: 'حزمة الدولة', description: 'القيم القانونية لكل دولة (نسب، حدود، شرائح) بتاريخ سريانها ومصدرها.', href: '/settings/statutory', permission: 'settings.manage', icon: Building2 },
       { title: 'الفروع', description: 'الفروع وأيام العطلة ومراكز التكلفة المرتبطة بها.', href: '/settings/branches', permission: 'org.manage', icon: GitBranch },

@@ -65,6 +65,7 @@ import { protectPayrollObligations } from './payroll-obligation-protection'
 import { postPayrollObligations, readPayrollNetProtectionSettings, readTypedObligationFacts, releasePayrollObligations, reservePayrollObligations } from './payroll-obligation-ledger'
 import { describePayrollObligationLines } from './payroll-obligation-trace'
 import { describePayrollItemsLines, payrollLineColumns } from './payroll-item-lines'
+import { readSalaryItemOrder } from './salary-items'
 import { approvedPayrollOvertimeClaims, assertUniqueOvertimeDays, closedOvertimePeriod, legacyExemptOvertimeSource, overtimeFinancialValue, overtimeTraceMatchesStoredTotals, projectOvertimeFinancialValue } from './overtime-financial'
 import { findPayrollPeriodContinuity, payrollPeriodBounds, PayrollPeriodError, payrollPolicyPeriodBounds, shiftPayrollPeriod } from './payroll-period'
 import { PAYROLL_SALARY_EVIDENCE_MODE_KEY, parsePayrollSalaryEvidenceMode, samePayrollRunSalarySource, selectPayrollRunSalary } from './payroll-run-salary'
@@ -2122,9 +2123,10 @@ export class PayrollService {
       const items = await em.getRepository(PayrollItem).find({ where: { runId }, order: { employeeId: 'ASC' } })
       // CR39-B01/CR40-B02: أسماء السطور ومفاتيحها من غير فترة أي مسير مخفي للحساب لموظفي المسير (اتحاد الفترات جوه describePayrollItemsLines)،
       // والأعمدة من الصفوف المحجوبة نفسها فالمفتاح يفضل مطابق بين الصف والعمود. الشركة زي ما هي
-      const lines = await describePayrollItemsLines(em, items, user)
+      const order = await readSalaryItemOrder(em)
+      const lines = await describePayrollItemsLines(em, items, user, order)
       const rows = items.map((item, index) => ({ itemId: item.id, employeeId: item.employeeId, ...lines[index] }))
-      return { runId, columns: payrollLineColumns(rows), rows }
+      return { runId, columns: payrollLineColumns(rows, order), rows }
     })
   }
 

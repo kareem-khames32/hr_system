@@ -63,6 +63,9 @@ import { PayrollDailyAccrual } from './payroll-daily-accrual.entities'
 import { PayrollDailyAccrualService } from './payroll-daily-accrual.service'
 // B1.14: معاينة الفترة الجارية من التراكم اليومي (الراتب الحي)
 import { PayrollLiveController } from './payroll-live.controller'
+import { SalaryItem } from './salary-items'
+import { SalaryItemsController } from './salary-items.controller'
+import { SalaryItemsService } from './salary-items.service'
 import { PayrollLiveService } from './payroll-live.service'
 import { PayrollDailyAccrualScheduler } from './payroll-daily-accrual.scheduler'
 import { PayrollDailyAccrualController } from './payroll-daily-accrual.controller'
@@ -140,14 +143,15 @@ import { HiddenRunPeriodsInterceptor } from './hidden-run-periods.interceptor'
       PayrollApprovalChain,
       PayrollRunApproval,
       PayrollItemDisbursement,
+      SalaryItem,
     ]),
   ],
   controllers: [PayrollController, ObligationsController, PayrollRulesController, PayrollPolicyController, PayrollSalaryHistoryController, TypedDeductionsController, BonusesController,
     FinancialExemptionsController, PayrollCorrectionsController, SocialInsuranceController, PayrollBankSheetController, PayrollOverviewController, PayrollAllowancesController,
-    PayrollDailyAccrualController, PayrollApprovalChainController, PayrollDisbursementController, PayrollLiveController],
+    PayrollDailyAccrualController, PayrollApprovalChainController, PayrollDisbursementController, PayrollLiveController, SalaryItemsController],
   providers: [PayrollService, ObligationsService, PayrollRulesService, PayrollPolicyService, PayrollSalaryHistoryService, TypedDeductionsService, TypedDeductionsScheduler, BonusesService,
     FinancialExemptionsService, PayrollCorrectionsService, SocialInsuranceService, PayrollOverviewService, PayrollAllowancesService,
-    PayrollDailyAccrualService, PayrollDailyAccrualScheduler, PayrollApprovalChainService, PayrollDisbursementService, PayrollLiveService,
+    PayrollDailyAccrualService, PayrollDailyAccrualScheduler, PayrollApprovalChainService, PayrollDisbursementService, PayrollLiveService, SalaryItemsService,
     // CR40: شبكة أمان على كل رد JSON لحساب فرع — فترة مسير مخفي له في أي نص بتتحجب (hidden-run-periods.interceptor.ts)
     { provide: APP_INTERCEPTOR, useClass: HiddenRunPeriodsInterceptor }],
   // B3.8-ب: مكافآت نتيجة التقييم بتتقدّم بخدمة المكافآت نفسها

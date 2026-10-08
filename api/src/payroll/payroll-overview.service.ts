@@ -10,6 +10,7 @@ import {
 } from './payroll-deduction-waivers'
 import { findPayrollConflicts } from './payroll-membership-guard'
 import { describePayrollItemsLines, payrollLineColumns, type PayrollItemLines } from './payroll-item-lines'
+import { readSalaryItemOrder } from './salary-items'
 import {
   matchesPayrollOverviewFilter, normalizePayrollOverviewFilters, payrollOverviewNeedsSuspended,
   type PayrollOverviewFilterInput, type PayrollOverviewFilters,
@@ -428,7 +429,8 @@ export class PayrollOverviewService {
     }
     // CR40-B02: البنود مرة واحدة لكل صفوف الشهر بالقارئ — أسماء السطور ومفاتيحها من غير فترة أي مسير مخفي له (نفس جدول المسير والقسيمة)،
     // والاتحاد على الشهر كله فالمفتاح الواحد واحد في كل الصفوف والأعمدة
-    const lines = await describePayrollItemsLines(this.em, visible.map(row => row.item), user)
+    const order = await readSalaryItemOrder(this.em)
+    const lines = await describePayrollItemsLines(this.em, visible.map(row => row.item), user, order)
     visible.forEach(({ item, employeeId, snapshot, employee, place }, index) => {
       const run = runs.find(row => row.id === Number(item.runId))!
       rows.push({ runId: run.id, runName: run.name, runStatus: run.status, itemId: Number(item.id), employeeId,
@@ -437,7 +439,7 @@ export class PayrollOverviewService {
         departmentName: place.departmentId ? names.departments.get(place.departmentId) ?? null : null, ...lines[index] })
     })
     rows.sort((a, b) => a.fullName.localeCompare(b.fullName, 'ar') || a.runId - b.runId)
-    return { period, runs: (await this.runsInScope(scope, runs)).map(run => ({ id: run.id, name: run.name, status: run.status })), columns: payrollLineColumns(rows), rows }
+    return { period, runs: (await this.runsInScope(scope, runs)).map(run => ({ id: run.id, name: run.name, status: run.status })), columns: payrollLineColumns(rows, order), rows }
   }
 
   private async fixedShiftDays(items: Array<Record<string, any>>, runs: RunRow[]) {
