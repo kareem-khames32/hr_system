@@ -15,6 +15,8 @@ import { canSeeEmployeesFinance, projectEmployee } from './employee-projection'
 // مش في الملف: حسابات الدخول، وملفات القضايا والتحقيقات وتقييمات الغير (فيها بيانات ناس تانية)، والملفات المرفوعة نفسها (مراجعها بس)،
 // والطلبات السرّية (بتتقري من أطرافها بس). والأقسام المالية والجزاءات بتطلع للي معاه صلاحيتها بس — اللي اتشال بيتقال في `omitted`.
 // P4A-B04: السرّية بحكم تعريف الطلب الفعلي (definitionCode ثم typeCode — زي شاشة الطلب)، وأي سجل اتعمل من طلب سري (عمود requestId) برّه كمان.
+// P4B-B01: «سجل اتعمل من طلب سري» بكل أعمدة الربط الفعلية للطلب (مش `requestId` بس — قيد الدفتر بيشاور بـ`sourceRequestId`)، وبالقفزة التانية
+// (قسط السلفة ← السلفة ← الطلب). وP4B-N01: لو SQL اختار التصدير ضحية تعارض أقفال (1205) بيتعاد كله من الأول — التصدير قراءة وماكتبش حاجة.
 // P4A-B05: التصدير كله في معاملة واحدة ماسكة صف الموظف — حكم النطاق والبيانات المصدّرة من نفس اللحظة، ونقل الفرع بيستنى لحد ما التصدير يخلص.
 
 /** access: القسم محتاج صلاحية زيادة عن «تعديل الموظفين» — finance (البيانات المالية) أو penalties (لائحة الجزاءات) */
@@ -42,12 +44,34 @@ export const EMPLOYEE_DATA_SECTIONS: readonly EmployeeDataSection[] = [
 export const CONFIDENTIAL_REQUEST_SQL = `EXISTS (SELECT 1 FROM dbo.[request_types] t WHERE t.[isConfidential] = 1
   AND (t.[code] = r.[definitionCode] OR t.[code] = r.[typeCode] OR (t.[code] = N'LOAN' AND r.[typeCode] = N'${LOAN_DEFERRAL_TYPE}')))`
 export const EMPLOYEE_NOT_FOUND = 'الموظف غير موجود'
+/** أعمدة الجداول المشتقة اللي بتشاور على جدول requests — أي واحد منها موجود في جدول القسم سطره بيتفحص */
+export const REQUEST_LINK_COLUMNS: readonly string[] = ['requestId', 'sourceRequestId', 'resignationRequestId']
+/** قفزة تانية: السطر مربوط بسطر أب في جدول تاني، والأب هو اللي مربوط بالطلب */
+export const PARENT_REQUEST_LINKS: Readonly<Record<string, { column: string; table: string }>> = {
+  // قسط السلفة ← السلفة ← طلبها
+  loan_installments: { column: 'loanId', table: 'loans' },
+  // فترة الخدمة (سبب الخروج) ← ملف إنهاء الخدمة ← طلب الاستقالة
+  employment_periods: { column: 'offboardingCaseId', table: 'offboarding_cases' },
+}
+export const EXPORT_DEADLOCK_ATTEMPTS = 3
+const deadlockVictim = (error: unknown) => {
+  const value = error as { number?: unknown; driverError?: { number?: unknown } } | null
+  return value?.driverError?.number === 1205 || value?.number === 1205
+}
 
 @Injectable()
 export class EmployeeDataExportService {
   constructor(@InjectDataSource() private readonly ds: DataSource) {}
 
-  export(user: JwtPayload, employeeId: number) {
+  /** ضحية تعارض الأقفال (1205) بتتعاد من الأول بحكمها كله — المعاملة اللي رجعت ماكتبتش حاجة */
+  async export(user: JwtPayload, employeeId: number) {
+    for (let attempt = 1; ; attempt++) {
+      try { return await this.exportOnce(user, employeeId) }
+      catch (error) { if (attempt >= EXPORT_DEADLOCK_ATTEMPTS || !deadlockVictim(error)) throw error }
+    }
+  }
+
+  private exportOnce(user: JwtPayload, employeeId: number) {
     const scope = branchScopeOf(user)
     return this.ds.transaction(async em => {
       // صف الموظف مقفول من هنا لآخر قراءة: فرعه مايتغيّرش في النص، وحكم النطاق على الصف المقفول. خارج نطاق فروع الحساب = «غير موجود»
@@ -60,6 +84,20 @@ export class EmployeeDataExportService {
         const [exists]: Array<{ ok: number }> = await em.query('SELECT CASE WHEN COL_LENGTH(@0, @1) IS NOT NULL THEN 1 ELSE 0 END AS [ok]', [`dbo.${table}`, name])
         return Number(exists?.ok) === 1
       }
+      // أعمدة الربط بالطلب الموجودة فعلًا في القاعدة (قراءة واحدة)
+      const linkNames = [...REQUEST_LINK_COLUMNS, ...Object.values(PARENT_REQUEST_LINKS).map(parent => parent.column)]
+      const present = new Set((await em.query(`SELECT t.[name] AS [table], c.[name] AS [column] FROM sys.columns c INNER JOIN sys.tables t ON t.[object_id] = c.[object_id]
+        WHERE SCHEMA_NAME(t.[schema_id]) = N'dbo' AND c.[name] IN (${linkNames.map((_, index) => `@${index}`).join(', ')})`, linkNames) as Array<{ table: string; column: string }>)
+        .map(row => `${row.table}.${row.column}`))
+      /** شروط «مش مشتق من طلب سري» لجدول القسم: بكل عمود ربط فيه، وعن طريق أبوه لو له أب */
+      const notFromConfidential = (table: string): string => {
+        const own = REQUEST_LINK_COLUMNS.filter(name => present.has(`${table}.${name}`))
+          .map(name => ` AND NOT EXISTS (SELECT 1 FROM dbo.[requests] r WHERE r.[id] = s.[${name}] AND ${CONFIDENTIAL_REQUEST_SQL})`)
+        const parent = PARENT_REQUEST_LINKS[table]
+        const viaParent = parent && present.has(`${table}.${parent.column}`) ? REQUEST_LINK_COLUMNS.filter(name => present.has(`${parent.table}.${name}`))
+          .map(name => ` AND NOT EXISTS (SELECT 1 FROM dbo.[${parent.table}] p INNER JOIN dbo.[requests] r ON r.[id] = p.[${name}] WHERE p.[id] = s.[${parent.column}] AND ${CONFIDENTIAL_REQUEST_SQL})`) : []
+        return [...own, ...viaParent].join('')
+      }
       const sections: Array<{ key: string; label: string; count: number; truncated: boolean; rows: unknown[] }> = []
       const omitted: Array<{ key: string; label: string; reason: string }> = []
       for (const section of EMPLOYEE_DATA_SECTIONS) {
@@ -68,12 +106,10 @@ export class EmployeeDataExportService {
         if (section.access === 'finance' && !canSeeEmployeesFinance(user)) { omitted.push({ key: section.key, label: section.label, reason: 'محتاج صلاحية البيانات المالية' }); continue }
         // أسماء الجداول والأعمدة ثوابت من الكود (مش من الطلب)؛ الجدول أو العمود الناقص (قبل ترحيله) بيتعدّى
         if (!(await column(section.table, section.column))) continue
-        // الطلبات: السرّي بيتقري من أطرافه بس — برّه الملف خالص. وأي جدول سطره مربوط بطلب: السطر اللي طلبه سري برّه كمان
-        const fromRequest = section.key !== 'requests' && await column(section.table, 'requestId')
+        // الطلبات: السرّي بيتقري من أطرافه بس — برّه الملف خالص. وأي جدول سطره مشتق من طلب (بأي عمود ربط، أو عن طريق أبوه): السطر اللي طلبه سري برّه كمان
         const rows: unknown[] = section.key === 'requests'
           ? await em.query(`SELECT TOP (${EMPLOYEE_DATA_SECTION_LIMIT + 1}) r.* FROM dbo.[requests] r WHERE r.[requesterId] = @0 AND NOT ${CONFIDENTIAL_REQUEST_SQL} ORDER BY r.[id]`, [employeeId])
-          : await em.query(`SELECT TOP (${EMPLOYEE_DATA_SECTION_LIMIT + 1}) s.* FROM dbo.[${section.table}] s WHERE s.[${section.column}] = @0${fromRequest
-            ? ` AND NOT EXISTS (SELECT 1 FROM dbo.[requests] r WHERE r.[id] = s.[requestId] AND ${CONFIDENTIAL_REQUEST_SQL})` : ''} ORDER BY 1`, [employeeId])
+          : await em.query(`SELECT TOP (${EMPLOYEE_DATA_SECTION_LIMIT + 1}) s.* FROM dbo.[${section.table}] s WHERE s.[${section.column}] = @0${notFromConfidential(section.table)} ORDER BY 1`, [employeeId])
         const truncated = rows.length > EMPLOYEE_DATA_SECTION_LIMIT
         sections.push({ key: section.key, label: section.label, count: Math.min(rows.length, EMPLOYEE_DATA_SECTION_LIMIT), truncated, rows: truncated ? rows.slice(0, EMPLOYEE_DATA_SECTION_LIMIT) : rows })
       }
