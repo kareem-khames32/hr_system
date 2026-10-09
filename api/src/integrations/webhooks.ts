@@ -124,17 +124,30 @@ export function webhookBody(input: { eventId: string; type: WebhookEventName; oc
  */
 export function postPinned(url: URL, pinned: { address: string; family: number }, headers: Record<string, string>, body: string, timeoutMs: number): Promise<number> {
   return new Promise((resolve, reject) => {
+    // CRP6B (P6B-B01): الوعد بيتحسم مرة واحدة ودايمًا — برقم الحالة أول ما ترويسة الرد توصل (الجسم مابيتقريش، فرد متقطع أو طويل مايعلّقش عامل
+    // الطابور)، أو بخطأ الاتصال، أو بمهلة كلية للطلب كله (اتصال + إرسال + انتظار الترويسة).
+    let settled = false, deadline: NodeJS.Timeout | undefined
+    const finish = (error: Error | null, status = 0) => {
+      if (settled) return
+      settled = true
+      if (deadline) clearTimeout(deadline)
+      if (error) reject(error); else resolve(status)
+    }
     const send = url.protocol === 'https:' ? httpsRequest : httpRequest
     const call = send({ protocol: url.protocol, hostname: url.hostname.replace(/^\[|\]$/g, ''), port: url.port || undefined, path: url.pathname + url.search, method: 'POST', agent: false, timeout: timeoutMs,
       headers: { ...headers, 'Content-Length': String(Buffer.byteLength(body)) },
       // حل الاسم الوحيد المسموح: العنوان المثبّت
       lookup: (_hostname: string, options: unknown, callback: (...args: unknown[]) => void) => ((options as { all?: boolean } | undefined)?.all
         ? callback(null, [{ address: pinned.address, family: pinned.family }]) : callback(null, pinned.address, pinned.family)) } as unknown as RequestOptions, response => {
-      response.resume()
-      response.on('end', () => resolve(response.statusCode ?? 0))
+      const status = response.statusCode ?? 0
+      response.on('error', () => undefined)
+      response.destroy()
+      finish(null, status)
     })
-    call.on('timeout', () => call.destroy(new Error('انتهت مهلة نقطة الاستقبال')))
-    call.on('error', reject)
+    const expired = () => { const error = new Error('انتهت مهلة نقطة الاستقبال'); call.destroy(error); finish(error) }
+    deadline = setTimeout(expired, timeoutMs)
+    call.on('timeout', expired)
+    call.on('error', error => finish(error instanceof Error ? error : new Error(String(error))))
     call.end(body)
   })
 }

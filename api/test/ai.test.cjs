@@ -226,21 +226,28 @@ test('AIU-11: مصدر الكود — خدمة الاقتراحات مابتكت
 })
 
 // ===== CRP6A: حواجز P6A =====
-test('AIU-12 (CRP6A-B06): النص الحر قبل المزوّد — بريد وآيبان وأرقام طويلة (تليفون، هوية، حساب) بتتحجب جوه أي نص؛ التواريخ والمبالغ والأرقام القصيرة بتفضل', () => {
+test('AIU-12 (CRP6A-B06، CRP6B): النص الحر قبل المزوّد — حد آمن واحد: ولا تلات أرقام ورا بعض بأي كتابة أو فواصل أو محارف مخفية، ولا كلمة فيها @ أو رابط؛ والقيم المنظّمة ومعرّفات النظام بتعدّي', () => {
   const hidden = rules.AI_HIDDEN_TEXT
   const cases = [
-    ['كلّمه على 0501234567 بكرة', `كلّمه على ${hidden} بكرة`], ['جواله +966 50 123 4567', `جواله ${hidden}`], ['تليفون ٠٥٠١٢٣٤٥٦٧', `تليفون ${hidden}`], ['هاتف 050-123-4567.', `هاتف ${hidden}.`],
-    ['آيبان SA4420000001234567891234 للتحويل', `آيبان ${hidden} للتحويل`], ['IBAN: SA44 2000 0001 2345 6789 1234', `IBAN: ${hidden}`], ['بريده ahmed.ali@example.com', `بريده ${hidden}`],
-    ['هويته 1099887766', `هويته ${hidden}`], ['حساب 123456789012', `حساب ${hidden}`],
-    // بيفضل زي ما هو
-    ['خبرة 6 سنين من 2019', 'خبرة 6 سنين من 2019'], ['من 2026-10-01 إلى 2026-10-31', 'من 2026-10-01 إلى 2026-10-31'], ['بتاريخ 01/10/2026', 'بتاريخ 01/10/2026'], ['1500000.00', '1500000.00'], ['المبلغ 1500.00 ريال', 'المبلغ 1500.00 ريال'],
-    ['كود AX_P1 ومسير 2026-10', 'كود AX_P1 ومسير 2026-10'], ['2026-10-09T03:22:22.000Z', '2026-10-09T03:22:22.000Z'], ['', ''],
+    ['كلّمه على 0501234567 بكرة', `كلّمه على ${hidden} بكرة`], ['جواله +966 50 123 4567', `جواله +${hidden}`], ['تليفون ٠٥٠١٢٣٤٥٦٧', `تليفون ${hidden}`], ['هاتف 050-123-4567.', `هاتف ${hidden}.`],
+    // بدائل P6B: أرقام فارسية، رقم محلي سباعي، وأرقام بينها فاصل بعرض صفر
+    ['تماس ۰۹۱۲۳۴۵۶۷۸۹', `تماس ${hidden}`], ['Contact telephone 5551234', `Contact telephone ${hidden}`], ['رقمه 05\u200B01\u200B23\u200B45\u200B67', `رقمه ${hidden}`], ['０５０１２３４５６７', hidden],
+    ['كود 4 4 7 1 9 2', `كود ${hidden}`], ['داخلي (212) 555', `داخلي (${hidden}`],
+    ['آيبان SA4420000001234567891234 للتحويل', `آيبان SA${hidden} للتحويل`], ['بريده ahmed.ali@example.com', `بريده ${hidden}`], ['تليجرام @ahmed_ali', `تليجرام ${hidden}`], ['صفحته https://x.example/u/7 هنا', `صفحته ${hidden} هنا`],
+    ['هويته 1099887766', `هويته ${hidden}`], ['من سنة 2019', `من سنة ${hidden}`],
+    // بيفضل: رقم من خانة أو اتنين، والكلام
+    ['خبرة 6 سنين و 12 مشروع', 'خبرة 6 سنين و 12 مشروع'], ['مستوى B2 في الإنجليزي', 'مستوى B2 في الإنجليزي'], ['', ''],
   ]
-  for (const [input, expected] of cases) assert.equal(rules.scrubFreeText(input), expected, input)
-  // على أي عمق في ناتج الأداة، ومع حجب أسماء الخانات زي ما هو
-  assert.deepEqual(rules.redactForProvider({ notes: 'واتساب 0501234567', phone: '0500000000', list: [{ comment: 'x@y.example و SA4420000001234567891234' }], days: 12345678, when: '2026-10-01' }),
-    { notes: `واتساب ${hidden}`, list: [{ comment: `${hidden} و ${hidden}` }], days: 12345678, when: '2026-10-01' })
-  assert.equal(JSON.parse(rules.toolResultText({ notes: 'رقمه 0501234567' })).notes, `رقمه ${hidden}`)
+  for (const [input, expected] of cases) assert.equal(rules.scrubFreeText(input), expected, JSON.stringify(input))
+  // ولا نص حر بيطلع منه تلات أرقام ورا بعض — أيًّا كان شكله
+  for (const [input] of cases) assert.equal(/\p{Nd}[^\p{L}\p{Nd}]{0,3}\p{Nd}[^\p{L}\p{Nd}]{0,3}\p{Nd}/u.test(rules.scrubFreeText(input)), false, JSON.stringify(input))
+  assert.equal(rules.scrubFreeText('س'.repeat(5000)).length, rules.AI_FREE_TEXT_MAX)
+  // القيم المنظّمة (النص كله تاريخ/وقت/شهر/مبلغ/عدد قصير) ومعرّفات النظام ونصوصه الثابتة بتعدّي؛ وأي حاجة تانية نص حر
+  const kept = { when: '2026-10-01', at: '2026-10-09T03:22:22.000Z', period: '2026-10', time: '08:30', total: '1500000.00', year: '2026', employeeCode: 'EMP20240001', definition: 'أيام الغياب ÷ أيام العمل × 100', days: 12345678 }
+  assert.deepEqual(rules.redactForProvider(kept), kept)
+  assert.deepEqual(rules.redactForProvider({ notes: 'واتساب 0501234567', phone: '0500000000', total: '0501234567', title: 'سياسة 2026', employeeCode: 'رقمه 0501234567', list: [{ comment: 'x@y.example و 1099887766' }] }),
+    { notes: `واتساب ${hidden}`, total: hidden, title: `سياسة ${hidden}`, employeeCode: `رقمه ${hidden}`, list: [{ comment: `${hidden} و ${hidden}` }] })
+  assert.equal(JSON.parse(rules.toolResultText({ notes: 'رقمه ۰۹۱۲۳۴۵۶۷۸۹' })).notes, `رقمه ${hidden}`)
 })
 
 test('AIU-13 (CRP6A-B03/B05): مصدر الكود — أداة البحث من غير أرقام مراجع؛ والاقتراح مربوط بملف الموظف وقت تجهيزه في العرض والتأكيد والحجز وقرار اقتراحات التوظيف والأداء', () => {
@@ -252,6 +259,9 @@ test('AIU-13 (CRP6A-B03/B05): مصدر الكود — أداة البحث من �
   assert.match(service, /if \(!row \|\| !proposal \|\| \(row\.employeeId \?\? null\) !== \(user\.employeeId \?\? null\)\) throw new NotFoundException\(AI_SUGGESTION_NOT_FOUND\)/)
   assert.match(service, /return proposal && \(row\.employeeId \?\? null\) === \(user\.employeeId \?\? null\) && now - created <= AI_SUGGESTION_TTL_MS/)
   assert.match(service, /AND \[createdAt\] >= @6 AND ISNULL\(\[employeeId\], 0\) = @7/)
+  // CRP6B-B05: ربط الحساب الحالي بيتقري جوه جملة الحجز نفسها (مش هوية الجلسة بس)
+  assert.match(service, /AND ISNULL\(\(SELECT u\.\[employeeId\] FROM dbo\.users u WHERE u\.\[id\] = @1\), 0\) = @7`/)
+  assert.match(read('ai/ai-assist.service.ts'), /AND ISNULL\(\(SELECT u\.\[employeeId\] FROM dbo\.users u WHERE u\.\[id\] = @1\), 0\) = @6`/)
   const assist = read('ai/ai-assist.service.ts')
   assert.match(assist, /if \(!row \|\| !stored \|\| \(row\.employeeId \?\? null\) !== \(user\.employeeId \?\? null\)\) throw new NotFoundException\(AI_SUGGESTION_NOT_FOUND\)/)
   assert.match(assist, /AND \[status\] = N'OK' AND ISNULL\(\[employeeId\], 0\) = @6/)

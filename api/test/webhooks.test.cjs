@@ -105,3 +105,32 @@ test('WHU-05 (CRP6A-B04): الإرسال المثبّت — الاتصال بي�
     await assert.rejects(hooks.postPinned(new URL('http://localhost:' + port + '/hook'), { address: '127.0.0.1', family: 4 }, {}, '{}', 3000).then(() => hooks.postPinned(new URL('http://hooks.example.invalid:1/hook'), { address: '127.0.0.1', family: 4 }, {}, '{}', 2000)))
   } finally { await new Promise(resolve => server.close(resolve)) }
 })
+
+test('WHU-06 (CRP6B، P6B-B01): الإرسال المثبّت مابيعلّقش — رد متقطع بعد الترويسة بيتحسم برقم حالته فورًا، ومستقبِل مابيردّش بيتحسم بالمهلة، وانقطاع قبل الرد بيتحسم بخطأ', async () => {
+  const http = require('node:http')
+  const sockets = new Set()
+  const server = http.createServer((request, response) => {
+    request.resume()
+    if (request.url === '/partial') { response.writeHead(200, { 'Content-Length': '1000' }); response.write('جزء'); setTimeout(() => request.socket.destroy(), 30); return }
+    if (request.url === '/silent') return
+    if (request.url === '/drop') { request.socket.destroy(); return }
+    response.writeHead(200); response.end('ok')
+  })
+  server.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)) })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = server.address().port, pinned = { address: '127.0.0.1', family: 4 }
+  const timed = async work => { const started = Date.now(); try { return { value: await work(), ms: Date.now() - started } } catch (error) { return { error: String(error.message), ms: Date.now() - started } } }
+  try {
+    const partial = await timed(() => hooks.postPinned(new URL(`http://hooks.example.invalid:${port}/partial`), pinned, {}, '{}', 4000))
+    assert.deepEqual([partial.value, partial.ms < 1500], [200, true], JSON.stringify(partial))
+    const silent = await timed(() => hooks.postPinned(new URL(`http://hooks.example.invalid:${port}/silent`), pinned, {}, '{}', 400))
+    assert.deepEqual([silent.error, silent.ms >= 350 && silent.ms < 2000], ['انتهت مهلة نقطة الاستقبال', true], JSON.stringify(silent))
+    const dropped = await timed(() => hooks.postPinned(new URL(`http://hooks.example.invalid:${port}/drop`), pinned, {}, '{}', 4000))
+    assert.deepEqual([typeof dropped.error, dropped.ms < 1500], ['string', true], JSON.stringify(dropped))
+    // وبعد كل ده الإرسال العادي لسه شغال
+    assert.equal(await hooks.postPinned(new URL(`http://hooks.example.invalid:${port}/ok`), pinned, {}, '{}', 4000), 200)
+  } finally { for (const socket of sockets) socket.destroy(); await new Promise(resolve => server.close(resolve)) }
+  const source = read('integrations/webhooks.ts')
+  assert.doesNotMatch(source, /response\.on\('end'/, 'مفيش انتظار لآخر الجسم')
+  assert.match(source, /deadline = setTimeout\(expired, timeoutMs\)/)
+})

@@ -127,7 +127,9 @@ export class AiAssistService {
       } else status = 'ACCEPTED'
     }
     const claimed: unknown[] = await this.ds.query(`UPDATE dbo.ai_actions SET [confirmed] = @0, [confirmedByUserId] = @1, [confirmedAt] = @2, [status] = @3, [answer] = @4 OUTPUT inserted.[id]
-      WHERE [id] = @5 AND [userId] = @1 AND [confirmed] IS NULL AND [status] = N'OK' AND ISNULL([employeeId], 0) = @6`, [input.used ? 1 : 0, user.sub, new Date(), status, finalText, id, user.employeeId ?? 0])
+      WHERE [id] = @5 AND [userId] = @1 AND [confirmed] IS NULL AND [status] = N'OK' AND ISNULL([employeeId], 0) = @6
+        -- CRP6B-B05: وربط الحساب بالموظف دلوقتي لازم يساويه (تغيير الربط قبل القرار بيبطّله)
+        AND ISNULL((SELECT u.[employeeId] FROM dbo.users u WHERE u.[id] = @1), 0) = @6`, [input.used ? 1 : 0, user.sub, new Date(), status, finalText, id, user.employeeId ?? 0])
     if (claimed.length !== 1) throw new ConflictException(AI_SUGGESTION_DECIDED)
     return { id, outcome: status }
   }

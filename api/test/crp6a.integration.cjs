@@ -154,6 +154,18 @@ test('CR6-03 (B05): الاقتراح مربوط بملف الموظف اللي �
   assert.deepEqual([untouched.confirmed, untouched.status, await count('requests')], [null, 'OK', requestsBefore])
   // صاحبه الأصلي لسه يقدر يلغيه
   assert.deepEqual(ok(await request(U.staff, 'POST', `/ai/actions/${pending.id}/dismiss`)), { id: pending.id, dismissed: true })
+  // CRP6B-B05: ربط الحساب اتغيّر في القاعدة والجلسة لسه بالهوية القديمة (السباق قبل الحجز): الحجز نفسه بيقرا الربط الحالي فمابيتنفّذش
+  const racing = await actions.save({ userId: U.staff.id, employeeId: E.one.id, kind: rules.AI_KIND_ACTION, question: 'عايز إجازة', tools: '[]', answer: 'المعاينة جاهزة', suggestion, confirmed: null, confirmedByUserId: null, confirmedAt: null,
+    provider: 'fake', model: 'fake-1', status: 'OK', createdAt: new Date() })
+  const racingDraft = await actions.save({ userId: U.staff.id, employeeId: E.one.id, kind: rules.AI_KIND_CV, question: 'قراءة سيرة', tools: '[]', answer: null, suggestion: JSON.stringify({ kind: rules.AI_KIND_CV, entityId: 1, text: 'ملخص' }),
+    confirmed: null, confirmedByUserId: null, confirmedAt: null, provider: 'fake', model: 'fake-1', status: 'OK', createdAt: new Date() })
+  await repo('User').update(U.staff.id, { employeeId: E.two.id })
+  try {
+    assert.deepEqual([(await request(U.staff, 'POST', `/ai/actions/${racing.id}/confirm`)).status, (await request(U.staff, 'POST', `/ai/actions/${racing.id}/dismiss`)).status,
+      (await request(U.staff, 'POST', `/ai/assist/${racingDraft.id}/outcome`, { used: true, finalText: 'ملخص' })).status], [409, 409, 409])
+    const after = [await actions.findOneByOrFail({ id: racing.id }), await actions.findOneByOrFail({ id: racingDraft.id })]
+    assert.deepEqual([after.map(row => [row.confirmed, row.status]), await count('requests')], [[[null, 'OK'], [null, 'OK']], requestsBefore])
+  } finally { await repo('User').update(U.staff.id, { employeeId: E.one.id }) }
   // قرار اقتراح توظيف (B6.10) بنفس الحكم
   const draft = await actions.save({ userId: U.staff.id, employeeId: E.one.id, kind: rules.AI_KIND_CV, question: 'قراءة سيرة', tools: '[]', answer: null, suggestion: JSON.stringify({ kind: rules.AI_KIND_CV, entityId: 1, text: 'ملخص' }), confirmed: null,
     confirmedByUserId: null, confirmedAt: null, provider: 'fake', model: 'fake-1', status: 'OK', createdAt: new Date() })
@@ -173,5 +185,15 @@ test('CR6-04 (B06): ترتيب المرشحين — تليفون وآيبان و
   const sent = JSON.stringify(fake.seen)
   for (const hidden of ['0501234567', 'SA4420000001234567891234', 'private.person@mail.example', '1099887766', '0555000111']) assert.equal(sent.includes(hidden), false, hidden)
   const notes = JSON.parse(fake.seen[0].messages[0].text).candidates.map(row => row.notes)
-  assert.deepEqual(notes, [`خبرة 6 سنين. واتساب ${rules.AI_HIDDEN_TEXT} وآيبانه ${rules.AI_HIDDEN_TEXT}`, `خبرة 3 سنين — بريده ${rules.AI_HIDDEN_TEXT} وهويته ${rules.AI_HIDDEN_TEXT}`])
+  assert.deepEqual(notes, [`خبرة 6 سنين. واتساب ${rules.AI_HIDDEN_TEXT} وآيبانه SA${rules.AI_HIDDEN_TEXT}`, `خبرة 3 سنين — بريده ${rules.AI_HIDDEN_TEXT} وهويته ${rules.AI_HIDDEN_TEXT}`])
+  // CRP6B-B06: بدائل P6B — أرقام فارسية، رقم سباعي، وأرقام بينها فاصل بعرض صفر: ولا واحد بيوصل
+  const variants = ['۰۹۱۲۳۴۵۶۷۸۹', '5551234', '05\u200B01\u200B23\u200B45\u200B67']
+  await repo('Candidate').update(C.one.id, { notes: `تماس ${variants[0]} — Contact telephone ${variants[1]}` })
+  await repo('Candidate').update(C.two.id, { notes: `رقمه ${variants[2]} وخبرته 4 سنين` })
+  fake.seen = []
+  ok(await request(U.staff, 'POST', `/ai/assist/ranking/${job.id}`))
+  const again = JSON.stringify(fake.seen), sentNotes = JSON.parse(fake.seen[0].messages[0].text).candidates.map(row => row.notes)
+  for (const variant of [...variants, '0501234567', '۰۹۱۲', '555']) assert.equal(again.includes(variant), false, JSON.stringify(variant))
+  assert.equal(sentNotes.some(note => /\p{Nd}[^\p{L}\p{Nd}]{0,3}\p{Nd}[^\p{L}\p{Nd}]{0,3}\p{Nd}/u.test(note)), false)
+  assert.equal(sentNotes[1], `رقمه ${rules.AI_HIDDEN_TEXT} وخبرته 4 سنين`)
 })

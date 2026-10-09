@@ -85,31 +85,38 @@ export function cleanQuestion(raw: unknown): string | null {
 // خانات مابتتبعتش لمزوّد النموذج أبدًا (آيبان، هوية، جواز، جوال، حساب بنكي، كلمات سر ومفاتيح)
 const SENSITIVE_KEY = /iban|national|passport|phone|mobile|bank|account(no|number)|password|secret|token|birth/i
 export const AI_HIDDEN_TEXT = '[محجوب]'
-const digitsOf = (value: string) => value.replace(/[^0-9\u0660-\u0669]/g, '')
+export const AI_FREE_TEXT_MAX = 1500
 /**
- * CRP6A-B06: نص حر رايح للمزوّد (ملاحظات، تعليقات، أسباب) — أي حاجة شكلها بريد، أو آيبان، أو رقم طويل (تليفون، هوية، حساب: 8 أرقام فأكتر ولو بينهم
- * مسافات أو شرط) بتتحجب. التواريخ والمبالغ بتفضل. اسم الخانة لوحده مش كفاية: الحساس ممكن يتكتب جوه أي نص.
+ * CRP6B-B06: الحد الآمن للنص الحر الرايح للمزوّد (ملاحظات، تعليقات، أسباب، عناوين). مش قايمة أشكال بتتطارد — قاعدة واحدة محافظة:
+ *  - النص بيتوحّد (NFKC) والمحارف المخفية (\p{Cf}: فاصل بعرض صفر وأخواته) بتتشال الأول؛
+ *  - أي كلمة فيها @ أو رابط بتتحجب (بريد، معرّف، عنوان)؛
+ *  - **أي تلات أرقام فأكتر** ورا بعض بتتحجب، بأي كتابة أرقام (\p{Nd}: عربي، هندي، فارسي…) ولو بينهم لحد تلات محارف مش حروف (مسافة، شرطة، نقطة، قوس).
+ * فمايعدّيش رقم تليفون ولا هوية ولا حساب ولا آيبان بأي شكل؛ اللي بيفضل رقم من خانة أو اتنين (سنين الخبرة) والكلام. الأرقام المكتوبة بالحروف بتعدّي.
  */
 export function scrubFreeText(text: string): string {
-  return text
-    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, AI_HIDDEN_TEXT)
-    .replace(/\b[A-Za-z]{2}[0-9]{2}(?:[ -]?[A-Za-z0-9]){10,30}\b/g, AI_HIDDEN_TEXT)
-    .replace(/[+]?[0-9\u0660-\u0669][0-9\u0660-\u0669\s().\/-]{5,}[0-9\u0660-\u0669]/g, found => {
-      const value = found.trim()
-      if (digitsOf(value).length < 8) return found
-      // تاريخ (2026-10-01 أو 01/10/2026) أو مبلغ (1500000.00): مش بيانات اتصال
-      if (/^\d{4}-\d{2}-\d{2}$/.test(value) || /^\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}$/.test(value) || /^\d+\.\d{1,2}$/.test(value)) return found
-      return AI_HIDDEN_TEXT
-    })
+  return text.normalize('NFKC').replace(/\p{Cf}/gu, '')
+    .replace(/\S*(?:@|:\/\/|www\.)\S*/giu, AI_HIDDEN_TEXT)
+    .replace(/\p{Nd}(?:[^\p{L}\p{Nd}]{0,3}\p{Nd}){2,}/gu, AI_HIDDEN_TEXT)
+    .slice(0, AI_FREE_TEXT_MAX)
 }
-/** نسخة من ناتج الأداة من غير الخانات الحساسة (على أي عمق)، والنصوص متنضّفة من الحساس اللي جواها */
-export function redactForProvider(value: unknown, depth = 0): unknown {
+// قيمة منظّمة (مش نص حر): النص **كله** بشكل واحد من دول — تاريخ، وقت، شهر، مبلغ بكسرين، أو عدد لحد أربع خانات
+const STRUCTURED_VALUE = [/^\d{4}-\d{2}-\d{2}$/, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z?$/, /^\d{4}-\d{2}$/, /^\d{2}:\d{2}(:\d{2})?$/, /^-?\d{1,12}\.\d{2}$/, /^-?\d{1,4}$/]
+// خانات معرّفات النظام (كود الموظف/الوظيفة) ونصوص النظام الثابتة (تعريف المؤشر واسمه ومصدر الرد): مش نص من مستخدم
+const IDENTIFIER_KEY = /^(employeeCode|code|jobCode)$/
+const SYSTEM_TEXT_KEY = /^(definition|label|source|unit)$/
+/**
+ * نسخة من ناتج الأداة للمزوّد: الخانات الحساسة باسمها بتتشال (على أي عمق)، والقيم المنظّمة ومعرّفات النظام ونصوصه الثابتة بتعدّي زي ما هي،
+ * وأي نص تاني نص حر بيعدّي على `scrubFreeText`.
+ */
+export function redactForProvider(value: unknown, depth = 0, key = ''): unknown {
   if (depth > 8 || value === null || value === undefined) return value ?? null
-  if (Array.isArray(value)) return value.slice(0, 50).map(item => redactForProvider(item, depth + 1))
+  if (Array.isArray(value)) return value.slice(0, 50).map(item => redactForProvider(item, depth + 1, key))
   if (value instanceof Date) return value.toISOString()
-  if (typeof value === 'object') return Object.fromEntries(Object.entries(value as Record<string, unknown>).filter(([key]) => !SENSITIVE_KEY.test(key)).map(([key, item]) => [key, redactForProvider(item, depth + 1)]))
-  if (typeof value === 'string') return scrubFreeText(value)
-  return value
+  if (typeof value === 'object') return Object.fromEntries(Object.entries(value as Record<string, unknown>).filter(([name]) => !SENSITIVE_KEY.test(name)).map(([name, item]) => [name, redactForProvider(item, depth + 1, name)]))
+  if (typeof value !== 'string') return value
+  if (SYSTEM_TEXT_KEY.test(key) || STRUCTURED_VALUE.some(shape => shape.test(value))) return value
+  if (IDENTIFIER_KEY.test(key) && /^[\p{L}\p{Nd}_.\/-]{1,40}$/u.test(value)) return value
+  return scrubFreeText(value)
 }
 /** ناتج الأداة كنص للمزوّد: من غير الحساس، وبحد للطول */
 export function toolResultText(value: unknown): string {
