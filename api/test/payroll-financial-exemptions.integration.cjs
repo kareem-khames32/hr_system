@@ -25,7 +25,12 @@ const today = new Date()
 const ym = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
 const period = ym(today)
 const nextPeriod = ym(new Date(today.getFullYear(), today.getMonth() + 1, 1))
-const day = n => `${period}-${String(n).padStart(2, '0')}`
+const calendarDay = n => `${period}-${String(n).padStart(2, '0')}`
+// «اليوم رقم n» في السيناريوهات = يوم العمل رقم n في الشهر (من غير الجمعة والسبت): يوم غياب أو تأخير بييجي في عطلة أسبوعية مابيتحسبش،
+// فالاختبار كان بيقع في أي شهر يوم 9 (أو 3 أو 8…) فيه جمعة — زي أكتوبر 2026.
+const WORKING_DAYS = Array.from({ length: new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate() }, (_, index) => index + 1)
+  .filter(n => ![5, 6].includes(new Date(today.getFullYear(), today.getMonth(), n).getDay()))
+const day = n => calendarDay(WORKING_DAYS[n - 1])
 const incidentDate = new Date(Date.now() - 3 * 86400000).toLocaleDateString('en-CA')
 const REASON = 'عطل حافلة الشركة صباح اليوم بمحضر الموارد البشرية الرسمي'
 
@@ -66,7 +71,7 @@ async function attendance(emp, { late = [], absent = [] } = {}) {
   const rows = []
   const days = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate()
   for (let n = 1; n <= days; n++) {
-    const date = day(n)
+    const date = calendarDay(n)
     if (absent.includes(date)) {
       rows.push({ employeeId: emp.id, branchId: emp.branchId, date, status: 'absent', checkIn: null, checkOut: null, shiftName: 'وردية اختبار الإعفاء', shiftStart: '08:00', shiftEnd: '16:00',
         scheduleSource: 'override', workMinutes: 0, lateMinutes: 0, deductibleMinutes: 0, earlyLeaveMinutes: 0 })

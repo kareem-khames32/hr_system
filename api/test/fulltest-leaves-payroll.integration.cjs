@@ -1,6 +1,9 @@
 // اختبار شامل قبل التشغيل (الموجة ب): الإجازات والعهدة والطلبات وسلاسل الاعتماد والرواتب —
 // على قاعدة SQL مؤقتة عشوائية (hr_fulltest_payroll_<hex>) تُنشأ بـsynchronize وتُحذف في النهاية.
 // لا مساس بقاعدة الشركة ولا بقاعدة المراجعة. التوكنات موقّعة محليًّا بسر عشوائي — لا كلمات مرور ولا أسرار.
+// ساعة الاختبار مثبّتة: سيناريوهات الملف ده بتواريخ ثابتة حوالين أكتوبر 2026 (إضافي «يوم ماضي قريب»، يوم «لسه من غير صف حضور») —
+// من غير التثبيت بينجح في أيام ويقع في أيام حسب تاريخ التشغيل.
+require('./fixtures/pinned-clock.cjs').pin('2026-10-06T10:00:00')
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), crypto = require('node:crypto')

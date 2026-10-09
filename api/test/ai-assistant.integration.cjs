@@ -174,6 +174,8 @@ test('AI-03: سؤال السياسة — الرد فيه اسم السياسة �
   assert.deepEqual(screen.map(row => [row.title, row.version.versionNo]), [['سياسة الإجازات السنوية', 2]])
   const asked = await ask(U.staff, 'إيه سياسة الإجازات؟', [{ name: 'company_policies', input: { query: 'الإجازات' } }])
   assert.deepEqual(asked.results[0].map(row => [row.source, row.title, row.versionNo, row.category]), [['مكتبة السياسات', 'سياسة الإجازات السنوية', 2, 'الإجازات']])
+  // P6D-N01: تاريخ السريان بيوصل زي ما مكتبة السياسات بترجّعه (كان بيوصل فاضي باسم خانة غلط)
+  assert.deepEqual([asked.results[0][0].effectiveDate, screen[0].version.effectiveDate, 'effectiveFrom' in asked.results[0][0]], [today, today, false])
   assert.match(asked.body.answer, /سياسة الإجازات السنوية/)
   assert.deepEqual(asked.body.sources, [{ name: 'company_policies', label: 'سياسات الشركة' }])
   // سياسة برّه جمهوره، وسياسة مش موجودة: نفس الرد

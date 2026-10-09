@@ -62,7 +62,7 @@ export class AiToolsService {
           const rows = (mine.policies ?? []).filter(row => !query || `${row.title ?? ''} ${row.category ?? ''}`.toLowerCase().includes(query))
           if (!rows.length) return AI_UNAVAILABLE_DATA
           return rows.slice(0, 15).map(row => ({ source: trusted('مكتبة السياسات'), title: row.title, category: row.category ?? null, isMandatory: row.isMandatory, state: row.state,
-            versionNo: (row.version as Record<string, unknown> | undefined)?.versionNo ?? null, effectiveFrom: trustedShape((row.version as Record<string, unknown> | undefined)?.effectiveFrom, 'date') }))
+            versionNo: (row.version as Record<string, unknown> | undefined)?.versionNo ?? null, effectiveDate: trustedShape((row.version as Record<string, unknown> | undefined)?.effectiveDate, 'date') }))
         } },
       { label: 'المعلّق عندي', module: null, def: { name: 'pending_my_approval', description: 'الطلبات اللي مستنية قرار المستخدم نفسه (صندوق الموافقات).', inputSchema: noInput },
         run: async user => { const inbox = await this.requests.inbox(user) as unknown as Array<Record<string, unknown>>; return { count: inbox.length, requests: inbox.slice(0, 10).map(row => pick(row, ['id', 'typeCode', 'typeName', 'status', 'submittedAt', 'currentStep'])) } } },

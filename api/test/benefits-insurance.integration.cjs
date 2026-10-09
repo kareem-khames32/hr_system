@@ -36,7 +36,8 @@ const account = (label, branch, permissions) => repo('User').save({ email: `${la
 const runMigrations = async () => { assert.match(database, NAME); for (const file of MIGRATIONS) for (const batch of migrate.splitBatches(fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n'))) await pool.request().batch(batch) }
 const tablesPresent = async () => (await pool.request().query(`SELECT COUNT(*) AS n FROM sys.tables WHERE [name] IN (${TABLES.map(name => `N'${name}'`).join(', ')})`)).recordset[0].n
 const I = '/benefits/insurance'
-const day = offset => new Date(Date.now() + offset * 86400000).toISOString().slice(0, 10)
+// التاريخ المحلي (زي الخدمة) مش UTC: بين منتصف الليل والتالتة الفجر الاتنين بيفرقوا يوم
+const day = offset => { const date = new Date(); date.setDate(date.getDate() + offset); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}` }
 const policyOf = (overview, id) => overview.policies.find(row => row.id === id)
 const classOf = (overview, policyId, name) => policyOf(overview, policyId).classes.find(row => row.name === name)
 
