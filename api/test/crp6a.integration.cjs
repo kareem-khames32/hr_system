@@ -130,7 +130,7 @@ test('CR6-02 (B03): الـAPI العام — رقم القسم والفريق و
   const asked = ok(await request(U.viewer, 'POST', '/ai/ask', { question: 'مين موظف فرع أ؟' }))
   const [row] = JSON.parse(asked.answer.replace(/^RESULT /, ''))
   fake.plan = null
-  assert.deepEqual([row.employeeCode, row.fullName, ['branchId', 'departmentId', 'teamId', 'managerEmployeeId', 'id'].filter(key => key in row)], ['CR002', 'موظف فرع أ', []])
+  assert.deepEqual([row.fullName, ['branchId', 'departmentId', 'teamId', 'managerEmployeeId', 'id'].filter(key => key in row)], ['موظف فرع أ', []])
   assert.equal(/"(branchId|departmentId|teamId|managerEmployeeId)"/.test(JSON.stringify(fake.seen)), false)
 })
 
@@ -166,6 +166,19 @@ test('CR6-03 (B05): الاقتراح مربوط بملف الموظف اللي �
     const after = [await actions.findOneByOrFail({ id: racing.id }), await actions.findOneByOrFail({ id: racingDraft.id })]
     assert.deepEqual([after.map(row => [row.confirmed, row.status]), await count('requests')], [[[null, 'OK'], [null, 'OK']], requestsBefore])
   } finally { await repo('User').update(U.staff.id, { employeeId: E.one.id }) }
+  // CRP6C (P6C-B01): الحجز نفسه (الجملة الذرية) بيرفض هوية حساب اتعطّل أو إصدار هويته اتغيّر (دور أو صلاحية) بعد ما الطلب عدّى حارس الجلسة
+  const ai = app.get(require('../src/ai/ai.service').AiService)
+  const gate = await actions.save({ userId: U.staff.id, employeeId: E.one.id, kind: rules.AI_KIND_ACTION, question: 'عايز إجازة', tools: '[]', answer: 'المعاينة جاهزة', suggestion, confirmed: null, confirmedByUserId: null, confirmedAt: null,
+    provider: 'fake', model: 'fake-1', status: 'OK', createdAt: new Date() })
+  const identity = { sub: U.staff.id, role: 'employee', email: U.staff.email, employeeId: E.one.id, tokenVersion: U.staff.tokenVersion ?? 0, permissions: [] }
+  await repo('User').update(U.staff.id, { isActive: false })
+  try { assert.equal(await ai.claim(identity, gate.id, true, 'EXECUTING'), false, 'حساب متعطّل') } finally { await repo('User').update(U.staff.id, { isActive: true }) }
+  await repo('User').update(U.staff.id, { tokenVersion: (U.staff.tokenVersion ?? 0) + 1 })
+  try { assert.equal(await ai.claim(identity, gate.id, true, 'EXECUTING'), false, 'إصدار الهوية اتغيّر') } finally { await repo('User').update(U.staff.id, { tokenVersion: U.staff.tokenVersion ?? 0 }) }
+  assert.equal(await ai.claim({ ...identity, sub: 987654 }, gate.id, true, 'EXECUTING'), false, 'حساب مش موجود')
+  assert.deepEqual([(await actions.findOneByOrFail({ id: gate.id })).confirmed, (await actions.findOneByOrFail({ id: gate.id })).status], [null, 'OK'])
+  // والهوية السليمة بتحجز
+  assert.equal(await ai.claim(identity, gate.id, false, 'DISMISSED'), true)
   // قرار اقتراح توظيف (B6.10) بنفس الحكم
   const draft = await actions.save({ userId: U.staff.id, employeeId: E.one.id, kind: rules.AI_KIND_CV, question: 'قراءة سيرة', tools: '[]', answer: null, suggestion: JSON.stringify({ kind: rules.AI_KIND_CV, entityId: 1, text: 'ملخص' }), confirmed: null,
     confirmedByUserId: null, confirmedAt: null, provider: 'fake', model: 'fake-1', status: 'OK', createdAt: new Date() })
@@ -185,15 +198,17 @@ test('CR6-04 (B06): ترتيب المرشحين — تليفون وآيبان و
   const sent = JSON.stringify(fake.seen)
   for (const hidden of ['0501234567', 'SA4420000001234567891234', 'private.person@mail.example', '1099887766', '0555000111']) assert.equal(sent.includes(hidden), false, hidden)
   const notes = JSON.parse(fake.seen[0].messages[0].text).candidates.map(row => row.notes)
-  assert.deepEqual(notes, [`خبرة 6 سنين. واتساب ${rules.AI_HIDDEN_TEXT} وآيبانه SA${rules.AI_HIDDEN_TEXT}`, `خبرة 3 سنين — بريده ${rules.AI_HIDDEN_TEXT} وهويته ${rules.AI_HIDDEN_TEXT}`])
+  assert.deepEqual(notes, [`خبرة ${rules.AI_HIDDEN_TEXT} سنين. واتساب ${rules.AI_HIDDEN_TEXT} وآيبانه SA${rules.AI_HIDDEN_TEXT}`, `خبرة ${rules.AI_HIDDEN_TEXT} سنين — بريده ${rules.AI_HIDDEN_TEXT} وهويته ${rules.AI_HIDDEN_TEXT}`])
   // CRP6B-B06: بدائل P6B — أرقام فارسية، رقم سباعي، وأرقام بينها فاصل بعرض صفر: ولا واحد بيوصل
-  const variants = ['۰۹۱۲۳۴۵۶۷۸۹', '5551234', '05\u200B01\u200B23\u200B45\u200B67']
-  await repo('Candidate').update(C.one.id, { notes: `تماس ${variants[0]} — Contact telephone ${variants[1]}` })
-  await repo('Candidate').update(C.two.id, { notes: `رقمه ${variants[2]} وخبرته 4 سنين` })
+  // وبدائل P6C: «مبلغ» شكله رقم، ومجموعات بينها أربع مسافات
+  const variants = ['۰۹۱۲۳۴۵۶۷۸۹', '5551234', '05\u200B01\u200B23\u200B45\u200B67', '05012345.67', '050    123    4567']
+  await repo('Candidate').update(C.one.id, { notes: `تماس ${variants[0]} — Contact telephone ${variants[1]} — ${variants[3]}` })
+  await repo('Candidate').update(C.two.id, { notes: `رقمه ${variants[2]} أو ${variants[4]} وخبرته طويلة` })
   fake.seen = []
   ok(await request(U.staff, 'POST', `/ai/assist/ranking/${job.id}`))
   const again = JSON.stringify(fake.seen), sentNotes = JSON.parse(fake.seen[0].messages[0].text).candidates.map(row => row.notes)
-  for (const variant of [...variants, '0501234567', '۰۹۱۲', '555']) assert.equal(again.includes(variant), false, JSON.stringify(variant))
-  assert.equal(sentNotes.some(note => /\p{Nd}[^\p{L}\p{Nd}]{0,3}\p{Nd}[^\p{L}\p{Nd}]{0,3}\p{Nd}/u.test(note)), false)
-  assert.equal(sentNotes[1], `رقمه ${rules.AI_HIDDEN_TEXT} وخبرته 4 سنين`)
+  for (const variant of [...variants, '0501234567', '۰۹۱۲', '555', '050', '4567']) assert.equal(again.includes(variant), false, JSON.stringify(variant))
+  // ولا محرف رقمي في أي ملاحظة راحت للمزوّد
+  assert.equal(sentNotes.some(note => /\p{N}/u.test(note)), false)
+  assert.equal(sentNotes[1], `رقمه ${rules.AI_HIDDEN_TEXT} أو ${rules.AI_HIDDEN_TEXT} وخبرته طويلة`)
 })

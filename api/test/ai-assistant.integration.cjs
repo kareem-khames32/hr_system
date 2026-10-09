@@ -196,7 +196,8 @@ test('AI-04: موظف برّه النطاق = «مش متاح» (نفس رد ا�
   const lookup = name => [{ name: 'employee_lookup', input: { query: name } }]
   // حساب فرع الرياض بصلاحية عرض الموظفين: موظف فرعه ظاهر
   const inside = await ask(U.hrBranch, 'مين سالم؟', lookup('سالم'))
-  assert.deepEqual(inside.results[0].map(row => [row.employeeCode, row.fullName, row.jobTitle]), [['AI-001', 'سالم الرياض', 'محاسب']])
+  // CRP6C-B06: الكود نص بيكتبه مستخدم — أرقامه بتتحجب عند المزوّد؛ وتاريخ التعيين (عمود تاريخ) بيعدّي
+  assert.deepEqual(inside.results[0].map(row => [row.employeeCode, row.fullName, row.jobTitle, row.joinDate]), [[`AI-${rules.AI_HIDDEN_TEXT}`, 'سالم الرياض', 'محاسب', '2022-03-01']])
   const sent = JSON.stringify(fake.seen)
   for (const hidden of ['1099887766', '0500000001', 'SA4420000001234567891234', 'nationalId', 'iban', 'basicSalary']) assert.equal(sent.includes(hidden), false, hidden)
   // موظف القاهرة (برّه نطاقه)، وموظف مش موجود: نفس الرد بالحرف
@@ -207,7 +208,7 @@ test('AI-04: موظف برّه النطاق = «مش متاح» (نفس رد ا�
   // موظف من غير صلاحية عرض الموظفين: حتى زميل فرعه «مش متاح»
   assert.deepEqual((await ask(U.staff, 'مين ماجد؟', lookup('ماجد'))).results, [rules.AI_UNAVAILABLE_DATA])
   // حساب كل الفروع: الاتنين ظاهرين
-  assert.deepEqual((await ask(U.admin, 'مين هشام؟', lookup('هشام'))).results[0].map(row => row.employeeCode), ['AI-003'])
+  assert.deepEqual((await ask(U.admin, 'مين هشام؟', lookup('هشام'))).results[0].map(row => row.fullName), ['هشام القاهرة'])
   const logged = await lastAction()
   assert.deepEqual([logged.userId, logged.question, JSON.parse(logged.tools)], [U.admin.id, 'مين هشام؟', [{ name: 'employee_lookup', input: { query: 'هشام' }, ok: true }]])
 })

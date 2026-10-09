@@ -226,33 +226,41 @@ test('AIU-11: مصدر الكود — خدمة الاقتراحات مابتكت
 })
 
 // ===== CRP6A: حواجز P6A =====
-test('AIU-12 (CRP6A-B06، CRP6B): النص الحر قبل المزوّد — حد آمن واحد: ولا تلات أرقام ورا بعض بأي كتابة أو فواصل أو محارف مخفية، ولا كلمة فيها @ أو رابط؛ والقيم المنظّمة ومعرّفات النظام بتعدّي', () => {
+test('AIU-12 (CRP6A/B/C — B06): النص الحر قبل المزوّد — ولا محرف رقمي بيعدّي بأي كتابة أو تقسيم أو فواصل، ولا كلمة فيها @ أو رابط؛ والاستثناء بتعليم الكود للخانة بس (مش بشكل القيمة ولا باسم الخانة)', () => {
   const hidden = rules.AI_HIDDEN_TEXT
   const cases = [
     ['كلّمه على 0501234567 بكرة', `كلّمه على ${hidden} بكرة`], ['جواله +966 50 123 4567', `جواله +${hidden}`], ['تليفون ٠٥٠١٢٣٤٥٦٧', `تليفون ${hidden}`], ['هاتف 050-123-4567.', `هاتف ${hidden}.`],
-    // بدائل P6B: أرقام فارسية، رقم محلي سباعي، وأرقام بينها فاصل بعرض صفر
     ['تماس ۰۹۱۲۳۴۵۶۷۸۹', `تماس ${hidden}`], ['Contact telephone 5551234', `Contact telephone ${hidden}`], ['رقمه 05\u200B01\u200B23\u200B45\u200B67', `رقمه ${hidden}`], ['０５０１２３４５６７', hidden],
-    ['كود 4 4 7 1 9 2', `كود ${hidden}`], ['داخلي (212) 555', `داخلي (${hidden}`],
+    // بدائل P6C: «مبلغ» شكله رقم، ومجموعات بينها أربع مسافات (وأي عدد)، وتقسيمات بسطور وفواصل
+    ['05012345.67', hidden], ['050    123    4567', hidden], ['050 \n\t 123 ... 4567', hidden], ['0-5-0-1-2-3', hidden], ['رقم ⁰⁵⁰ ①②③ ½', `رقم ${hidden}`],
     ['آيبان SA4420000001234567891234 للتحويل', `آيبان SA${hidden} للتحويل`], ['بريده ahmed.ali@example.com', `بريده ${hidden}`], ['تليجرام @ahmed_ali', `تليجرام ${hidden}`], ['صفحته https://x.example/u/7 هنا', `صفحته ${hidden} هنا`],
-    ['هويته 1099887766', `هويته ${hidden}`], ['من سنة 2019', `من سنة ${hidden}`],
-    // بيفضل: رقم من خانة أو اتنين، والكلام
-    ['خبرة 6 سنين و 12 مشروع', 'خبرة 6 سنين و 12 مشروع'], ['مستوى B2 في الإنجليزي', 'مستوى B2 في الإنجليزي'], ['', ''],
+    // حتى الرقم الواحد والسنة والتاريخ جوه نص حر
+    ['خبرة 6 سنين و 12 مشروع', `خبرة ${hidden} سنين و ${hidden} مشروع`], ['من 2026-10-01', `من ${hidden}`], ['مستوى B2', `مستوى B${hidden}`],
+    ['خبرة طويلة في المحاسبة', 'خبرة طويلة في المحاسبة'], ['', ''],
   ]
   for (const [input, expected] of cases) assert.equal(rules.scrubFreeText(input), expected, JSON.stringify(input))
-  // ولا نص حر بيطلع منه تلات أرقام ورا بعض — أيًّا كان شكله
-  for (const [input] of cases) assert.equal(/\p{Nd}[^\p{L}\p{Nd}]{0,3}\p{Nd}[^\p{L}\p{Nd}]{0,3}\p{Nd}/u.test(rules.scrubFreeText(input)), false, JSON.stringify(input))
+  for (const [input] of cases) assert.equal(/\p{N}/u.test(rules.scrubFreeText(input)), false, JSON.stringify(input))
   assert.equal(rules.scrubFreeText('س'.repeat(5000)).length, rules.AI_FREE_TEXT_MAX)
-  // القيم المنظّمة (النص كله تاريخ/وقت/شهر/مبلغ/عدد قصير) ومعرّفات النظام ونصوصه الثابتة بتعدّي؛ وأي حاجة تانية نص حر
-  const kept = { when: '2026-10-01', at: '2026-10-09T03:22:22.000Z', period: '2026-10', time: '08:30', total: '1500000.00', year: '2026', employeeCode: 'EMP20240001', definition: 'أيام الغياب ÷ أيام العمل × 100', days: 12345678 }
-  assert.deepEqual(rules.redactForProvider(kept), kept)
-  assert.deepEqual(rules.redactForProvider({ notes: 'واتساب 0501234567', phone: '0500000000', total: '0501234567', title: 'سياسة 2026', employeeCode: 'رقمه 0501234567', list: [{ comment: 'x@y.example و 1099887766' }] }),
-    { notes: `واتساب ${hidden}`, total: hidden, title: `سياسة ${hidden}`, employeeCode: `رقمه ${hidden}`, list: [{ comment: `${hidden} و ${hidden}` }] })
+  // من غير تعليم: كل نص نص حر — مهما كان شكله (تاريخ، «مبلغ») أو اسم خانته (unit، code، definition…)
+  assert.deepEqual(rules.redactForProvider({ when: '2026-10-01', total: '05012345.67', unit: 'Phone 0501234567', employeeCode: 'EMP20240001', definition: 'اتصل 0501234567', label: 'x 123', days: 12345678, phone: '0500000000', flag: true }),
+    { when: hidden, total: hidden, unit: `Phone ${hidden}`, employeeCode: `EMP${hidden}`, definition: `اتصل ${hidden}`, label: `x ${hidden}`, days: 12345678, flag: true })
+  // بتعليم الكود: الثابت بيعدّي؛ وقيمة عمود النظام بتعدّي لو بشكل نوعها بس — غير كده نص حر
+  assert.deepEqual(rules.redactForProvider({ source: rules.trusted('قاموس 2026'), from: rules.trustedShape('2026-10-01', 'date'), period: rules.trustedShape('2026-10', 'period'), year: rules.trustedShape('2026', 'period'),
+    time: rules.trustedShape('08:30', 'time'), total: rules.trustedShape('1500000.00', 'amount'), at: rules.trustedShape(new Date('2026-10-09T03:22:22Z'), 'date'), none: rules.trustedShape(null, 'date'),
+    notDate: rules.trustedShape('0501234567', 'date'), notTime: rules.trustedShape('Phone 0501234567', 'time'), notAmount: rules.trustedShape('050 123 4567', 'amount'), list: [rules.trustedShape('2026-01-01', 'date'), '2026-01-01'] }),
+    { source: 'قاموس 2026', from: '2026-10-01', period: '2026-10', year: '2026', time: '08:30', total: '1500000.00', at: '2026-10-09', none: null, notDate: hidden, notTime: `Phone ${hidden}`, notAmount: hidden, list: ['2026-01-01', hidden] })
   assert.equal(JSON.parse(rules.toolResultText({ notes: 'رقمه ۰۹۱۲۳۴۵۶۷۸۹' })).notes, `رقمه ${hidden}`)
+  // مصدر الكود: مفيش استثناء بشكل القيمة ولا باسم الخانة في الحاجب
+  const source = read('ai/ai-rules.ts')
+  const redact = source.slice(source.indexOf('export function redactForProvider('), source.indexOf('/** ناتج الأداة كنص للمزوّد'))
+  assert.doesNotMatch(source, /STRUCTURED_VALUE|IDENTIFIER_KEY|SYSTEM_TEXT_KEY/)
+  assert.match(redact, /if \(value instanceof ProviderTrusted\) return value\.value/)
+  assert.match(redact, /return typeof value === 'string' \? scrubFreeText\(value\) : value/)
 })
 
 test('AIU-13 (CRP6A-B03/B05): مصدر الكود — أداة البحث من غير أرقام مراجع؛ والاقتراح مربوط بملف الموظف وقت تجهيزه في العرض والتأكيد والحجز وقرار اقتراحات التوظيف والأداء', () => {
   const tools = read('ai/ai-tools.service.ts')
-  assert.match(tools, /pick\(row, \['employeeCode', 'fullName', 'fullNameEn', 'jobTitle', 'status', 'joinDate'\]\)/)
+  assert.match(tools, /\{ \.\.\.pick\(row, \['employeeCode', 'fullName', 'fullNameEn', 'jobTitle', 'status'\]\), joinDate: trustedShape\(row\.joinDate, 'date'\) \}/)
   const lookup = tools.slice(tools.indexOf("name: 'employee_lookup'"), tools.indexOf("name: 'report_metric'"))
   assert.doesNotMatch(lookup, /'branchId'|'departmentId'|'teamId'|'managerEmployeeId'/)
   const service = read('ai/ai.service.ts')
@@ -260,8 +268,10 @@ test('AIU-13 (CRP6A-B03/B05): مصدر الكود — أداة البحث من �
   assert.match(service, /return proposal && \(row\.employeeId \?\? null\) === \(user\.employeeId \?\? null\) && now - created <= AI_SUGGESTION_TTL_MS/)
   assert.match(service, /AND \[createdAt\] >= @6 AND ISNULL\(\[employeeId\], 0\) = @7/)
   // CRP6B-B05: ربط الحساب الحالي بيتقري جوه جملة الحجز نفسها (مش هوية الجلسة بس)
-  assert.match(service, /AND ISNULL\(\(SELECT u\.\[employeeId\] FROM dbo\.users u WHERE u\.\[id\] = @1\), 0\) = @7`/)
-  assert.match(read('ai/ai-assist.service.ts'), /AND ISNULL\(\(SELECT u\.\[employeeId\] FROM dbo\.users u WHERE u\.\[id\] = @1\), 0\) = @6`/)
+  // CRP6C (P6C-B01): والحساب نفسه — موجود ومفعّل وبنفس إصدار هويته — في نفس الجملة
+  assert.match(service, /AND EXISTS \(SELECT 1 FROM dbo\.users u WHERE u\.\[id\] = @1 AND u\.\[isActive\] = 1 AND ISNULL\(u\.\[tokenVersion\], 0\) = @8 AND ISNULL\(u\.\[employeeId\], 0\) = @7\)`/)
+  assert.match(service, /user\.employeeId \?\? 0, user\.tokenVersion \?\? 0\]\)/)
+  assert.match(read('ai/ai-assist.service.ts'), /AND EXISTS \(SELECT 1 FROM dbo\.users u WHERE u\.\[id\] = @1 AND u\.\[isActive\] = 1 AND ISNULL\(u\.\[tokenVersion\], 0\) = @7 AND ISNULL\(u\.\[employeeId\], 0\) = @6\)`/)
   const assist = read('ai/ai-assist.service.ts')
   assert.match(assist, /if \(!row \|\| !stored \|\| \(row\.employeeId \?\? null\) !== \(user\.employeeId \?\? null\)\) throw new NotFoundException\(AI_SUGGESTION_NOT_FOUND\)/)
   assert.match(assist, /AND \[status\] = N'OK' AND ISNULL\(\[employeeId\], 0\) = @6/)

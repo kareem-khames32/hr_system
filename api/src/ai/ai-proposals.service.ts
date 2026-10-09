@@ -14,7 +14,7 @@ import { hasHrOverride } from '../requests/approver-resolver.service'
 import { LeaveType } from '../requests/entities/leave.entities'
 import { LeaveBalancesService } from '../requests/leave-balances.service'
 import { RequestsService } from '../requests/requests.service'
-import { AI_SUGGESTION_NOT_FOUND, AI_UNAVAILABLE_DATA } from './ai-rules'
+import { AI_SUGGESTION_NOT_FOUND, AI_UNAVAILABLE_DATA, trustedShape } from './ai-rules'
 import type { LlmToolDef } from './llm-provider'
 
 // B6.7: مساعد التنفيذ — أدوات الاقتراح. الأداة بتبني معاينة بهوية السائل من دوال المعاينة القايمة ومابتكتبش؛
@@ -160,7 +160,8 @@ export class AiProposalsService {
       total: preview.totals.totalAmount,
       notice: instant ? 'هتتعتمد فورًا من غير سلسلة اعتماد: قرارك كموارد بشرية نهائي.' : 'بعد التأكيد كل مكافأة بتدخل سلسلة اعتمادها.' }
     return { proposal: { kind: 'BONUS_BULK', dto, previewHash: preview.previewHash, view },
-      result: { status: 'PREVIEW_READY', type: type.nameAr, targetPeriod: dto.targetPeriod, ready: preview.totals.ready, skipped, totalAmount: preview.totals.totalAmount, instant } }
+      // قيم نظام: الشهر (متحقق منه أو شهر الرواتب الجاري) والإجمالي المحسوب؛ اسم النوع نص حر
+      result: { status: 'PREVIEW_READY', type: type.nameAr, targetPeriod: trustedShape(dto.targetPeriod, 'period'), ready: preview.totals.ready, skipped, totalAmount: trustedShape(preview.totals.totalAmount, 'amount'), instant } }
   }
 
   // ===== طلب الإجازة (للمستخدم نفسه) =====
@@ -181,6 +182,6 @@ export class AiProposalsService {
       details: [{ label: 'نوع الإجازة', value: String(type.nameAr) }, { label: 'من', value: fromDate }, { label: 'إلى', value: toDate }, ...(reason ? [{ label: 'السبب', value: reason }] : []),
         ...(balance ? [{ label: 'رصيدك المتبقي دلوقتي', value: String(balance.remaining) }] : [])],
       rows: [], total: null, notice: 'عدد الأيام والتحقق (الرصيد، التعارض، المرفقات) بيتحسبوا عند الإرسال، والطلب بيدخل سلسلة اعتماده العادية.' }
-    return { proposal: { kind: 'LEAVE_REQUEST', dto, view }, result: { status: 'PREVIEW_READY', leaveType: type.nameAr, fromDate, toDate, remaining: balance?.remaining ?? null } }
+    return { proposal: { kind: 'LEAVE_REQUEST', dto, view }, result: { status: 'PREVIEW_READY', leaveType: type.nameAr, fromDate: trustedShape(fromDate, 'date'), toDate: trustedShape(toDate, 'date'), remaining: balance?.remaining ?? null } }
   }
 }

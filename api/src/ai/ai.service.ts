@@ -134,9 +134,10 @@ export class AiService {
   private async claim(user: JwtPayload, id: number, confirmed: boolean, status: string): Promise<boolean> {
     const claimed: unknown[] = await this.ds.query(`UPDATE dbo.ai_actions SET [confirmed] = @0, [confirmedByUserId] = @1, [confirmedAt] = @2, [status] = @3 OUTPUT inserted.[id]
       WHERE [id] = @4 AND [userId] = @1 AND [kind] = @5 AND [confirmed] IS NULL AND [status] = N'OK' AND [createdAt] >= @6 AND ISNULL([employeeId], 0) = @7
-        -- CRP6B-B05: ربط الحساب بالموظف **دلوقتي** (مش هوية الجلسة بس) لازم يساوي صاحب الاقتراح — تغيير الربط قبل الحجز بيبطّله
-        AND ISNULL((SELECT u.[employeeId] FROM dbo.users u WHERE u.[id] = @1), 0) = @7`,
-      [confirmed ? 1 : 0, user.sub, new Date(), status, id, AI_KIND_ACTION, new Date(Date.now() - AI_SUGGESTION_TTL_MS), user.employeeId ?? 0])
+        -- CRP6B-B05 / CRP6C (P6C-B01): الحساب **دلوقتي** (مش هوية الجلسة بس) — موجود، مفعّل، بنفس إصدار هويته (أي تغيير دور أو صلاحية أو تعطيل
+        -- بيزوّد الإصدار)، وربطه بالموظف هو صاحب الاقتراح. أي تغيير اتثبّت قبل الحجز بيبطّل القرار.
+        AND EXISTS (SELECT 1 FROM dbo.users u WHERE u.[id] = @1 AND u.[isActive] = 1 AND ISNULL(u.[tokenVersion], 0) = @8 AND ISNULL(u.[employeeId], 0) = @7)`,
+      [confirmed ? 1 : 0, user.sub, new Date(), status, id, AI_KIND_ACTION, new Date(Date.now() - AI_SUGGESTION_TTL_MS), user.employeeId ?? 0, user.tokenVersion ?? 0])
     return claimed.length === 1
   }
 

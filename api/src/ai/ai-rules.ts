@@ -87,36 +87,46 @@ const SENSITIVE_KEY = /iban|national|passport|phone|mobile|bank|account(no|numbe
 export const AI_HIDDEN_TEXT = '[محجوب]'
 export const AI_FREE_TEXT_MAX = 1500
 /**
- * CRP6B-B06: الحد الآمن للنص الحر الرايح للمزوّد (ملاحظات، تعليقات، أسباب، عناوين). مش قايمة أشكال بتتطارد — قاعدة واحدة محافظة:
- *  - النص بيتوحّد (NFKC) والمحارف المخفية (\p{Cf}: فاصل بعرض صفر وأخواته) بتتشال الأول؛
+ * CRP6C-B06: الحد الآمن للنص الحر الرايح للمزوّد — **ولا رقم بيعدّي**:
+ *  - النص بيتوحّد (NFKC) والمحارف المخفية (\p{Cf}) بتتشال الأول؛
  *  - أي كلمة فيها @ أو رابط بتتحجب (بريد، معرّف، عنوان)؛
- *  - **أي تلات أرقام فأكتر** ورا بعض بتتحجب، بأي كتابة أرقام (\p{Nd}: عربي، هندي، فارسي…) ولو بينهم لحد تلات محارف مش حروف (مسافة، شرطة، نقطة، قوس).
- * فمايعدّيش رقم تليفون ولا هوية ولا حساب ولا آيبان بأي شكل؛ اللي بيفضل رقم من خانة أو اتنين (سنين الخبرة) والكلام. الأرقام المكتوبة بالحروف بتعدّي.
+ *  - أي محرف رقمي بأي كتابة (\p{N}: عربي، هندي، فارسي، كسور، أرقام محاطة…) بيتحجب، والأرقام اللي بينها أي فواصل مش حروف (بأي طول) بتتحجب كتلة واحدة.
+ * يعني مفيش تليفون ولا هوية ولا حساب ولا آيبان ولا «مبلغ» شكله رقم بيطلع من نص حر، بأي تقسيم أو فواصل. اللي بيفضل الكلام بس (والأرقام المكتوبة بالحروف).
  */
 export function scrubFreeText(text: string): string {
   return text.normalize('NFKC').replace(/\p{Cf}/gu, '')
     .replace(/\S*(?:@|:\/\/|www\.)\S*/giu, AI_HIDDEN_TEXT)
-    .replace(/\p{Nd}(?:[^\p{L}\p{Nd}]{0,3}\p{Nd}){2,}/gu, AI_HIDDEN_TEXT)
+    .replace(/\p{N}(?:[^\p{L}\p{N}]*\p{N})*/gu, AI_HIDDEN_TEXT)
     .slice(0, AI_FREE_TEXT_MAX)
 }
-// قيمة منظّمة (مش نص حر): النص **كله** بشكل واحد من دول — تاريخ، وقت، شهر، مبلغ بكسرين، أو عدد لحد أربع خانات
-const STRUCTURED_VALUE = [/^\d{4}-\d{2}-\d{2}$/, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z?$/, /^\d{4}-\d{2}$/, /^\d{2}:\d{2}(:\d{2})?$/, /^-?\d{1,12}\.\d{2}$/, /^-?\d{1,4}$/]
-// خانات معرّفات النظام (كود الموظف/الوظيفة) ونصوص النظام الثابتة (تعريف المؤشر واسمه ومصدر الرد): مش نص من مستخدم
-const IDENTIFIER_KEY = /^(employeeCode|code|jobCode)$/
-const SYSTEM_TEXT_KEY = /^(definition|label|source|unit)$/
 /**
- * نسخة من ناتج الأداة للمزوّد: الخانات الحساسة باسمها بتتشال (على أي عمق)، والقيم المنظّمة ومعرّفات النظام ونصوصه الثابتة بتعدّي زي ما هي،
- * وأي نص تاني نص حر بيعدّي على `scrubFreeText`.
+ * قيمة نظام موثوقة بمصدرها: الكود اللي بيبني ناتج الأداة هو اللي بيعلّم الخانة (عمود تاريخ، مبلغ محسوب، ثابت في الكود) — مش شكل القيمة ولا اسم الخانة.
+ * `redactForProvider` بيعدّيها زي ما هي؛ وأي نص مش متعلّم نص حر.
  */
-export function redactForProvider(value: unknown, depth = 0, key = ''): unknown {
+export class ProviderTrusted { constructor(readonly value: string | number | boolean | null) {} }
+/** ثابت مكتوب في الكود (اسم مؤشر، تعريفه، مصدر الرد) */
+export const trusted = (value: string | number | boolean | null): ProviderTrusted => new ProviderTrusted(value)
+const TRUSTED_SHAPES = { date: /^\d{4}-\d{2}-\d{2}$/, period: /^\d{4}(-\d{2}(-\d{2})?)?$/, time: /^\d{2}:\d{2}(:\d{2})?$/, amount: /^-?\d{1,12}(\.\d{1,4})?$/ } as const
+/**
+ * قيمة من عمود نظام بنوعه (تاريخ، شهر، وقت، مبلغ): المنادي بيحدد المصدر بالنوع، والشكل بيتراجع كمان — لو القيمة مش بالشكل ده بتتعامل نص حر.
+ * الاتنين لازمين: المصدر في الكود، والشكل تأكيد.
+ */
+export function trustedShape(value: unknown, shape: keyof typeof TRUSTED_SHAPES): ProviderTrusted | string | null {
+  if (value === null || value === undefined) return null
+  const text = value instanceof Date ? value.toISOString().slice(0, 10) : String(value)
+  return TRUSTED_SHAPES[shape].test(text) ? new ProviderTrusted(text) : text
+}
+/**
+ * نسخة من ناتج الأداة للمزوّد: الخانات الحساسة باسمها بتتشال (على أي عمق)، القيم المتعلّمة «موثوقة» من الكود بتعدّي زي ما هي،
+ * و**كل نص تاني نص حر** بيعدّي على `scrubFreeText` — من غير أي استثناء بشكل القيمة أو باسم الخانة.
+ */
+export function redactForProvider(value: unknown, depth = 0): unknown {
+  if (value instanceof ProviderTrusted) return value.value
   if (depth > 8 || value === null || value === undefined) return value ?? null
-  if (Array.isArray(value)) return value.slice(0, 50).map(item => redactForProvider(item, depth + 1, key))
+  if (Array.isArray(value)) return value.slice(0, 50).map(item => redactForProvider(item, depth + 1))
   if (value instanceof Date) return value.toISOString()
-  if (typeof value === 'object') return Object.fromEntries(Object.entries(value as Record<string, unknown>).filter(([name]) => !SENSITIVE_KEY.test(name)).map(([name, item]) => [name, redactForProvider(item, depth + 1, name)]))
-  if (typeof value !== 'string') return value
-  if (SYSTEM_TEXT_KEY.test(key) || STRUCTURED_VALUE.some(shape => shape.test(value))) return value
-  if (IDENTIFIER_KEY.test(key) && /^[\p{L}\p{Nd}_.\/-]{1,40}$/u.test(value)) return value
-  return scrubFreeText(value)
+  if (typeof value === 'object') return Object.fromEntries(Object.entries(value as Record<string, unknown>).filter(([name]) => !SENSITIVE_KEY.test(name)).map(([name, item]) => [name, redactForProvider(item, depth + 1)]))
+  return typeof value === 'string' ? scrubFreeText(value) : value
 }
 /** ناتج الأداة كنص للمزوّد: من غير الحساس، وبحد للطول */
 export function toolResultText(value: unknown): string {

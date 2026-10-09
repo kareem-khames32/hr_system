@@ -15,7 +15,7 @@ import { assertCandidateCvAccess } from '../recruitment/candidate-applications'
 import { CV_ENTITY_TYPE } from '../recruitment/careers'
 import { RecruitmentJob } from '../recruitment/recruitment-job.entity'
 import { AI_ASSIST_KINDS, AI_ASSIST_TEXT_MAX, AI_CV_MAX_BYTES, AI_KIND_CV, AI_KIND_RANKING, AI_KIND_REVIEW_DRAFT, AI_PROVIDER_FAILED, AI_SUGGESTION_DECIDED, AI_SUGGESTION_LABEL, AI_SUGGESTION_NOT_FOUND,
-  AiAction, CV_SUMMARY_SYSTEM, parseRanking, RANKING_SYSTEM, redactForProvider, REVIEW_DRAFT_SYSTEM, sameSuggestionText } from './ai-rules'
+  AiAction, CV_SUMMARY_SYSTEM, parseRanking, RANKING_SYSTEM, redactForProvider, REVIEW_DRAFT_SYSTEM, sameSuggestionText, scrubFreeText, trustedShape } from './ai-rules'
 import { AiService } from './ai.service'
 import type { LlmMessage } from './llm-provider'
 
@@ -68,7 +68,7 @@ export class AiAssistService {
     const chunks: Buffer[] = []
     for await (const chunk of fileStorage().read(file.storedName)) chunks.push(Buffer.from(chunk as Buffer))
     const made = await this.suggest(user, AI_KIND_CV, `قراءة سيرة المرشح #${candidate.id}`, candidate.id, CV_SUMMARY_SYSTEM,
-      { role: 'user', text: `لخّص السيرة الذاتية المرفقة لمرشح على وظيفة «${candidate.positionTitle ?? ''}».`, documents: [{ mediaType: 'application/pdf', base64: Buffer.concat(chunks).toString('base64') }] },
+      { role: 'user', text: `لخّص السيرة الذاتية المرفقة لمرشح على وظيفة «${scrubFreeText(candidate.positionTitle ?? '')}».`, documents: [{ mediaType: 'application/pdf', base64: Buffer.concat(chunks).toString('base64') }] },
       text => ({ text }))
     return { id: made.id, suggestion: made.suggestion, label: made.label, kind: made.kind, candidateId: candidate.id, text: made.stored.text }
   }
@@ -102,7 +102,10 @@ export class AiAssistService {
     const form = await this.reviews.form(user, assignmentId)
     if (form.relation !== 'manager' || !form.canSubmit) throw new NotFoundException(REVIEW_NOT_FOUND)
     const made = await this.suggest(user, AI_KIND_REVIEW_DRAFT, `مسودة ملخص التقييم #${assignmentId}`, assignmentId, REVIEW_DRAFT_SYSTEM,
-      { role: 'user', text: JSON.stringify(redactForProvider({ period: { from: form.periodStart, to: form.periodEnd }, goals: form.goals, evidence: form.evidence, selfComment: form.self?.comment ?? null })) },
+      // قيم نظام: فترة الدورة (تواريخ متحقق منها)، والمستهدف والمحقق (محسوبين من أعمدة عشرية). عنوان الهدف ووحدته وتعليق الموظف نص حر
+      { role: 'user', text: JSON.stringify(redactForProvider({ period: { from: trustedShape(form.periodStart, 'date'), to: trustedShape(form.periodEnd, 'date') },
+        goals: form.goals.map(goal => ({ title: goal.title, unit: goal.unit, weight: goal.weight, targetValue: trustedShape(goal.targetValue, 'amount'), actualValue: trustedShape(goal.actualValue, 'amount') })),
+        evidence: { attendance: form.evidence?.attendance ?? null, tasks: form.evidence?.tasks ?? null }, selfComment: form.self?.comment ?? null })) },
       text => ({ text }))
     return { id: made.id, suggestion: made.suggestion, label: made.label, kind: made.kind, assignmentId, text: made.stored.text }
   }
@@ -128,8 +131,9 @@ export class AiAssistService {
     }
     const claimed: unknown[] = await this.ds.query(`UPDATE dbo.ai_actions SET [confirmed] = @0, [confirmedByUserId] = @1, [confirmedAt] = @2, [status] = @3, [answer] = @4 OUTPUT inserted.[id]
       WHERE [id] = @5 AND [userId] = @1 AND [confirmed] IS NULL AND [status] = N'OK' AND ISNULL([employeeId], 0) = @6
-        -- CRP6B-B05: وربط الحساب بالموظف دلوقتي لازم يساويه (تغيير الربط قبل القرار بيبطّله)
-        AND ISNULL((SELECT u.[employeeId] FROM dbo.users u WHERE u.[id] = @1), 0) = @6`, [input.used ? 1 : 0, user.sub, new Date(), status, finalText, id, user.employeeId ?? 0])
+        -- CRP6B-B05 / CRP6C (P6C-B01): والحساب دلوقتي موجود ومفعّل وبنفس إصدار هويته وربطه بالموظف هو صاحب الاقتراح
+        AND EXISTS (SELECT 1 FROM dbo.users u WHERE u.[id] = @1 AND u.[isActive] = 1 AND ISNULL(u.[tokenVersion], 0) = @7 AND ISNULL(u.[employeeId], 0) = @6)`,
+      [input.used ? 1 : 0, user.sub, new Date(), status, finalText, id, user.employeeId ?? 0, user.tokenVersion ?? 0])
     if (claimed.length !== 1) throw new ConflictException(AI_SUGGESTION_DECIDED)
     return { id, outcome: status }
   }
