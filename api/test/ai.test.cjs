@@ -120,7 +120,7 @@ test('AIU-07: مصدر الكود — أدوات الاقتراح مابتكتب
   assert.doesNotMatch(proposals, /transaction\(|EntityManager|DataSource/)
   const service = read('ai/ai.service.ts')
   // الحجز: تحديث مشروط لصاحب الاقتراح ولاقتراح لسه مستني قراره
-  assert.match(service, /WHERE \[id\] = @4 AND \[userId\] = @1 AND \[kind\] = @5 AND \[confirmed\] IS NULL AND \[status\] = N'OK'/)
+  assert.match(service, /WHERE \[id\] = @4 AND \[userId\] = @1 AND \[kind\] = @5 AND \[confirmed\] IS NULL AND \[status\] = N'OK' AND \[createdAt\] >= @6/, 'والمهلة جوه الحجز نفسه')
   const confirm = service.slice(service.indexOf('async confirm('), service.indexOf('async dismiss('))
   assert.ok(confirm.indexOf('await this.claim(user, id, true') > 0 && confirm.indexOf('await this.claim(user, id, true') < confirm.indexOf('await this.proposals.execute(user, proposal)'), 'الحجز قبل التنفيذ')
   assert.doesNotMatch(service, /transaction\(/, 'مفيش معاملة للمساعد حوالين نداء خدمة تانية')
@@ -219,7 +219,7 @@ test('AIU-11: مصدر الكود — خدمة الاقتراحات مابتكت
   assert.equal((controller.match(/@RequireFeature\(/g) ?? []).length, 3)
   assert.equal((controller.match(/@Perm\('candidates\.manage'\)/g) ?? []).length, 2)
   // الواجهة: الحفظ من مسار المرشح العادي، والاقتراح متعلّم
-  const web = fs.readFileSync(path.join(apiRoot, '..', 'src', 'components', 'AiCandidateAssist.tsx'), 'utf8')
+  const web = fs.readFileSync(path.join(apiRoot, '..', 'src', 'components', 'AiCandidateAssist.tsx'), 'utf8').replace(/\r\n/g, '\n')
   assert.match(web, /await updateCandidate\(candidate\.id, \{ notes: text\.trim\(\) \}\)\n    await outcome\(cv\.id, \{ used: true, finalText: text\.trim\(\) \}\)/)
   assert.equal((web.match(/data-ai-suggestion/g) ?? []).length, 2)
   assert.doesNotMatch(web, /stage:|moveStage|rejected|hired'\)/, 'مفيش نقل مرحلة من مكوّن الاقتراحات')

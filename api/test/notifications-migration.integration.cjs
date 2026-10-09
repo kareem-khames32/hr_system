@@ -150,7 +150,8 @@ test('NM-2: من غير الجداول الإشعارات المخزّنة وا�
   // الحدث نفسه بيتسجل ويتوزع ومهمته بتخلص من غير فشل
   assert.equal(await ds.transaction(em => outbox.recordOutboxEvent(em, { type: 'PAYROLL_RUN_APPROVED', entityType: 'payroll_run', entityId: 1, payload: { runId: 1 } })), true)
   const cycle = await queue.runOnce()
-  assert.deepEqual([cycle.dispatched, cycle.done, cycle.retried, cycle.dead], [1, 1, 0, 0])
+  // B6.3-ج: الحدث ده بقى له مشتركين — مهمة الإشعارات ومهمة توزيع الـwebhooks (بتخلص من غير إرسال: موديول التكاملات مقفول)
+  assert.deepEqual([cycle.dispatched, cycle.done, cycle.retried, cycle.dead], [1, 2, 0, 0])
   assert.equal(sent.length, 0)
 
   const record = await migrate.apply({ database, base, trial: true, schemaDiff: false, quiet: true })

@@ -132,7 +132,8 @@ export class AiService {
   /** حجز الاقتراح بتحديث مشروط: طلبين متزامنين = واحد بس بياخده (مفتاح منع التكرار) */
   private async claim(user: JwtPayload, id: number, confirmed: boolean, status: string): Promise<boolean> {
     const claimed: unknown[] = await this.ds.query(`UPDATE dbo.ai_actions SET [confirmed] = @0, [confirmedByUserId] = @1, [confirmedAt] = @2, [status] = @3 OUTPUT inserted.[id]
-      WHERE [id] = @4 AND [userId] = @1 AND [kind] = @5 AND [confirmed] IS NULL AND [status] = N'OK'`, [confirmed ? 1 : 0, user.sub, new Date(), status, id, AI_KIND_ACTION])
+      WHERE [id] = @4 AND [userId] = @1 AND [kind] = @5 AND [confirmed] IS NULL AND [status] = N'OK' AND [createdAt] >= @6`,
+      [confirmed ? 1 : 0, user.sub, new Date(), status, id, AI_KIND_ACTION, new Date(Date.now() - AI_SUGGESTION_TTL_MS)])
     return claimed.length === 1
   }
 
