@@ -10,6 +10,7 @@ import type { CreateEmployeeDto } from '../employees/employees.dto'
 import { employeeCreateIssue, EmployeesService } from '../employees/employees.service'
 import type { CreateBranchDto, CreateDepartmentDto } from '../org/org.dto'
 import { ModulesService } from '../modules-registry/modules.service'
+import type { ModuleKey } from '../modules-registry/registry'
 import { OrgService } from '../org/org.service'
 import { LeaveBalancesService } from '../requests/leave-balances.service'
 import { RequestsService } from '../requests/requests.service'
@@ -37,6 +38,15 @@ const messageOf = (failure: unknown): string => {
   return String(Array.isArray(response) ? response[0] : response ?? (failure as { message?: unknown })?.message ?? failure)
 }
 
+// CRP6A-B01: كل نوع استيراد بحراس مساره الأصلي — صلاحية المسار وموديوله بجمهور تفعيله — فوق صلاحية الإعدادات ونطاق «كل الفروع».
+// الاستيراد مايعدّيش حاجة المسار نفسه بيرفضها للحساب ده.
+const IMPORT_KIND_GATES: Record<ImportKind, { perms: string[]; modules: ModuleKey[]; denied: string; closed: string }> = {
+  structure: { perms: ['org.manage'], modules: ['org'], denied: 'استيراد الهيكل محتاج صلاحية إدارة الهيكل', closed: 'موديول الهيكل مقفول' },
+  employees: { perms: ['employees.create'], modules: ['employees'], denied: 'استيراد الموظفين محتاج صلاحية إضافة موظف', closed: 'موديول الموظفين مقفول' },
+  balances: { perms: ['leave_balances.manage'], modules: ['leave'], denied: 'استيراد الأرصدة محتاج صلاحية إدارة أرصدة الإجازات', closed: 'موديول الإجازات مقفول' },
+  loans: { perms: ['requests.create_on_behalf', 'loans.exceptional'], modules: ['requests', 'loans'], denied: 'استيراد السلف محتاج صلاحية تقديم الطلبات بالنيابة وصلاحية السلفة الاستثنائية', closed: 'موديول السلف مقفول' },
+}
+
 @Injectable()
 export class SetupImportService {
   constructor(@InjectDataSource() private readonly ds: DataSource, private readonly org: OrgService, private readonly employees: EmployeesService,
@@ -47,10 +57,18 @@ export class SetupImportService {
     return raw
   }
 
+  /** حراس المسار الأصلي للنوع: صلاحياته كلها، وموديولاته مفعّلة للحساب ده (جمهور التفعيل داخل) — قبل أي قراءة للملف */
+  private async assertKindAllowed(user: JwtPayload, kind: ImportKind): Promise<void> {
+    const gate = IMPORT_KIND_GATES[kind]
+    if (!gate.perms.every(perm => userHasPerm(user, perm))) throw new ForbiddenException(gate.denied)
+    for (const module of gate.modules) if (!(await this.modules.allowedFor(module, user))) throw new BadRequestException(gate.closed)
+  }
+
   /** قالب فاضي بعناوينه وملاحظاته */
   async template(user: JwtPayload, rawKind: unknown) {
     assertCompanyWideWrite(user)
     const kind = this.kindOf(rawKind)
+    await this.assertKindAllowed(user, kind)
     const buffer = await writeBulkWorkbook({ columns: IMPORT_COLUMNS[kind].map(column => ({ header: column.header, width: column.width, text: !column.money, money: column.money, list: column.list, note: column.note })),
       rows: [], references: [], instructions: [`قالب استيراد ${IMPORT_KIND_LABELS[kind]}.`, 'الصف الأول عناوين — ماتغيّرهاش. املا من الصف التاني.', 'ارفع الملف للمعاينة الأول: مفيش حاجة بتتحفظ قبل ما تراجع النتيجة وتأكد.',
         'الموجود قبل كده بيتخطّى، فإعادة رفع نفس الملف آمنة.', ...(IMPORT_KIND_NOTES[kind] ?? [])] })
@@ -143,8 +161,6 @@ export class SetupImportService {
 
   // الأرصدة الافتتاحية: نفس صلاحية وموديول شاشة تعديل الرصيد، والكتابة بخدمتها (سبب، مفتاح عملية، سجل تعديلات، قفل الموظف)
   private async balancePlan(rows: ImportRow[], user: JwtPayload): Promise<PlanRow[]> {
-    if (!userHasPerm(user, 'leave_balances.manage')) throw new ForbiddenException('استيراد الأرصدة محتاج صلاحية إدارة أرصدة الإجازات')
-    if (!(await this.modules.isEnabled('leave'))) throw new BadRequestException('موديول الإجازات مقفول')
     const people = await this.employeesByPrint(), seen = new Map<string, number>(), plan: PlanRow[] = []
     for (const line of rows) {
       const { values } = line, { balanceType, days, issues } = balanceDraft(values), errors = [...line.errors, ...issues]
@@ -173,7 +189,6 @@ export class SetupImportService {
 
   // السلف القائمة: كل صف = طلب سلفة استثنائية بالنيابة (المتبقي على عدد الأقساط من شهر أول قسط) — بنفس صلاحيات الشاشة، والطلب بيمشي في الاعتماد والسقوف
   private async loanPlan(rows: ImportRow[], user: JwtPayload): Promise<PlanRow[]> {
-    if (!userHasPerm(user, 'requests.create_on_behalf') || !userHasPerm(user, 'loans.exceptional')) throw new ForbiddenException('استيراد السلف محتاج صلاحية تقديم الطلبات بالنيابة وصلاحية السلفة الاستثنائية')
     const people = await this.employeesByPrint(), currentPeriod = localDateOf(new Date()).slice(0, 7)
     const existing: Array<{ requesterId: number; payload: string | null }> = await this.ds.query(
       `SELECT [requesterId], [payload] FROM dbo.requests WHERE [typeCode] = N'LOAN' AND [status] IN (${LIVE_LOAN_REQUEST.map(status => `N'${status}'`).join(', ')})`)
@@ -202,6 +217,7 @@ export class SetupImportService {
   private async plan(user: JwtPayload, rawKind: unknown, file: ImportUploadedFile | undefined): Promise<{ kind: ImportKind; rows: PlanRow[] }> {
     assertCompanyWideWrite(user)
     const kind = this.kindOf(rawKind)
+    await this.assertKindAllowed(user, kind)
     if (!file?.buffer?.length) throw new BadRequestException('ارفع ملف القالب')
     const { rows, fileError } = importRows(kind, await readBulkFile(file.buffer, file.originalname))
     if (fileError) throw new BadRequestException(fileError)

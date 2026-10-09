@@ -58,11 +58,13 @@ test('WHU-04: مصدر الكود — مستهلك على الطابور الق�
   // الإرسال: الموديول والنقطة والاشتراك والنطاق بيتحكموا تاني، وبعدهم السر والعنوان وحل الاسم، وبعدين الإرسال
   const deliver = service.slice(service.indexOf('async deliver('))
   const order = [`this.modules.isEnabled('integrations')`, '!endpoint?.isActive', 'await this.inScope(storedBranchScope(endpoint.branchIds), payload.type, payload.data)', 'openWebhookSecret(endpoint.secret', 'targetIssue(endpoint.url, this.allowLocal())',
-    'await this.assertPublicTarget(url)', 'await fetch(url, {'].map(text => deliver.indexOf(text))
+    'const pinned = await this.pinnedTarget(url)', 'await postPinned(url, pinned, {'].map(text => deliver.indexOf(text))
   assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), JSON.stringify(order))
-  assert.match(deliver, /method: 'POST', redirect: 'manual', signal: AbortSignal\.timeout\(WEBHOOK_TIMEOUT_MS\), body,/)
-  assert.match(deliver, /if \(response\.status < 200 \|\| response\.status > 299\) throw new Error\(`HTTP \$\{response\.status\}`\)/)
-  assert.match(service, /if \(!addresses\.length \|\| addresses\.some\(entry => isPrivateAddress\(entry\.address\)\)\) throw new Error/)
+  // CRP6A-B04: الإرسال على العنوان المثبّت (اللي اتفحص) — مفيش fetch بيحل الاسم تاني
+  assert.doesNotMatch(service, /\bfetch\(/)
+  assert.match(deliver, /\}, body, WEBHOOK_TIMEOUT_MS\)\n      if \(status < 200 \|\| status > 299\) throw new Error\(`HTTP \$\{status\}`\)/)
+  assert.match(service, /if \(!addresses\.length \|\| \(!this\.allowLocal\(\) && addresses\.some\(entry => isPrivateAddress\(entry\.address\)\)\)\) throw new Error/)
+  assert.match(service, /return \{ address: addresses\[0\]\.address, family: addresses\[0\]\.family \}/)
   // «محلي مسموح» متغير بيئة ومش في الإنتاج — مش إعداد من جوه النظام
   assert.match(service, /return process\.env\.HR_WEBHOOKS_ALLOW_LOCAL === '1' && process\.env\.NODE_ENV !== 'production'/)
   // الرسالة مراجع بس: مفيش قراءة اسم ولا راتب ولا هوية في الخدمة
@@ -76,4 +78,30 @@ test('WHU-04: مصدر الكود — مستهلك على الطابور الق�
   const update = employees.slice(employees.indexOf('  async update(id: number, dto: UpdateEmployeeDto'), employees.indexOf('\n  // الأرشفة بدل الحذف'))
   const inside = update.slice(0, update.indexOf('      return result\n    })'))
   assert.match(inside, /await recordOutboxEvent\(em, \{ type: 'EMPLOYEE_UPDATED', entityType: 'employee', entityId: id, payload: \{ employeeId: id, branchId: result\.branchId \?\? null \} \}\)\s*$/)
+})
+
+test('WHU-05 (CRP6A-B04): الإرسال المثبّت — الاتصال بيروح للعنوان اللي اتفحص حتى لو الاسم مابيتحلش أو بيتحل لحاجة تانية، والاسم بيفضل في Host، ومن غير تتبّع تحويل', async () => {
+  const http = require('node:http')
+  const seen = []
+  const server = http.createServer((request, response) => {
+    const chunks = []
+    request.on('data', chunk => chunks.push(chunk))
+    request.on('end', () => {
+      seen.push({ method: request.method, url: request.url, host: request.headers.host, event: request.headers['x-hr-event'], body: Buffer.concat(chunks).toString('utf8') })
+      if (request.url.startsWith('/moved')) { response.writeHead(302, { Location: 'http://127.0.0.1:1/elsewhere' }); response.end(); return }
+      response.writeHead(204); response.end()
+    })
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = server.address().port
+  try {
+    // اسم مابيتحلش أصلًا: الطلب بيوصل للعنوان المثبّت — يعني مفيش حل اسم وقت الاتصال
+    const status = await hooks.postPinned(new URL(`http://hooks.example.invalid:${port}/hook?x=1`), { address: '127.0.0.1', family: 4 }, { 'Content-Type': 'application/json', 'X-HR-Event': 'employee.hired' }, '{"a":1}', 3000)
+    assert.deepEqual([status, seen[0]], [204, { method: 'POST', url: '/hook?x=1', host: `hooks.example.invalid:${port}`, event: 'employee.hired', body: '{"a":1}' }])
+    // تحويل: بيرجع برقمه ومابيتتبعش
+    assert.equal(await hooks.postPinned(new URL(`http://hooks.example.invalid:${port}/moved`), { address: '127.0.0.1', family: 4 }, {}, '{}', 3000), 302)
+    assert.equal(seen.length, 2)
+    // عنوان مثبّت مفيش حد سامع عليه: فشل (مابيرجعش للاسم)
+    await assert.rejects(hooks.postPinned(new URL('http://localhost:' + port + '/hook'), { address: '127.0.0.1', family: 4 }, {}, '{}', 3000).then(() => hooks.postPinned(new URL('http://hooks.example.invalid:1/hook'), { address: '127.0.0.1', family: 4 }, {}, '{}', 2000)))
+  } finally { await new Promise(resolve => server.close(resolve)) }
 })

@@ -80,3 +80,20 @@ test('INU-04: مصدر الكود — الحارس (حد العنوان ← ال
   assert.match(store, /UPDATE dbo\.integration_keys SET \[isActive\] = 0, \[revokedByUserId\] = @1, \[revokedAt\] = @2 OUTPUT INSERTED\.\[id\] WHERE \[id\] = @0 AND \[isActive\] = 1/)
   assert.match(store, /FROM dbo\.integration_keys WHERE \[keyPrefix\] = @0 AND \[isActive\] = 1/)
 })
+
+test('INU-05 (CRP6A-B03): أرقام مراجع الموظف (القسم، الفريق، المدير) محكومة بفرع المرجع الحالي — مفتاح بفروع محددة بياخدها بشرط فرع المرجع، ومفتاح من غير فروع مابياخدش أي رقم', () => {
+  const all = []
+  assert.match(api.employeeColumns(null, all), /e\.\[departmentId\], e\.\[teamId\], e\.\[managerEmployeeId\]$/)
+  assert.deepEqual(all, [])
+  const scoped = [7], columns = api.employeeColumns([3, 5], scoped)
+  assert.deepEqual(scoped, [7, 3, 5])
+  assert.match(columns, /CASE WHEN EXISTS \(SELECT 1 FROM dbo\.departments rd WHERE rd\.\[id\] = e\.\[departmentId\] AND rd\.\[branchId\] IN \(@1, @2\)\) THEN e\.\[departmentId\] END AS \[departmentId\]/)
+  assert.match(columns, /FROM dbo\.teams rt INNER JOIN dbo\.departments rtd ON rtd\.\[id\] = rt\.\[departmentId\] WHERE rt\.\[id\] = e\.\[teamId\] AND rtd\.\[branchId\] IN \(@1, @2\)\) THEN e\.\[teamId\] END AS \[teamId\]/)
+  assert.match(columns, /FROM dbo\.employees rm WHERE rm\.\[id\] = e\.\[managerEmployeeId\] AND rm\.\[branchId\] IN \(@1, @2\)\) THEN e\.\[managerEmployeeId\] END AS \[managerEmployeeId\]/)
+  assert.doesNotMatch(columns, /, e\.\[departmentId\]|, e\.\[teamId\]|, e\.\[managerEmployeeId\]/, 'مفيش رقم مرجع من غير حكم فرعه')
+  const none = []
+  assert.match(api.employeeColumns([], none), /CAST\(NULL AS int\) AS \[departmentId\], CAST\(NULL AS int\) AS \[teamId\], CAST\(NULL AS int\) AS \[managerEmployeeId\]$/)
+  const source = read('integrations/public-api.service.ts')
+  assert.equal((source.match(/employeeColumns\(integration\.branchScope, parameters\)/g) ?? []).length, 2, 'القايمة والموظف الواحد')
+  assert.match(source, /parentId: row\.parentId != null && shown\.has\(Number\(row\.parentId\)\) \? Number\(row\.parentId\) : null/)
+})

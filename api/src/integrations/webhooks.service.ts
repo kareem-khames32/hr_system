@@ -13,7 +13,7 @@ import { cleanBranchIds, storedBranchScope } from './integration-keys'
 import { WebhookEndpoint } from './integrations.entities'
 import { cleanWebhookEvents, generateWebhookSecret, isPrivateAddress, openWebhookSecret, sealWebhookSecret, signatureHeader, storedWebhookEvents, targetIssue, WEBHOOK_DELIVER_JOB, WEBHOOK_DELIVER_MAX_ATTEMPTS,
   WEBHOOK_ENDPOINTS_MAX, WEBHOOK_EVENT_LABELS, WEBHOOK_EVENT_NAMES, WEBHOOK_EVENTS, WEBHOOK_FANOUT_JOB, WEBHOOK_NOT_FOUND, WEBHOOK_SIGNATURE_HEADER, WEBHOOK_TIMEOUT_MS, webhookBody, WEBHOOKS_MIGRATION_MISSING,
-  type WebhookEventName } from './webhooks'
+  type WebhookEventName, postPinned } from './webhooks'
 
 // B6.3 (ج): الـwebhooks — نقاط استقبال لأنظمة خارجية بسر توقيع، والتوزيع من الـoutbox القايم:
 //   حدث النظام ← مهمة «توزيع» (webhooks.fanout): بتحدد النقط الشغالة المشتركة في الحدث واللي الحدث جوه فروعها، ومهمة «إرسال» لكل نقطة.
@@ -140,11 +140,17 @@ export class WebhooksService implements OnModuleInit {
   }
 
   /** الاسم بيتحل، وكل عنوانه لازم يكون عام (ضد اسم عام بيشاور على عنوان داخلي) */
-  private async assertPublicTarget(url: URL) {
-    if (this.allowLocal()) return
-    const addresses = await lookup(url.hostname.replace(/^\[|\]$/g, ''), { all: true })
-    if (!addresses.length || addresses.some(entry => isPrivateAddress(entry.address))) throw new Error('عنوان نقطة الاستقبال بيتحل لعنوان داخلي')
+  /**
+   * CRP6A-B04: عنوان الاتصال المثبّت — الاسم بيتحل **مرة واحدة**، كل عناوينه لازم تكون عامة، والإرسال بيتصل بالعنوان اللي اتفحص نفسه
+   * (حل تاني وقت الاتصال ممكن يرجّع عنوان داخلي).
+   */
+  private async pinnedTarget(url: URL): Promise<{ address: string; family: number }> {
+    const addresses = await this.resolve(url.hostname.replace(/^\[|\]$/g, ''))
+    if (!addresses.length || (!this.allowLocal() && addresses.some(entry => isPrivateAddress(entry.address)))) throw new Error('عنوان نقطة الاستقبال بيتحل لعنوان داخلي')
+    return { address: addresses[0].address, family: addresses[0].family }
   }
+  /** حل الاسم (بيتبدّل في الاختبارات) */
+  resolve: (host: string) => Promise<Array<{ address: string; family: number }>> = host => lookup(host, { all: true })
 
   private async mark(endpointId: number, status: string, ok: boolean) {
     await this.ds.query(`UPDATE dbo.webhook_endpoints SET [lastStatus] = @1, [lastAttemptAt] = @2, [failures] = CASE WHEN @3 = 1 THEN 0 ELSE [failures] + 1 END WHERE [id] = @0`, [endpointId, status.slice(0, 40), new Date(), ok ? 1 : 0])
@@ -162,12 +168,12 @@ export class WebhooksService implements OnModuleInit {
     if (issue) { await this.mark(endpoint.id, 'TARGET_REFUSED', false); throw new Error(issue) }
     const url = new URL(endpoint.url), body = webhookBody(payload), timestamp = Math.floor(Date.now() / 1000)
     try {
-      await this.assertPublicTarget(url)
-      // من غير تتبّع تحويل (التحويل ممكن يودّي لعنوان داخلي)، وبمهلة
-      const response = await fetch(url, { method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS), body,
-        headers: { 'Content-Type': 'application/json', 'User-Agent': 'HR-Webhooks/1', 'X-HR-Event': payload.type, 'X-HR-Delivery': `${payload.eventId}:${endpoint.id}:${context.attempt}`, [WEBHOOK_SIGNATURE_HEADER]: signatureHeader(secret, timestamp, body) } })
-      if (response.status < 200 || response.status > 299) throw new Error(`HTTP ${response.status}`)
-      await this.mark(endpoint.id, `HTTP ${response.status}`, true)
+      const pinned = await this.pinnedTarget(url)
+      // من غير تتبّع تحويل (التحويل ممكن يودّي لعنوان داخلي)، وبمهلة، وعلى العنوان المثبّت
+      const status = await postPinned(url, pinned, { 'Content-Type': 'application/json', 'User-Agent': 'HR-Webhooks/1', 'X-HR-Event': payload.type,
+        'X-HR-Delivery': `${payload.eventId}:${endpoint.id}:${context.attempt}`, [WEBHOOK_SIGNATURE_HEADER]: signatureHeader(secret, timestamp, body) }, body, WEBHOOK_TIMEOUT_MS)
+      if (status < 200 || status > 299) throw new Error(`HTTP ${status}`)
+      await this.mark(endpoint.id, `HTTP ${status}`, true)
       return 'SENT'
     } catch (failure) {
       const reason = failure instanceof Error ? failure.message : String(failure)

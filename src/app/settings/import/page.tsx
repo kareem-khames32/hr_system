@@ -55,7 +55,9 @@ export default function SetupImportPage() {
   const [kinds, setKinds] = useState(KINDS)
   useEffect(() => {
     setWide(branchScopeOfUser(getCurrentUser()) === null)
-    setKinds(KINDS.filter((item) => item.key === 'balances' ? can('leave_balances.manage') : item.key === 'loans' ? can('requests.create_on_behalf') && can('loans.exceptional') : true))
+    // CRP6A-B01: كل نوع بصلاحية مساره الأصلي (الخادم بيرفض غير كده)
+    setKinds(KINDS.filter((item) => item.key === 'balances' ? can('leave_balances.manage') : item.key === 'loans' ? can('requests.create_on_behalf') && can('loans.exceptional')
+      : item.key === 'employees' ? can('employees.create') : can('org.manage')))
   }, [])
 
   function reset(next?: Kind) {

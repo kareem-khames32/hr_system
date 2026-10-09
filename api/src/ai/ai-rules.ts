@@ -84,12 +84,31 @@ export function cleanQuestion(raw: unknown): string | null {
 
 // خانات مابتتبعتش لمزوّد النموذج أبدًا (آيبان، هوية، جواز، جوال، حساب بنكي، كلمات سر ومفاتيح)
 const SENSITIVE_KEY = /iban|national|passport|phone|mobile|bank|account(no|number)|password|secret|token|birth/i
-/** نسخة من ناتج الأداة من غير الخانات الحساسة (على أي عمق) */
+export const AI_HIDDEN_TEXT = '[محجوب]'
+const digitsOf = (value: string) => value.replace(/[^0-9\u0660-\u0669]/g, '')
+/**
+ * CRP6A-B06: نص حر رايح للمزوّد (ملاحظات، تعليقات، أسباب) — أي حاجة شكلها بريد، أو آيبان، أو رقم طويل (تليفون، هوية، حساب: 8 أرقام فأكتر ولو بينهم
+ * مسافات أو شرط) بتتحجب. التواريخ والمبالغ بتفضل. اسم الخانة لوحده مش كفاية: الحساس ممكن يتكتب جوه أي نص.
+ */
+export function scrubFreeText(text: string): string {
+  return text
+    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, AI_HIDDEN_TEXT)
+    .replace(/\b[A-Za-z]{2}[0-9]{2}(?:[ -]?[A-Za-z0-9]){10,30}\b/g, AI_HIDDEN_TEXT)
+    .replace(/[+]?[0-9\u0660-\u0669][0-9\u0660-\u0669\s().\/-]{5,}[0-9\u0660-\u0669]/g, found => {
+      const value = found.trim()
+      if (digitsOf(value).length < 8) return found
+      // تاريخ (2026-10-01 أو 01/10/2026) أو مبلغ (1500000.00): مش بيانات اتصال
+      if (/^\d{4}-\d{2}-\d{2}$/.test(value) || /^\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}$/.test(value) || /^\d+\.\d{1,2}$/.test(value)) return found
+      return AI_HIDDEN_TEXT
+    })
+}
+/** نسخة من ناتج الأداة من غير الخانات الحساسة (على أي عمق)، والنصوص متنضّفة من الحساس اللي جواها */
 export function redactForProvider(value: unknown, depth = 0): unknown {
   if (depth > 8 || value === null || value === undefined) return value ?? null
   if (Array.isArray(value)) return value.slice(0, 50).map(item => redactForProvider(item, depth + 1))
   if (value instanceof Date) return value.toISOString()
   if (typeof value === 'object') return Object.fromEntries(Object.entries(value as Record<string, unknown>).filter(([key]) => !SENSITIVE_KEY.test(key)).map(([key, item]) => [key, redactForProvider(item, depth + 1)]))
+  if (typeof value === 'string') return scrubFreeText(value)
   return value
 }
 /** ناتج الأداة كنص للمزوّد: من غير الحساس، وبحد للطول */

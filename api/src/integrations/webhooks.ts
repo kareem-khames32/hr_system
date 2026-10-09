@@ -1,4 +1,6 @@
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes, timingSafeEqual } from 'node:crypto'
+import { request as httpRequest } from 'node:http'
+import { request as httpsRequest, type RequestOptions } from 'node:https'
 import { isIP } from 'node:net'
 import type { DomainEventType } from '../queue/outbox'
 
@@ -114,4 +116,25 @@ export function storedWebhookEvents(stored: string): WebhookEventName[] {
 /** جسم الرسالة (نص JSON ثابت الترتيب): المعرّف والنوع والوقت والمراجع */
 export function webhookBody(input: { eventId: string; type: WebhookEventName; occurredAt: string; data: Record<string, unknown> }): string {
   return JSON.stringify({ id: `evt_${input.eventId}`, type: input.type, occurredAt: input.occurredAt, data: input.data })
+}
+
+/**
+ * CRP6A-B04: إرسال POST لعنوان **مثبّت**: الاتصال بيروح لعنوان الـIP اللي اتفحص بالظبط (الاسم مابيتحلش تاني وقت الاتصال)، والاسم بيفضل في
+ * ترويسة Host وفي التحقق من شهادة TLS. من غير تتبّع تحويل. بيرجّع رقم حالة الرد.
+ */
+export function postPinned(url: URL, pinned: { address: string; family: number }, headers: Record<string, string>, body: string, timeoutMs: number): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const send = url.protocol === 'https:' ? httpsRequest : httpRequest
+    const call = send({ protocol: url.protocol, hostname: url.hostname.replace(/^\[|\]$/g, ''), port: url.port || undefined, path: url.pathname + url.search, method: 'POST', agent: false, timeout: timeoutMs,
+      headers: { ...headers, 'Content-Length': String(Buffer.byteLength(body)) },
+      // حل الاسم الوحيد المسموح: العنوان المثبّت
+      lookup: (_hostname: string, options: unknown, callback: (...args: unknown[]) => void) => ((options as { all?: boolean } | undefined)?.all
+        ? callback(null, [{ address: pinned.address, family: pinned.family }]) : callback(null, pinned.address, pinned.family)) } as unknown as RequestOptions, response => {
+      response.resume()
+      response.on('end', () => resolve(response.statusCode ?? 0))
+    })
+    call.on('timeout', () => call.destroy(new Error('انتهت مهلة نقطة الاستقبال')))
+    call.on('error', reject)
+    call.end(body)
+  })
 }

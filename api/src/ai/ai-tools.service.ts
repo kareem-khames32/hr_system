@@ -69,7 +69,8 @@ export class AiToolsService {
           const rows = (await this.employees.findAll(branchScopeOf(user))).map(employee => projectEmployee(employee, user, masking) as unknown as Record<string, unknown>)
             .filter(row => String(row.fullName ?? '').toLowerCase().includes(query) || String(row.fullNameEn ?? '').toLowerCase().includes(query) || String(row.employeeCode ?? '').toLowerCase() === query)
           if (!rows.length) return AI_UNAVAILABLE_DATA
-          return rows.slice(0, 5).map(row => pick(row, ['employeeCode', 'fullName', 'fullNameEn', 'jobTitle', 'status', 'branchId', 'departmentId', 'joinDate']))
+          // CRP6A-B03: من غير أرقام مراجع (فرع، قسم، فريق، مدير) — المرجع ممكن يكون في فرع برّه نطاق السائل
+          return rows.slice(0, 5).map(row => pick(row, ['employeeCode', 'fullName', 'fullNameEn', 'jobTitle', 'status', 'joinDate']))
         } },
       // B6.9: تقارير باللغة الطبيعية — النموذج بيختار مفتاح مؤشر من القاموس وفلاتر بالاسم بس (مفيش نص استعلام)، والرقم من دالة التقرير نفسها
       { label: 'مؤشرات التقارير', module: 'reports', perm: 'reports.view', def: { name: 'report_metric',

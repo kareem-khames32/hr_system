@@ -209,7 +209,7 @@ test('AIU-11: مصدر الكود — خدمة الاقتراحات مابتكت
   assert.match(assist, /const row = await repo\.save\(repo\.create\(\{ userId: user\.sub/)
   assert.deepEqual([...assist.matchAll(/UPDATE dbo\.(\w+)/g)].map(found => found[1]), ['ai_actions'])
   assert.doesNotMatch(assist, /stages\.move|\.submit\(|\.calibrate\(|\.hire\(|transaction\(/)
-  assert.match(assist, /WHERE \[id\] = @5 AND \[userId\] = @1 AND \[confirmed\] IS NULL AND \[status\] = N'OK'/)
+  assert.match(assist, /WHERE \[id\] = @5 AND \[userId\] = @1 AND \[confirmed\] IS NULL AND \[status\] = N'OK' AND ISNULL\(\[employeeId\], 0\) = @6/)
   assert.match(assist, /await assertCandidateCvAccess\(em, user, file\)/, 'السيرة بحكم قراءتها القايم')
   assert.match(assist, /const form = await this\.reviews\.form\(user, assignmentId\)\n    if \(form\.relation !== 'manager' \|\| !form\.canSubmit\) throw new NotFoundException\(REVIEW_NOT_FOUND\)/)
   assert.match(assist, /candidates: candidates\.map\(row => \(\{ candidateId: row\.id, stage: row\.stage, notes: row\.notes \?\? null \}\)\)/, 'الترتيب من غير أسماء ولا بيانات اتصال')
@@ -223,4 +223,36 @@ test('AIU-11: مصدر الكود — خدمة الاقتراحات مابتكت
   assert.match(web, /await updateCandidate\(candidate\.id, \{ notes: text\.trim\(\) \}\)\n    await outcome\(cv\.id, \{ used: true, finalText: text\.trim\(\) \}\)/)
   assert.equal((web.match(/data-ai-suggestion/g) ?? []).length, 2)
   assert.doesNotMatch(web, /stage:|moveStage|rejected|hired'\)/, 'مفيش نقل مرحلة من مكوّن الاقتراحات')
+})
+
+// ===== CRP6A: حواجز P6A =====
+test('AIU-12 (CRP6A-B06): النص الحر قبل المزوّد — بريد وآيبان وأرقام طويلة (تليفون، هوية، حساب) بتتحجب جوه أي نص؛ التواريخ والمبالغ والأرقام القصيرة بتفضل', () => {
+  const hidden = rules.AI_HIDDEN_TEXT
+  const cases = [
+    ['كلّمه على 0501234567 بكرة', `كلّمه على ${hidden} بكرة`], ['جواله +966 50 123 4567', `جواله ${hidden}`], ['تليفون ٠٥٠١٢٣٤٥٦٧', `تليفون ${hidden}`], ['هاتف 050-123-4567.', `هاتف ${hidden}.`],
+    ['آيبان SA4420000001234567891234 للتحويل', `آيبان ${hidden} للتحويل`], ['IBAN: SA44 2000 0001 2345 6789 1234', `IBAN: ${hidden}`], ['بريده ahmed.ali@example.com', `بريده ${hidden}`],
+    ['هويته 1099887766', `هويته ${hidden}`], ['حساب 123456789012', `حساب ${hidden}`],
+    // بيفضل زي ما هو
+    ['خبرة 6 سنين من 2019', 'خبرة 6 سنين من 2019'], ['من 2026-10-01 إلى 2026-10-31', 'من 2026-10-01 إلى 2026-10-31'], ['بتاريخ 01/10/2026', 'بتاريخ 01/10/2026'], ['1500000.00', '1500000.00'], ['المبلغ 1500.00 ريال', 'المبلغ 1500.00 ريال'],
+    ['كود AX_P1 ومسير 2026-10', 'كود AX_P1 ومسير 2026-10'], ['2026-10-09T03:22:22.000Z', '2026-10-09T03:22:22.000Z'], ['', ''],
+  ]
+  for (const [input, expected] of cases) assert.equal(rules.scrubFreeText(input), expected, input)
+  // على أي عمق في ناتج الأداة، ومع حجب أسماء الخانات زي ما هو
+  assert.deepEqual(rules.redactForProvider({ notes: 'واتساب 0501234567', phone: '0500000000', list: [{ comment: 'x@y.example و SA4420000001234567891234' }], days: 12345678, when: '2026-10-01' }),
+    { notes: `واتساب ${hidden}`, list: [{ comment: `${hidden} و ${hidden}` }], days: 12345678, when: '2026-10-01' })
+  assert.equal(JSON.parse(rules.toolResultText({ notes: 'رقمه 0501234567' })).notes, `رقمه ${hidden}`)
+})
+
+test('AIU-13 (CRP6A-B03/B05): مصدر الكود — أداة البحث من غير أرقام مراجع؛ والاقتراح مربوط بملف الموظف وقت تجهيزه في العرض والتأكيد والحجز وقرار اقتراحات التوظيف والأداء', () => {
+  const tools = read('ai/ai-tools.service.ts')
+  assert.match(tools, /pick\(row, \['employeeCode', 'fullName', 'fullNameEn', 'jobTitle', 'status', 'joinDate'\]\)/)
+  const lookup = tools.slice(tools.indexOf("name: 'employee_lookup'"), tools.indexOf("name: 'report_metric'"))
+  assert.doesNotMatch(lookup, /'branchId'|'departmentId'|'teamId'|'managerEmployeeId'/)
+  const service = read('ai/ai.service.ts')
+  assert.match(service, /if \(!row \|\| !proposal \|\| \(row\.employeeId \?\? null\) !== \(user\.employeeId \?\? null\)\) throw new NotFoundException\(AI_SUGGESTION_NOT_FOUND\)/)
+  assert.match(service, /return proposal && \(row\.employeeId \?\? null\) === \(user\.employeeId \?\? null\) && now - created <= AI_SUGGESTION_TTL_MS/)
+  assert.match(service, /AND \[createdAt\] >= @6 AND ISNULL\(\[employeeId\], 0\) = @7/)
+  const assist = read('ai/ai-assist.service.ts')
+  assert.match(assist, /if \(!row \|\| !stored \|\| \(row\.employeeId \?\? null\) !== \(user\.employeeId \?\? null\)\) throw new NotFoundException\(AI_SUGGESTION_NOT_FOUND\)/)
+  assert.match(assist, /AND \[status\] = N'OK' AND ISNULL\(\[employeeId\], 0\) = @6/)
 })

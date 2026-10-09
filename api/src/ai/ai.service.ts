@@ -109,7 +109,8 @@ export class AiService {
   private async pendingSuggestion(user: JwtPayload, id: number): Promise<{ row: AiAction; proposal: AiProposal }> {
     const row = Number.isSafeInteger(id) && id > 0 && await this.ready(this.ds.manager) ? await this.ds.getRepository(AiAction).findOne({ where: { id, userId: user.sub, kind: AI_KIND_ACTION } }) : null
     const proposal = row?.suggestion ? this.proposals.parse(row.suggestion) : null
-    if (!row || !proposal) throw new NotFoundException(AI_SUGGESTION_NOT_FOUND)
+    // CRP6A-B05: الاقتراح اتجهّز لملف موظف بعينه — لو ربط الحساب بالموظف اتغيّر بعدها الاقتراح مابقاش له (نفس رد اللي مش موجود)
+    if (!row || !proposal || (row.employeeId ?? null) !== (user.employeeId ?? null)) throw new NotFoundException(AI_SUGGESTION_NOT_FOUND)
     if (row.confirmed !== null || row.status !== 'OK') throw new ConflictException(AI_SUGGESTION_DECIDED)
     if (Date.now() - new Date(row.createdAt).getTime() > AI_SUGGESTION_TTL_MS) throw new ConflictException(AI_SUGGESTION_EXPIRED)
     return { row, proposal }
@@ -125,15 +126,15 @@ export class AiService {
     const now = Date.now()
     return { suggestions: rows.flatMap(row => {
       const proposal = row.suggestion ? this.proposals.parse(row.suggestion) : null, created = new Date(row.createdAt).getTime()
-      return proposal && now - created <= AI_SUGGESTION_TTL_MS ? [{ id: row.id, question: row.question, expiresAt: new Date(created + AI_SUGGESTION_TTL_MS).toISOString(), ...proposal.view }] : []
+      return proposal && (row.employeeId ?? null) === (user.employeeId ?? null) && now - created <= AI_SUGGESTION_TTL_MS ? [{ id: row.id, question: row.question, expiresAt: new Date(created + AI_SUGGESTION_TTL_MS).toISOString(), ...proposal.view }] : []
     }) }
   }
 
   /** حجز الاقتراح بتحديث مشروط: طلبين متزامنين = واحد بس بياخده (مفتاح منع التكرار) */
   private async claim(user: JwtPayload, id: number, confirmed: boolean, status: string): Promise<boolean> {
     const claimed: unknown[] = await this.ds.query(`UPDATE dbo.ai_actions SET [confirmed] = @0, [confirmedByUserId] = @1, [confirmedAt] = @2, [status] = @3 OUTPUT inserted.[id]
-      WHERE [id] = @4 AND [userId] = @1 AND [kind] = @5 AND [confirmed] IS NULL AND [status] = N'OK' AND [createdAt] >= @6`,
-      [confirmed ? 1 : 0, user.sub, new Date(), status, id, AI_KIND_ACTION, new Date(Date.now() - AI_SUGGESTION_TTL_MS)])
+      WHERE [id] = @4 AND [userId] = @1 AND [kind] = @5 AND [confirmed] IS NULL AND [status] = N'OK' AND [createdAt] >= @6 AND ISNULL([employeeId], 0) = @7`,
+      [confirmed ? 1 : 0, user.sub, new Date(), status, id, AI_KIND_ACTION, new Date(Date.now() - AI_SUGGESTION_TTL_MS), user.employeeId ?? 0])
     return claimed.length === 1
   }
 

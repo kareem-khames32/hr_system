@@ -72,13 +72,22 @@ test('CPU-04: سجل النسخ وترقية كل النسخ — المُرحّ�
     customer.writeRegistry([{ database: 'hr_c_one', apiRoot: instance('one') }, { database: 'hr_c_two', apiRoot: instance('two') }, { database: 'hr_c_lost', apiRoot: path.join(work, 'missing') }, { database: 'hr_c_none' }], registry)
     const calls = []
     const run = (root, args) => { calls.push([path.basename(root), args.join(' ')]); if (path.basename(root) === 'one' && args[0] === 'apply') { const error = new Error('exit 1'); error.stderr = 'ERROR: وضع الشركة موقوف: الـAPI يستمع'; throw error } return 'ok\nledger complete' }
-    const report = customer.upgradeAll({ registry, run })
+    // CRP6A-B02: ملف بيئة كل مجلد بيشاور على قاعدته المسجّلة — والاسم بيتبعت للمُرحّل
+    const targetOf = root => 'hr_c_' + path.basename(root)
+    const report = customer.upgradeAll({ registry, run, targetOf })
     assert.deepEqual([report.total, report.failed, report.results.map(row => [row.database, row.ok])], [4, 3, [['hr_c_one', false], ['hr_c_two', true], ['hr_c_lost', false], ['hr_c_none', false]]])
-    assert.deepEqual(calls, [['one', 'plan'], ['one', 'apply --company'], ['two', 'plan'], ['two', 'apply --company']])
+    assert.deepEqual(calls, [['one', 'plan --database hr_c_one'], ['one', 'apply --company --database hr_c_one'], ['two', 'plan --database hr_c_two'], ['two', 'apply --company --database hr_c_two']])
+    // مجلد ملف بيئته بيشاور على قاعدة تانية (أو مش مقري، أو اسم مسجّل مش اسم قاعدة عميل): ولا خطة ولا تطبيق، والفشل ظاهر
+    calls.length = 0
+    const wrong = customer.upgradeAll({ registry, run, targetOf: root => (path.basename(root) === 'two' ? 'hr_c_actual_other' : 'hr_c_' + path.basename(root)) })
+    assert.deepEqual([wrong.results.map(row => row.ok), wrong.results[1].error, calls.map(call => call[0])], [[false, false, false, false], 'قاعدة ملف بيئة النسخة مش هي القاعدة المسجّلة باسمها — الترقية ماتنفّذتش', ['one', 'one']])
+    calls.length = 0
+    assert.deepEqual([customer.upgradeAll({ registry, run, targetOf: () => { throw new Error('no env') } }).failed, calls.length], [4, 0])
+    assert.match(fs.readFileSync(path.join(apiRoot, 'scripts', 'customer.cjs'), 'utf8'), /\['apply', '--company', '--database', row\.database\]/)
     assert.match(report.results[0].error, /وضع الشركة موقوف/)
     // خطة بس: من غير تطبيق
     calls.length = 0
-    assert.deepEqual([customer.upgradeAll({ registry, run, planOnly: true }).failed, calls.map(call => call[1])], [2, ['plan', 'plan']])
+    assert.deepEqual([customer.upgradeAll({ registry, run, targetOf, planOnly: true }).failed, calls.map(call => call[1])], [2, ['plan --database hr_c_one', 'plan --database hr_c_two']])
     fs.writeFileSync(registry, '{"not":"a list"}')
     assert.throws(() => customer.readRegistry(registry), /سجل النسخ تالف/)
   } finally { fs.rmSync(work, { recursive: true, force: true }) }

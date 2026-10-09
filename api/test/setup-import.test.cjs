@@ -89,8 +89,14 @@ test('SIU-06: (ج) مصدر الخدمة — الرصيد بخدمة تعديل�
   const balance = service.slice(service.indexOf('private async balancePlan('), service.indexOf('private async loanPlan('))
   const loan = service.slice(service.indexOf('private async loanPlan('), service.indexOf('private async plan('))
   // الصلاحية والموديول قبل أي قراية
-  assert.match(balance, /^private async balancePlan\([^\n]+\n\s+if \(!userHasPerm\(user, 'leave_balances\.manage'\)\) throw new ForbiddenException\([^\n]+\n\s+if \(!\(await this\.modules\.isEnabled\('leave'\)\)\) throw new BadRequestException/)
-  assert.match(loan, /^private async loanPlan\([^\n]+\n\s+if \(!userHasPerm\(user, 'requests\.create_on_behalf'\) \|\| !userHasPerm\(user, 'loans\.exceptional'\)\) throw new ForbiddenException/)
+  // CRP6A-B01: حراس كل نوع (صلاحية مساره الأصلي وموديوله بجمهور التفعيل) في مكان واحد، قبل قراءة الملف، للقالب والمعاينة والتنفيذ
+  assert.match(service, /structure: \{ perms: \['org\.manage'\], modules: \['org'\]/)
+  assert.match(service, /employees: \{ perms: \['employees\.create'\], modules: \['employees'\]/)
+  assert.match(service, /balances: \{ perms: \['leave_balances\.manage'\], modules: \['leave'\]/)
+  assert.match(service, /loans: \{ perms: \['requests\.create_on_behalf', 'loans\.exceptional'\], modules: \['requests', 'loans'\]/)
+  assert.match(service, /if \(!gate\.perms\.every\(perm => userHasPerm\(user, perm\)\)\) throw new ForbiddenException\(gate\.denied\)\n    for \(const module of gate\.modules\) if \(!\(await this\.modules\.allowedFor\(module, user\)\)\) throw new BadRequestException\(gate\.closed\)/)
+  assert.equal((service.match(/const kind = this\.kindOf\(rawKind\)\n    await this\.assertKindAllowed\(user, kind\)/g) ?? []).length, 2, 'القالب، والخطة (المعاينة والتنفيذ)')
+  assert.doesNotMatch(service, /modules\.isEnabled\(/, 'الموديول بجمهور تفعيله مش بحالته العامة بس')
   // الرصيد: خدمة التعديل القايمة بسببها ومفتاح عملية و«المتوقع» اللي بيرفض لو الرصيد اتغيّر
   assert.match(balance, /await this\.balances\.adjust\(person\.id, \{ balanceType, period: now\.period, delta, reason: OPENING_BALANCE_REASON, idempotencyKey: randomUUID\(\), expectedRemaining: now\.shown \}, user\.sub, null\)/)
   // السلفة: طلب بالنيابة بيتقدّم — من غير أي كتابة في جدول السلف

@@ -107,13 +107,20 @@ async function provision(options = {}) {
 function upgradeAll(options = {}) {
   const rows = readRegistry(options.registry || REGISTRY)
   const run = options.run || ((root, args) => execFileSync(process.execPath, [path.join(root, 'scripts', 'db-migrate.cjs'), ...args], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }))
+  // CRP6A-B02: قاعدة ملف بيئة مجلد النسخة (اسمها بس — مفيش قيمة تانية بتتقري ولا بتتطبع)
+  const targetOf = options.targetOf || (root => String(require(path.join(apiRoot, 'node_modules', 'dotenv')).parse(fs.readFileSync(path.join(root, '.env'))).DB_DATABASE ?? '').trim())
   const results = []
   for (const row of rows) {
     const result = { database: row.database, apiRoot: row.apiRoot || null }
     if (!row.apiRoot || !fs.existsSync(path.join(row.apiRoot, 'scripts', 'db-migrate.cjs'))) { results.push({ ...result, ok: false, error: 'مجلد النسخة (apiRoot) مش متسجّل أو مش موجود' }); continue }
+    // CRP6A-B02: الترقية مثبّتة على القاعدة المسجّلة باسم العميل. ملف بيئة المجلد لازم يشاور عليها (وإلا مفيش خطة ولا تطبيق)، والاسم نفسه بيتبعت
+    // للمُرحّل (--database): لو ملف البيئة اتغيّر بعد الفحص المُرحّل نفسه بيرفض (--company لقاعدة ملف البيئة بس) — مفيش ترحيل بيروح لقاعدة تانية.
+    let target = ''
+    try { assertDatabaseName(row.database, {}); target = targetOf(row.apiRoot) } catch { target = '' }
+    if (!target || target !== row.database) { results.push({ ...result, ok: false, error: 'قاعدة ملف بيئة النسخة مش هي القاعدة المسجّلة باسمها — الترقية ماتنفّذتش' }); continue }
     try {
-      result.plan = String(run(row.apiRoot, ['plan'])).trim().split('\n').slice(-3).join(' | ')
-      if (!options.planOnly) result.apply = String(run(row.apiRoot, ['apply', '--company'])).trim().split('\n').slice(-3).join(' | ')
+      result.plan = String(run(row.apiRoot, ['plan', '--database', row.database])).trim().split('\n').slice(-3).join(' | ')
+      if (!options.planOnly) result.apply = String(run(row.apiRoot, ['apply', '--company', '--database', row.database])).trim().split('\n').slice(-3).join(' | ')
       results.push({ ...result, ok: true })
     } catch (failure) {
       results.push({ ...result, ok: false, error: String(failure.stderr || failure.message || failure).trim().split('\n').slice(-2).join(' | ').slice(0, 600) })

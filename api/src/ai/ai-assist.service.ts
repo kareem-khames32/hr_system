@@ -115,7 +115,8 @@ export class AiAssistService {
     const row = Number.isSafeInteger(id) && id > 0 ? await this.ds.getRepository(AiAction).findOne({ where: { id, userId: user.sub, kind: In([...AI_ASSIST_KINDS]) } }) : null
     let stored: StoredSuggestion | null = null
     try { stored = row?.suggestion ? JSON.parse(row.suggestion) as StoredSuggestion : null } catch { stored = null }
-    if (!row || !stored) throw new NotFoundException(AI_SUGGESTION_NOT_FOUND)
+    // CRP6A-B05: الاقتراح لصاحبه بالحساب **وبملف الموظف** اللي طلبه بيه
+    if (!row || !stored || (row.employeeId ?? null) !== (user.employeeId ?? null)) throw new NotFoundException(AI_SUGGESTION_NOT_FOUND)
     if (typeof input.used !== 'boolean') throw new BadRequestException('used: true لو استخدمت الاقتراح، false لو رفضته')
     let status = 'DISMISSED', finalText: string | null = null
     if (input.used) {
@@ -126,7 +127,7 @@ export class AiAssistService {
       } else status = 'ACCEPTED'
     }
     const claimed: unknown[] = await this.ds.query(`UPDATE dbo.ai_actions SET [confirmed] = @0, [confirmedByUserId] = @1, [confirmedAt] = @2, [status] = @3, [answer] = @4 OUTPUT inserted.[id]
-      WHERE [id] = @5 AND [userId] = @1 AND [confirmed] IS NULL AND [status] = N'OK'`, [input.used ? 1 : 0, user.sub, new Date(), status, finalText, id])
+      WHERE [id] = @5 AND [userId] = @1 AND [confirmed] IS NULL AND [status] = N'OK' AND ISNULL([employeeId], 0) = @6`, [input.used ? 1 : 0, user.sub, new Date(), status, finalText, id, user.employeeId ?? 0])
     if (claimed.length !== 1) throw new ConflictException(AI_SUGGESTION_DECIDED)
     return { id, outcome: status }
   }

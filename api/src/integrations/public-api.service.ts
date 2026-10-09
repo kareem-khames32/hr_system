@@ -11,8 +11,20 @@ export const PUBLIC_PAGE_DEFAULT = 50
 export const PUBLIC_PAGE_MAX = 200
 // نفس حالات ملف الموظف (common/domain-status.ts)
 export const PUBLIC_EMPLOYEE_STATUSES = ['active', 'probation', 'notice_period', 'suspended', 'terminated', 'archived'] as const
-const EMPLOYEE_COLUMNS = `e.[id], e.[employeeCode], e.[fullName], e.[fullNameEn], e.[jobTitle], e.[email], e.[branchId], e.[departmentId], e.[teamId], e.[managerEmployeeId], e.[status],
-  CONVERT(char(10), e.[joinDate], 23) AS [joinDate]`
+const EMPLOYEE_COLUMNS = `e.[id], e.[employeeCode], e.[fullName], e.[fullNameEn], e.[jobTitle], e.[email], e.[branchId], e.[status], CONVERT(char(10), e.[joinDate], 23) AS [joinDate]`
+/**
+ * CRP6A-B03: أعمدة الموظف بأرقام مراجعه (القسم، الفريق، المدير) محكومة بفرع المرجع **الحالي**: مرجع فرعه برّه نطاق المفتاح بيرجع null — زي ما
+ * الهيكل بيحجب القسم ده وقراءة المدير نفسه «مش موجود». نطاق الموظف لوحده مش كفاية (قسم اتنقل لفرع تاني، مدير من فرع تاني). مفتاح بكل الفروع: الأرقام زي ما هي.
+ */
+export function employeeColumns(scope: BranchScope, parameters: unknown[]): string {
+  if (scope === null) return `${EMPLOYEE_COLUMNS}, e.[departmentId], e.[teamId], e.[managerEmployeeId]`
+  if (!scope.length) return `${EMPLOYEE_COLUMNS}, CAST(NULL AS int) AS [departmentId], CAST(NULL AS int) AS [teamId], CAST(NULL AS int) AS [managerEmployeeId]`
+  const marks = scope.map(id => { parameters.push(id); return `@${parameters.length - 1}` }).join(', ')
+  return `${EMPLOYEE_COLUMNS},
+    CASE WHEN EXISTS (SELECT 1 FROM dbo.departments rd WHERE rd.[id] = e.[departmentId] AND rd.[branchId] IN (${marks})) THEN e.[departmentId] END AS [departmentId],
+    CASE WHEN EXISTS (SELECT 1 FROM dbo.teams rt INNER JOIN dbo.departments rtd ON rtd.[id] = rt.[departmentId] WHERE rt.[id] = e.[teamId] AND rtd.[branchId] IN (${marks})) THEN e.[teamId] END AS [teamId],
+    CASE WHEN EXISTS (SELECT 1 FROM dbo.employees rm WHERE rm.[id] = e.[managerEmployeeId] AND rm.[branchId] IN (${marks})) THEN e.[managerEmployeeId] END AS [managerEmployeeId]`
+}
 
 // B6.3 (ب): حدود مدى التاريخ لكل قراءة
 export const PUBLIC_ATTENDANCE_MAX_DAYS = 31
@@ -63,6 +75,7 @@ export class PublicApiService {
   async employees(integration: IntegrationIdentity, query: { page?: unknown; pageSize?: unknown; status?: unknown; branchId?: unknown }) {
     const { page, pageSize } = pageOf(query)
     const parameters: unknown[] = []
+    const columns = employeeColumns(integration.branchScope, parameters)
     let where = 'WHERE 1 = 1' + scopeClause(integration.branchScope, 'e.[branchId]', parameters)
     if (query.status !== undefined && query.status !== '') {
       if (!(PUBLIC_EMPLOYEE_STATUSES as readonly unknown[]).includes(query.status)) throw new BadRequestException(`status واحدة من: ${PUBLIC_EMPLOYEE_STATUSES.join(', ')}`)
@@ -74,7 +87,7 @@ export class PublicApiService {
       parameters.push(branchId); where += ` AND e.[branchId] = @${parameters.length - 1}`
     }
     parameters.push((page - 1) * pageSize, pageSize)
-    const rows: EmployeeRow[] = await this.ds.query(`SELECT ${EMPLOYEE_COLUMNS}, COUNT(*) OVER () AS [total] FROM dbo.employees e ${where}
+    const rows: EmployeeRow[] = await this.ds.query(`SELECT ${columns}, COUNT(*) OVER () AS [total] FROM dbo.employees e ${where}
       ORDER BY e.[id] OFFSET @${parameters.length - 2} ROWS FETCH NEXT @${parameters.length - 1} ROWS ONLY`, parameters)
     // صفحة بعد الآخر: مفيش صفوف ومفيش عدّ — العدّ في جملة لوحدها بنفس الشرط
     const total = rows.length ? Number(rows[0].total) : Number((await this.ds.query(`SELECT COUNT(*) AS [total] FROM dbo.employees e ${where}`, parameters.slice(0, -2)))[0]?.total ?? 0)
@@ -83,7 +96,8 @@ export class PublicApiService {
 
   async employee(integration: IntegrationIdentity, id: number) {
     const parameters: unknown[] = [id]
-    const [row]: EmployeeRow[] = await this.ds.query(`SELECT ${EMPLOYEE_COLUMNS} FROM dbo.employees e WHERE e.[id] = @0${scopeClause(integration.branchScope, 'e.[branchId]', parameters)}`, parameters)
+    const columns = employeeColumns(integration.branchScope, parameters)
+    const [row]: EmployeeRow[] = await this.ds.query(`SELECT ${columns} FROM dbo.employees e WHERE e.[id] = @0${scopeClause(integration.branchScope, 'e.[branchId]', parameters)}`, parameters)
     // موظف برّه نطاق المفتاح = مش موجود (نفس الرد)
     if (!row) throw new NotFoundException('الموظف مش موجود')
     return employeeView(row)
@@ -95,8 +109,10 @@ export class PublicApiService {
       ORDER BY b.[id]`, branchParameters)
     const departments: Array<Record<string, unknown>> = await this.ds.query(`SELECT d.[id], d.[name], d.[nameEn], d.[code], d.[parentId], d.[branchId], d.[isActive] FROM dbo.departments d
       WHERE 1 = 1${scopeClause(integration.branchScope, 'd.[branchId]', departmentParameters)} ORDER BY d.[id]`, departmentParameters)
+    // CRP6A-B03: أب الوحدة لو مش من الوحدات الراجعة (فرعه برّه نطاق المفتاح) بيبقى null — مفيش رقم من فرع برّه النطاق
+    const shown = new Set(departments.map(row => Number(row.id)))
     return { branches: branches.map(row => ({ ...row, id: Number(row.id), isActive: !!row.isActive })),
-      departments: departments.map(row => ({ ...row, id: Number(row.id), branchId: Number(row.branchId), parentId: row.parentId == null ? null : Number(row.parentId), isActive: !!row.isActive })) }
+      departments: departments.map(row => ({ ...row, id: Number(row.id), branchId: Number(row.branchId), parentId: row.parentId != null && shown.has(Number(row.parentId)) ? Number(row.parentId) : null, isActive: !!row.isActive })) }
   }
 
   /** صفحة من جملة قراءة واحدة (العدّ معاها)؛ صفحة بعد الآخر: العدّ بجملة بنفس الشرط */
