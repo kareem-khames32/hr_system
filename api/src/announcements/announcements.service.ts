@@ -13,6 +13,7 @@ import { ModulesService } from '../modules-registry/modules.service'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
+import { assertAudienceTargets, departmentPathsFor, type DepartmentPaths } from '../org/org-audience'
 import { recordOutboxEvent } from '../queue/outbox'
 import { isCurrentEmployee } from '../reports/metrics'
 import { audienceNeedsPositions, parseRequestAudience, requestAudienceAllows, type AudiencePositions, type AudienceSubject } from '../requests/request-audience'
@@ -30,6 +31,8 @@ export interface AnnouncementInput {
 }
 type Attachment = { id: number; name: string; size: number }
 type Positions = { departmentManagers: Set<number>; teamLeaders: Set<number>; branchManagers: Set<number> }
+// B-ADD.1: اللي المقيّم محتاجه من الهيكل لمجموعة إعلانات — المناصب («حسب المنصب») ومسارات الأقسام («إدارات أو أقسام»)، كل واحد لما يتحتاج بس
+type OrgFacts = { positions: Positions | null; paths: DepartmentPaths | null }
 type Member = Pick<Employee, 'id' | 'departmentId' | 'teamId' | 'branchId'>
 const day = (value: unknown): string | null => (value == null || value === '' ? null : String(value).slice(0, 10))
 
@@ -61,20 +64,22 @@ export class AnnouncementsService {
    * الموظف قدام مقيّم الجمهور: بملفه (قسم، فريق، فرع، منصب) وبدور حسابه. من غير صلاحيات، ودور مدير النظام مش دور وظيفي: المقيّم
    * بيعدّي مدير النظام في أي جمهور، وهنا السؤال «الإعلان ده للموظف ده؟»، فمدير النظام بيشوف اللي لموظفه بس (زي السياسات).
    */
-  private subject(employee: Member, role: string | null | undefined, positions: Positions | null): AudienceSubject {
+  private subject(employee: Member, role: string | null | undefined, org: OrgFacts): AudienceSubject {
+    const positions = org.positions
     const held: AudiencePositions = positions ? { departmentManager: positions.departmentManagers.has(employee.id), teamLeader: positions.teamLeaders.has(employee.id),
       branchManager: positions.branchManagers.has(employee.id) } : {}
     return { role: role && role !== 'super_admin' ? role : null, permissions: [], employeeId: employee.id, departmentId: employee.departmentId ?? null,
-      teamId: employee.teamId ?? null, branchId: employee.branchId ?? null, positions: held }
+      teamId: employee.teamId ?? null, branchId: employee.branchId ?? null, positions: held, departmentPath: org.paths ? org.paths(employee.departmentId) : null }
   }
 
-  private inAudience(row: Pick<Announcement, 'audience'>, employee: Member, role: string | null | undefined, positions: Positions | null): boolean {
+  private inAudience(row: Pick<Announcement, 'audience'>, employee: Member, role: string | null | undefined, org: OrgFacts): boolean {
     // نص جمهور تالف (اتغيّر برّه الكاتب) = الإعلان مش لحد
-    return announcementAudienceIntact(row.audience) && requestAudienceAllows(row.audience, this.subject(employee, role, positions), 'submit')
+    return announcementAudienceIntact(row.audience) && requestAudienceAllows(row.audience, this.subject(employee, role, org), 'submit')
   }
 
-  private async positionsFor(em: EntityManager, rows: ReadonlyArray<Pick<Announcement, 'audience'>>): Promise<Positions | null> {
-    return rows.some(row => audienceNeedsPositions(row.audience)) ? this.positions(em) : null
+  private async positionsFor(em: EntityManager, rows: ReadonlyArray<Pick<Announcement, 'audience'>>): Promise<OrgFacts> {
+    return { positions: rows.some(row => audienceNeedsPositions(row.audience)) ? await this.positions(em) : null,
+      paths: await departmentPathsFor(em, rows.map(row => row.audience)) }
   }
 
   /** موظف الحساب الحالي (ملف مفعّل وحالته مش خارج)، أو null */
@@ -206,7 +211,9 @@ export class AnnouncementsService {
     const scope = branchScopeOf(user)
     const rows = (await this.repo.find({ order: { id: 'DESC' }, take: 300 })).filter(row => announcementAudienceInScope(row.audience, scope))
     const attachments = await this.attachmentsOf(this.ds.manager, rows.map(row => row.id))
-    return { available: true, message: null, items: rows.map(row => this.manageView(row, attachments.get(row.id) ?? null)) }
+    // B-ADD.4: نسبة القراءة لكل إعلان منشور (جمهوره في نطاق القارئ دلوقتي، وقرا منهم كام) — «مين ماقراش» من تقرير الإعلان
+    const stats = await this.readStats(this.ds.manager, rows.filter(row => row.status === 'PUBLISHED'), scope)
+    return { available: true, message: null, items: rows.map(row => ({ ...this.manageView(row, attachments.get(row.id) ?? null), readStats: stats.get(row.id) ?? null })) }
   }
 
   async create(user: JwtPayload, input: AnnouncementInput) {
@@ -214,6 +221,7 @@ export class AnnouncementsService {
     const fields = this.fields(user, input, null)
     const attachment = announcementAttachmentInput(input.attachmentFileId)
     return this.ds.transaction(async em => {
+      await assertAudienceTargets(em, fields.audience, 'جمهور الإعلان')
       const repo = em.getRepository(Announcement)
       const saved = await repo.save(repo.create({ ...fields, status: 'DRAFT', createdByUserId: user.sub, createdAt: new Date(), publishedAt: null }))
       if (attachment != null) await this.setAttachment(em, user, saved.id, attachment)
@@ -229,6 +237,7 @@ export class AnnouncementsService {
       const row = await this.managed(user, id, em, true)
       if (row.status !== 'DRAFT') throw new BadRequestException(ANNOUNCEMENT_NOT_DRAFT)
       const fields = this.fields(user, input, row)
+      if (input.audience !== undefined) await assertAudienceTargets(em, fields.audience, 'جمهور الإعلان', row.audience)
       const attachment = announcementAttachmentInput(input.attachmentFileId)
       // بالحقول وبرقم الصف — مش حفظ الكيان كله (الصف مقفول من أول المعاملة)
       await em.getRepository(Announcement).update({ id: row.id }, fields)
@@ -317,8 +326,8 @@ export class AnnouncementsService {
     return occasionsOf(colleagues.filter(row => isCurrentEmployee(row)), today)
   }
 
-  /** موظفين الجمهور الحاليين في نطاق فروع القارئ (كل الفروع لو null)، ومعاهم دور حساب كل واحد */
-  private async audienceMembers(em: EntityManager, row: Announcement, scope: BranchScope) {
+  /** الموظفين الحاليين في نطاق فروع القارئ (كل الفروع لو null) وحساباتهم المفعّلة ودور كل واحد — قراءة واحدة لأي عدد إعلانات */
+  private async audiencePool(em: EntityManager, scope: BranchScope) {
     const employees = scope !== null && !scope.length ? [] : await em.getRepository(Employee).find({
       where: { isActive: true, ...(scope === null ? {} : { branchId: branchIdIn(scope) }) },
       select: { id: true, employeeCode: true, fullName: true, branchId: true, departmentId: true, teamId: true, status: true, isActive: true }, order: { id: 'ASC' } })
@@ -330,10 +339,41 @@ export class AnnouncementsService {
     }
     const roles = new Map<number, string>()
     for (const account of accounts) if (!roles.has(account.employeeId!)) roles.set(account.employeeId!, account.role)
+    return { current, accounts, roles }
+  }
+
+  /** موظفين الجمهور الحاليين في نطاق فروع القارئ (كل الفروع لو null)، ومعاهم دور حساب كل واحد */
+  private async audienceMembers(em: EntityManager, row: Announcement, scope: BranchScope) {
+    const { current, accounts, roles } = await this.audiencePool(em, scope)
     const positions = await this.positionsFor(em, [row])
     const members = current.filter(employee => this.inAudience(row, employee, roles.get(employee.id), positions))
     const inAudience = new Set(members.map(member => member.id))
     return { members, accounts: accounts.filter(account => inAudience.has(account.employeeId!)) }
+  }
+
+  /**
+   * B-ADD.4: لكل إعلان — جمهوره الحالي في نطاق القارئ وعدد اللي قروا منهم (نفس حساب تقرير الإعلان الواحد). الموظفين والحسابات بيتقروا
+   * مرة واحدة لكل الإعلانات، والقراءات باستعلام واحد.
+   */
+  private async readStats(em: EntityManager, rows: Announcement[], scope: BranchScope): Promise<Map<number, { audience: number; read: number }>> {
+    const stats = new Map<number, { audience: number; read: number }>()
+    if (!rows.length) return stats
+    const { current, roles } = await this.audiencePool(em, scope)
+    const org = await this.positionsFor(em, rows)
+    const readers = new Map<number, Set<number>>()
+    const ids = rows.map(row => row.id)
+    for (let offset = 0; offset < ids.length; offset += 1000) {
+      for (const read of await em.getRepository(AnnouncementRead).find({ where: { announcementId: In(ids.slice(offset, offset + 1000)) }, select: { id: true, announcementId: true, employeeId: true } })) {
+        if (!readers.has(read.announcementId)) readers.set(read.announcementId, new Set())
+        readers.get(read.announcementId)!.add(read.employeeId)
+      }
+    }
+    for (const row of rows) {
+      const members = current.filter(employee => this.inAudience(row, employee, roles.get(employee.id), org))
+      const seen = readers.get(row.id)
+      stats.set(row.id, { audience: members.length, read: seen ? members.filter(member => seen.has(member.id)).length : 0 })
+    }
+    return stats
   }
 
   /** تقرير القراءة: موظفين جمهور الإعلان اللي في نطاق القارئ — مين قرا وإمتى، ومين لسه */

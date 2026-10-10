@@ -12,7 +12,8 @@ import { StoredFile } from '../files/stored-file.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
-import { AUDIENCE_WHERE_MODES, AUDIENCE_WHO_MODES, audienceNeedsPositions, parseRequestAudience, requestAudienceAllows,
+import { assertAudienceTargets, audienceExcludeIds, audienceWhereBranchId, departmentPathsFor, type DepartmentPaths } from '../org/org-audience'
+import { AUDIENCE_ORG_WHERE_MODES, AUDIENCE_WHO_MODES, audienceNeedsPositions, parseRequestAudience, requestAudienceAllows,
   type AudiencePositions, type AudienceSubject } from '../requests/request-audience'
 import { PolicyGate } from './policy-gate'
 import { Policy, PolicyAcknowledgement, PolicyVersion } from './policy.entities'
@@ -44,7 +45,7 @@ type PolicyWithVersions = { policy: Policy; versions: VersionRow[] }
 type OrgPositions = { departmentManagers: Set<number>; teamLeaders: Set<number>; branchManagers: Set<number> }
 type AudienceEmployee = Pick<Employee, 'id' | 'employeeCode' | 'fullName' | 'branchId' | 'departmentId' | 'teamId' | 'joinDate'>
 /** موظفين (شغالين، في نطاق) ومعاهم اللي المقيّم محتاجه: دور حساب كل واحد ومنصبه في الهيكل */
-type AudiencePool = { employees: AudienceEmployee[]; roles: Map<number, string>; positions: OrgPositions | null }
+type AudiencePool = { employees: AudienceEmployee[]; roles: Map<number, string>; positions: OrgPositions | null; paths: DepartmentPaths | null }
 
 const COMPANY_SCOPE_ONLY = 'إدارة السياسات لحساب نطاقه كل الفروع — السياسة بتسري على الشركة كلها'
 const VERSION_COLUMNS = `v.[id], v.[policyId], v.[versionNo], CONVERT(nvarchar(10), v.[effectiveDate], 23) AS [effectiveDate], v.[isMaterial], v.[contentHash], v.[fileId],
@@ -99,19 +100,24 @@ export class PoliciesService {
   private audienceJson(audience: unknown): string | null {
     if (audience === null || audience === undefined) return null
     if (typeof audience !== 'object' || Array.isArray(audience)) throw new BadRequestException('جمهور السياسة بصيغة غير صحيحة')
-    const value = audience as { mode?: unknown; ids?: unknown; where?: { mode?: unknown; ids?: unknown } | null }
+    const value = audience as { mode?: unknown; ids?: unknown; where?: { mode?: unknown; ids?: unknown; branchId?: unknown } | null; exclude?: unknown }
     const mode = String(value.mode ?? 'all')
     if (!(AUDIENCE_WHO_MODES as readonly string[]).includes(mode)) throw new BadRequestException('اختيار «مين» في جمهور السياسة غير معروف')
     // الاختيارات مرتّبة ومن غير تكرار: نفس الجمهور بترتيب تاني مايتحسبش «جمهور اتغيّر» (اللي بيبدأ المهلة من جديد للكل)
     const ids = [...new Set(Array.isArray(value.ids) ? value.ids.map(String).filter(Boolean) : [])].sort()
     const whereMode = String(value.where?.mode ?? 'company')
-    if (!(AUDIENCE_WHERE_MODES as readonly string[]).includes(whereMode)) throw new BadRequestException('اختيار «فين» في جمهور السياسة غير معروف')
+    // B-ADD.1: ومعاهم «إدارات أو أقسام من فرع» (units) بالاستهداف الموحد
+    if (!(AUDIENCE_ORG_WHERE_MODES as readonly string[]).includes(whereMode)) throw new BadRequestException('اختيار «فين» في جمهور السياسة غير معروف')
     const whereIds = [...new Set(Array.isArray(value.where?.ids) ? value.where!.ids.map(Number).filter(id => Number.isSafeInteger(id) && id > 0) : [])].sort((a, b) => a - b)
     if (mode !== 'all' && ids.length === 0) throw new BadRequestException('اختار مين السياسة عليهم، أو خلّيها «الكل»')
     // «فين» من غير اختيار كان هيتقري «كل الشركة»: سياسة إلزامية كانت هتقفل الشركة كلها بدل المكان المقصود
     if (whereMode !== 'company' && whereIds.length === 0) throw new BadRequestException('اختار الفروع أو الأقسام أو الفرق، أو خلّيها «كل الشركة»')
-    if (mode === 'all' && whereMode === 'company') return null
-    const json = JSON.stringify({ mode, ids, where: whereMode === 'company' ? null : { mode: whereMode, ids: whereIds } })
+    // B-ADD.1: فرع الاختيار و«الكل ماعدا…» — بيتكتبوا لما يكونوا موجودين بس، فالنص القديم زي ما هو بالحرف
+    const whereBranchId = whereMode === 'company' ? null : audienceWhereBranchId(value.where, whereMode, 'جمهور السياسة')
+    const exclude = audienceExcludeIds(value.exclude, 'جمهور السياسة')
+    if (mode === 'all' && whereMode === 'company' && !exclude.length) return null
+    const json = JSON.stringify({ mode, ids, where: whereMode === 'company' ? null : { mode: whereMode, ids: whereIds, ...(whereBranchId !== null ? { branchId: whereBranchId } : {}) },
+      ...(exclude.length ? { exclude } : {}) })
     if (json.length > POLICY_AUDIENCE_MAX) throw new BadRequestException('جمهور السياسة أطول من المسموح — اختار بالدور أو المنصب أو الفرع بدل أسماء كتير')
     return json
   }
@@ -158,14 +164,16 @@ export class PoliciesService {
    * الموظف قدام المقيّم: بملفه (قسم، فريق، فرع، منصب) وبدور حسابه. من غير صلاحيات، ودور مدير النظام مش دور وظيفي: المقيّم بيعدّي
    * مدير النظام في أي جمهور (معناها هناك «يقدر يقدّم»)، وهنا السؤال «مين عليه يقرّ»، فمدير النظام عليه اللي على موظفه بس.
    */
-  private subjectOf(employee: Pick<Employee, 'id' | 'departmentId' | 'teamId' | 'branchId'>, role: string | null | undefined, positions: AudiencePositions): AudienceSubject {
+  private subjectOf(employee: Pick<Employee, 'id' | 'departmentId' | 'teamId' | 'branchId'>, role: string | null | undefined, positions: AudiencePositions,
+    paths: DepartmentPaths | null): AudienceSubject {
+    // B-ADD.1: مسار القسم لجمهور «إدارات أو أقسام» (الوحدة بتشمل اللي تحتها)
     return { role: role && role !== 'super_admin' ? role : null, permissions: [], employeeId: employee.id, departmentId: employee.departmentId ?? null,
-      teamId: employee.teamId ?? null, branchId: employee.branchId ?? null, positions }
+      teamId: employee.teamId ?? null, branchId: employee.branchId ?? null, positions, departmentPath: paths ? paths(employee.departmentId) : null }
   }
 
   /** الموظف ده في جمهور السياسة؟ */
   private inAudience(policy: Policy, employee: AudienceEmployee, pool: AudiencePool): boolean {
-    return requestAudienceAllows(policy.audience, this.subjectOf(employee, pool.roles.get(employee.id), this.positionsOf(pool.positions, employee.id)), 'submit')
+    return requestAudienceAllows(policy.audience, this.subjectOf(employee, pool.roles.get(employee.id), this.positionsOf(pool.positions, employee.id), pool.paths), 'submit')
   }
 
   /** الموظفين الشغالين في نطاق القارئ، باللي المقيّم محتاجه للسياسات دي */
@@ -180,7 +188,8 @@ export class PoliciesService {
         if (!roles.has(account.employeeId!)) roles.set(account.employeeId!, account.role)
       }
     }
-    return { employees, roles, positions: policies.some(policy => audienceNeedsPositions(policy.audience)) ? await this.orgPositions(em) : null }
+    return { employees, roles, positions: policies.some(policy => audienceNeedsPositions(policy.audience)) ? await this.orgPositions(em) : null,
+      paths: await departmentPathsFor(em, policies.map(policy => policy.audience)) }
   }
 
   /**
@@ -214,7 +223,7 @@ export class PoliciesService {
     const published = await this.withVersions(em, await em.getRepository(Policy).find({
       where: { status: 'PUBLISHED', ...(onlyMandatory ? { isMandatory: true } : {}) }, order: { id: 'ASC' } }))
     const positions = published.some(item => audienceNeedsPositions(item.policy.audience)) ? this.positionsOf(await this.orgPositions(em), employee.id) : {}
-    const subject = this.subjectOf(employee, user.role, positions)
+    const subject = this.subjectOf(employee, user.role, positions, await departmentPathsFor(em, published.map(item => item.policy.audience)))
     const applicable = published.filter(item => requestAudienceAllows(item.policy.audience, subject, 'submit') && currentPolicyVersion(item.versions, today))
     const acknowledged = new Map<number, Array<{ versionId: number; acknowledgedAt: Date }>>()
     if (applicable.length) {
@@ -280,6 +289,7 @@ export class PoliciesService {
       isMandatory: input.isMandatory === true, graceDays: this.graceOf(input.graceDays ?? 0) }
     return this.ds.transaction(async em => {
       await this.assertReady(em)
+      await assertAudienceTargets(em, row.audience, 'جمهور السياسة')
       const repo = em.getRepository(Policy)
       const saved = await repo.save(repo.create({ ...row, graceFrom: null, status: 'DRAFT', createdByUserId: user.sub, createdAt: new Date(), withdrawnAt: null, withdrawnByUserId: null }))
       await recordAudit(em, { category: 'SETTINGS', action: 'POLICY_CREATED', entityType: 'policy', entityId: saved.id, actorUserId: user.sub,
@@ -312,7 +322,11 @@ export class PoliciesService {
         if (category !== (policy.category ?? null) && policy.status !== 'DRAFT') throw new BadRequestException('فئة السياسة مابتتغيّرش بعد النشر — اسحبها واعمل سياسة جديدة بالفئة الصح')
         policy.category = category
       }
-      if (input.audience !== undefined) policy.audience = this.audienceJson(input.audience)
+      if (input.audience !== undefined) {
+        const audience = this.audienceJson(input.audience)
+        await assertAudienceTargets(em, audience, 'جمهور السياسة', policy.audience)
+        policy.audience = audience
+      }
       if (input.isMandatory !== undefined) policy.isMandatory = input.isMandatory === true
       if (input.graceDays !== undefined) policy.graceDays = this.graceOf(input.graceDays)
       const after = { title: policy.title, category: policy.category ?? null, audience: parseRequestAudience(policy.audience), isMandatory: !!policy.isMandatory, graceDays: policy.graceDays }

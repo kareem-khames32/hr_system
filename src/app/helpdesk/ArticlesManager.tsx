@@ -1,18 +1,20 @@
 'use client'
 
-// B3.10: إدارة مقالات قاعدة المعرفة (لصاحب صلاحية مركز الخدمات) — مقال بنوع استفسار وكلمات بحث وجمهور (كل الشركة أو فروع محددة)، ونشره وسحبه.
+// B3.10: إدارة مقالات قاعدة المعرفة (لصاحب صلاحية مركز الخدمات) — مقال بنوع استفسار وكلمات بحث وجمهور، ونشره وسحبه.
+// B-ADD.1: الجمهور بالاستهداف الموحد (الشركة ← فرع ← إدارة ← قسم ← فريق ← موظفين بالاسم + «الكل ماعدا…» ومعاينة).
 import { useCallback, useEffect, useState } from 'react'
 import { Plus, X } from 'lucide-react'
-import { fetchBranches, type ApiBranch } from '@/lib/api'
-import { createArticle, fetchManagedArticles, updateArticle, type ApiManagedArticle } from '@/lib/helpdesk-api'
+import { OrgAudienceField } from '@/components/OrgAudienceField'
+import { describeAudience, fetchOrgAudienceContext, type OrgAudienceContext, type StoredAudience } from '@/lib/org-audience'
+import { createArticle, fetchManagedArticles, updateArticle, type ApiManagedArticle, type ArticleBody } from '@/lib/helpdesk-api'
 
-interface Draft { id: number | null; title: string; body: string; typeCode: string; keywords: string; branchIds: number[]; isPublished: boolean }
-const blank: Draft = { id: null, title: '', body: '', typeCode: '', keywords: '', branchIds: [], isPublished: true }
+interface Draft { id: number | null; title: string; body: string; typeCode: string; keywords: string; audience: StoredAudience | null; audienceComplete: boolean; isPublished: boolean }
+const blank: Draft = { id: null, title: '', body: '', typeCode: '', keywords: '', audience: null, audienceComplete: true, isPublished: true }
 
 export default function ArticlesManager() {
   const [rows, setRows] = useState<ApiManagedArticle[] | null>(null)
   const [types, setTypes] = useState<Array<{ code: string; name: string }>>([])
-  const [branches, setBranches] = useState<ApiBranch[]>([])
+  const [orgContext, setOrgContext] = useState<OrgAudienceContext | null>(null)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
   const [draft, setDraft] = useState<Draft | null>(null)
@@ -26,16 +28,16 @@ export default function ArticlesManager() {
       .catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل المقالات'))
   }, [])
   useEffect(load, [load])
-  useEffect(() => { fetchBranches().then(setBranches).catch(() => setBranches([])) }, [])
+  useEffect(() => { fetchOrgAudienceContext().then(setOrgContext).catch(() => setOrgContext(null)) }, [])
 
   const edit = (row: ApiManagedArticle) => setDraft({ id: row.id, title: row.title, body: row.body, typeCode: row.typeCode ?? '', keywords: row.keywords ?? '',
-    branchIds: row.audience?.where?.mode === 'branches' ? row.audience.where.ids : [], isPublished: row.isPublished })
+    audience: (row.audience ?? null) as StoredAudience | null, audienceComplete: true, isPublished: row.isPublished })
   const save = async () => {
     if (!draft) return
     setBusy(true)
     setFormError('')
     const body = { title: draft.title.trim(), body: draft.body.trim(), typeCode: draft.typeCode || null, keywords: draft.keywords.trim() || null,
-      audience: draft.branchIds.length ? { mode: 'all', where: { mode: 'branches', ids: draft.branchIds } } : null, isPublished: draft.isPublished }
+      audience: draft.audience as ArticleBody['audience'], isPublished: draft.isPublished }
     try {
       if (draft.id) await updateArticle(draft.id, body)
       else await createArticle(body)
@@ -96,7 +98,7 @@ export default function ArticlesManager() {
                 <tr key={row.id}>
                   <td className="px-3 py-2 text-gray-800">{row.title}</td>
                   <td className="px-3 py-2 text-gray-600">{row.typeName ?? 'عام'}</td>
-                  <td className="px-3 py-2 text-gray-600">{row.audience ? 'جمهور محدد' : 'كل الشركة'}</td>
+                  <td className="px-3 py-2 text-gray-600">{describeAudience(row.audience as StoredAudience | null, orgContext)}</td>
                   <td className="px-3 py-2 text-gray-600">{row.isPublished ? 'منشور' : 'مسودة'}</td>
                   <td className="px-3 py-2 text-end whitespace-nowrap">
                     <button onClick={() => edit(row)} className="text-primary-600 hover:underline text-xs me-3">
@@ -153,17 +155,9 @@ export default function ArticlesManager() {
                 </label>
               </div>
               <div className="text-sm text-gray-600">
-                الجمهور (من غير اختيار = كل الشركة)
-                <div className="flex flex-wrap gap-2 mt-2">
-                  {branches.map((branch) => {
-                    const on = draft.branchIds.includes(branch.id)
-                    return (
-                      <button key={branch.id} type="button" onClick={() => setDraft({ ...draft, branchIds: on ? draft.branchIds.filter((id) => id !== branch.id) : [...draft.branchIds, branch.id] })}
-                        className={`px-3 py-1 rounded-full text-sm ${on ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>
-                        {branch.name}
-                      </button>
-                    )
-                  })}
+                <div className="mt-1" data-article-audience>
+                  <OrgAudienceField value={draft.audience} disabled={busy}
+                    onChange={(audience, complete) => setDraft((current) => (current ? { ...current, audience, audienceComplete: complete } : current))} />
                 </div>
               </div>
               <label className="flex items-center gap-2 text-sm text-gray-700">
@@ -174,7 +168,7 @@ export default function ArticlesManager() {
                 <button onClick={() => setDraft(null)} className="btn-secondary text-sm">
                   إلغاء
                 </button>
-                <button onClick={save} disabled={busy || draft.title.trim().length < 3 || !draft.body.trim()} className="btn-primary text-sm disabled:opacity-50">
+                <button onClick={save} disabled={busy || !draft.audienceComplete || draft.title.trim().length < 3 || !draft.body.trim()} className="btn-primary text-sm disabled:opacity-50">
                   حفظ المقال
                 </button>
               </div>

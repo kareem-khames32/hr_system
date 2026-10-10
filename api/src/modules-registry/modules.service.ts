@@ -3,9 +3,10 @@ import { DataSource, In, MoreThanOrEqual, Not } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { User } from '../auth/user.entity'
 import { Employee } from '../employees/employee.entity'
-import { audienceNeedsEmployee, audienceNeedsPositions, parseRequestAudience, requestAudienceAllows, AUDIENCE_WHERE_MODES,
+import { audienceNeedsEmployee, audienceNeedsPositions, parseRequestAudience, requestAudienceAllows, AUDIENCE_ORG_WHERE_MODES,
   AUDIENCE_WHO_MODES, type AudienceSubject } from '../requests/request-audience'
 import { orgPositionsOf } from '../requests/request-audience-positions'
+import { assertAudienceTargets, audienceExcludeIds, audienceNeedsDepartmentPath, audienceWhereBranchId, departmentPaths } from '../org/org-audience'
 import {
   enabledDependents, enabledSnapshot, featureEnabled, isFeatureKey, isModuleKey, missingDependencies, moduleDefOf, moduleEnabled, moduleOfJob,
   moduleOfRequestType, modulesOfPreset, MODULE_FEATURES, MODULE_KEYS, MODULE_PRESETS, type ModuleKey, type ModulePreset, type ModulesState,
@@ -163,7 +164,9 @@ export class ModulesService {
       if (!user.employeeId || (!audienceNeedsEmployee(audience) && !audienceNeedsPositions(audience))) return requestAudienceAllows(audience, base, 'submit')
       const employee = await em.getRepository(Employee).findOne({ where: { id: user.employeeId }, select: { id: true, departmentId: true, teamId: true, branchId: true } })
       return requestAudienceAllows(audience, { ...base, departmentId: employee?.departmentId ?? null, teamId: employee?.teamId ?? null, branchId: employee?.branchId ?? user.branchId ?? null,
-        positions: await orgPositionsOf(em, user.employeeId) }, 'submit')
+        positions: await orgPositionsOf(em, user.employeeId),
+        // B-ADD.1: مسار القسم لجمهور «إدارات أو أقسام» — بمدير المعاملة نفسه
+        departmentPath: audienceNeedsDepartmentPath(audience) ? (await departmentPaths(em))(employee?.departmentId) : null }, 'submit')
     }
     return allowed(module, new Set())
   }
@@ -201,6 +204,8 @@ export class ModulesService {
       ...base,
       departmentId: employee?.departmentId ?? null, teamId: employee?.teamId ?? null, branchId: employee?.branchId ?? user.branchId ?? null,
       positions: await orgPositionsOf(this.ds.manager, user.employeeId),
+      // B-ADD.1: مسار القسم (قسمه واللي فوقه جوه فرعه) — بيتحسب دايمًا مع الموضوع المحفوظ مؤقتًا: جمهور موديول تاني ممكن يحتاجه
+      departmentPath: employee?.departmentId != null ? (await departmentPaths(this.ds.manager))(employee.departmentId) : [],
     }
     this.subjects.set(user.sub, { at: Date.now(), subject })
     return subject
@@ -263,17 +268,23 @@ export class ModulesService {
   private audienceJson(audience: unknown): string | null {
     if (audience === null || audience === undefined) return null
     if (typeof audience !== 'object' || Array.isArray(audience)) throw new BadRequestException('جمهور التفعيل بصيغة غير صحيحة')
-    const value = audience as { mode?: unknown; ids?: unknown; where?: { mode?: unknown; ids?: unknown } | null }
+    const value = audience as { mode?: unknown; ids?: unknown; where?: { mode?: unknown; ids?: unknown; branchId?: unknown } | null; exclude?: unknown }
     const mode = String(value.mode ?? 'all')
     if (!(AUDIENCE_WHO_MODES as readonly string[]).includes(mode)) throw new BadRequestException('اختيار «مين» في جمهور التفعيل غير معروف')
     const ids = Array.isArray(value.ids) ? value.ids.map(String).filter(Boolean).slice(0, 500) : []
     const whereMode = String(value.where?.mode ?? 'company')
-    if (!(AUDIENCE_WHERE_MODES as readonly string[]).includes(whereMode)) throw new BadRequestException('اختيار «فين» في جمهور التفعيل غير معروف')
+    // B-ADD.1: ومعاهم «إدارات أو أقسام من فرع» (units) بالاستهداف الموحد
+    if (!(AUDIENCE_ORG_WHERE_MODES as readonly string[]).includes(whereMode)) throw new BadRequestException('اختيار «فين» في جمهور التفعيل غير معروف')
     const whereIds = Array.isArray(value.where?.ids) ? value.where!.ids.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0).slice(0, 500) : []
+    const located = whereMode !== 'company' && whereIds.length > 0
+    // B-ADD.1: فرع الاختيار و«الكل ماعدا…» — بيتكتبوا لما يكونوا موجودين بس، فالنص القديم زي ما هو بالحرف
+    const whereBranchId = located ? audienceWhereBranchId(value.where, whereMode, 'جمهور التفعيل') : null
+    const exclude = audienceExcludeIds(value.exclude, 'جمهور التفعيل')
     // «الكل» في «كل الشركة» = من غير جمهور
-    if (mode === 'all' && (whereMode === 'company' || whereIds.length === 0)) return null
+    if (mode === 'all' && !located && !exclude.length) return null
     if (mode !== 'all' && ids.length === 0) throw new BadRequestException('اختار مين الموديول مفعّل لهم، أو خلّيه «الكل»')
-    return JSON.stringify({ mode, ids, where: whereMode === 'company' || whereIds.length === 0 ? null : { mode: whereMode, ids: whereIds } })
+    return JSON.stringify({ mode, ids, where: !located ? null : { mode: whereMode, ids: whereIds, ...(whereBranchId !== null ? { branchId: whereBranchId } : {}) },
+      ...(exclude.length ? { exclude } : {}) })
   }
 
   /**
@@ -305,7 +316,12 @@ export class ModulesService {
       const repo = em.getRepository(SystemModule)
       const row = (await repo.findOne({ where: { key: module } })) ?? repo.create({ key: module, enabled: def.core || def.defaultEnabled, audience: null })
       if (change.enabled !== undefined) row.enabled = def.core ? true : change.enabled
-      if (change.audience !== undefined) row.audience = this.audienceJson(change.audience)
+      if (change.audience !== undefined) {
+        const audience = this.audienceJson(change.audience)
+        // B-ADD.1: أرقام الجمهور الجديدة موجودة وتبع فرع اختيارها
+        await assertAudienceTargets(em, audience, 'جمهور التفعيل', row.audience)
+        row.audience = audience
+      }
       const at = new Date()
       // «مين فتح أو قفل وإمتى» بيتغيّر مع الفتح والقفل بس؛ تغيير الجمهور لوحده حدث enabled = null («غيّر جمهور»)
       if (change.enabled !== undefined || !row.enabledAt) {

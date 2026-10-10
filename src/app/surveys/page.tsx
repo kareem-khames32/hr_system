@@ -7,11 +7,13 @@ import Link from 'next/link'
 import { ClipboardList, Plus, X } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import EmptyState from '@/components/EmptyState'
-import { can, fetchBranches, type ApiBranch } from '@/lib/api'
+import { can } from '@/lib/api'
+import { OrgAudienceField } from '@/components/OrgAudienceField'
+import type { StoredAudience } from '@/lib/org-audience'
 import { formatDate } from '@/lib/dates'
 import {
   SURVEY_KIND_LABELS, SURVEY_QUESTION_LABELS, closeSurvey, createSurvey, fetchMySurveys, fetchSurveyResults, fetchSurveys, openSurvey,
-  type ApiMySurvey, type ApiSurvey, type ApiSurveyResults, type SurveyKind, type SurveyQuestionType, type SurveySummaryRow,
+  type ApiMySurvey, type ApiSurvey, type ApiSurveyResults, type SurveyAudience, type SurveyKind, type SurveyQuestionType, type SurveySummaryRow,
 } from '@/lib/surveys-api'
 
 export default function SurveysPage() {
@@ -215,18 +217,18 @@ function ResultsModal({ data, onClose }: { data: ApiSurveyResults; onClose: () =
 }
 
 function SurveyModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
-  const [branches, setBranches] = useState<ApiBranch[]>([])
   const [title, setTitle] = useState('')
   const [kind, setKind] = useState<SurveyKind>('SATISFACTION')
   const [isAnonymous, setIsAnonymous] = useState(true)
   const [minGroup, setMinGroup] = useState('5')
   const [closeDate, setCloseDate] = useState('')
-  const [branchIds, setBranchIds] = useState<number[]>([])
+  // B-ADD.1: الجمهور بالاستهداف الموحد (الشركة ← فرع ← إدارة ← قسم ← فريق ← موظفين بالاسم + «الكل ماعدا…» ومعاينة)
+  const [audience, setAudience] = useState<StoredAudience | null>(null)
+  const [audienceComplete, setAudienceComplete] = useState(true)
   const [questions, setQuestions] = useState<Array<{ label: string; type: SurveyQuestionType; required: boolean; options: string }>>([{ label: '', type: 'rating', required: true, options: '' }])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
-  useEffect(() => { fetchBranches().then(setBranches).catch(() => setBranches([])) }, [])
   const patch = (index: number, change: Partial<(typeof questions)[number]>) => setQuestions(questions.map((entry, at) => (at === index ? { ...entry, ...change } : entry)))
 
   const save = async () => {
@@ -234,7 +236,7 @@ function SurveyModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
     setError('')
     try {
       await createSurvey({ title: title.trim(), kind, isAnonymous, minGroup: Number(minGroup) || 5, closeDate: closeDate || null,
-        audience: branchIds.length ? { mode: 'all', where: { mode: 'branches', ids: branchIds } } : null,
+        audience: audience as SurveyAudience | null,
         questions: questions.map((entry) => ({ label: entry.label.trim(), type: entry.type, required: entry.required,
           ...(entry.type === 'choice' ? { options: entry.options.split('\n').map((option) => option.trim()).filter(Boolean) } : {}) })) })
       onDone()
@@ -289,17 +291,8 @@ function SurveyModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
             مجهول (الرد مايتربطش بصاحبه)
           </label>
           <div className="text-sm text-gray-600">
-            الجمهور (من غير اختيار = كل الشركة)
-            <div className="flex flex-wrap gap-2 mt-2">
-              {branches.map((branch) => {
-                const on = branchIds.includes(branch.id)
-                return (
-                  <button key={branch.id} type="button" onClick={() => setBranchIds(on ? branchIds.filter((value) => value !== branch.id) : [...branchIds, branch.id])}
-                    className={`px-3 py-1 rounded-full text-sm ${on ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>
-                    {branch.name}
-                  </button>
-                )
-              })}
+            <div className="mt-1" data-survey-audience>
+              <OrgAudienceField value={audience} disabled={busy} onChange={(next, complete) => { setAudience(next); setAudienceComplete(complete) }} />
             </div>
           </div>
           <div className="space-y-3">
@@ -340,7 +333,7 @@ function SurveyModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
             <button onClick={onClose} className="btn-secondary text-sm">
               إلغاء
             </button>
-            <button onClick={save} disabled={busy || title.trim().length < 3 || questions.some((entry) => entry.label.trim().length < 2)} className="btn-primary text-sm disabled:opacity-50">
+            <button onClick={save} disabled={busy || !audienceComplete || title.trim().length < 3 || questions.some((entry) => entry.label.trim().length < 2)} className="btn-primary text-sm disabled:opacity-50">
               حفظ المسودة
             </button>
           </div>

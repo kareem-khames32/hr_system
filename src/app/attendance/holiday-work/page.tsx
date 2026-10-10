@@ -135,7 +135,8 @@ function HolidayWorkContent() {
     if (needsPick(form.target)) { setFormError('كمّل اختيار على مين'); return }
     if (!form.dates.length) { setFormError('زوّد يوم عطلة واحد على الأقل'); return }
     const input = {
-      name: form.name.trim(), targetLevel: form.target.level, branchId: form.target.level === 'company' ? null : form.target.branchId,
+      // المنتقي هنا بمستوياته القديمة (من غير «إدارات» — B-ADD.1 زوّدها للشاشات اللي بتطلبها بس)
+      name: form.name.trim(), targetLevel: form.target.level as Exclude<OrgTarget['level'], 'administrations'>, branchId: form.target.level === 'company' ? null : form.target.branchId,
       departmentIds: form.target.level === 'departments' ? form.target.departmentIds : [],
       teamIds: form.target.level === 'teams' ? form.target.teamIds ?? [] : [],
       employeeIds: form.target.level === 'employees' ? form.target.employeeIds : [],

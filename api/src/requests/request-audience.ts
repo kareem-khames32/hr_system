@@ -1,6 +1,7 @@
 import type { JwtPayload } from '../auth/auth.service'
 import { definitionInBranch } from '../common/definition-branch'
 import { nationalityKind } from '../employees/employee-required-fields'
+import { isMember, type OrgMember, type OrgTargetLevel } from '../org/org-audience'
 
 // ===== ب4 (قرار المالك): «جمهور» نوع الطلب — مين يقدر يقدّمه =====
 // إعداد واحد ومقيّم واحد: الكتالوج (عرض الكارت) ومحرك الطلبات (التقديم) وشاشتا «خصم» و«مكافأة»
@@ -15,9 +16,14 @@ import { nationalityKind } from '../employees/employee-required-fields'
 // مثال: «مديرو الأقسام في فرع مصر فقط» = { mode: 'positions', ids: ['DEPARTMENT_MANAGERS'], where: { mode: 'branches', ids: [2] } }
 // الوضع القديم mode: 'departments' يفضل شغال كما هو (= الكل في أقسام محددة).
 // «فرق محددة» ({ mode: 'teams', ids }) إضافة: الشكل القديم كله زي ما هو.
+// B-ADD.1 (الاستهداف الموحد — إضافات المالك 11 أكتوبر)، للي بيكتبوه بس (الإعلانات، السياسات، قاعدة المعرفة، الاستبيانات، الموديولات):
+//   where: { mode: 'units', ids, branchId }  ← إدارات أو أقسام من فرع، وكل واحدة بتشمل اللي تحتها جوه الفرع (subject.departmentPath)
+//   where: { mode: 'teams', ids, branchId }  ← فرق من فرع (branchId اختياري؛ من غيره الشكل القديم بالحرف)
+//   exclude: [أرقام موظفين]                   ← «الكل ماعدا…»: المستثنى برّه الجمهور مهما كان «مين» و«فين»
+// ومكان الموظف من الجمهور (فرع، إدارة، قسم، فريق، اسم، استثناء) بيتحكم في دالة واحدة: isMember (org/org-audience).
 export type RequestAudiencePurpose = 'catalog' | 'submit'
-export type AudienceWhereMode = 'company' | 'branches' | 'departments' | 'teams'
-export type AudienceWhere = { mode?: string; ids?: Array<number | string> }
+export type AudienceWhereMode = 'company' | 'branches' | 'departments' | 'teams' | 'units'
+export type AudienceWhere = { mode?: string; ids?: Array<number | string>; branchId?: number | string | null }
 // B2.9: شروط على صفات الموظف فوق «مين + فين» — كلها لازم تتحقق:
 //   conditions: [{ field: 'nationality', values: ['SAUDI'] }, { field: 'contractType', values: ['fixed_term'] },
 //                { field: 'grade', values: [3] }, { field: 'joinDate', op: 'before' | 'from', value: '2025-01-01' }]
@@ -27,7 +33,7 @@ export type AudienceWhere = { mode?: string; ids?: Array<number | string> }
 // B2.9-ب: وشرط على حقل مخصص في ملف الموظف (نوعه «اختيار» أو «نعم/لا»، وغير مقيّد): { field: 'custom', key: 'مفتاح الحقل', values: [...] }.
 // قيمة الموظف في الحقل لازم تكون من القايمة؛ موظف من غير قيمة، أو حقل اتعطّل أو بقى مقيّد = مش من الجمهور.
 export type AudienceCondition = { field?: string; key?: string; values?: Array<number | string>; op?: string; value?: string }
-export type RequestAudience = { mode?: string; ids?: Array<number | string>; where?: AudienceWhere | null; conditions?: AudienceCondition[] | null }
+export type RequestAudience = { mode?: string; ids?: Array<number | string>; where?: AudienceWhere | null; conditions?: AudienceCondition[] | null; exclude?: Array<number | string> | null }
 export const AUDIENCE_NATIONALITY_KINDS = ['SAUDI', 'EGYPTIAN', 'RESIDENT'] as const
 export const AUDIENCE_CONTRACT_TYPES = ['permanent', 'fixed_term', 'part_time', 'seasonal'] as const
 export const AUDIENCE_JOIN_DATE_OPS = ['before', 'from'] as const
@@ -39,6 +45,8 @@ export const AUDIENCE_POSITION_KEYS = ['DEPARTMENT_MANAGERS', 'TEAM_LEADERS', 'B
 // «مين»: الأوضاع المقبولة عند الحفظ (departments قديم ومقبول لتوافق العملاء القدامى)
 export const AUDIENCE_WHO_MODES = ['all', 'positions', 'roles', 'employees', 'departments'] as const
 export const AUDIENCE_WHERE_MODES = ['company', 'branches', 'departments', 'teams'] as const
+// B-ADD.1: «فين» للي بيكتبوا بالاستهداف الموحد — نفس القديم ومعاه «إدارات أو أقسام من فرع»
+export const AUDIENCE_ORG_WHERE_MODES = [...AUDIENCE_WHERE_MODES, 'units'] as const
 export type AudienceSubject = {
   role?: string | null
   permissions?: string[] | null
@@ -48,6 +56,8 @@ export type AudienceSubject = {
   branchId?: number | null
   positions?: AudiencePositions | null
   attributes?: AudienceAttributes | null
+  /** B-ADD.1: قسم الموظف واللي فوقه جوه فرعه (لجمهور «إدارات أو أقسام»). من غيره المطابقة بقسمه بس */
+  departmentPath?: readonly number[] | null
 }
 
 // جمهور «حسب المنصب» وحده يحتاج قراءة الهيكل؛ باقي الأوضاع لا تكلّف استعلامًا
@@ -81,13 +91,31 @@ export function parseRequestAudience(visibleTo: string | null | undefined): Requ
 }
 
 // «فين» بعد التطبيع: وضع غير معروف أو قائمة فاضية = كل الشركة (الباب لا يُقفل صامتًا)
-export function audienceWhereOf(audience: RequestAudience | null | undefined): { mode: AudienceWhereMode; ids: number[] } {
+export function audienceWhereOf(audience: RequestAudience | null | undefined): { mode: AudienceWhereMode; ids: number[]; branchId?: number } {
   const where = audience?.where
   const ids = Array.isArray(where?.ids) ? where!.ids.map(Number).filter((n) => Number.isInteger(n) && n > 0) : []
-  if (where && (where.mode === 'branches' || where.mode === 'departments' || where.mode === 'teams') && ids.length) {
-    return { mode: where.mode, ids }
+  if (where && (where.mode === 'branches' || where.mode === 'departments' || where.mode === 'teams' || where.mode === 'units') && ids.length) {
+    // فرع الاختيار (B-ADD.1) للإدارات/الأقسام والفرق بس؛ الشكل القديم من غيره = من غير قيد فرع (والرد بشكله القديم بالحرف)
+    const branch = where.mode === 'units' || where.mode === 'teams' ? Number(where.branchId) : NaN
+    return { mode: where.mode, ids, ...(Number.isInteger(branch) && branch > 0 ? { branchId: branch } : {}) }
   }
   return { mode: 'company', ids: [] }
+}
+
+// B-ADD.1: «الكل ماعدا…». غايبة = من غير استثناء؛ وقيمة مش قايمة أرقام = استثناء تالف (قيد، فالتالف مايفتحش: مش لحد)
+function audienceExcludeOf(audience: RequestAudience | null | undefined): number[] | null {
+  const exclude = audience?.exclude
+  if (exclude == null) return []
+  if (!Array.isArray(exclude)) return null
+  const ids = exclude.map(Number)
+  return ids.every((n) => Number.isInteger(n) && n > 0) ? ids : null
+}
+
+// الموظف قدام isMember. exact = المطابقة برقم قسمه بالحرف (الشكل القديم «أقسام محددة»)، وإلا بمساره (قسمه واللي فوقه)
+function audienceMemberOf(subject: AudienceSubject, exact: boolean): OrgMember {
+  const own = subject.departmentId != null ? [Number(subject.departmentId)] : []
+  return { employeeId: subject.employeeId != null ? Number(subject.employeeId) : null, branchId: subject.branchId != null ? Number(subject.branchId) : null,
+    teamId: subject.teamId != null ? Number(subject.teamId) : null, departmentPath: exact || !subject.departmentPath ? own : subject.departmentPath }
 }
 
 // شروط الجمهور بعد التطبيع: غايبة = من غير شروط؛ وقيمة مش قايمة = شرط تالف (مش من الجمهور)
@@ -169,18 +197,14 @@ function audienceWhoAllows(audience: RequestAudience, subject: AudienceSubject):
   }
 }
 
+const WHERE_LEVELS: Record<Exclude<AudienceWhereMode, 'company'>, OrgTargetLevel> = { branches: 'branch', departments: 'departments', units: 'departments', teams: 'teams' }
+
 function audienceWhereAllows(audience: RequestAudience, subject: AudienceSubject): boolean {
   const where = audienceWhereOf(audience)
-  switch (where.mode) {
-    case 'branches':
-      return subject.branchId != null && where.ids.includes(Number(subject.branchId))
-    case 'departments':
-      return subject.departmentId != null && where.ids.includes(Number(subject.departmentId))
-    case 'teams':
-      return subject.teamId != null && where.ids.includes(Number(subject.teamId))
-    default:
-      return true
-  }
+  if (where.mode === 'company') return true
+  // «فروع محددة»: الفروع هي الاختيار نفسه؛ وغيرها: فرع الاختيار قيد لو متحدد
+  return isMember({ level: WHERE_LEVELS[where.mode], branchIds: where.mode === 'branches' ? where.ids : where.branchId != null ? [where.branchId] : [],
+    ids: where.mode === 'branches' ? [] : where.ids }, audienceMemberOf(subject, where.mode === 'departments'))
 }
 
 export function requestAudienceAllows(
@@ -195,6 +219,9 @@ export function requestAudienceAllows(
   if (purpose === 'catalog' && permissions.includes('request_types.manage')) return true
   const audience = parseRequestAudience(visibleTo)
   if (!audience) return true
+  // B-ADD.1: المستثنى بالاسم برّه الجمهور قبل أي حاجة
+  const exclude = audienceExcludeOf(audience)
+  if (!exclude || (subject.employeeId != null && exclude.includes(Number(subject.employeeId)))) return false
   // مين + فين + شروط الصفات (B2.9): كلهم لازم يتحققوا
   return audienceWhoAllows(audience, subject) && audienceWhereAllows(audience, subject)
     && audienceConditionsOf(audience).every((condition) => audienceConditionAllows(condition, subject.attributes))

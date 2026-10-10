@@ -2,10 +2,14 @@
 // B2.5: نموذج تكليف مهمة (جديدة أو تعديل). المسؤول موظف من اللي الحساب يقدر يكلّفهم (نفسه: مهمة شخصية؛ واللي تحته في الهيكل؛ وموظفي
 // نطاقه بصلاحية «إدارة المهام» أو «تكليف أي موظف»)، أو دور وظيفي في فرع (لصاحب «إدارة المهام» بس). الخادم هو اللي بيحكم؛ القايمة هنا
 // من نفس حكمه (GET /tasks/assignees). حد برّه القايمة مايتكلّفش مباشرة: طلب، ولما يتعتمد بيتحوّل مهمة (قواعد المالك 6 أكتوبر).
+// B-ADD.1: «مجموعة» = مهمة جماعية بالاستهداف الموحد (الشركة ← فرع ← إدارة ← قسم ← فريق ← موظفين + «الكل ماعدا…» ومعاينة) — كل موظف
+// في الجمهور بياخد مهمته هو. للمهمة الجديدة بس، ولصاحب «إدارة المهام» أو «تكليف أي موظف».
 import { useState } from 'react'
 import { EmployeePicker } from '../EmployeePicker'
+import { OrgAudienceField } from '../OrgAudienceField'
+import type { StoredAudience } from '../../lib/org-audience'
 import { localToday } from '../../lib/dates'
-import { createTask, updateTask, TASK_PRIORITY_LABELS, type ApiTask, type ApiTaskAssignees, type TaskInput, type TaskPriority } from '../../lib/tasks-api'
+import { createGroupTask, createTask, updateTask, TASK_PRIORITY_LABELS, type ApiTask, type ApiTaskAssignees, type TaskInput, type TaskPriority } from '../../lib/tasks-api'
 
 interface Props {
   assignees: ApiTaskAssignees
@@ -13,12 +17,18 @@ interface Props {
   task?: ApiTask | null
   onClose: () => void
   onSaved: (task: ApiTask) => void
+  /** B-ADD.1: بعد مهمة جماعية (الشاشة بتحدّث قايمتها) */
+  onGroupSaved?: () => void
 }
 
-export default function TaskFormModal({ assignees, task, onClose, onSaved }: Props) {
+export default function TaskFormModal({ assignees, task, onClose, onSaved, onGroupSaved }: Props) {
   const [title, setTitle] = useState(task?.title ?? '')
   const [description, setDescription] = useState(task?.description ?? '')
-  const [target, setTarget] = useState<'employee' | 'role'>(task?.assigneeRole ? 'role' : 'employee')
+  const [target, setTarget] = useState<'employee' | 'role' | 'group'>(task?.assigneeRole ? 'role' : 'employee')
+  const canGroup = !task && !!assignees.canAssignGroup
+  const [audience, setAudience] = useState<StoredAudience | null>(null)
+  const [audienceComplete, setAudienceComplete] = useState(true)
+  const [groupDone, setGroupDone] = useState<{ created: number; skipped: Array<{ employeeId: number; fullName: string; reason: string }> } | null>(null)
   const [employeeId, setEmployeeId] = useState(task?.assigneeEmployeeId ? String(task.assigneeEmployeeId) : '')
   const [role, setRole] = useState(task?.assigneeRole ?? '')
   const [branchId, setBranchId] = useState(task?.assigneeRole ? String(task.branchId) : assignees.branches.length === 1 ? String(assignees.branches[0].id) : '')
@@ -28,7 +38,7 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved }: Pro
   const [needsRating, setNeedsRating] = useState(task?.needsRating ?? false)
   // نفسي = مهمة شخصية (بيشوفها صاحبها ومديره المباشر بس، ومن غير تقييم)
   const self = target === 'employee' && !!assignees.employees.find(row => String(row.id) === employeeId)?.self
-  const canFlagRating = !!assignees.ratingEnabled && target === 'employee' && !self
+  const canFlagRating = !!assignees.ratingEnabled && (target === 'group' || (target === 'employee' && !self))
   const options = assignees.employees.map(row => row.self ? { ...row, fullName: `${row.fullName} — نفسي (مهمة شخصية)` } : row)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -38,6 +48,18 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved }: Pro
     if (title.trim().length < 2) { setError('اكتب عنوان المهمة'); return }
     if (target === 'employee' && !employeeId) { setError('اختار الموظف المسؤول عن المهمة'); return }
     if (target === 'role' && (!role || !branchId)) { setError('اختار الدور والفرع'); return }
+    if (target === 'group') {
+      if (!audienceComplete) { setError('كمّل اختيار «على مين؟» الأول'); return }
+      setBusy(true)
+      try {
+        const result = await createGroupTask({ title: title.trim(), description: description.trim() || undefined, dueDate: dueDate || undefined, priority, requiresProof,
+          ...(assignees.ratingEnabled && needsRating ? { needsRating: true } : {}), audience })
+        setGroupDone({ created: result.created, skipped: result.skipped })
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'تعذر حفظ المهمة الجماعية')
+      } finally { setBusy(false) }
+      return
+    }
     const input: TaskInput = { title: title.trim(), description: description.trim() || null, dueDate: dueDate || null, priority, requiresProof,
       ...(assignees.ratingEnabled ? { needsRating: canFlagRating && needsRating } : {}) }
     // في التعديل المسؤول بيتبعت لما يتغيّر بس: تحويل المهمة تكليف جديد بشروطه
@@ -70,13 +92,19 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved }: Pro
             <label className="label" htmlFor="task-description">التفاصيل</label>
             <textarea id="task-description" className="input" rows={3} maxLength={2000} value={description} onChange={event => setDescription(event.target.value)} />
           </div>
-          {assignees.canManage && (
-            <div className="flex gap-4 text-sm" role="radiogroup" aria-label="المسؤول عن المهمة">
+          {(assignees.canManage || canGroup) && (
+            <div className="flex gap-4 flex-wrap text-sm" role="radiogroup" aria-label="المسؤول عن المهمة">
               <label className="flex items-center gap-2"><input type="radio" name="task-target" checked={target === 'employee'} onChange={() => setTarget('employee')} />موظف</label>
-              <label className="flex items-center gap-2"><input type="radio" name="task-target" checked={target === 'role'} onChange={() => setTarget('role')} />دور (كل حاملي الدور في الفرع)</label>
+              {assignees.canManage && <label className="flex items-center gap-2"><input type="radio" name="task-target" checked={target === 'role'} onChange={() => setTarget('role')} />دور (كل حاملي الدور في الفرع)</label>}
+              {canGroup && <label className="flex items-center gap-2"><input type="radio" name="task-target" checked={target === 'group'} onChange={() => setTarget('group')} />مجموعة (كل واحد بياخد مهمته)</label>}
             </div>
           )}
-          {target === 'employee' ? (
+          {target === 'group' ? (
+            <div data-task-group-audience>
+              <OrgAudienceField value={audience} disabled={busy} onChange={(next, complete) => { setAudience(next); setAudienceComplete(complete) }} />
+              <p className="text-xs text-gray-500 mt-1">كل موظف في الاختيار بياخد المهمة دي باسمه ويتابعها لوحده. إنت نفسك مش من المكلَّفين.</p>
+            </div>
+          ) : target === 'employee' ? (
             <div>
               <label className="label" htmlFor="task-assignee">الموظف المسؤول *</label>
               <EmployeePicker id="task-assignee" employees={options} value={employeeId} onChange={id => setEmployeeId(id)} placeholder="اكتب الاسم أو الكود"
@@ -129,9 +157,25 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved }: Pro
             </label>
           )}
         </div>
+        {groupDone && (
+          <div role="status" className="bg-green-50 text-green-800 rounded-xl p-3 text-sm mt-4" data-task-group-done>
+            اتكلّف {groupDone.created} موظف بالمهمة.
+            {groupDone.skipped.length > 0 && (
+              <ul className="mt-2 text-amber-800 list-disc ps-5">
+                {groupDone.skipped.map(row => <li key={row.employeeId}>{row.fullName}: {row.reason}</li>)}
+              </ul>
+            )}
+          </div>
+        )}
         <div className="flex justify-end gap-2 mt-5">
-          <button type="button" className="btn-secondary" disabled={busy} onClick={onClose}>إلغاء</button>
-          <button type="button" className="btn-primary" disabled={busy} onClick={save}>{busy ? 'جاري الحفظ…' : task ? 'حفظ' : 'تكليف'}</button>
+          {groupDone ? (
+            <button type="button" className="btn-primary" onClick={() => (onGroupSaved ?? onClose)()}>تمام</button>
+          ) : (
+            <>
+              <button type="button" className="btn-secondary" disabled={busy} onClick={onClose}>إلغاء</button>
+              <button type="button" className="btn-primary" disabled={busy} onClick={save}>{busy ? 'جاري الحفظ…' : task ? 'حفظ' : 'تكليف'}</button>
+            </>
+          )}
         </div>
       </div>
     </div>

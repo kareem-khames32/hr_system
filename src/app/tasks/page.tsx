@@ -109,7 +109,8 @@ export default function TasksPage() {
         {available && <TaskComplianceReport />}
       </div>
       {form && assignees && (
-        <TaskFormModal assignees={assignees} task={form.task} onClose={() => setForm(null)} onSaved={() => { setForm(null); notifyTasksChanged(); void load() }} />
+        <TaskFormModal assignees={assignees} task={form.task} onClose={() => setForm(null)} onSaved={() => { setForm(null); notifyTasksChanged(); void load() }}
+          onGroupSaved={() => { setForm(null); notifyTasksChanged(); void load() }} />
       )}
     </MainLayout>
   )

@@ -5,6 +5,8 @@ import Link from 'next/link'
 import { ArrowRight, Boxes, Lock, X } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import { fetchBranches, fetchRolesFull, type ApiBranch, type ApiRole } from '@/lib/api'
+import { OrgAudienceField } from '@/components/OrgAudienceField'
+import type { StoredAudience } from '@/lib/org-audience'
 import { formatDate } from '@/lib/dates'
 import { MODULE_GROUPS, type ModuleGroup, type ModulePreset } from '@/lib/modules'
 import {
@@ -68,7 +70,9 @@ export default function ModulesSettingsPage() {
   const [audienceOf, setAudienceOf] = useState<ModuleCatalogRow | null>(null)
   const [who, setWho] = useState<WhoMode>('all')
   const [whoIds, setWhoIds] = useState<string[]>([])
-  const [whereBranches, setWhereBranches] = useState<number[]>([])
+  // B-ADD.1: الجمهور كله (مين + فين + المستثنين) من الحقل الموحد
+  const [audienceValue, setAudienceValue] = useState<StoredAudience | null>(null)
+  const [audienceComplete, setAudienceComplete] = useState(true)
   const [modalError, setModalError] = useState<string | null>(null)
   // الموديولات لكل الشركة: حساب مقفول على فرع يشوفها بس
   const { canWrite, readOnly } = useCompanyWideWrite()
@@ -139,15 +143,16 @@ export default function ModulesSettingsPage() {
     const mode: WhoMode = audience?.mode === 'roles' || audience?.mode === 'positions' ? audience.mode : 'all'
     setWho(mode)
     setWhoIds(mode === 'all' ? [] : (audience?.ids ?? []).map(String))
-    setWhereBranches(audience?.where?.mode === 'branches' ? (audience.where.ids ?? []).map(Number) : [])
+    setAudienceValue((audience ?? null) as StoredAudience | null)
+    setAudienceComplete(true)
     setModalError(null)
     setAudienceOf(module)
   }
   const saveAudience = async () => {
     if (!audienceOf) return
     if (who !== 'all' && whoIds.length === 0) { setModalError('اختار مين الموديول مفعّل لهم، أو خلّيه «الكل»'); return }
-    const audience: ModuleAudience | null = who === 'all' && whereBranches.length === 0 ? null
-      : { mode: who, ids: who === 'all' ? [] : whoIds, where: whereBranches.length ? { mode: 'branches', ids: whereBranches } : null }
+    if (!audienceComplete) { setModalError('كمّل اختيار «على مين؟» الأول'); return }
+    const audience = audienceValue as ModuleAudience | null
     const key = audienceOf.key
     setAudienceOf(null)
     await run(key, () => setModuleState(key, { audience }))
@@ -396,17 +401,9 @@ export default function ModulesSettingsPage() {
               </div>
             )}
           </div>
-          <div>
-            <p className="label">فين</p>
-            <p className="text-xs text-gray-500 mb-2">من غير اختيار = كل الشركة</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-              {branches.map((branch) => (
-                <label key={branch.id} className="flex items-center gap-2">
-                  <input type="checkbox" checked={whereBranches.includes(branch.id)} onChange={() => setWhereBranches(pick(whereBranches, branch.id))} />
-                  {branch.name}
-                </label>
-              ))}
-            </div>
+          <div data-module-audience>
+            <OrgAudienceField value={audienceValue} who={{ mode: who, ids: whoIds }}
+              onChange={(audience, complete) => { setAudienceValue(audience); setAudienceComplete(complete) }} />
           </div>
           <div className="flex justify-end gap-3 pt-2">
             <button type="button" onClick={() => setAudienceOf(null)} className="btn-secondary">رجوع</button>

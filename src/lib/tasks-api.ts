@@ -118,6 +118,8 @@ export interface ApiTaskAssignees {
   canManage: boolean
   /** الحساب يقدر يكلّف حد: نفسه (مهمة شخصية)، أو حد تحته في الهيكل، أو موظفي نطاقه بصلاحية */
   canAssign: boolean
+  /** B-ADD.1: المهمة الجماعية (نفس المهمة لكل موظف في جمهور) — لصاحب «إدارة المهام» أو «تكليف أي موظف» */
+  canAssignGroup?: boolean
   /** self = الحساب نفسه (مهمة شخصية) */
   employees: Array<{ id: number; fullName: string; employeeCode: string; jobTitle: string | null; branchName: string | null; self?: boolean }>
   /** ترحيل 096 موجود (المهمة الشخصية والتمديد والتقييم)، وميزة التقييم مفتوحة */
@@ -182,6 +184,10 @@ export const fetchTasks = (filter: TaskListFilter = {}) => {
   return apiFetch<{ available: boolean; tasks: ApiTask[] }>(`/tasks${query ? `?${query}` : ''}`)
 }
 export const createTask = (input: TaskInput) => apiFetch<ApiTask>('/tasks', json('POST', input))
+// B-ADD.1: المهمة الجماعية — الجمهور بالاستهداف الموحد، وكل موظف بياخد مهمته
+export interface TaskGroupResult { created: number; taskIds: number[]; skipped: Array<{ employeeId: number; fullName: string; reason: string }> }
+export const createGroupTask = (input: Omit<TaskInput, 'assigneeEmployeeId' | 'assigneeRole' | 'branchId'> & { audience: unknown }) =>
+  apiFetch<TaskGroupResult>('/tasks/group', json('POST', input))
 export const updateTask = (id: number, input: TaskInput) => apiFetch<ApiTask>(`/tasks/${id}`, json('PATCH', input))
 export const setTaskStatus = (id: number, input: { status: TaskStatus; note?: string; proofNote?: string; proofFileId?: number }) =>
   apiFetch<ApiTask>(`/tasks/${id}/status`, json('POST', input))

@@ -16,6 +16,8 @@ import { normalizeWeekendDays, weekendDaysError } from '../attendance/weekend-da
 import { beginCalendarChange, finishCalendarChange, readCalendarSource } from '../attendance/attendance-calendar-history'
 import { attendanceRuleToday, lockAttendanceRuleMutation } from '../attendance/attendance-rule-history'
 import { Employee } from '../employees/employee.entity'
+import { isCurrentEmployee } from '../reports/metrics'
+import { previewAudience } from './audience-preview'
 import { branchCountryOf, branchInsuranceIssue, normalizeBranchCountry } from './branch-currency'
 import { Branch } from './entities/branch.entity'
 import { unlinkBranchEntityOnCountryChange } from './legal-entities'
@@ -575,6 +577,26 @@ export class OrgService {
         teamId: visible(e.teamId, teamIds),
       })),
     }
+  }
+
+  // ===== B-ADD.1: الاستهداف الموحد =====
+  /**
+   * شجرة نطاق الحساب (نفس filterContext) ومعاها الموظفين الحاليين بأسمائهم وأكوادهم — عشان منتقي الجمهور يختار ويستثني بالاسم
+   * ويعدّ من غير نداء لكل اختيار. الموظفين اللي سابوا الشغل مابيرجعوش (مايتستهدفوش).
+   */
+  async audienceContext(scope: BranchScope) {
+    const context = await this.filterContext(scope)
+    const rows = isEmptyBranchScope(scope) ? [] : await this.employees.find({
+      where: { isActive: true, ...(scope === null ? {} : { branchId: branchIdIn(scope) }) },
+      select: { id: true, employeeCode: true, fullName: true, status: true, isActive: true }, order: { id: 'ASC' } })
+    const names = new Map(rows.filter((row) => isCurrentEmployee(row)).map((row) => [row.id, row]))
+    return { ...context, employees: context.employees.filter((row) => names.has(row.id))
+      .map((row) => ({ ...row, fullName: names.get(row.id)!.fullName, employeeCode: names.get(row.id)!.employeeCode ?? null })) }
+  }
+
+  /** معاينة جمهور قبل الحفظ بنطاق الحساب: العدد والأسماء (audience-preview) */
+  audiencePreview(scope: BranchScope, audience: unknown) {
+    return previewAudience(this.employees.manager, audience, scope)
   }
 
   // ===== الفرق =====

@@ -28,6 +28,17 @@ class TaskDto {
   @IsOptional() @IsBoolean() needsRating?: boolean
 }
 
+// B-ADD.1: المهمة الجماعية — خانات المهمة نفسها، و«على مين؟» بدل المسؤول (الجسم خام والحكم في الخدمة)
+class TaskGroupDto {
+  @IsString() @MinLength(2) @MaxLength(200) title: string
+  @IsOptional() @IsString() @MaxLength(2000) description?: string
+  @IsOptional() @Matches(DATE) dueDate?: string
+  @IsOptional() @IsIn([...TASK_PRIORITIES]) priority?: string
+  @IsOptional() @IsBoolean() requiresProof?: boolean
+  @IsOptional() @IsBoolean() needsRating?: boolean
+  @IsOptional() audience?: unknown
+}
+
 class TaskPatchDto {
   @IsOptional() @IsString() @MinLength(2) @MaxLength(200) title?: string
   // null = من غير وصف أو من غير موعد
@@ -108,6 +119,12 @@ export class TasksController {
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: TaskDto) {
     return this.tasks.create(user, dto)
+  }
+
+  // B-ADD.1: المهمة الجماعية — نفس المهمة لكل موظف في جمهور بالاستهداف الموحد (الفحص في الخدمة: «إدارة المهام» أو «تكليف أي موظف»، بنطاقه)
+  @Post('group')
+  createForGroup(@CurrentUser() user: JwtPayload, @Body() dto: TaskGroupDto) {
+    return this.tasks.createForGroup(user, dto)
   }
 
   @AllowPreboarding()

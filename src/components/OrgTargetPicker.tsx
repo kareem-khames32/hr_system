@@ -6,13 +6,15 @@
 // الشاشة بتحدد المستويات المسموحة (مثلًا فترات الإضافي: الشركة أو فرع بس)،
 // ومستخدم الفرع بيتقفل على فرعه. مستوى الفرق بيظهر لما الشاشة تبعت الفرق (teams).
 // الفرض الحقيقي للنطاق في الباك — هنا تسهيل الاختيار وعرض العدد.
+// B-ADD.1 (إضافات المالك 11 أكتوبر): مستوى «إدارات من الفرع» للشاشات اللي بتطلبه (levels فيها administrations)، ومعاه tree:
+// الإدارة أو القسم بيشمل الوحدات اللي تحته جوه فرعه (نفس حكم الخادم). الشاشات القديمة من غيرهم زي ما هي بالحرف.
 
 import { useMemo, useState } from 'react'
-import { Building2, Globe, Layers, Search, Users, UsersRound } from 'lucide-react'
+import { Building2, Globe, Layers, Network, Search, Users, UsersRound } from 'lucide-react'
 import { canSeeBranch, type BranchScope } from '../lib/branch-scope'
 import { employeeSearchMatcher } from '../lib/employee-search'
 
-export type OrgTargetLevel = 'company' | 'branch' | 'departments' | 'teams' | 'employees'
+export type OrgTargetLevel = 'company' | 'branch' | 'administrations' | 'departments' | 'teams' | 'employees'
 
 export interface OrgTarget {
   level: OrgTargetLevel
@@ -21,10 +23,12 @@ export interface OrgTarget {
   // الفرق المختارة (مستوى «فرق من الفرع») — اختيارية عشان القيم القديمة تفضل شغالة
   teamIds?: number[]
   employeeIds: number[]
+  // B-ADD.1: الإدارات المختارة (مستوى «إدارات من الفرع») — اختيارية عشان القيم القديمة تفضل شغالة
+  administrationIds?: number[]
 }
 
 export interface OrgPickerBranch { id: number; name: string; isActive?: boolean }
-export interface OrgPickerDepartment { id: number; name: string; branchId: number; isActive?: boolean }
+export interface OrgPickerDepartment { id: number; name: string; branchId: number; isActive?: boolean; parentId?: number | null; unitType?: string | null }
 export interface OrgPickerTeam { id: number; name: string; departmentId: number; isActive?: boolean }
 export interface OrgPickerEmployee {
   id: number
@@ -37,6 +41,25 @@ export interface OrgPickerEmployee {
 }
 
 export const ORG_TARGET_LEVELS: OrgTargetLevel[] = ['company', 'branch', 'departments', 'teams', 'employees']
+// B-ADD.1: مستويات الاستهداف الموحد كاملة (الشركة ← فرع ← إدارة ← قسم ← فريق ← موظفين) للشاشات اللي بتحدد جمهور
+export const ORG_AUDIENCE_LEVELS: OrgTargetLevel[] = ['company', 'branch', 'administrations', 'departments', 'teams', 'employees']
+export const isAdministrationUnit = (d: OrgPickerDepartment) => d.unitType === 'ADMINISTRATION'
+
+// الوحدات المختارة وكل اللي تحتها جوه فرع كل وحدة (نفس branchLocalSubtree في الخادم: الأب من فرع تاني مايتحسبش)
+export function unitSubtree(rootIds: number[], departments: OrgPickerDepartment[]): Set<number> {
+  const result = new Set(rootIds)
+  const byId = new Map(departments.map((d) => [d.id, d]))
+  for (let grew = true; grew;) {
+    grew = false
+    for (const d of departments) {
+      if (result.has(d.id) || d.parentId == null || !result.has(d.parentId)) continue
+      if (byId.get(d.parentId)?.branchId !== d.branchId) continue
+      result.add(d.id)
+      grew = true
+    }
+  }
+  return result
+}
 
 // الموظفين اللي سابوا الشغل مايتستهدفوش
 const INACTIVE_STATUSES = new Set(['terminated', 'archived'])
@@ -69,14 +92,16 @@ export function teamsOfBranch(
 }
 
 // الموظفين اللي عليهم الاختيار فعلًا (بالترتيب: شركة ← فرع ← أقسام ← فرق ← موظفين)
-export function resolveOrgTarget(target: OrgTarget, employees: OrgPickerEmployee[]): number[] {
+// treeDepartments (B-ADD.1): الوحدة المختارة (إدارة أو قسم) بتشمل اللي تحتها؛ من غيرها المطابقة برقم القسم بالحرف (الشاشات القديمة)
+export function resolveOrgTarget(target: OrgTarget, employees: OrgPickerEmployee[], treeDepartments?: OrgPickerDepartment[]): number[] {
   const active = employees.filter(isTargetableEmployee)
   if (target.level === 'company') return active.map((e) => e.id)
   if (target.branchId == null) return []
   const inBranch = active.filter((e) => e.branchId === target.branchId)
   if (target.level === 'branch') return inBranch.map((e) => e.id)
-  if (target.level === 'departments') {
-    const set = new Set(target.departmentIds)
+  if (target.level === 'departments' || target.level === 'administrations') {
+    const chosen = target.level === 'administrations' ? target.administrationIds ?? [] : target.departmentIds
+    const set = treeDepartments ? unitSubtree(chosen, treeDepartments) : new Set(chosen)
     return inBranch.filter((e) => e.departmentId != null && set.has(e.departmentId)).map((e) => e.id)
   }
   if (target.level === 'teams') {
@@ -97,6 +122,10 @@ export function describeOrgTarget(
   if (target.level === 'company') return 'الشركة كلها'
   const branch = branches.find((b) => b.id === target.branchId)?.name ?? (target.branchId ? `فرع #${target.branchId}` : 'فرع')
   if (target.level === 'branch') return `${branch} كله`
+  if (target.level === 'administrations') {
+    const names = (target.administrationIds ?? []).map((id) => departments.find((d) => d.id === id)?.name ?? `إدارة #${id}`)
+    return names.length ? `${branch} — إدارات: ${names.join('، ')}` : `${branch} — لسه ما اخترتش إدارات`
+  }
   if (target.level === 'departments') {
     const names = target.departmentIds.map((id) => departments.find((d) => d.id === id)?.name ?? `قسم #${id}`)
     return names.length ? `${branch} — ${names.join('، ')}` : `${branch} — لسه ما اخترتش أقسام`
@@ -110,6 +139,7 @@ export function describeOrgTarget(
 
 const LEVEL_LABELS: Record<Exclude<OrgTargetLevel, 'company'>, { label: string; icon: typeof Building2 }> = {
   branch: { label: 'الفرع كله', icon: Building2 },
+  administrations: { label: 'إدارات من الفرع', icon: Network },
   departments: { label: 'أقسام من الفرع', icon: Layers },
   teams: { label: 'فرق من الفرع', icon: UsersRound },
   employees: { label: 'موظفين من الفرع', icon: Users },
@@ -127,6 +157,7 @@ export function OrgTargetPicker({
   branchScope,
   disabled = false,
   showCount = true,
+  tree = false,
 }: {
   value: OrgTarget
   onChange: (next: OrgTarget) => void
@@ -143,14 +174,18 @@ export function OrgTargetPicker({
   branchScope?: BranchScope
   disabled?: boolean
   showCount?: boolean
+  // B-ADD.1: الإدارة أو القسم المختار بيشمل الوحدات اللي تحته (الأقسام لازم يبقى معاها parentId وunitType)
+  tree?: boolean
 }) {
   const [query, setQuery] = useState('')
   const [departmentFilter, setDepartmentFilter] = useState<number | ''>('')
   const [teamFilter, setTeamFilter] = useState<number | ''>('')
   const scopedToBranches = Array.isArray(branchScope)
   const allowCompany = levels.includes('company') && !lockedBranchId && !scopedToBranches
-  const innerLevels = (['branch', 'departments', 'teams', 'employees'] as const)
+  const innerLevels = (['branch', 'administrations', 'departments', 'teams', 'employees'] as const)
     .filter((l) => levels.includes(l) && (l !== 'teams' || teams !== undefined))
+  const administrationIds = value.administrationIds ?? []
+  const unitLevel = value.level === 'administrations' || value.level === 'departments'
   const teamIds = value.teamIds ?? []
   const allTeams = teams ?? []
 
@@ -171,7 +206,17 @@ export function OrgTargetPicker({
     () => employees.filter((e) => isTargetableEmployee(e) && e.branchId === value.branchId),
     [employees, value.branchId]
   )
-  const countIn = (departmentId: number) => branchEmployees.filter((e) => e.departmentId === departmentId).length
+  const countIn = (departmentId: number) => {
+    const set = tree ? unitSubtree([departmentId], departments) : new Set([departmentId])
+    return branchEmployees.filter((e) => e.departmentId != null && set.has(e.departmentId)).length
+  }
+  // وحدات المستوى المفتوح: «إدارات» = وحدات الفرع اللي نوعها إدارة؛ «أقسام» مع tree = الباقي (من غير tree كل وحدات الفرع زي زمان)
+  const levelUnits = value.level === 'administrations' ? branchDepartments.filter(isAdministrationUnit)
+    : tree && levels.includes('administrations') ? branchDepartments.filter((d) => !isAdministrationUnit(d)) : branchDepartments
+  const chosenUnits = value.level === 'administrations' ? administrationIds : value.departmentIds
+  const toggleUnit = (id: number) => onChange(value.level === 'administrations'
+    ? { ...value, administrationIds: toggle(administrationIds, id) }
+    : { ...value, departmentIds: toggle(value.departmentIds, id) })
   const countInTeam = (teamId: number) => branchEmployees.filter((e) => e.teamId === teamId).length
   // البحث بالاسم أو الكود بنفس مطابقة منتقي الموظف (الإملاء العربي والكود)
   const matchesQuery = employeeSearchMatcher(query)
@@ -180,7 +225,7 @@ export function OrgTargetPicker({
     (teamFilter === '' || e.teamId === teamFilter) &&
     matchesQuery(e)
   )
-  const count = resolveOrgTarget(value, employees).length
+  const count = resolveOrgTarget(value, employees, tree ? departments : undefined).length
 
   // الخطوة 1: الشركة كلها أو فرع — تغيير الفرع يمسح الأقسام والفرق والموظفين المختارين
   const pickScope = (raw: string) => {
@@ -188,18 +233,18 @@ export function OrgTargetPicker({
     setDepartmentFilter('')
     setTeamFilter('')
     if (raw === 'company') {
-      onChange({ level: 'company', branchId: null, departmentIds: [], teamIds: [], employeeIds: [] })
+      onChange({ level: 'company', branchId: null, departmentIds: [], teamIds: [], employeeIds: [], administrationIds: [] })
       return
     }
     const branchId = raw === '' ? null : Number(raw)
     const level = value.level === 'company' ? (innerLevels[0] ?? 'branch') : value.level
-    onChange({ level, branchId, departmentIds: [], teamIds: [], employeeIds: [] })
+    onChange({ level, branchId, departmentIds: [], teamIds: [], employeeIds: [], administrationIds: [] })
   }
 
   // الأقسام المختارة بتفضل لما تنقل بين «أقسام» و«فرق» (الفرق متفلترة بيها)
   const pickLevel = (level: OrgTargetLevel) => {
     const keepDeps = (level === 'departments' || level === 'teams') && (value.level === 'departments' || value.level === 'teams')
-    onChange({ ...value, level, departmentIds: keepDeps ? value.departmentIds : [], teamIds: [], employeeIds: [] })
+    onChange({ ...value, level, departmentIds: keepDeps ? value.departmentIds : [], teamIds: [], employeeIds: [], administrationIds: [] })
   }
 
   // اختيار قسم في مستوى الفرق: الفرق اللي برا الأقسام المختارة بتتشال
@@ -271,25 +316,25 @@ export function OrgTargetPicker({
         </div>
       )}
 
-      {/* 3أ) أقسام الفرع المختار بس */}
-      {value.level === 'departments' && value.branchId != null && (
-        <div className="border border-gray-200 rounded-xl p-2 max-h-44 overflow-y-auto space-y-1">
-          {branchDepartments.length === 0 && (
-            <p className="text-sm text-gray-400 text-center py-3">مفيش أقسام في الفرع ده</p>
+      {/* 3أ) إدارات أو أقسام الفرع المختار بس */}
+      {unitLevel && value.branchId != null && (
+        <div className="border border-gray-200 rounded-xl p-2 max-h-44 overflow-y-auto space-y-1" data-org-target-units={value.level}>
+          {levelUnits.length === 0 && (
+            <p className="text-sm text-gray-400 text-center py-3">{value.level === 'administrations' ? 'مفيش إدارات في الفرع ده' : 'مفيش أقسام في الفرع ده'}</p>
           )}
-          {branchDepartments.map((d) => (
+          {levelUnits.map((d) => (
             <label
               key={d.id}
               className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer ${
-                value.departmentIds.includes(d.id) ? 'bg-primary-50' : 'hover:bg-gray-50'
+                chosenUnits.includes(d.id) ? 'bg-primary-50' : 'hover:bg-gray-50'
               }`}
             >
               <input
                 type="checkbox"
                 className="w-4 h-4 rounded border-gray-300"
                 disabled={disabled}
-                checked={value.departmentIds.includes(d.id)}
-                onChange={() => onChange({ ...value, departmentIds: toggle(value.departmentIds, d.id) })}
+                checked={chosenUnits.includes(d.id)}
+                onChange={() => toggleUnit(d.id)}
               />
               <span className="text-sm text-gray-700">{d.name}</span>
               <span className="text-xs text-gray-400 ms-auto">{countIn(d.id)} موظف</span>

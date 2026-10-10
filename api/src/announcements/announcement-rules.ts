@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common'
 import type { EntityManager } from 'typeorm'
-import { AUDIENCE_WHERE_MODES, AUDIENCE_WHO_MODES, parseRequestAudience } from '../requests/request-audience'
+import { AUDIENCE_ORG_WHERE_MODES, AUDIENCE_WHO_MODES } from '../requests/request-audience'
+import { audienceBranchIds, audienceExcludeIds, audienceWhereBranchId } from '../org/org-audience'
 import type { BranchScope } from '../auth/guards'
 
 // B2.16: قواعد الإعلانات — ملف صرف (غير فحص وجود الجدولين): المدخلات، ومتى الإعلان ساري، وجمهور حساب الفروع.
@@ -65,20 +66,25 @@ export function announcementDates(publishDate: unknown, expiryDate: unknown, tod
 export function announcementAudienceJson(audience: unknown): string | null {
   if (audience === null || audience === undefined) return null
   if (typeof audience !== 'object' || Array.isArray(audience)) throw new BadRequestException('جمهور الإعلان بصيغة غير صحيحة')
-  const value = audience as { mode?: unknown; ids?: unknown; where?: { mode?: unknown; ids?: unknown } | null; conditions?: unknown }
+  const value = audience as { mode?: unknown; ids?: unknown; where?: { mode?: unknown; ids?: unknown; branchId?: unknown } | null; conditions?: unknown; exclude?: unknown }
   // شروط الصفات (جنسية، عقد…) مش من جمهور الإعلان: مرفوضة بدل ما تتشال بصمت والإعلان يطلع لجمهور أوسع من المقصود
   if (value.conditions != null) throw new BadRequestException('جمهور الإعلان «مين» و«فين» بس — من غير شروط صفات')
   const mode = String(value.mode ?? 'all')
   if (!(AUDIENCE_WHO_MODES as readonly string[]).includes(mode)) throw new BadRequestException('اختيار «مين» في جمهور الإعلان غير معروف')
   const ids = [...new Set(Array.isArray(value.ids) ? value.ids.map(String).filter(Boolean) : [])].sort()
   const whereMode = String(value.where?.mode ?? 'company')
-  if (!(AUDIENCE_WHERE_MODES as readonly string[]).includes(whereMode)) throw new BadRequestException('اختيار «فين» في جمهور الإعلان غير معروف')
+  // B-ADD.1: ومعاهم «إدارات أو أقسام من فرع» (units) بالاستهداف الموحد
+  if (!(AUDIENCE_ORG_WHERE_MODES as readonly string[]).includes(whereMode)) throw new BadRequestException('اختيار «فين» في جمهور الإعلان غير معروف')
   const whereIds = [...new Set(Array.isArray(value.where?.ids) ? (value.where!.ids as unknown[]).map(Number).filter(id => Number.isSafeInteger(id) && id > 0) : [])].sort((a, b) => a - b)
   if (mode !== 'all' && ids.length === 0) throw new BadRequestException('اختار مين الإعلان ليهم، أو خلّيه «الكل»')
   // «فين» من غير اختيار كان هيتقري «كل الشركة»: إعلان فرع كان هيطلع للكل
   if (whereMode !== 'company' && whereIds.length === 0) throw new BadRequestException('اختار الفروع أو الأقسام أو الفرق، أو خلّيه «كل الشركة»')
-  if (mode === 'all' && whereMode === 'company') return null
-  const text = JSON.stringify({ mode, ids, where: whereMode === 'company' ? null : { mode: whereMode, ids: whereIds } })
+  // B-ADD.1: فرع الاختيار (للإدارات/الأقسام والفرق) و«الكل ماعدا…» — المفاتيح دي بتتكتب لما تكون موجودة بس، فالنص القديم زي ما هو بالحرف
+  const whereBranchId = whereMode === 'company' ? null : audienceWhereBranchId(value.where, whereMode, 'جمهور الإعلان')
+  const exclude = audienceExcludeIds(value.exclude, 'جمهور الإعلان')
+  if (mode === 'all' && whereMode === 'company' && !exclude.length) return null
+  const text = JSON.stringify({ mode, ids, where: whereMode === 'company' ? null : { mode: whereMode, ids: whereIds, ...(whereBranchId !== null ? { branchId: whereBranchId } : {}) },
+    ...(exclude.length ? { exclude } : {}) })
   if (text.length > ANNOUNCEMENT_AUDIENCE_MAX) throw new BadRequestException('جمهور الإعلان أكبر من الحد')
   return text
 }
@@ -97,14 +103,13 @@ export function announcementAudienceIntact(audience: string | null | undefined):
 }
 
 /**
- * جمهور الإعلان جوه نطاق فروع الحساب؟ حساب كل الفروع (null): أي جمهور. حساب الفروع: «فين» لازم «فروع محددة» وكلها من فروعه —
- * كل الشركة أو أقسام وفرق (مكانها مش متثبّت بفرع في الجمهور) لأ.
+ * جمهور الإعلان جوه نطاق فروع الحساب؟ حساب كل الفروع (null): أي جمهور. حساب الفروع: «فين» لازم «فروع محددة» وكلها من فروعه،
+ * أو (B-ADD.1) إدارات/أقسام/فرق فرع اختيارها متحدد ومن فروعه — كل الشركة أو أقسام وفرق بالشكل القديم (مكانها مش متثبّت بفرع) لأ.
  */
 export function announcementAudienceInScope(audience: string | null | undefined, scope: BranchScope): boolean {
   if (scope === null) return true
-  const where = parseRequestAudience(audience)?.where
-  if (!where || where.mode !== 'branches' || !Array.isArray(where.ids) || where.ids.length === 0) return false
-  return where.ids.every(id => scope.includes(Number(id)))
+  const branches = audienceBranchIds(audience)
+  return !!branches && branches.every(id => scope.includes(id))
 }
 
 /** الإعلان ساري النهارده؟ منشور، ووصل تاريخ نشره، ولسه ماعدّاش تاريخ انتهائه */

@@ -11,6 +11,8 @@ import EmptyState from '@/components/EmptyState'
 import PdfPreview from '@/components/PdfPreview'
 import PolicyReader from '@/components/policies/PolicyReader'
 import { fetchBranches, fetchRolesFull, type ApiBranch, type ApiRole } from '@/lib/api'
+import { OrgAudienceField } from '@/components/OrgAudienceField'
+import type { StoredAudience } from '@/lib/org-audience'
 import { formatDate, localToday } from '@/lib/dates'
 import {
   createPolicy, fetchPolicies, POLICY_BODY_MAX, POLICY_GRACE_MAX, POLICY_STATUS_LABELS, policyGraceText, publishPolicyVersion, updatePolicy, uploadPolicyFile, withdrawPolicy,
@@ -38,7 +40,9 @@ function Modal({ title, wide, onClose, children }: { title: string; wide?: boole
   )
 }
 
-type PolicyForm = { id: number | null; published: boolean; title: string; category: string; isMandatory: boolean; graceDays: string; who: WhoMode; whoIds: string[]; whereBranches: number[] }
+type PolicyForm = { id: number | null; published: boolean; title: string; category: string; isMandatory: boolean; graceDays: string; who: WhoMode; whoIds: string[]
+  // B-ADD.1: الجمهور كله (مين + فين + المستثنين) من الحقل الموحد
+  audience: StoredAudience | null; audienceComplete: boolean }
 // fileUrl: رابط محلي للملف المختار لمعاينته قبل النشر. fileShown: المعاينة اتعرضت فعلًا (ملف مابيتعرضش في المتصفح مابيتنشرش من هنا)
 type VersionForm = { policy: ApiPolicy; kind: 'TEXT' | 'FILE'; bodyText: string; file: File | null; fileUrl: string | null; fileShown: 'loading' | 'rendered' | 'failed';
   effectiveDate: string; isMaterial: boolean }
@@ -84,12 +88,7 @@ export default function PoliciesPage() {
     const who: WhoMode = audience?.mode === 'roles' || audience?.mode === 'positions' ? audience.mode : 'all'
     setModalError('')
     setForm({ id: policy?.id ?? null, published: !!policy && policy.status !== 'DRAFT', title: policy?.title ?? '', category: policy?.category ?? '', isMandatory: policy?.isMandatory ?? true, graceDays: String(policy?.graceDays ?? 7),
-      who, whoIds: who === 'all' ? [] : (audience?.ids ?? []).map(String), whereBranches: audience?.where?.mode === 'branches' ? (audience.where.ids ?? []).map(Number) : [] })
-  }
-  // سياسة جمهورها متسجّل بشكل الشاشة دي مابتعرضوش (موظفين بعينهم، أقسام، فرق): التعديل مايلمسش الجمهور غير لو المدير غيّره
-  const audienceEditable = (policy: ApiPolicy | undefined) => {
-    const audience = policy?.audience
-    return !audience || ((audience.mode === 'all' || audience.mode === 'roles' || audience.mode === 'positions') && (!audience.where || audience.where.mode === 'branches'))
+      who, whoIds: who === 'all' ? [] : (audience?.ids ?? []).map(String), audience: (audience ?? null) as StoredAudience | null, audienceComplete: true })
   }
 
   const savePolicy = async () => {
@@ -99,10 +98,12 @@ export default function PoliciesPage() {
     if (!Number.isInteger(grace) || grace < 0 || grace > POLICY_GRACE_MAX) { setModalError(`مهلة السماح من صفر لـ${POLICY_GRACE_MAX} يوم`); return }
     if (form.who !== 'all' && form.whoIds.length === 0) { setModalError('اختار مين السياسة عليهم، أو خلّيها «الكل»'); return }
     const existing = data?.policies.find(policy => policy.id === form.id)
-    const audience: PolicyAudience | null = form.who === 'all' && form.whereBranches.length === 0 ? null
-      : { mode: form.who, ids: form.who === 'all' ? [] : form.whoIds, where: form.whereBranches.length ? { mode: 'branches', ids: form.whereBranches } : null }
+    if (!form.audienceComplete) { setModalError('كمّل اختيار «على مين؟» الأول'); return }
+    // B-ADD.1: الجمهور من الحقل الموحد؛ ومابيتبعتش لو ماتغيّرش (الجمهور المحفوظ بشكل قديم بيفضل زي ما هو)
+    const audience = form.audience as PolicyAudience | null
+    const audienceChanged = JSON.stringify(audience ?? null) !== JSON.stringify(existing?.audience ?? null)
     // العنوان والفئة مابيتبعتوش لسياسة منشورة: الخادم مابيغيّرهمش بعد النشر
-    const input = { ...(form.published ? {} : { title, category: form.category.trim() || null }), isMandatory: form.isMandatory, graceDays: grace, ...(audienceEditable(existing) ? { audience } : {}) }
+    const input = { ...(form.published ? {} : { title, category: form.category.trim() || null }), isMandatory: form.isMandatory, graceDays: grace, ...(audienceChanged || form.id == null ? { audience } : {}) }
     setSaving(true); setModalError('')
     try {
       if (form.id == null) await createPolicy(input); else await updatePolicy(form.id, input)
@@ -227,8 +228,7 @@ export default function PoliciesPage() {
               <span className="block text-xs text-gray-500 mt-1">بتتحسب من الأبعد: سريان النسخة، أو تعيين الموظف، أو يوم ما السياسة تبقى إلزامية أو جمهورها يتغيّر. تقليل المهلة ممكن يقفل اللي لسه مااقرّش فورًا. واللي يدخل الجمهور بعد كده (نقل أو ترقية) مالوش مهلة جديدة</span>
             </label>
           )}
-          {audienceEditable(data?.policies.find(policy => policy.id === form.id)) ? (
-            <>
+          <>
               <div>
                 <p className="label">مين عليه السياسة</p>
                 <div className="flex flex-wrap gap-4 text-sm">
@@ -250,20 +250,11 @@ export default function PoliciesPage() {
                   </div>
                 )}
               </div>
-              <div>
-                <p className="label">فين</p>
-                <p className="text-xs text-gray-500 mb-2">من غير اختيار = كل الشركة</p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-                  {branches.map(branch => (
-                    <label key={branch.id} className="flex items-center gap-2">
-                      <input type="checkbox" checked={form.whereBranches.includes(branch.id)} onChange={() => setForm({ ...form, whereBranches: pick(form.whereBranches, branch.id) })} />
-                      {branch.name}
-                    </label>
-                  ))}
-                </div>
+              <div data-policy-audience>
+                <OrgAudienceField value={form.audience} who={{ mode: form.who, ids: form.whoIds }} disabled={saving}
+                  onChange={(audience, complete) => setForm(current => (current ? { ...current, audience, audienceComplete: complete } : current))} />
               </div>
-            </>
-          ) : <p className="text-sm text-gray-500">جمهور السياسة دي متحدد بشكل الشاشة مابتعرضوش، وهيفضل زي ما هو.</p>}
+          </>
           <div className="flex justify-end gap-3 pt-2">
             <button type="button" onClick={() => setForm(null)} className="btn-secondary">رجوع</button>
             <button type="button" onClick={savePolicy} disabled={saving} className="btn-primary disabled:opacity-50">{saving ? 'جارٍ الحفظ…' : 'حفظ'}</button>

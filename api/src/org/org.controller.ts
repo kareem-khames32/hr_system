@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
   Param,
   ParseIntPipe,
   Patch,
@@ -33,6 +34,14 @@ export const ORG_FILTER_VIEW_PERMS = [
   'employees.view', 'documents.manage', 'custody.assign', 'transfers.view', 'offboarding.manage', 'attendance.view_all',
   'attendance_exemption.view', 'leaves.view_all', 'leave_balances.manage', 'payroll.view', 'payroll.disburse', 'deductions.view',
   'bonuses.view', 'requests.view_all', 'reports.view', 'users.manage',
+]
+
+// B-ADD.1: صلاحيات الشاشات اللي بتحدد جمهور بالاستهداف الموحد (يكفي واحدة): بتاخد شجرة النطاق وأسماء موظفينه ومعاينة الجمهور
+export const ORG_AUDIENCE_PERMS = [
+  'announcements.manage', 'policies.manage', 'helpdesk.manage', 'surveys.manage', 'settings.modules', 'settings.manage',
+  'performance.manage', 'training.manage', 'tasks.manage', 'tasks.assign_any', 'employees.view',
+  // B-ADD.2: فترات الإضافي (attendance.manage) والعطلات الرسمية (settings.manage فوق)
+  'attendance.manage',
 ]
 
 @RequireModule('org')
@@ -94,6 +103,24 @@ export class OrgController {
   @Perm(...ORG_FILTER_VIEW_PERMS)
   filterContext(@CurrentUser() user: JwtPayload) {
     return this.org.filterContext(branchScopeOf(user))
+  }
+
+  // ===== B-ADD.1: الاستهداف الموحد «على مين؟» (الشركة ← فرع ← إدارة ← قسم ← فريق ← موظفين بالاسم + استثناء) =====
+  // اللي بيحدد جمهور (إعلان، سياسة، مقال، استبيان، موديول، دورة، مهمة…) بياخد شجرة نطاقه وموظفينه الحاليين بأسمائهم عشان يختار
+  // ويستثني بالاسم — بنطاق فروعه بس (الخادم هو اللي بيفرض النطاق).
+  @Get('org/audience-context')
+  @Perm(...ORG_AUDIENCE_PERMS)
+  audienceContext(@CurrentUser() user: JwtPayload) {
+    return this.org.audienceContext(branchScopeOf(user))
+  }
+
+  // المعاينة قبل الحفظ: «N موظف» وأسماؤهم بنفس المقيّم اللي هيحكم بعد الحفظ، وجوه نطاق فروع الحساب. الجسم خام والحكم في الخدمة
+  @Post('org/audience-preview')
+  @HttpCode(200)
+  @Perm(...ORG_AUDIENCE_PERMS)
+  audiencePreview(@CurrentUser() user: JwtPayload, @Body() body: unknown) {
+    const raw = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {}
+    return this.org.audiencePreview(branchScopeOf(user), raw.audience)
   }
 
   // ===== الفرق =====

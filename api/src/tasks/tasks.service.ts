@@ -13,6 +13,8 @@ import { OnboardingService } from '../onboarding/onboarding.service'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
+import { audienceMembersNow } from '../org/audience-preview'
+import { assertAudienceTargets, orgAudienceJson } from '../org/org-audience'
 import { recordOutboxEvent } from '../queue/outbox'
 import { ApproverResolver, FUNCTIONAL_APPROVER_ROLES } from '../requests/approver-resolver.service'
 import { completeExecution, executionOwnRequest, executionRequestOfTask, executionRequestsOfTasks, executionTaskLinked, EXECUTION_TASK_CANCEL_BLOCKED, EXECUTION_TASK_CLOSE_BLOCKED, EXECUTION_TASK_EDIT_BLOCKED, EXECUTION_TASK_OWN_BLOCKED, EXECUTION_TASK_REOPEN_BLOCKED } from '../requests/execution-tasks'
@@ -51,6 +53,9 @@ const LIST_LIMIT = 500
 const TEAM_CLOSED_DAYS = 14
 // تقرير الالتزام: الفترة الافتراضية وأقصى فترة (أيام)، وأقصى مهام بتتعدّ
 const REPORT_DEFAULT_DAYS = 90, REPORT_MAX_DAYS = 366, REPORT_TASKS_MAX = 5000
+// B-ADD.1: المهمة الجماعية
+export const TASK_GROUP_MAX = 300
+export const TASK_GROUP_RULE = 'المهمة الجماعية لصاحب صلاحية «إدارة المهام» أو «تكليف أي موظف» — في نطاق فروعه'
 
 export interface TaskInput {
   title?: string
@@ -231,6 +236,8 @@ export class TasksService {
     const branchName = new Map(branches.map(branch => [branch.id, branch.name]))
     return {
       available: await this.ready(), canManage, canAssign: scoped || all.length > 0,
+      // B-ADD.1: المهمة الجماعية (بالاستهداف الموحد) لصاحب صلاحية بنطاق
+      canAssignGroup: scoped,
       employees: all.map(row => ({ id: row.id, fullName: row.fullName, employeeCode: row.employeeCode, jobTitle: row.jobTitle ?? null, branchName: branchName.get(row.branchId) ?? null,
         // نفسي: مهمة شخصية (تذكير) بيشوفها صاحبها ومديره المباشر بس
         self: self && row.id === user.employeeId })),
@@ -335,6 +342,53 @@ export class TasksService {
       return row
     })
     return (await this.views(user, [saved]))[0]
+  }
+
+  // ===== B-ADD.1: المهمة الجماعية — نفس المهمة لكل موظف في جمهور بالاستهداف الموحد =====
+  /**
+   * لصاحب «إدارة المهام» أو «تكليف أي موظف» بس، وجوه نطاق فروعه: الجمهور (الشركة ← فرع ← إدارة ← قسم ← فريق ← موظفين بالاسم، ومعاه
+   * «الكل ماعدا…») بيتفك لموظفينه الحاليين دلوقتي، وكل واحد بياخد مهمته هو (مهمة عادية بكل قواعدها: إشعار، سجل، إثبات، تقييم) بحكم
+   * التكليف الفردي نفسه (assignment). اللي بيكلّف مش من المكلَّفين (مهمته لنفسه شخصية ومن شاشتها)، واللي مش على رأس العمل بيتخطّى
+   * وبيرجع في «اتخطّوا». كله في معاملة واحدة: يا الكل يا ولا مهمة.
+   */
+  async createForGroup(user: JwtPayload, input: TaskInput & { audience?: unknown }) {
+    if (!(await this.ready())) throw new BadRequestException(TASKS_MIGRATION_MISSING)
+    if (!userHasPerm(user, 'tasks.manage') && !userHasPerm(user, 'tasks.assign_any')) throw new ForbiddenException(TASK_GROUP_RULE)
+    const title = this.cleanTitle(input.title)
+    const description = this.cleanText(input.description, 2000)
+    const dueDate = this.cleanDueDate(input.dueDate)
+    const audience = orgAudienceJson(input.audience, 'جمهور المهمة')
+    const ratingOn = input.needsRating === true && await this.ratingOn()
+    const now = new Date()
+    return this.ds.transaction(async em => {
+      await assertAudienceTargets(em, audience, 'جمهور المهمة')
+      const members = (await audienceMembersNow(em, audience, branchScopeOf(user))).filter(member => member.id !== user.employeeId)
+      if (!members.length) throw new BadRequestException('مفيش موظفين في الجمهور ده جوه نطاقك')
+      if (members.length > TASK_GROUP_MAX) throw new BadRequestException(`المهمة الجماعية لـ${TASK_GROUP_MAX} موظف بالكتير — قسّم الجمهور`)
+      const repo = em.getRepository(Task)
+      const created: Task[] = [], skipped: Array<{ employeeId: number; fullName: string; reason: string }> = []
+      for (const member of members) {
+        let assignment: Awaited<ReturnType<TasksService['assignment']>>
+        try { assignment = await this.assignment(user, { assigneeEmployeeId: member.id }, em) } catch (error) {
+          if (!(error instanceof BadRequestException) && !(error instanceof NotFoundException) && !(error instanceof ForbiddenException)) throw error
+          skipped.push({ employeeId: member.id, fullName: member.fullName, reason: [].concat((error.getResponse() as { message?: unknown })?.message as never ?? error.message).join('، ') })
+          continue
+        }
+        const { personal, ...target } = assignment
+        const needsRating = await this.ratingFlag(input.needsRating, { ...target, personal }, ratingOn, em)
+        const row = await repo.save(repo.create({
+          title, description, ...target, createdByUserId: user.sub, dueDate, priority: (input.priority ?? 'NORMAL') as TaskPriority, status: 'OPEN',
+          requiresProof: input.requiresProof === true, proofNote: null, proofFileId: null, statusNote: null, closedByUserId: null, closedAt: null,
+          remindedAt: null, escalatedAt: null, createdAt: now, updatedAt: now,
+        }))
+        if (needsRating) await writeTaskExtras(em, row.id, { isPersonal: false, needsRating })
+        await this.recordEvent(em, 'TASK_ASSIGNED', row)
+        await recordTaskLog(em, user, row, 'ASSIGNED', 'كلّف بالمهمة (مهمة جماعية)')
+        created.push(row)
+      }
+      if (!created.length) throw new BadRequestException('ولا موظف في الجمهور ده ينفع يتكلّف دلوقتي')
+      return { created: created.length, taskIds: created.map(row => row.id), skipped }
+    })
   }
 
   // حدث المهمة في نفس معاملة تغييرها — مراجع بس (زي أحداث الطلبات). حدثي التذكير والتأخير بيشيلوا كمان رقم ختم المهمة اللي اتسجّل معاهم

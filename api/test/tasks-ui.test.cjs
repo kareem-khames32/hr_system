@@ -79,7 +79,10 @@ test('TU-03: كارت المهمة ونموذج التكليف — الأزرا�
   assert.match(files, /else if \(f\.entityType === 'task'\) \{[\s\S]{0,260}await assertTaskFileAccess\(this\.ds\.manager, user, f\)/)
   const form = read('src/components/tasks/TaskFormModal.tsx')
   // مهمة الدور لصاحب «إدارة المهام» بس، والمسؤول بيتبعت في التعديل لما يتغيّر
-  assert.match(form, /\{assignees\.canManage && \(\s*<div className="flex gap-4 text-sm" role="radiogroup"/)
+  // B-ADD.1: الاختيار بيظهر كمان للي يقدر يعمل مهمة جماعية؛ و«دور» لسه لصاحب «إدارة المهام» بس
+  assert.match(form, /\{\(assignees\.canManage \|\| canGroup\) && \(\s*<div className="flex gap-4 flex-wrap text-sm" role="radiogroup"/)
+  assert.match(form, /\{assignees\.canManage && <label className="flex items-center gap-2"><input type="radio" name="task-target" checked=\{target === 'role'\}/)
+  assert.match(form, /const canGroup = !task && !!assignees\.canAssignGroup/)
   assert.match(form, /if \(!task \|\| !\(sameEmployee \|\| sameRole\)\) \{/)
   assert.match(form, /<EmployeePicker id="task-assignee" employees=\{options\}/)
 })
@@ -101,7 +104,8 @@ test('TU-04: قايمة المهام والقايمة الجانبية والع�
   // وبيتحدّث بعد أي تغيير في المهام من غير انتقال: الشاشتين بيعلنوا، والقايمة بتسمع
   assert.match(sidebar, /window\.addEventListener\(TASKS_CHANGED_EVENT, bump\)/)
   assert.match(read('src/app/my/tasks/page.tsx'), /notifyTasksChanged\(\)\s+void load\(\)/)
-  assert.equal((read('src/app/tasks/page.tsx').match(/notifyTasksChanged\(\); void load\(\)/g) ?? []).length, 2)
+  // B-ADD.1: ومعاهم بعد المهمة الجماعية
+  assert.equal((read('src/app/tasks/page.tsx').match(/notifyTasksChanged\(\); void load\(\)/g) ?? []).length, 3)
   // العدّاد داخل في اعتماديات القايمة (من غيره الرقم بيتحمّل ومابيظهرش)
   // (B2.6-ب زوّد delegationEntry على نفس السطر: بند «بانتظار موافقتي» للمعتمد الهيكلي)
   assert.match(sidebar, /\}, \[currentUser, inboxCount, inboxError, delegationEntry, payrollApprovals, tasksCount, teamManager, raisesOpen, enabledModules\]\)/)
@@ -176,7 +180,7 @@ test('TU-05: قواعد المالك في الشاشات — الأزرار من
   assert.match(form, /\{self && <p className="text-xs text-gray-500 mt-1" data-task-personal-hint>مهمة شخصية: بتظهر لك ولمديرك المباشر بس\.<\/p>\}/)
   assert.match(form, /\{!assignees\.canManage && \(\s+<p className="text-xs text-gray-500 mt-1" data-task-outside-hint>\s+تقدر تكلّف نفسك وأي حد تحتك في الهيكل\. حد مش في فريقك؟ <a href="\/requests" className="text-primary-600 underline">اعمل طلب<\/a>، ولما يتعتمد هيتحوّل مهمة\./)
   // علامة «تحتاج تقييم»: الميزة مفتوحة، والمهمة على موظف غير اللي بيكلّف — وبتتبعت لما الميزة مفتوحة بس
-  assert.match(form, /const canFlagRating = !!assignees\.ratingEnabled && target === 'employee' && !self/)
+  assert.match(form, /const canFlagRating = !!assignees\.ratingEnabled && \(target === 'group' \|\| \(target === 'employee' && !self\)\)/)
   assert.match(form, /\{canFlagRating && \(\s+<label className="flex items-center gap-2 text-sm text-gray-700" data-task-needs-rating>/)
   assert.match(form, /\.\.\.\(assignees\.ratingEnabled \? \{ needsRating: canFlagRating && needsRating \} : \{\}\) \}/)
 

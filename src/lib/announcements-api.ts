@@ -15,7 +15,12 @@ export type AnnouncementStatus = 'DRAFT' | 'PUBLISHED' | 'WITHDRAWN'
 export const ANNOUNCEMENT_STATUS_LABELS: Record<AnnouncementStatus, string> = { DRAFT: 'مسودة', PUBLISHED: 'منشور', WITHDRAWN: 'مسحوب' }
 /** جمهور الإعلان بصيغة جمهور أنواع الطلبات: null = كل الشركة */
 export type AnnouncementAudience = { mode?: string; ids?: Array<number | string>; where?: { mode?: string; ids?: Array<number | string> } | null } | null
-export interface ManagedAnnouncement extends AnnouncementItem { status: AnnouncementStatus; audience: AnnouncementAudience; createdAt: string; publishedAt: string | null }
+export interface ManagedAnnouncement extends AnnouncementItem { status: AnnouncementStatus; audience: AnnouncementAudience; createdAt: string; publishedAt: string | null
+  /** B-ADD.4: للإعلان المنشور — جمهوره الحالي في نطاق القارئ، وقرا منهم كام */
+  readStats?: { audience: number; read: number } | null }
+/** نسبة القراءة كنص: «12 من 40 (30%)» */
+export const readStatsText = (stats: { audience: number; read: number } | null | undefined): string =>
+  !stats ? '—' : stats.audience === 0 ? 'مفيش جمهور' : `${stats.read} من ${stats.audience} (${Math.round((stats.read / stats.audience) * 100)}%)`
 export interface AnnouncementInput {
   title: string; body: string; audience: AnnouncementAudience; publishDate?: string | null; expiryDate?: string | null; pinned?: boolean; requiresRead?: boolean
   /** رقم ملف مرفوع بتصنيف «announcement» (null = من غير مرفق) */

@@ -5,15 +5,17 @@ import { MainLayout } from '@/components/layout'
 import { Cake, CheckCircle2, Megaphone, Paperclip, Pin } from 'lucide-react'
 import { can, fetchFileObjectUrl, uploadFile } from '@/lib/api'
 import { useFeatureEnabled } from '@/lib/modules'
-import { loadOrgFilterContext } from '@/lib/org-filter'
+import { OrgAudienceField } from '@/components/OrgAudienceField'
+import { describeAudience, fetchOrgAudienceContext, type OrgAudienceContext, type StoredAudience } from '@/lib/org-audience'
 import {
-  ANNOUNCEMENT_OCCASIONS_FEATURE, ANNOUNCEMENT_STATUS_LABELS, announcementAudienceText, branchesAudience, createAnnouncement, fetchAnnouncementOccasions,
-  fetchAnnouncementReport, fetchAnnouncements, fetchAnnouncementsBoard, markAnnouncementRead, occasionDayText, publishAnnouncement, withdrawAnnouncement,
-  type AnnouncementAttachment, type AnnouncementOccasions, type AnnouncementReport, type BoardAnnouncement, type ManagedAnnouncement,
+  ANNOUNCEMENT_OCCASIONS_FEATURE, ANNOUNCEMENT_STATUS_LABELS, createAnnouncement, fetchAnnouncementOccasions,
+  fetchAnnouncementReport, fetchAnnouncements, fetchAnnouncementsBoard, markAnnouncementRead, occasionDayText, publishAnnouncement, readStatsText, withdrawAnnouncement,
+  type AnnouncementAttachment, type AnnouncementInput, type AnnouncementOccasions, type AnnouncementReport, type BoardAnnouncement, type ManagedAnnouncement,
 } from '@/lib/announcements-api'
 
 // B2.16: الإعلانات — اللوحة لكل موظف (الإعلانات السارية اللي هو في جمهورها، المثبّت أولًا)، وقسم الإدارة للي معاه «إدارة الإعلانات»
-// (مسودة ← نشر ← سحب، وتقرير مين قرا). الجمهور من الشاشة: كل الشركة أو فروع محددة.
+// (مسودة ← نشر ← سحب، وتقرير مين قرا). الجمهور من الشاشة بالاستهداف الموحد (B-ADD.1): الشركة كلها ← فرع ← إدارة ← قسم ← فريق ←
+// موظفين بالاسم، مع «الكل ماعدا…» ومعاينة العدد والأسماء قبل الحفظ.
 // B2.16-ب: مرفق واحد للإعلان (بيترفع مع المسودة وبيتفتح بحكم الإعلان)، وكارت «مناسبات الأسبوع» لما ميزته مفتوحة.
 export default function AnnouncementsPage() {
   const [board, setBoard] = useState<BoardAnnouncement[] | null>(null)
@@ -21,9 +23,9 @@ export default function AnnouncementsPage() {
   const [busy, setBusy] = useState(false)
   const [manager, setManager] = useState(false)
   const [managed, setManaged] = useState<{ available: boolean; message: string | null; items: ManagedAnnouncement[] } | null>(null)
-  const [branches, setBranches] = useState<Array<{ id: number; name: string }>>([])
+  const [orgContext, setOrgContext] = useState<OrgAudienceContext | null>(null)
   const [report, setReport] = useState<AnnouncementReport | null>(null)
-  const [form, setForm] = useState({ title: '', body: '', branchIds: [] as number[], publishDate: '', expiryDate: '', pinned: false, requiresRead: false })
+  const [form, setForm] = useState({ title: '', body: '', audience: null as StoredAudience | null, audienceComplete: true, publishDate: '', expiryDate: '', pinned: false, requiresRead: false })
   const [attachment, setAttachment] = useState<{ id: number; name: string } | null>(null)
   const [occasions, setOccasions] = useState<AnnouncementOccasions | null>(null)
   const occasionsOn = useFeatureEnabled(ANNOUNCEMENT_OCCASIONS_FEATURE)
@@ -37,7 +39,7 @@ export default function AnnouncementsPage() {
     setManager(manages)
     if (manages) {
       loadManaged()
-      loadOrgFilterContext().then((context) => setBranches(context.branches)).catch(() => undefined)
+      fetchOrgAudienceContext().then(setOrgContext).catch(() => undefined)
     }
   }, [])
   // المناسبات: لما الميزة الفرعية مفتوحة بس (مسارها مش موجود وهي مقفولة)
@@ -60,9 +62,9 @@ export default function AnnouncementsPage() {
     }
   }
   const save = () => run(async () => {
-    await createAnnouncement({ title: form.title, body: form.body, audience: branchesAudience(form.branchIds), publishDate: form.publishDate || null,
+    await createAnnouncement({ title: form.title, body: form.body, audience: form.audience as AnnouncementInput['audience'], publishDate: form.publishDate || null,
       expiryDate: form.expiryDate || null, pinned: form.pinned, requiresRead: form.requiresRead, ...(attachment ? { attachmentFileId: attachment.id } : {}) })
-    setForm({ title: '', body: '', branchIds: [], publishDate: '', expiryDate: '', pinned: false, requiresRead: false })
+    setForm({ title: '', body: '', audience: null, audienceComplete: true, publishDate: '', expiryDate: '', pinned: false, requiresRead: false })
     setAttachment(null)
   })
   // المرفق: بيترفع بتصنيف «announcement» وبيتربط بالمسودة عند الحفظ
@@ -84,8 +86,6 @@ export default function AnnouncementsPage() {
       <Paperclip size={14} className="shrink-0" /> {file.name}
     </button>
   )
-  const toggleBranch = (id: number) => setForm((current) => ({ ...current, branchIds: current.branchIds.includes(id) ? current.branchIds.filter((item) => item !== id) : [...current.branchIds, id] }))
-  const branchName = (id: number) => branches.find((branch) => branch.id === id)?.name
   const field = 'w-full rounded-lg border border-gray-200 px-3 py-2 text-sm'
 
   return (
@@ -160,14 +160,9 @@ export default function AnnouncementsPage() {
                   <textarea value={form.body} maxLength={4000} rows={4} onChange={(e) => setForm({ ...form, body: e.target.value })} className={field} />
                 </label>
                 <div className="md:col-span-2">
-                  <span className="text-xs text-gray-500">لمين (من غير اختيار = كل الشركة)</span>
-                  <div className="flex flex-wrap gap-2 mt-1">
-                    {branches.map((branch) => (
-                      <label key={branch.id} className="flex items-center gap-1 text-sm bg-gray-50 rounded-lg px-2 py-1">
-                        <input type="checkbox" checked={form.branchIds.includes(branch.id)} onChange={() => toggleBranch(branch.id)} />
-                        {branch.name}
-                      </label>
-                    ))}
+                  <div className="mt-1" data-announcement-audience>
+                    <OrgAudienceField value={form.audience} disabled={busy}
+                      onChange={(audience, complete) => setForm((current) => ({ ...current, audience, audienceComplete: complete }))} />
                   </div>
                 </div>
                 <label className="block">
@@ -193,7 +188,7 @@ export default function AnnouncementsPage() {
                   )}
                 </div>
                 <div className="md:col-span-2">
-                  <button type="button" onClick={save} disabled={busy || form.title.trim().length < 2 || !form.body.trim()} className="btn-primary disabled:opacity-50">حفظ كمسودة</button>
+                  <button type="button" onClick={save} disabled={busy || form.title.trim().length < 2 || !form.body.trim() || !form.audienceComplete} className="btn-primary disabled:opacity-50">حفظ كمسودة</button>
                 </div>
               </div>
             )}
@@ -206,6 +201,7 @@ export default function AnnouncementsPage() {
                       <th className="py-2 px-2 font-medium">لمين</th>
                       <th className="py-2 px-2 font-medium">النشر / الانتهاء</th>
                       <th className="py-2 px-2 font-medium">الحالة</th>
+                      <th className="py-2 px-2 font-medium">القراءة</th>
                       <th className="py-2 px-2 font-medium">إجراءات</th>
                     </tr>
                   </thead>
@@ -213,9 +209,11 @@ export default function AnnouncementsPage() {
                     {managed.items.map((item) => (
                       <tr key={item.id} className="border-b border-gray-50">
                         <td className="py-2 px-2 text-gray-800">{item.title}{item.pinned ? ' 📌' : ''}{item.attachment && <div>{attachmentLink(item.attachment)}</div>}</td>
-                        <td className="py-2 px-2 text-gray-600">{announcementAudienceText(item.audience, branchName)}</td>
+                        <td className="py-2 px-2 text-gray-600">{describeAudience(item.audience as StoredAudience | null, orgContext)}</td>
                         <td className="py-2 px-2 text-gray-600"><bdi>{item.publishDate}</bdi>{item.expiryDate ? <> ← <bdi>{item.expiryDate}</bdi></> : null}</td>
                         <td className="py-2 px-2">{ANNOUNCEMENT_STATUS_LABELS[item.status] ?? item.status}</td>
+                        {/* B-ADD.4: نسبة القراءة من جمهور الإعلان الحالي */}
+                        <td className="py-2 px-2 text-gray-600 whitespace-nowrap" data-announcement-read-stats={item.id}>{item.status === 'PUBLISHED' ? readStatsText(item.readStats) : '—'}</td>
                         <td className="py-2 px-2">
                           <div className="flex flex-wrap gap-2">
                             {item.status === 'DRAFT' && <button type="button" disabled={busy} onClick={() => run(() => publishAnnouncement(item.id))} className="btn-primary">نشر</button>}
@@ -234,17 +232,18 @@ export default function AnnouncementsPage() {
             {report && (
               <div className="rounded-xl bg-gray-50 p-3 space-y-2" data-announcement-report>
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="font-medium text-gray-800">تقرير القراءة: {report.announcement.title} — قرا {report.summary.read} من {report.summary.audience}</p>
+                  <p className="font-medium text-gray-800">تقرير القراءة: {report.announcement.title} — قرا {readStatsText(report.summary)}
+                    {report.summary.audience > report.summary.read && <span className="text-amber-700"> — لسه ماقراش {report.summary.audience - report.summary.read}</span>}</p>
                   <button type="button" onClick={() => setReport(null)} className="text-sm text-gray-500 hover:text-gray-700">إغلاق</button>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <tbody>
-                      {report.rows.map((row) => (
+                      {[...report.rows].sort((a, b) => Number(!!a.readAt) - Number(!!b.readAt)).map((row) => (
                         <tr key={row.employeeId} className="border-b border-gray-100">
                           <td className="py-1.5 px-2 text-gray-800">{row.fullName} <span className="text-xs text-gray-400"><bdi>{row.employeeCode}</bdi></span></td>
                           <td className="py-1.5 px-2 text-gray-600">{row.branchName ?? '—'}</td>
-                          <td className="py-1.5 px-2">{row.readAt ? <span className="text-success-700">قرا <bdi>{String(row.readAt).slice(0, 10)}</bdi></span> : <span className="text-gray-400">لسه</span>}</td>
+                          <td className="py-1.5 px-2">{row.readAt ? <span className="text-success-700">قرا <bdi>{String(row.readAt).slice(0, 10)}</bdi></span> : <span className="text-amber-700 font-medium">لسه ماقراش</span>}</td>
                         </tr>
                       ))}
                     </tbody>

@@ -110,7 +110,7 @@ test('AU-02: the module, its permission, guarded routes, writes under the row lo
   assert.match(mark, /WHERE NOT EXISTS \(SELECT 1 FROM \[announcement_reads\] WITH \(UPDLOCK, HOLDLOCK\) WHERE \[announcementId\] = @0 AND \[employeeId\] = @1\)/)
   assert.match(service, /lock \? \{ lock: \{ mode: 'pessimistic_read' as const \} \} : \{\}/)
   // الجمهور: مقيّم أنواع الطلبات نفسه، ومقفول على النص التالف، ومدير النظام مش بدوره
-  assert.match(service, /return announcementAudienceIntact\(row\.audience\) && requestAudienceAllows\(row\.audience, this\.subject\(employee, role, positions\), 'submit'\)/)
+  assert.match(service, /return announcementAudienceIntact\(row\.audience\) && requestAudienceAllows\(row\.audience, this\.subject\(employee, role, org\), 'submit'\)/)
   assert.match(service, /role: role && role !== 'super_admin' \? role : null, permissions: \[\]/)
   // النشر: حدث «إعلان اتنشر» في معاملة النشر نفسها، ولما تاريخ النشر وصل بس
   const publish = service.slice(service.indexOf('async publish('), service.indexOf('async withdraw('))
