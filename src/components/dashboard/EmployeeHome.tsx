@@ -40,6 +40,7 @@ import {
 } from '@/data/requestsCatalog'
 import { useModuleEnabled } from '@/lib/modules'
 import { MyLiveSalaryCard } from '@/components/payroll/MyLiveSalaryCard'
+import { MyAnnouncementsCard } from '@/components/dashboard/MyAnnouncementsCard'
 
 // حالة يوم الحضور كما يحسبها السيرفر
 const dayStatusLabels: Record<string, string> = {
@@ -274,6 +275,9 @@ export default function EmployeeHome() {
           )}
         </div>
       </div>
+
+      {/* B-ADD.4: الإعلانات فوق — المثبّت أولًا، و«جديد» لحد ما يتفتح، و«قريت» للي عليه إقرار */}
+      {user?.employeeId && <MyAnnouncementsCard />}
 
       {loading ? (
         <div className="card flex items-center justify-center py-16">
