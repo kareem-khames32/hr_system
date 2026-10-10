@@ -227,6 +227,16 @@ async function audienceMember(em: EntityManager, employee: Employee, branchId: n
   return { ...member, teamId: at.teamId, departmentPath: departmentPathOf(at.departmentId, payrollDepartmentParentOf(history)) }
 }
 
+/**
+ * B-ADD.2: مكان الموظف في يوم لجمهور فترة الإضافي — نفس مصادر العطلة المخصصة (audienceMember فوق): الفرع المؤرخ ليوم العمل، والقسم
+ * والفريق من سجل التنظيم في اليوم نفسه، ومسار القسم جوه فرعه. بيتنادى بس لما فيه فترة جمهورها أقسام أو فرق بتغطي اليوم.
+ */
+export async function employeeAudienceMemberOn(em: EntityManager, employee: Employee, branchId: number, date: string): Promise<HolidayAudienceMember> {
+  const history = await loadPayrollOrgHistory(em, attendanceRuleToday(), employee.id)
+  const at = payrollOrgAt(history, employee, date)
+  return { employeeId: employee.id, branchId, teamId: at.teamId, departmentPath: departmentPathOf(at.departmentId, payrollDepartmentParentOf(history)) }
+}
+
 export async function resolveEmployeeCalendarDay(em: EntityManager, employeeId: number, date: string, options: Options = {}): Promise<ResolvedCalendarDay> {
   attendanceRuleDate(date)
   if (!idValid(employeeId)) throw new BadRequestException('موظف التقويم مطلوب')

@@ -1,5 +1,6 @@
 import {
   Column,
+  PrimaryColumn,
   CreateDateColumn,
   Entity,
   Index,
@@ -300,6 +301,18 @@ export class ScheduleExceptionRule {
 
   @Column({ default: true })
   isActive: boolean
+}
+
+// B-ADD.2 (ترحيل 186): جمهور فترة الإضافي — «على مين؟» بالاستهداف الموحد (فرع ← إدارة ← قسم ← فريق ← موظفين بالاسم + «الكل ماعدا…»)
+// بنفس شكل «تسري على» للعطلة (holiday-audience). جدول لوحده مش عمود على الفترة: قبل الترحيل الفترات بتشتغل زي ما هي بالحرف،
+// والفترة اللي مالهاش صف هنا = فرعها كله (أو كل الفروع) زي زمان.
+@Entity('overtime_period_audiences')
+export class OvertimePeriodAudience {
+  @PrimaryColumn({ type: 'int', primaryKeyConstraintName: 'PK_overtime_period_audiences' })
+  periodId: number
+
+  @Column({ type: 'nvarchar', length: 'MAX' })
+  audience: string
 }
 
 // فترات فتح/قفل احتساب الأوفرتايم بالتواريخ — تتقدّم على المفتاح العام

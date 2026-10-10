@@ -3,6 +3,7 @@ import type { EntityManager } from 'typeorm'
 import { inBranchScope, scopeWord } from '../auth/guards'
 import type { BranchScope } from '../auth/guards'
 import { branchLocalParentOf } from '../org/department-tree'
+import { isMember } from '../org/org-audience'
 
 // «تسري على» للعطلة الرسمية (طلب المالك 26 سبتمبر: «اقدر اخصص الاجازات الرسمية علي ناس معينه» — ترحيل 070).
 // NULL = للكل: السلوك القديم بالحرف لكل العطلات الموجودة. غير كده نفس ترتيب منتقي الاستهداف الموحّد:
@@ -14,13 +15,21 @@ import { branchLocalParentOf } from '../org/department-tree'
 //   {"level":"employees","branchId":3,"employeeIds":[11,12]}      ← الموظف برقمه مهما اتنقل
 // فرع الأقسام/الفرق/الموظفين هو فرع الاختيار في المنتقي (للعرض والتعديل)؛ المطابقة نفسها بالقسم/الفريق/رقم الموظف.
 // اللي مش مشمول بعطلة مخصصة اليوم ده عنده يوم عادي: شغل ← غياب لو مابصمش، والإجازة بتعدّه.
+// B-ADD.2 (الاستهداف الموحد — إضافات المالك 11 أكتوبر): «الكل ماعدا…» — مفتاح اختياري excludeEmployeeIds (بيتكتب لما يكون فيه
+// مستثنين بس، فكل المحفوظ قبل كده بنفس نصه وبصمته):
+//   {"level":"departments","branchId":3,"departmentIds":[5],"excludeEmployeeIds":[12]}
+// الاستثناء جوه فرع (الفرع كله أو أقسامه أو فرقه): كل قراء العطلة المخصصة مبنيين على فرعها، فـ«الشركة كلها ماعدا…» مش من الشكل ده.
+// «الإدارة» وحدة في شجرة الأقسام: اختيارها = رقمها في departmentIds (القسم بيشمل اللي تحته جوه فرعه من الأول).
+// ونفس الشكل بيتخزن لجمهور فترة الإضافي (overtime_period_audiences — ترحيل 186).
 export const HOLIDAY_AUDIENCE_LEVELS = ['branch', 'departments', 'teams', 'employees'] as const
 export type HolidayAudienceLevel = typeof HOLIDAY_AUDIENCE_LEVELS[number]
+type Excluding = { excludeEmployeeIds?: number[] }
 export type HolidayAudience =
-  | { level: 'branch'; branchId: number }
-  | { level: 'departments'; branchId: number; departmentIds: number[] }
-  | { level: 'teams'; branchId: number; teamIds: number[] }
-  | { level: 'employees'; branchId: number; employeeIds: number[] }
+  | ({ level: 'branch'; branchId: number } & Excluding)
+  | ({ level: 'departments'; branchId: number; departmentIds: number[] } & Excluding)
+  | ({ level: 'teams'; branchId: number; teamIds: number[] } & Excluding)
+  | ({ level: 'employees'; branchId: number; employeeIds: number[] })
+export const HOLIDAY_AUDIENCE_MAX_EXCLUDED = 500
 export const HOLIDAY_AUDIENCE_MAX_IDS = 5000
 const LIST_KEYS = { departments: 'departmentIds', teams: 'teamIds', employees: 'employeeIds' } as const
 type ListLevel = keyof typeof LIST_KEYS
@@ -42,19 +51,33 @@ export function normalizeHolidayAudience(value: unknown, fail: (message: string)
   if (value === null || value === undefined) return null
   if (!plain(value)) return fail('تخصيص العطلة غير صالح')
   const level = value.level
+  // B-ADD.2: المستثنين — مفتاح اختياري؛ لو موجود لازم قايمة غير فاضية (القايمة الفاضية مابتتكتبش، عشان النص القانوني واحد)
+  const excluded = (): number[] | undefined => {
+    if (!Object.prototype.hasOwnProperty.call(value, 'excludeEmployeeIds')) return undefined
+    const list = value.excludeEmployeeIds
+    if (!Array.isArray(list) || !list.length || list.length > HOLIDAY_AUDIENCE_MAX_EXCLUDED) return fail('قائمة المستثنين من العطلة فاضية أو أطول من المسموح')
+    const out = list.map(id => idOf(id) ?? fail('رقم موظف مستثنى من العطلة غير صالح'))
+    if (new Set(out).size !== out.length) return fail('رقم مكرر في المستثنين من العطلة')
+    return out.sort((a, b) => a - b)
+  }
+  const sameKeys = (keys: string[]) => Object.keys(value).filter(key => key !== 'excludeEmployeeIds').sort().join('|') === [...keys].sort().join('|')
   if (typeof level !== 'string' || !(HOLIDAY_AUDIENCE_LEVELS as readonly string[]).includes(level)) return fail('مستوى تخصيص العطلة غير صالح')
   const listKey = level === 'branch' ? null : LIST_KEYS[level as ListLevel]
   const keys = ['level', 'branchId', ...(listKey ? [listKey] : [])]
-  if (Object.keys(value).sort().join('|') !== [...keys].sort().join('|')) return fail('بنية تخصيص العطلة غير صالحة')
+  if (!sameKeys(keys)) return fail('بنية تخصيص العطلة غير صالحة')
   const branchId = idOf(value.branchId) ?? fail('فرع تخصيص العطلة غير صالح')
-  if (!listKey) return { level: 'branch', branchId }
+  const out = excluded()
+  const extra = out ? { excludeEmployeeIds: out } : {}
+  if (!listKey) return { level: 'branch', branchId, ...extra }
   const raw = value[listKey]
   if (!Array.isArray(raw) || !raw.length || raw.length > HOLIDAY_AUDIENCE_MAX_IDS) return fail('قائمة تخصيص العطلة فاضية أو أطول من المسموح')
   const ids = raw.map(id => idOf(id) ?? fail('رقم في تخصيص العطلة غير صالح'))
   if (new Set(ids).size !== ids.length) return fail('رقم مكرر في تخصيص العطلة')
   ids.sort((a, b) => a - b)
-  if (level === 'departments') return { level, branchId, departmentIds: ids }
-  if (level === 'teams') return { level, branchId, teamIds: ids }
+  if (level === 'departments') return { level, branchId, departmentIds: ids, ...extra }
+  if (level === 'teams') return { level, branchId, teamIds: ids, ...extra }
+  // موظفين بالاسم: القايمة نفسها هي الاختيار، فمفيش مستثنين معاها
+  if (out) return fail('الموظفين بالاسم مالهمش مستثنين — شيل الموظف من القايمة نفسها')
   return { level: 'employees', branchId, employeeIds: ids }
 }
 
@@ -84,20 +107,26 @@ export function holidayAudienceFromInput(value: unknown): HolidayAudience | null
   const bad = (message: string): never => { throw new BadRequestException(message) }
   if (value === null || value === undefined) return null
   if (!plain(value)) return bad('«تسري على» غير صالحة')
-  if (value.level === 'company') return null
+  // B-ADD.2: «الكل ماعدا…» — القايمة الفاضية أو الغايبة = من غير مستثنين (والتكرار بيتشال)
+  const rawExcluded = value.excludeEmployeeIds
+  if (rawExcluded !== undefined && rawExcluded !== null && !Array.isArray(rawExcluded)) return bad('قائمة المستثنين غير صالحة')
+  const excluded = [...new Set((Array.isArray(rawExcluded) ? rawExcluded : []).map(id => idOf(id) ?? bad('رقم موظف مستثنى غير صالح')))]
+  if (excluded.length > HOLIDAY_AUDIENCE_MAX_EXCLUDED) return bad(`أقصى عدد للمستثنين ${HOLIDAY_AUDIENCE_MAX_EXCLUDED}`)
+  const extra = excluded.length ? { excludeEmployeeIds: excluded } : {}
+  if (value.level === 'company') return excluded.length ? bad('«الكل ماعدا…» للشركة كلها مش متاح هنا — اختار فرع واستثني منه') : null
   if (typeof value.level !== 'string' || !(HOLIDAY_AUDIENCE_LEVELS as readonly string[]).includes(value.level)) {
     return bad('اختار العطلة تسري على مين: الكل أو فرع أو أقسام أو فرق أو موظفين')
   }
   const level = value.level as HolidayAudienceLevel
   const branchId = idOf(value.branchId) ?? bad('اختار الفرع اللي العطلة تسري عليه')
-  if (level === 'branch') return { level, branchId }
+  if (level === 'branch') return normalizeHolidayAudience({ level, branchId, ...extra }, bad)
   const listKey = LIST_KEYS[level]
   const label = level === 'departments' ? 'قسم' : level === 'teams' ? 'فريق' : 'موظف'
   const raw = value[listKey]
   if (!Array.isArray(raw) || !raw.length) return bad(`اختار ${label} واحد على الأقل تسري عليه العطلة`)
   if (raw.length > HOLIDAY_AUDIENCE_MAX_IDS) return bad(`أقصى عدد في التخصيص ${HOLIDAY_AUDIENCE_MAX_IDS}`)
   const ids = [...new Set(raw.map(id => idOf(id) ?? bad(`رقم ${label} في «تسري على» غير صالح`)))]
-  return normalizeHolidayAudience({ level, branchId, [listKey]: ids }, bad)
+  return normalizeHolidayAudience({ level, branchId, [listKey]: ids, ...(level === 'employees' ? {} : extra) }, bad)
 }
 
 // ===== المطابقة =====
@@ -119,12 +148,10 @@ export interface HolidayAudienceMember {
 export function holidayAudienceMatches(audience: HolidayAudience | null | undefined, member: HolidayAudienceMember | null | undefined): boolean {
   if (!audience) return true
   if (!member) return false
-  if (audience.level === 'branch') return member.branchId !== null && member.branchId === audience.branchId
-  // الأقسام والفرق والموظفين بالاسم مابيغطوش فرع كامل — لموظف بعينه بس
-  if (member.employeeId === null) return false
-  if (audience.level === 'employees') return audience.employeeIds.includes(member.employeeId)
-  if (audience.level === 'teams') return member.teamId !== null && audience.teamIds.includes(member.teamId)
-  return member.departmentPath.some(id => audience.departmentIds.includes(id))
+  // B-ADD.1: الحكم بدالة العضوية الواحدة (isMember). فرع الاختيار قيد لمستوى الفرع بس — الأقسام (بمسارها جوه فرعها) والفرق
+  // والموظفين بالاسم بأرقامهم زي ما كانوا («الموظف برقمه مهما اتنقل»)؛ وفرع كامل (من غير موظف) مابيطابقش القوايم
+  return isMember({ level: audience.level, branchIds: audience.level === 'branch' ? [audience.branchId] : [], ids: holidayAudienceIds(audience),
+    excludeEmployeeIds: audience.level === 'employees' ? undefined : audience.excludeEmployeeIds }, member)
 }
 
 /** عطلة لأقسام أو فرق: حكمها محتاج قسم الموظف وفريقه في اليوم نفسه. */
@@ -178,16 +205,19 @@ const prefixed = (word: string, name: string) => name.startsWith(word) ? name : 
 /** وصف قصير: «للكل» / «فرع المعادي» / «فرع المعادي — قسم المبيعات» / «فرع المعادي — أقسام: المبيعات، المخازن» / «3 موظفين». */
 export function describeHolidayAudience(audience: HolidayAudience | null, names: HolidayAudienceNames = {}): string {
   if (!audience) return 'للكل'
+  // B-ADD.2: المستثنين في آخر الوصف
+  const except = audience.level !== 'employees' && audience.excludeEmployeeIds?.length
+    ? ` (ماعدا ${counted(audience.excludeEmployeeIds.length, 'موظف واحد', 'موظفين اتنين', 'موظفين', 'موظف')})` : ''
   const name = names.branches?.get(audience.branchId)?.trim()
   const branch = name ? prefixed('فرع', name) : `فرع #${audience.branchId}`
-  if (audience.level === 'branch') return branch
+  if (audience.level === 'branch') return `${branch}${except}`
   const list = (ids: number[], map: ReadonlyMap<number, string> | undefined, word: string, plural: string) => {
     const shown = ids.slice(0, 3).map(id => map?.get(id)?.trim() || `#${id}`)
     if (ids.length === 1) return prefixed(word, shown[0])
     return `${plural}: ${shown.join('، ')}${ids.length > 3 ? ` و${ids.length - 3} غيرهم` : ''}`
   }
-  if (audience.level === 'departments') return `${branch} — ${list(audience.departmentIds, names.departments, 'قسم', 'أقسام')}`
-  if (audience.level === 'teams') return `${branch} — ${list(audience.teamIds, names.teams, 'فريق', 'فرق')}`
+  if (audience.level === 'departments') return `${branch} — ${list(audience.departmentIds, names.departments, 'قسم', 'أقسام')}${except}`
+  if (audience.level === 'teams') return `${branch} — ${list(audience.teamIds, names.teams, 'فريق', 'فرق')}${except}`
   return counted(audience.employeeIds.length, 'موظف واحد', 'موظفين اتنين', 'موظفين', 'موظف')
 }
 
@@ -213,6 +243,15 @@ export async function assertHolidayAudienceTargets(em: EntityManager, audience: 
   if (!audience) {
     if (scope !== null) throw new ForbiddenException('العطلة اللي للكل بتتحط من حساب على مستوى الشركة بس')
     return
+  }
+  // B-ADD.2: المستثنين الجداد موظفين موجودين (اللي كانوا محفوظين قبل كده بيفضلوا مقبولين)
+  const excludedNow = audience.level === 'employees' ? [] : audience.excludeEmployeeIds ?? []
+  const excludedBefore = new Set(previous && previous.level !== 'employees' ? previous.excludeEmployeeIds ?? [] : [])
+  const freshExcluded = excludedNow.filter(id => !excludedBefore.has(id))
+  for (let index = 0; index < freshExcluded.length; index += 500) {
+    const chunk = freshExcluded.slice(index, index + 500)
+    const rows: Array<{ id: number }> = await em.query(`SELECT [id] FROM [employees] WHERE [id] IN (${inList(chunk, 0)})`, chunk)
+    if (rows.length !== chunk.length) throw new BadRequestException('في موظف مستثنى مش موجود')
   }
   if (!inBranchScope(scope, audience.branchId)) throw new ForbiddenException(`صلاحيتك على ${scopeWord(scope)} بس`)
   const [branch] = await em.query('SELECT [id] FROM [branches] WHERE [id] = @0', [audience.branchId])

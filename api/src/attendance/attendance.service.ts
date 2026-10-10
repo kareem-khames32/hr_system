@@ -48,6 +48,7 @@ import {
   AttendancePunch,
   AttendanceStatus,
   OvertimePeriod,
+  OvertimePeriodAudience,
   PermissionType,
   PunchSource,
   ScheduleDayOverride,
@@ -77,7 +78,10 @@ import { readStatutoryEntries } from '../statutory/statutory.service'
 import { appendOvertimeEvent, assertOvertimeDayAvailable, claimOvertimeDay, describeOvertimeSubmission, findActiveOvertimeEntries, releaseOvertimeDayClaim } from '../requests/overtime-day-claims'
 import { queueOvertimeDispatch } from '../requests/overtime-dispatch'
 import { holidayWorkCoversDay } from './holiday-work'
-import { createCalendarResolverCache, employeeHolidayName, resolveBranchCalendarDay, resolveEmployeeCalendarDay, resolveGlobalCalendarDay } from './attendance-calendar-resolver'
+import { assertHolidayAudienceTargets, describeHolidayAudience, holidayAudienceColumn, holidayAudienceFromInput, holidayAudienceMatches, holidayAudienceNames,
+  holidayAudienceNeedsOrg, parseHolidayAudienceColumn } from './holiday-audience'
+import type { HolidayAudience, HolidayAudienceMember } from './holiday-audience'
+import { createCalendarResolverCache, employeeAudienceMemberOn, employeeHolidayName, resolveBranchCalendarDay, resolveEmployeeCalendarDay, resolveGlobalCalendarDay } from './attendance-calendar-resolver'
 import { employmentOverlaps, employmentWindowOf, employmentWindowsOf, inEmploymentWindow, lastWorkingDaysOf, schedulableOn } from './attendance-employment'
 import type { EmploymentWindow } from './attendance-employment'
 import type { CalendarResolverCache, ResolvedCalendarDay } from './attendance-calendar-resolver'
@@ -112,6 +116,12 @@ export type AttendanceDayWithExemption = AttendanceDay & {
   // يوم إيقاف عن العمل بلا بصمة — مش غياب ومالوش صف محفوظ
   suspended?: boolean
 }
+
+// B-ADD.2: جدول جمهور فترات الإضافي (ترحيل 186). الموجود بيتحفظ (المخطط مابيتشالش)؛ الناقص بيتفحص مع كل نداء لحد ما الترحيل يتطبق
+let overtimeAudienceTableReady = false
+export const OVERTIME_AUDIENCE_MIGRATION_MISSING = 'تحديد «على مين؟» لفترة الإضافي محتاج ترحيل 20261011_186 على قاعدة البيانات'
+/** للاختبارات: نسيان حالة الجدول */
+export function resetOvertimeAudienceCache() { overtimeAudienceTableReady = false }
 
 // حدّ أمان صريح لمدى عدّ أيام العمل (سنة) — الأطول يُرفض برسالة بدل قصّه بصمت
 export const MAX_RANGE_DAYS = 366
@@ -612,23 +622,62 @@ export class AttendanceService {
 
   // ===== فترات فتح/قفل الأوفرتايم بالتواريخ =====
   // القرار: فترة تغطّي اليوم؟ CLOSED يحسم، وإلا OPEN يفتح، وإلا المفتاح العام
-  async isOvertimeOpen(date: string, branchId: number): Promise<boolean> {
-    return (await this.overtimeWindow(date, branchId)).open
+  async isOvertimeOpen(date: string, branchId: number, employeeId?: number): Promise<boolean> {
+    return (await this.overtimeWindow(date, branchId, employeeId)).open
   }
 
-  // الفترات الشغالة اللي بتغطي اليوم لفرع يوم العمل (أو «كل الفروع») — أساس النافذة والاعتماد التلقائي مع بعض
-  private async coveringOvertimePeriods(date: string, branchId: number) {
-    const periods = await this.overtimePeriods.find({ where: { isActive: true } })
-    return periods.filter(
+  // ===== B-ADD.2: جمهور فترة الإضافي (overtime_period_audiences — ترحيل 186) =====
+  // الفترة اللي ليها جمهور بتسري على اللي جوه جمهورها بس (بمكانه في يوم العمل)؛ واللي برّه الجمهور الفترة دي مش موجودة بالنسبة له
+  // (بيحكمه باقي الفترات أو الإعداد العام — السلوك الحالي). الفترة من غير صف جمهور = فرعها كله زي زمان، وقبل الترحيل مفيش جماهير.
+  private async overtimeAudiencesReady(): Promise<boolean> {
+    if (overtimeAudienceTableReady) return true
+    const [row] = await this.overtimePeriods.manager.query(`SELECT CASE WHEN OBJECT_ID(N'dbo.overtime_period_audiences', N'U') IS NOT NULL THEN 1 ELSE 0 END AS [ready]`)
+    overtimeAudienceTableReady = Number(row?.ready) === 1
+    return overtimeAudienceTableReady
+  }
+
+  /** جمهور كل فترة ليها جمهور. نص تالف = 'INVALID' (مايتقراش «للكل» أبدًا) */
+  private async overtimePeriodAudiences(periodIds: number[]): Promise<Map<number, HolidayAudience | 'INVALID'>> {
+    const out = new Map<number, HolidayAudience | 'INVALID'>()
+    if (!periodIds.length || !(await this.overtimeAudiencesReady())) return out
+    const rows = await this.overtimePeriods.manager.getRepository(OvertimePeriodAudience).find({ where: { periodId: In(periodIds) } })
+    for (const row of rows) {
+      try {
+        const audience = parseHolidayAudienceColumn(row.audience, message => { throw new Error(message) })
+        out.set(row.periodId, audience ?? 'INVALID')
+      } catch { out.set(row.periodId, 'INVALID') }
+    }
+    return out
+  }
+
+  // الفترات الشغالة اللي بتغطي اليوم لفرع يوم العمل (أو «كل الفروع») — أساس النافذة والاعتماد التلقائي مع بعض.
+  // B-ADD.2: والفترة اللي ليها جمهور لازم الموظف يكون جوه جمهورها في اليوم ده. جمهور تالف: الفترة المفتوحة مابتفتحش لحد، والمقفولة
+  // بتقفل فرعها كله (التالف مايفتحش إضافي). من غير موظف (سؤال عن فرع) = فترات الفرع كله بس.
+  private async coveringOvertimePeriods(date: string, branchId: number, employeeId?: number) {
+    const periods = (await this.overtimePeriods.find({ where: { isActive: true } })).filter(
       (p) =>
         (p.branchId == null || p.branchId === branchId) &&
         p.fromDate <= date &&
         p.toDate >= date
     )
+    if (!periods.length) return periods
+    const audiences = await this.overtimePeriodAudiences(periods.map(p => p.id))
+    if (!audiences.size) return periods
+    const employee = employeeId != null ? await this.employeeRow(employeeId) : null
+    const needsOrg = [...audiences.values()].some(audience => audience !== 'INVALID' && holidayAudienceNeedsOrg(audience))
+    const member: HolidayAudienceMember = !employee ? { employeeId: null, branchId, departmentPath: [], teamId: null }
+      : needsOrg ? await this.batched(`OVERTIME_MEMBER:${employee.id}:${branchId}:${date}`, () => employeeAudienceMemberOn(this.overtimePeriods.manager, employee, branchId, date))
+        : { employeeId: employee.id, branchId, departmentPath: [], teamId: null }
+    return periods.filter(p => {
+      const audience = audiences.get(p.id)
+      if (audience === undefined) return true
+      if (audience === 'INVALID') return p.effect === 'CLOSED'
+      return holidayAudienceMatches(audience, member)
+    })
   }
 
-  private async overtimeWindow(date: string, branchId: number): Promise<OvertimeEvidence['window']> {
-    const covering = await this.coveringOvertimePeriods(date, branchId)
+  private async overtimeWindow(date: string, branchId: number, employeeId?: number): Promise<OvertimeEvidence['window']> {
+    const covering = await this.coveringOvertimePeriods(date, branchId, employeeId)
     const closed = covering.filter(p => p.effect === 'CLOSED')
     const governing = (closed.length ? closed : covering.filter(p => p.effect === 'OPEN')).sort((a, b) => a.id - b.id)
     return { open: closed.length ? false : governing.length ? true : (await this.configValue('overtime.enabled', 'true')) === 'true',
@@ -674,7 +723,7 @@ export class AttendanceService {
     if (em && em !== this.days.manager) return this.inManager(em).overtimeAutoApproval(employeeId, date, evidence, undefined, now)
     if (!evidence.window.open || evidence.employeeId !== employeeId || evidence.workDate !== date) return null
     const calendar = await this.calendarDay(employeeId, date)
-    const covering = await this.coveringOvertimePeriods(date, calendar.branchId!)
+    const covering = await this.coveringOvertimePeriods(date, calendar.branchId!, employeeId)
     if (covering.some(p => p.effect === 'CLOSED')) return null
     const periods = covering.filter(p => p.effect === 'OPEN' && p.autoApprove).sort((a, b) => a.id - b.id)
     if (!periods.length || periods.some(p => !evidence.window.governingWindowIds.includes(p.id))) return null
@@ -716,12 +765,48 @@ export class AttendanceService {
   }
 
   // مستخدم فرع يشوف فترات «كل الفروع» وفترات فروعه بس
-  listOvertimePeriods(user?: JwtPayload) {
+  async listOvertimePeriods(user?: JwtPayload) {
     const scope = user ? branchScopeOf(user) : null
-    return this.overtimePeriods.find({
+    const periods = await this.overtimePeriods.find({
       where: scope === null ? {} : [{ branchId: IsNull() }, { branchId: branchIdIn(scope) }],
       order: { fromDate: 'DESC' },
     })
+    // B-ADD.2: جمهور كل فترة ووصفه («فرع المعادي — قسم المبيعات (ماعدا موظف واحد)») — الفترة من غير جمهور = فرعها كله
+    const audiences = await this.overtimePeriodAudiences(periods.map(p => p.id))
+    const names = audiences.size ? await holidayAudienceNames(this.overtimePeriods.manager) : {}
+    return periods.map(p => {
+      const audience = audiences.get(p.id)
+      return { ...p, audience: audience && audience !== 'INVALID' ? audience : null, audienceInvalid: audience === 'INVALID',
+        audienceText: audience === 'INVALID' ? 'جمهور الفترة تالف — عدّله' : audience ? describeHolidayAudience(audience, names) : null }
+    })
+  }
+
+  /**
+   * «على مين؟» من الشاشة لفترة إضافي: undefined = مااتبعتش؛ null (أو الشركة كلها) = من غير جمهور (فرع الفترة كله)؛ غير كده جمهور
+   * بفرعه وأرقامه متحقق منها (تبع الفرع وجوه نطاق الحساب). رسايل «تسري على» بتتقال باسم الفترة.
+   */
+  private async overtimePeriodAudienceInput(em: EntityManager, raw: unknown, user: JwtPayload | undefined, previous: HolidayAudience | null): Promise<HolidayAudience | null | undefined> {
+    if (raw === undefined) return undefined
+    const renamed = (error: unknown): never => {
+      if (error instanceof BadRequestException || error instanceof ForbiddenException) {
+        const text = [].concat((error.getResponse() as { message?: unknown })?.message as never ?? error.message).join('، ').replace(/العطلة/g, 'فترة الإضافي')
+        throw error instanceof ForbiddenException ? new ForbiddenException(text) : new BadRequestException(text)
+      }
+      throw error
+    }
+    let audience: HolidayAudience | null
+    try { audience = holidayAudienceFromInput(raw) } catch (error) { return renamed(error) }
+    if (!audience) return null
+    if (!(await this.overtimeAudiencesReady())) throw new BadRequestException(OVERTIME_AUDIENCE_MIGRATION_MISSING)
+    try { await assertHolidayAudienceTargets(em, audience, user ? branchScopeOf(user) : null, previous) } catch (error) { return renamed(error) }
+    return audience
+  }
+
+  private async saveOvertimePeriodAudience(em: EntityManager, periodId: number, audience: HolidayAudience | null) {
+    if (!(await this.overtimeAudiencesReady())) return
+    const repo = em.getRepository(OvertimePeriodAudience)
+    if (audience) await repo.save({ periodId, audience: holidayAudienceColumn(audience)! })
+    else await repo.delete({ periodId })
   }
 
   // فرع الفترة لازم يكون جوه نطاق المستخدم؛ «كل الفروع» لمن نطاقه الشركة كلها بس
@@ -763,6 +848,7 @@ export class AttendanceService {
     effect: string
     branchId?: number | null
     autoApprove?: boolean
+    audience?: unknown
   }, user?: JwtPayload) {
     if (!dto.name?.trim()) throw new BadRequestException('اسم الفترة مطلوب')
     this.validOvertimePeriodDates(dto.fromDate, dto.toDate)
@@ -772,21 +858,28 @@ export class AttendanceService {
     // غيابه = لأ (العميل القديم بيفضل زي ما هو)؛ الشاشة بتبعته صريح وبتخليه شغال افتراضيًا للفترة المفتوحة الجديدة
     const autoApprove = dto.autoApprove ?? false
     this.assertOvertimePeriodAutoApprove(autoApprove, dto.effect)
-    const branchId = await this.overtimePeriodBranch(dto.branchId)
+    // B-ADD.2: الفترة اللي ليها جمهور فرعها = فرع جمهورها (نطاق الحساب وإعادة الحساب بيمشوا عليه)
+    const audience = (await this.overtimePeriodAudienceInput(this.overtimePeriods.manager, dto.audience, user, null)) ?? null
+    const branchId = audience ? audience.branchId : await this.overtimePeriodBranch(dto.branchId)
     this.assertOvertimePeriodScope(user, branchId)
-    const saved = await this.overtimePeriods.save(
-      this.overtimePeriods.create({
-        name: dto.name.trim(),
-        fromDate: dto.fromDate,
-        toDate: dto.toDate,
-        effect: dto.effect as any,
-        branchId: branchId as any,
-        isActive: true,
-        autoApprove,
-      })
-    )
+    const saved = await this.overtimePeriods.manager.transaction(async em => {
+      const repo = em.getRepository(OvertimePeriod)
+      const row = await repo.save(
+        repo.create({
+          name: dto.name.trim(),
+          fromDate: dto.fromDate,
+          toDate: dto.toDate,
+          effect: dto.effect as any,
+          branchId: branchId as any,
+          isActive: true,
+          autoApprove,
+        })
+      )
+      if (audience) await this.saveOvertimePeriodAudience(em, row.id, audience)
+      return row
+    })
     const recompute = await this.recomputeOvertimeWindowDays([saved])
-    return { ...saved, recompute }
+    return { ...saved, audience, recompute }
   }
 
   async updateOvertimePeriod(
@@ -799,6 +892,7 @@ export class AttendanceService {
       branchId: number | null
       isActive: boolean
       autoApprove: boolean
+      audience: unknown
     }>,
     user?: JwtPayload
   ) {
@@ -810,7 +904,7 @@ export class AttendanceService {
     }
     // CR30-B01 (مراجعة Codex الجولة 30): الفترة نفسها ممكن تكون اتنقلت لفرع تاني (تعديل من حساب الشركة) بعد الفحص اللي فوق —
     // التعديل بيقفل صفها ويقرا نطاقها تاني تحت القفل جوه نفس المعاملة، وإعادة حساب الأيام بعد ما يتحفظ
-    const { saved, before } = await this.overtimePeriods.manager.transaction(async em => {
+    const { saved, before, audienceChanged } = await this.overtimePeriods.manager.transaction(async em => {
       const p = await em.getRepository(OvertimePeriod).findOne({ where: { id }, lock: { mode: 'pessimistic_write' } })
       if (!p) throw new NotFoundException('الفترة غير موجودة')
       this.assertOvertimePeriodScope(user, p.branchId)
@@ -833,11 +927,22 @@ export class AttendanceService {
       }
       if (dto.isActive !== undefined) p.isActive = !!dto.isActive
       if (dto.autoApprove != null) p.autoApprove = dto.autoApprove
-      return { saved: await em.getRepository(OvertimePeriod).save(p), before }
+      // B-ADD.2: الجمهور (لو اتبعت) تحت قفل صف الفترة: فرع الفترة بيمشي ورا فرع جمهورها؛ وتغيير فرع فترة ليها جمهور من غير ما
+      // الجمهور يتبعت معاه مرفوض (جمهورها متثبّت بفرعه)
+      const stored = (await this.overtimePeriodAudiences([p.id])).get(p.id)
+      const previous = stored && stored !== 'INVALID' ? stored : null
+      const audience = await this.overtimePeriodAudienceInput(em, dto.audience, user, previous)
+      if (audience) { p.branchId = audience.branchId as any; this.assertOvertimePeriodScope(user, p.branchId) }
+      const kept = audience === undefined ? previous : audience
+      if (kept && (p.branchId ?? null) !== kept.branchId) throw new BadRequestException('الفترة ليها جمهور من فرع تاني — غيّر «على مين؟» مع الفرع')
+      const audienceChanged = audience !== undefined && holidayAudienceColumn(audience) !== (stored === 'INVALID' ? 'INVALID' : holidayAudienceColumn(previous))
+      const savedRow = await em.getRepository(OvertimePeriod).save(p)
+      if (audienceChanged) await this.saveOvertimePeriodAudience(em, p.id, audience ?? null)
+      return { saved: savedRow, before, audienceChanged }
     })
     // «اعتماد تلقائي» لوحده مابيغيرش نافذة اليوم ولا أدلته فمفيش إعادة حساب: المكتشف اللي لسه ما اتوجهش بيتحسم في دورة
     // التوجيه الجاية (بيتعتمد لو يومه خلص، أو بيروح لسلسلته لو العلامة اتشالت)، واللي في سلسلة اعتماد بيفضل قرار معتمده
-    const changed = before.fromDate !== saved.fromDate || before.toDate !== saved.toDate ||
+    const changed = before.fromDate !== saved.fromDate || before.toDate !== saved.toDate || audienceChanged ||
       before.branchId !== (saved.branchId ?? null) || before.effect !== saved.effect || before.isActive !== saved.isActive
     const recompute = changed
       ? await this.recomputeOvertimeWindowDays([before, saved])
@@ -855,6 +960,8 @@ export class AttendanceService {
       if (!locked) throw new NotFoundException('الفترة غير موجودة')
       this.assertOvertimePeriodScope(user, locked.branchId)
       await em.getRepository(OvertimePeriod).delete({ id })
+      // B-ADD.2: وجمهورها معاها
+      await this.saveOvertimePeriodAudience(em, id, null)
       return locked
     })
     const recompute = p.isActive ? await this.recomputeOvertimeWindowDays([p]) : { recomputed: 0, failed: 0 }
@@ -3205,7 +3312,7 @@ export class AttendanceService {
     const dayKind = kind === 'WORKING' ? 'WEEKDAY' : kind
     // B4.5 (ب): الإعداد مقفول (الافتراضي) = معامل الشركة بالحرف؛ مفتوح = الأعلى من معامل الشركة والحد القانوني لدولة فرع الموظف
     const policy = await this.withLegalOvertimeMinimum(await this.overtimeEvidencePolicy(shift, dayKind), emp, calendar.branchId ?? emp.branchId, date, dayKind)
-    const window = await this.overtimeWindow(date, calendar.branchId!)
+    const window = await this.overtimeWindow(date, calendar.branchId!, employeeId)
     const windows = await this.exemptionsOf(employeeId, date, date)
     const exemptDefault = await this.configValue('payroll.exempt_overtime_eligible', 'false')
     if (!['true', 'false'].includes(exemptDefault)) throw new BadRequestException('إعداد استحقاق المستثنى للإضافي غير صالح')

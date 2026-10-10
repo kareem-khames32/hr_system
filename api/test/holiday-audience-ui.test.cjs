@@ -78,11 +78,12 @@ test('HAU-04: the version summary shows «تسري على» per holiday without 
 
 test('HAU-05: the holidays screen offers the unified picker as «تسري على», sends the audience with the dated calendar change, and lists it', () => {
   const page = src('app/leaves/holidays/page.tsx')
-  assert.match(page, /<OrgTargetPicker/)
+  // B-ADD.2: المنتقي جوه الحقل الموحد (ومعاه الإدارات والاستثناء والمعاينة)
+  assert.match(page, /<OrgAudienceField value=\{formAudience\} disabled=\{saving\} multiBranch=\{false\}/)
   assert.match(page, /تسري على/)
-  assert.match(page, /audience: holidayTargetToAudience\(formTarget\)/)
+  assert.match(page, /audience: holidayInputOfStored\(formAudience\) \?\? null/)
   assert.match(page, /calendarChange,\s*\n\s*\}/, 'التعديل لسه بتاريخ سريان وسبب (نسخة التقويم)')
-  assert.match(page, /holidayAudienceToTarget\(audienceOf\(row\)\)/, 'التعديل بيبدأ من «تسري على» في نسخة التقويم الحالية')
+  assert.match(page, /storedOfHolidayAudience\(audienceOf\(row\)\)/, 'التعديل بيبدأ من «تسري على» في نسخة التقويم الحالية')
   assert.match(page, /data-holiday-audience>/)
   for (const file of ['app/calendar/page.tsx', 'app/leaves/calendar/page.tsx']) assert.match(src(file), /audienceText/, file)
 })

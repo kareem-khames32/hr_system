@@ -30,13 +30,13 @@ import {
 } from '@/lib/api'
 import { buildCalendarChange, calendarScopeWritable, type PayrollCalendarChange } from '@/lib/payroll-calendar-api'
 import { CalendarChangeFields, CalendarContextSummary, CalendarMutationDialog, CalendarScopeConfirmation, useCalendarContext } from '@/components/PayrollCalendarChange'
-import { OrgTargetPicker, type OrgTarget } from '@/components/OrgTargetPicker'
+import { OrgAudienceField } from '@/components/OrgAudienceField'
+import type { StoredAudience } from '@/lib/org-audience'
 import {
   describeHolidayAudience,
-  holidayAudienceToTarget,
-  holidayTargetIncomplete,
-  holidayTargetToAudience,
+  holidayInputOfStored,
   isHolidayAudience,
+  storedOfHolidayAudience,
   type ApiHolidayAudience,
 } from '@/lib/holiday-audience'
 
@@ -53,7 +53,6 @@ interface Holiday {
 }
 
 // «تسري على»: الشركة كلها افتراضيًا (نفس سلوك كل العطلات القديمة)
-const EVERYONE: OrgTarget = { level: 'company', branchId: null, departmentIds: [], teamIds: [], employeeIds: [] }
 const audienceOf = (h: Holiday): ApiHolidayAudience | null => (isHolidayAudience(h.audience) ? h.audience : null)
 // «للكل» / «فرع المعادي» / «فرع المعادي — قسم المبيعات» / «3 موظفين» — وصف الخادم بالأسماء، وإلا بالعدد
 const audienceLabel = (h: Holiday): string =>
@@ -115,7 +114,9 @@ export default function HolidaysPage() {
   const [formEndDate, setFormEndDate] = useState('')
   const [formCountry, setFormCountry] = useState('')
   // «تسري على» — نفس منتقي الاستهداف الموحّد (الشركة كلها ← فرع ← أقسامه/فرقه/موظفينه)
-  const [formTarget, setFormTarget] = useState<OrgTarget>(EVERYONE)
+  // B-ADD.2: «تسري على» بالحقل الموحد (فرع ← إدارة ← قسم ← فريق ← موظفين بالاسم + «الكل ماعدا…» ومعاينة الأسماء)
+  const [formAudience, setFormAudience] = useState<StoredAudience | null>(null)
+  const [formAudienceComplete, setFormAudienceComplete] = useState(true)
   const [org, setOrg] = useState<{ branches: ApiBranch[]; departments: ApiDepartment[]; teams: ApiTeam[]; employees: ApiEmployee[] } | null>(null)
   const [orgError, setOrgError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -131,7 +132,7 @@ export default function HolidaysPage() {
     if (!row) { setSaveError('العطلة غير موجودة في نسخة التقويم الحالية. أغلق النموذج وأعد تحميل القائمة.'); return }
     setFormName(row.name); setFormDate(row.date); setFormEndDate(row.endDate ?? ''); setFormCountry(row.country ?? '')
     // «تسري على» من نسخة التقويم الحالية نفسها (اللي الحفظ هيتقارن بيها)
-    setFormTarget(holidayAudienceToTarget(audienceOf(row)))
+    setFormAudience(storedOfHolidayAudience(audienceOf(row))); setFormAudienceComplete(true)
   }, [calendar.context, editing])
   // الفروع والأقسام والفرق والموظفين للمنتقي — مرة واحدة أول ما النموذج يتفتح
   useEffect(() => {
@@ -164,7 +165,7 @@ export default function HolidaysPage() {
     setFormDate('')
     setFormEndDate('')
     setFormCountry('')
-    setFormTarget(EVERYONE)
+    setFormAudience(null); setFormAudienceComplete(true)
     setSaveError('')
     try {
       const config = await fetchConfig()
@@ -191,7 +192,7 @@ export default function HolidaysPage() {
     setFormDate(h.date)
     setFormEndDate(h.endDate ?? '')
     setFormCountry(h.country ?? '')
-    setFormTarget(holidayAudienceToTarget(audienceOf(h)))
+    setFormAudience(storedOfHolidayAudience(audienceOf(h))); setFormAudienceComplete(true)
     setSaveError('')
     setShowModal(true)
   }
@@ -204,7 +205,7 @@ export default function HolidaysPage() {
       setSaveError('تاريخ النهاية لا يسبق تاريخ البداية')
       return
     }
-    if (holidayTargetIncomplete(formTarget)) {
+    if (!formAudienceComplete || holidayInputOfStored(formAudience) === undefined) {
       setSaveError('كمّل اختيار «تسري على»: الفرع، والأقسام أو الفرق أو الموظفين')
       return
     }
@@ -219,7 +220,7 @@ export default function HolidaysPage() {
       // الإضافة تبدأ ببلد النظام والتعديل بقيمة العطلة المحمّلة؛ فارغ = كل الدول.
       country: formCountry.trim(),
       // «تسري على»: null = للكل
-      audience: holidayTargetToAudience(formTarget),
+      audience: holidayInputOfStored(formAudience) ?? null,
       calendarChange,
     }
     try {
@@ -530,21 +531,13 @@ export default function HolidaysPage() {
                 {org === null ? (
                   !orgError && <p className="text-sm text-gray-500">جارٍ تحميل الفروع والموظفين…</p>
                 ) : (
-                  <OrgTargetPicker
-                    value={formTarget}
-                    onChange={setFormTarget}
-                    branches={org.branches}
-                    departments={org.departments}
-                    teams={org.teams}
-                    employees={org.employees}
-                    disabled={saving}
-                  />
+                  <OrgAudienceField value={formAudience} disabled={saving} multiBranch={false}
+                    onChange={(audience, complete) => { setFormAudience(audience); setFormAudienceComplete(complete) }} />
                 )}
                 <p className="text-xs text-gray-500 mt-2">
-                  {formTarget.level === 'company'
+                  {!formAudience
                     ? 'العطلة لكل الموظفين (في دولتها).'
-                    : 'العطلة للمختارين بس. غيرهم اليوم ده عندهم يوم عادي: بيتحسب شغل، واللي مايبصمش يتسجل غياب، والإجازة بتعدّه.'}
-                  {formTarget.level === 'departments' && ' القسم بيشمل أقسامه الفرعية.'}
+                    : 'العطلة للمختارين بس. غيرهم اليوم ده عندهم يوم عادي: بيتحسب شغل، واللي مايبصمش يتسجل غياب، والإجازة بتعدّه. الإدارة أو القسم بيشمل اللي تحته.'}
                 </p>
               </div>
             </fieldset>

@@ -43,7 +43,9 @@ import {
   type ApiOvertimePeriod,
   type ApiOvertimePeriodRecompute,
 } from '@/lib/api'
-import { OrgTargetPicker, describeOrgTarget, initialOrgTarget, type OrgTarget } from '@/components/OrgTargetPicker'
+import { OrgAudienceField } from '@/components/OrgAudienceField'
+import { holidayInputOfStored } from '@/lib/holiday-audience'
+import type { StoredAudience } from '@/lib/org-audience'
 import { useOrgFilter } from '@/components/OrgFilter'
 import { localToday } from '@/lib/dates'
 import { branchScopeOfUser, canSeeBranch, type BranchScope } from '@/lib/branch-scope'
@@ -866,7 +868,7 @@ function OvertimePeriodsSection({ onChanged }: { onChanged: () => void }) {
                     </p>
                     <span className="inline-flex items-center gap-1 mt-2 px-2 py-0.5 bg-gray-100 text-gray-600 rounded-lg text-xs">
                       <Building2 size={12} />
-                      {branchName(p.branchId)}
+                      {p.audienceInvalid ? 'جمهور الفترة تالف — عدّله' : p.audienceText || branchName(p.branchId)}
                     </span>
                     {isOpen && canEdit(p) && (
                       <label className="flex items-center gap-2 mt-2 text-xs text-gray-700 cursor-pointer">
@@ -943,8 +945,10 @@ function AddOvertimePeriodModal({
   const [effect, setEffect] = useState<ApiOvertimePeriod['effect']>('OPEN')
   // «اعتماد تلقائي» (قرار المالك 28 سبتمبر): شغال افتراضيًا للفترة المفتوحة الجديدة، ومايظهرش ولا يتبعت للمقفولة
   const [autoApprove, setAutoApprove] = useState(true)
-  // الفترة للشركة كلها أو فرع — نفس منتقي الاستهداف بمستوى الفرع بس
-  const [target, setTarget] = useState<OrgTarget>(() => initialOrgTarget(lockedBranchId, ['company', 'branch'], branchScope))
+  // B-ADD.2: «على مين؟» بالحقل الموحد — الشركة كلها أو فرع أو إدارة أو قسم أو فريق أو موظفين بالاسم، مع «الكل ماعدا…» ومعاينة الأسماء.
+  // اللي برّه الجمهور الفترة دي مش موجودة بالنسبة له (بيحكمه باقي الفترات أو الإعداد العام)
+  const [audience, setAudience] = useState<StoredAudience | null>(null)
+  const [audienceComplete, setAudienceComplete] = useState(lockedBranchId == null && branchScope === null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -952,7 +956,8 @@ function AddOvertimePeriodModal({
     if (!name.trim()) { setError('اكتب اسم الفترة'); return }
     if (!fromDate || !toDate) { setError('حدد من تاريخ وإلى تاريخ'); return }
     if (fromDate > toDate) { setError('تاريخ البداية لازم يكون قبل أو يساوي تاريخ النهاية'); return }
-    if (target.level !== 'company' && target.branchId == null) { setError('اختار الفرع'); return }
+    const input = holidayInputOfStored(audience)
+    if (!audienceComplete || input === undefined) { setError('كمّل اختيار «على مين؟» الأول'); return }
     setSaving(true)
     setError('')
     try {
@@ -961,7 +966,8 @@ function AddOvertimePeriodModal({
         fromDate,
         toDate,
         effect,
-        branchId: target.level === 'company' ? undefined : target.branchId,
+        // الفرع كله من غير مستثنين = فترة فرع زي زمان (من غير صف جمهور)؛ غير كده الجمهور بيتبعت والخادم بياخد فرعه منه
+        ...(input === null ? {} : input.level === 'branch' && !input.excludeEmployeeIds?.length ? { branchId: input.branchId } : { audience: input }),
         autoApprove: effect === 'OPEN' && autoApprove,
       })
       await onCreated(created)
@@ -1048,20 +1054,14 @@ function AddOvertimePeriodModal({
             </div>
           )}
 
-          <OrgTargetPicker
-            value={target}
-            onChange={setTarget}
-            branches={branches}
-            levels={['company', 'branch']}
-            lockedBranchId={lockedBranchId}
-            branchScope={branchScope}
-            disabled={saving}
-            showCount={false}
-          />
+          <div data-overtime-period-audience>
+            <OrgAudienceField value={audience} disabled={saving} multiBranch={false}
+              onChange={(next, complete) => { setAudience(next); setAudienceComplete(complete) }} />
+          </div>
 
           <div className="p-3 bg-blue-50 rounded-xl text-sm text-blue-700">
             {fromDate && toDate
-              ? `من ${fromDate} إلى ${toDate} — الإضافي ${effect === 'OPEN' ? (autoApprove ? 'مفتوح وبيتعتمد تلقائي' : 'مفتوح') : 'مقفول'} لـ${describeOrgTarget(target, branches, [])}`
+              ? `من ${fromDate} إلى ${toDate} — الإضافي ${effect === 'OPEN' ? (autoApprove ? 'مفتوح وبيتعتمد تلقائي' : 'مفتوح') : 'مقفول'} للمختارين فوق بس`
               : 'حدد التواريخ عشان تشوف ملخص الفترة'}
           </div>
         </div>

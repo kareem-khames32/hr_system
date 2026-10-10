@@ -39,7 +39,7 @@ const SCREENS = [
   ['src/app/attendance/manual-entry/page.tsx', ['const orgPunches = punches.filter((p) => org.matches(p.employeeId))', 'total: orgPunches.length',
     'const filteredPunches = orgPunches.filter'], []],
   ['src/app/attendance/overtime/page.tsx', ['const orgEntries = entries.filter((e) => org.matches(e.employeeId))', "detected: orgEntries.filter((e) => e.status === 'DETECTED').length",
-    'const filtered = orgEntries.filter', '<OrgTargetPicker'], []],
+    'const filtered = orgEntries.filter', '<OrgAudienceField '], []],
   ['src/app/attendance/exemptions/page.tsx', ['(data?.rows ?? []).filter(row => org.matches(row.employeeId))'], []],
   ['src/app/attendance/reports/page.tsx', ['const attendanceRows = allAttendanceRows.filter((row) => org.matches(Number(row.employeeId)))',
     'const overtimeRows = allOvertimeRows.filter((row) => org.matches(Number(row.employeeId)))', 'filteredData.map(row => [row.employeeCode'], []],
@@ -102,9 +102,11 @@ test('OFW-01: كل شاشة فيها موظفين متوصل فيها الفلت
   assert.ok(payroll.includes('<PayrollOverviewTabs tab={tab} branches={branches} departments={departments} teams={teams} employees={employees} org={org}'))
   assert.ok(payroll.includes('<PayrollAllowancesTab branches={branches} departments={departments} teams={teams} org={org} employees={employees}'))
   // المنتقي بتاع الاستهداف (OrgTargetPicker) زي ما هو في الشاشات اللي بتستهدف
-  for (const file of ['src/app/attendance/overtime/page.tsx', 'src/app/leaves/year-end/page.tsx', 'src/app/attendance/weekly-schedule/page.tsx']) {
+  for (const file of ['src/app/leaves/year-end/page.tsx', 'src/app/attendance/weekly-schedule/page.tsx']) {
     assert.match(read(file), /<OrgTargetPicker/, file)
   }
+  // B-ADD.2: فترة الإضافي بتتحدد بالحقل الموحد (نفس المنتقي ومعاه الإدارات والاستثناء والمعاينة)
+  assert.match(read('src/app/attendance/overtime/page.tsx'), /<OrgAudienceField /)
 })
 
 test('OFW-02: الشريط نفسه — أربع قوائم مترابطة بـ«الكل»، والفرع المقفول، و«مسح الفلتر»، وبيلف على الموبايل، والتحميل مرة للجلسة', () => {

@@ -266,6 +266,10 @@ class OvertimePeriodDto {
   @IsOptional()
   @IsBoolean({ message: 'الاعتماد التلقائي (autoApprove) قيمة منطقية (true/false)' })
   autoApprove?: boolean
+
+  // B-ADD.2: «على مين؟» بالاستهداف الموحد (نفس قيمة «تسري على» للعطلة). الجسم خام والحكم في الخدمة. غيابه = مايتغيّرش؛ null = فرع الفترة كله
+  @IsOptional()
+  audience?: unknown
 }
 
 class ConfirmOvertimeDto {

@@ -1164,6 +1164,10 @@ export interface ApiOvertimePeriod {
   isActive: boolean
   // «اعتماد تلقائي» (قرار المالك 28 سبتمبر): الإضافي المكتشف في الفترة بيتعتمد لوحده بعد ما اليوم يخلص — للمفتوحة بس
   autoApprove: boolean
+  // B-ADD.2: «على مين؟» بالاستهداف الموحد (نفس شكل «تسري على» للعطلة). null/غايب = فرع الفترة كله؛ audienceText وصف جاهز من الخادم
+  audience?: unknown
+  audienceText?: string | null
+  audienceInvalid?: boolean
 }
 export const fetchOvertimePeriods = () =>
   get<ApiOvertimePeriod[]>('/attendance/overtime-periods')
