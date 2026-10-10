@@ -3,18 +3,9 @@
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import { can } from '@/lib/api'
-import {
-  StatsCards,
-  AttendanceChart,
-  RecentActivities,
-  PendingApprovals,
-  QuickActions,
-  UpcomingEvents,
-  DepartmentStats,
-} from '@/components/dashboard'
+import { RecentActivities, PendingApprovals, QuickActions, UpcomingEvents } from '@/components/dashboard'
+import AdminDashboard from '@/components/dashboard/AdminDashboard'
 import EmployeeHome from '@/components/dashboard/EmployeeHome'
-import MyClearanceItems from '@/components/dashboard/MyClearanceItems'
-import { useModuleEnabled } from '@/lib/modules'
 import { LayoutDashboard, User } from 'lucide-react'
 
 // اللوحة تُختار بالصلاحية لا باسم الدور: dashboard.view_all → لوحة الإدارة، وغير ذلك → لوحتي.
@@ -23,8 +14,6 @@ export default function DashboardPage() {
   // null حتى تُقرأ الجلسة بعد التركيب (localStorage غير متاح على السيرفر)
   const [view, setView] = useState<'admin' | 'employee' | null>(null)
   const [canAdmin, setCanAdmin] = useState(false)
-  // ويدجتات الحضور (المنحنى وإحصائيات الأقسام) تابعة لموديول الحضور: بتختفي معاه، وجارتها بتاخد العرض كله
-  const attendanceOn = useModuleEnabled('attendance')
 
   useEffect(() => {
     const allowed = can('dashboard.view_all')
@@ -71,46 +60,23 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* بنود إخلاء طرف معلّقة على جهتي/كمدير مباشر — تختفي عند الخلو */}
-        <MyClearanceItems />
-
+        {/* B-ADD.3: بنود إخلاء الطرف مش هنا — مكانها «مهامي» وملف إنهاء الخدمة وصندوق الموافقات */}
         {view === 'employee' ? (
           <EmployeeHome />
         ) : (
           <>
-            {/* Stats Cards */}
-            <StatsCards />
+            {/* فلتر اللوحة وكروتها: كل كارت بصلاحيته، وكل رقم جوه نطاق فروع الحساب */}
+            <AdminDashboard />
 
             {/* Quick Actions */}
             <QuickActions />
 
-            {/* Main Content Grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              {/* Attendance Chart - Takes 2 columns */}
-              {attendanceOn && <div className="lg:col-span-2">
-                <AttendanceChart />
-              </div>}
-
-              {/* Upcoming Events */}
-              <div className={attendanceOn ? undefined : 'lg:col-span-3'}>
-                <UpcomingEvents />
-              </div>
-            </div>
-
-            {/* Pending Approvals */}
+            {/* Pending Approvals — اللي مستني قرار صاحب الحساب نفسه */}
             <PendingApprovals />
 
-            {/* Bottom Grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              {/* Department Stats - Takes 2 columns */}
-              {attendanceOn && <div className="lg:col-span-2">
-                <DepartmentStats />
-              </div>}
-
-              {/* Recent Activities */}
-              <div className={attendanceOn ? undefined : 'lg:col-span-3'}>
-                <RecentActivities />
-              </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <UpcomingEvents />
+              <RecentActivities />
             </div>
           </>
         )}

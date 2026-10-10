@@ -414,7 +414,8 @@ test('MU-08: شاشات الأساس مع موديول مقفول — اللين
   assert.ok(mine.includes('if (leaveOn) fetchMyBalances()') && mine.includes("...(leaveOn ? [{ id: 'leaves', label: 'الإجازات', icon: Calendar }] : []),") && mine.includes('{custodyOn && <div className="card">'))
   // لوحة الإدارة وكروتها، والقايمة الجانبية، وبنود الإخلاء
   const adminHome = read('src/app/page.tsx')
-  assert.ok(adminHome.includes('{attendanceOn && <div className="lg:col-span-2">\n                <AttendanceChart />') && adminHome.includes('{attendanceOn && <div className="lg:col-span-2">\n                <DepartmentStats />'))
+  // B-ADD.3: اللوحة الإدارية بترسم الكروت اللي الخادم مسمّيها للحساب بس (الصلاحية والموديول والنطاق في الخادم)
+  assert.ok(adminHome.includes('<AdminDashboard />') && read('src/components/dashboard/AdminDashboard.tsx').includes('CARD_COMPONENTS.filter(([key]) => hrefOf.has(key))'))
   assert.ok(read('src/components/dashboard/StatsCards.tsx').includes("].filter((card) => (attendanceOn || !['present', 'late', 'absent'].includes(card.id)) && (leaveOn || card.id !== 'on-leave'))"))
   assert.ok(read('src/components/layout/Sidebar.tsx').includes('if (!payrollOn) setPayrollApprovals(0)'))
   assert.ok(read('src/components/dashboard/MyClearanceItems.tsx').includes('if (!offboardingOn) { setItems([]); return }'))

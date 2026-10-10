@@ -23,6 +23,8 @@ import { HrDocumentsModule } from './hr-documents/hr-documents.module'
 import { LoansModule } from './loans/loans.module'
 import { LeaveYearEndModule } from './requests/leave-year-end.module'
 import { DashboardController } from './dashboard/dashboard.controller'
+import { DashboardCardsController } from './dashboard/dashboard-cards.controller'
+import { DashboardCardsService } from './dashboard/dashboard-cards.service'
 import { ReportsController } from './reports/reports.controller'
 import { MetricsService } from './reports/metrics.service'
 import { ReportPdfRenderer } from './reports/report-pdf.renderer'
@@ -182,7 +184,7 @@ import { dbPacketSize } from './common/sql-packet-size'
     // B2.16: الإعلانات (موديول اختياري مقفول افتراضيًا)
     AnnouncementsModule,
   ],
-  controllers: [HealthController, DashboardController, ReportsController, CostCenterReportController, TeamController],
-  providers: [CostCenterReportService, MetricsService, ReportPdfRenderer, TeamService],
+  controllers: [HealthController, DashboardController, DashboardCardsController, ReportsController, CostCenterReportController, TeamController],
+  providers: [CostCenterReportService, MetricsService, ReportPdfRenderer, TeamService, DashboardCardsService],
 })
 export class AppModule {}
