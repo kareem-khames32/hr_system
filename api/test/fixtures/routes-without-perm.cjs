@@ -25,6 +25,7 @@ const EXCEPTIONS = {
   'BrandingController.logo': 'PUBLIC_OK', // GET /branding/logo
   'CareersController.apply': 'PUBLIC_OK', // POST /careers/jobs/:id/apply — B3.3-ب: تقديم من اللينك العام (ميزة مقفولة افتراضيًا، وحد بالعنوان)
   'CareersController.detail': 'PUBLIC_OK', // GET /careers/jobs/:id — B3.3-ب: وظيفة منشورة «خارجي» بس
+  'CareersController.feed': 'PUBLIC_OK', // GET /careers/feed/:name — B-ADD.6: فيد XML للوظائف المنشورة «خارجي» بس (ورا ميزة الصفحة العامة)
   'CareersController.list': 'PUBLIC_OK', // GET /careers/jobs — B3.3-ب: الوظائف المنشورة «خارجي» بس
   'HealthController.check': 'PUBLIC_OK', // GET /health
   // B6.3: الـAPI العام — من غير جلسة مستخدم: بمفتاح تكامل (حارسه IntegrationKeyGuard: مفتاح صالح، حد طلبات، نطاق قراءة) وموديول مقفول افتراضيًا
@@ -92,6 +93,7 @@ const EXCEPTIONS = {
   'HrDocumentsController.acknowledge': 'SELF', // POST /hr-documents/issued/:id/acknowledge
   // التكليف والقراءة والتعديل والحالة: الحق بيتحكم في الخدمة (المسؤول، المنشئ، المدير المباشر، أو صلاحية المهام في فرعها) — برّه كده 404
   'TasksController.create': 'SERVICE_CHECK', // POST /tasks
+  'TasksController.createForGroup': 'SERVICE_CHECK', // POST /tasks/group — B-ADD.1: المهمة الجماعية («إدارة المهام» أو «تكليف أي موظف»، بنطاقه)
   'TasksController.detail': 'SERVICE_CHECK', // GET /tasks/:id
   'TasksController.update': 'SERVICE_CHECK', // PATCH /tasks/:id
   'TasksController.setStatus': 'SERVICE_CHECK', // POST /tasks/:id/status

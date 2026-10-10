@@ -1,7 +1,7 @@
 'use client'
 
 // B3.3-ب: صفحة وظيفة عامة ونموذج التقديم (من غير دخول): الاسم والبريد والموبايل، والهوية والسيرة الذاتية اختياريين، وموافقة البيانات.
-// `?src=` في اللينك = مصدر المتقدّم (لينك لكل مصدر).
+// `?src=` في اللينك = مصدر المتقدّم (لينك لكل مصدر). B-ADD.6: من قايمة المصادر المعروفة بس (linkedin، facebook…) — أي قيمة تانية بتتساب.
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
@@ -9,6 +9,7 @@ import { CheckCircle2, MapPin } from 'lucide-react'
 import { useBranding } from '@/lib/branding'
 import { formatDate } from '@/lib/dates'
 import { CareersUnavailable, applyToPublicJob, fetchPublicJob, type PublicJob } from '@/lib/careers-api'
+import { knownShareSource } from '@/lib/job-share'
 
 const CV_MAX_BYTES = 5 * 1024 * 1024
 
@@ -30,7 +31,7 @@ export default function CareerJobPage() {
   const [sent, setSent] = useState(false)
 
   useEffect(() => {
-    setSource((new URLSearchParams(window.location.search).get('src') ?? '').trim().slice(0, 60))
+    setSource(knownShareSource(new URLSearchParams(window.location.search).get('src')))
   }, [])
 
   useEffect(() => {
@@ -69,7 +70,7 @@ export default function CareerJobPage() {
         <header>
           <p className="text-sm text-gray-500">
             <bdi>{brand.companyName}</bdi> ·{' '}
-            <Link href="/careers" className="text-primary-600 hover:underline">
+            <Link href={source ? `/careers?src=${source}` : '/careers'} className="text-primary-600 hover:underline">
               كل الوظائف
             </Link>
           </p>

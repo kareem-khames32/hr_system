@@ -31,6 +31,8 @@ async function read<T>(path: string): Promise<T> {
 
 export const fetchPublicJobs = () => read<{ jobs: PublicJob[] }>('/careers/jobs')
 export const fetchPublicJob = (id: number) => read<PublicJob>(`/careers/jobs/${id}`)
+// B-ADD.6: لينك فيد XML العام للوظائف (indeed.xml / linkedin.xml) — ثابت، ومن غير دخول
+export const publicFeedUrl = (name: string) => `${API_BASE}/careers/feed/${encodeURIComponent(name)}`
 
 // B3.5-أ: لينك رد المرشح على عرض العمل (الرمز في اللينك هو الحق)
 export interface PublicOffer { candidateName: string; positionTitle: string; branchName: string | null; salary: string; startDate: string | null; expiresOn: string | null }

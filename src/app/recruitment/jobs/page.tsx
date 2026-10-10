@@ -2,9 +2,11 @@
 
 // B3.2: «إدارة الوظائف» — الوظائف الشاغرة (من احتياج معتمد أو من الشاشة): الوصف والمتطلبات والعدد، والحالة: مسودة ← منشورة ↔ موقوفة ← مقفولة
 import { useCallback, useEffect, useState } from 'react'
-import { Briefcase, Link2, Plus, X } from 'lucide-react'
+import { Briefcase, Link2, Plus, Rss, Share2, X } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import EmptyState from '@/components/EmptyState'
+import JobSharePanel from '@/components/recruitment/JobSharePanel'
+import PublishingChannels from '@/components/recruitment/PublishingChannels'
 import { formatDate } from '@/lib/dates'
 import { formatMoney } from '@/lib/money'
 import {
@@ -30,6 +32,9 @@ export default function RecruitmentJobsPage() {
   const [editing, setEditing] = useState<ApiRecruitmentJob | 'new' | null>(null)
   const [busy, setBusy] = useState(0)
   const [copied, setCopied] = useState(0)
+  // B-ADD.6: «انشر الوظيفة» (رقم الوظيفة المفتوحة لوحتها) و«قنوات النشر»
+  const [sharing, setSharing] = useState(0)
+  const [channels, setChannels] = useState(false)
 
   // B3.3-ب: لينك التقديم العام للوظيفة المنشورة «خارجي» (بيشتغل لما ميزة «صفحة الوظائف العامة» مفتوحة) — النسخ والتحديد اليدوي لو النسخ اترفض
   const copyLink = async (job: ApiRecruitmentJob) => {
@@ -82,10 +87,16 @@ export default function RecruitmentJobsPage() {
             <p className="text-gray-500 mt-1">الوظائف الشاغرة: من احتياج توظيف معتمد أو من هنا مباشرة، ونشرها وإيقافها وقفلها</p>
           </div>
           {data?.available && data.canManage && (
-            <button onClick={() => setEditing('new')} disabled={!form} className="btn-primary flex items-center gap-2 disabled:opacity-50">
-              <Plus size={18} />
-              وظيفة جديدة
-            </button>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button onClick={() => setChannels(true)} className="btn-secondary flex items-center gap-2" title="فيد XML للوظائف والنشر التلقائي على صفحة الشركة">
+                <Rss size={18} />
+                قنوات النشر
+              </button>
+              <button onClick={() => setEditing('new')} disabled={!form} className="btn-primary flex items-center gap-2 disabled:opacity-50">
+                <Plus size={18} />
+                وظيفة جديدة
+              </button>
+            </div>
           )}
         </div>
         {error && (
@@ -162,6 +173,12 @@ export default function RecruitmentJobsPage() {
                               {copied === job.id ? 'اتنسخ' : 'لينك التقديم'}
                             </button>
                           )}
+                          {job.status === 'PUBLISHED' && job.external && (
+                            <button onClick={() => setSharing(job.id)} className="btn-secondary text-sm inline-flex items-center gap-1" title="بوست جاهز وصورة وأزرار مشاركة على السوشيال ميديا" data-job-share-open>
+                              <Share2 size={14} />
+                              انشر الوظيفة
+                            </button>
+                          )}
                           <button onClick={() => setEditing(job)} className="btn-secondary text-sm">
                             تعديل
                           </button>
@@ -186,6 +203,8 @@ export default function RecruitmentJobsPage() {
           </div>
         )}
       </div>
+      {sharing > 0 && <JobSharePanel jobId={sharing} onClose={() => setSharing(0)} />}
+      {channels && <PublishingChannels onClose={() => setChannels(false)} />}
       {editing && form && (
         <JobModal
           job={editing === 'new' ? null : editing}

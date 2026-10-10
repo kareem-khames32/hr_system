@@ -306,7 +306,8 @@ test('CA-05: التقديم من اللينك — القيم والموافقة 
   const file = await repo('StoredFile').findOneByOrFail({ id: application.cvFileId })
   assert.deepEqual([candidate.fullName, candidate.phone, candidate.positionTitle, candidate.branchId, candidate.stage], ['متقدّم من اللينك', '+966 55 000 1111', 'محاسب', org.branchA.id, 'applied'])
   assert.deepEqual([application.jobId, application.source, application.nationalId, application.applicantEmployeeId, application.consentAt instanceof Date],
-    [target, 'لينكد إن', 'B778899', null, true])
+    // B-ADD.6: المصدر من اللينك العام من قايمة معروفة — «لينكد إن» بيتسجّل باسمه الموحد
+    [target, 'LinkedIn', 'B778899', null, true])
   assert.deepEqual([file.entityType, file.entityId, file.mime, file.originalName, file.employeeId ?? null, file.uploadedBy ?? null], ['candidate_cv', candidate.id, 'application/pdf', 'سيرتي.pdf', null, null])
   assert.equal(storedFiles(), before[3] + 1)
   // من غير سيرة ذاتية ومن غير مصدر: مقبول، والمصدر «لينك عام»
@@ -342,7 +343,7 @@ test('CA-06: السيرة الذاتية بتتقري بحكم المرشح — 
   const read = async user => (await fetch(base + '/files/' + application.cvFileId, { headers: user ? { Authorization: 'Bearer ' + jwt.sign(payloadOf(user)) } : {} })).status
   assert.deepEqual([await read(users.recruiterA), await read(users.recruiterB), await read(users.a1), await read(users.nobody), await read(null)], [200, 404, 403, 403, 401])
   const listed = expectStatus(await request(users.recruiterA, 'GET', '/candidates'), 200).find(item => item.id === candidate.id)
-  assert.deepEqual([listed.application.cvFileId, typeof listed.application.consentAt, listed.application.source], [application.cvFileId, 'string', 'لينكد إن'])
+  assert.deepEqual([listed.application.cvFileId, typeof listed.application.consentAt, listed.application.source], [application.cvFileId, 'string', 'LinkedIn'])
   // ملف بتصنيف السيرة الذاتية بس مش ملف تقديم المرشح ده: غير موجود حتى لمسؤول التوظيف
   const stray = await repo('StoredFile').save({ originalName: 'stray.pdf', storedName: 'none/stray.pdf', mime: 'application/pdf', size: 10, entityType: 'candidate_cv', entityId: candidate.id })
   assert.equal((await fetch(base + '/files/' + stray.id, { headers: { Authorization: 'Bearer ' + jwt.sign(payloadOf(users.recruiterA)) } })).status, 404)

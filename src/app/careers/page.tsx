@@ -1,18 +1,25 @@
 'use client'
 
 // B3.3-ب: صفحة الوظائف العامة (من غير دخول) — الوظائف المنشورة «خارجي»، وكل وظيفة بلينك تقديمها
+// B-ADD.6: `?src=` (المصدر المعروف بس) بيكمّل مع المتقدّم للينك الوظيفة اللي بيختارها
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { Briefcase, MapPin } from 'lucide-react'
 import { useBranding } from '@/lib/branding'
 import { formatDate } from '@/lib/dates'
 import { CareersUnavailable, fetchPublicJobs, type PublicJob } from '@/lib/careers-api'
+import { knownShareSource } from '@/lib/job-share'
 
 export default function CareersPage() {
   const brand = useBranding()
   const [jobs, setJobs] = useState<PublicJob[] | null>(null)
   const [unavailable, setUnavailable] = useState(false)
   const [error, setError] = useState('')
+  const [source, setSource] = useState('')
+
+  useEffect(() => {
+    setSource(knownShareSource(new URLSearchParams(window.location.search).get('src')))
+  }, [])
 
   useEffect(() => {
     fetchPublicJobs()
@@ -51,7 +58,7 @@ export default function CareersPage() {
           <ul className="space-y-3" data-public-jobs>
             {jobs.map((job) => (
               <li key={job.id}>
-                <Link href={`/careers/${job.id}`} className="block bg-white rounded-xl border border-gray-100 p-5 hover:border-primary-300 transition-colors">
+                <Link href={`/careers/${job.id}${source ? `?src=${source}` : ''}`} className="block bg-white rounded-xl border border-gray-100 p-5 hover:border-primary-300 transition-colors">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">

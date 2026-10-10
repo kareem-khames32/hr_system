@@ -143,8 +143,9 @@ test('RG-03: قايمة الاستثناءات من غير بنود قديمة،
   // B3.13: +2 SELF («استبياناتي» والرد) و+1 SERVICE_CHECK (نموذج الاستبيان للمدعو)
   // B3.14: +1 SELF («معاليني»)
   // B4.6 (ج): +1 SELF (إعداد عرض الحساب نفسه: الهجري جنب الميلادي)
-  assert.deepEqual(counts, { PUBLIC_OK: 24, SELF: 99, AUTH_ANY_OK: 11, SERVICE_CHECK: 138 })
-  assert.equal(handlers.filter(handler => handler.perms.length === 0).length, 272)
+  // B-ADD.1: +1 SERVICE_CHECK (المهمة الجماعية)؛ B-ADD.6: +1 PUBLIC_OK (فيد الوظائف العام)
+  assert.deepEqual(counts, { PUBLIC_OK: 25, SELF: 99, AUTH_ANY_OK: 11, SERVICE_CHECK: 139 })
+  assert.equal(handlers.filter(handler => handler.perms.length === 0).length, 274)
   // من غير حارس دخول = العام بس
   const open = handlers.filter(handler => !guarded(handler, JwtAuthGuard)).map(handler => handler.id).sort()
   assert.deepEqual(open, Object.keys(EXCEPTIONS).filter(id => EXCEPTIONS[id] === 'PUBLIC_OK').sort())
@@ -199,7 +200,8 @@ test('RG-04: المسارات اللي بتخدم أكتر من موديول م�
     ['deliveries', ['settings.manage']], ['resetTemplate', ['settings.manage']], ['saveTemplate', ['settings.manage']], ['templates', ['settings.manage']]])
   // B2.5: مسارات المهام كلها تابعة لموديول المهام؛ وقايمة كل المهام بس اللي بصلاحية (الباقي حقه في الخدمة)
   const tasks = handlers.filter(handler => handler.controller === 'TasksController')
-  assert.equal(tasks.length, 14)
+  // B-ADD.1: +1 (المهمة الجماعية)
+  assert.equal(tasks.length, 15)
   for (const handler of tasks) assert.deepEqual(handler.modules, ['tasks'], handler.id)
   assert.deepEqual(tasks.filter(handler => handler.perms.length).map(handler => [handler.name, handler.perms]), [['list', ['tasks.view_all']]])
   // لوحة التحكم: الأرقام العامة أساسية، وويدجتات الحضور (المنحنى وإحصائيات الأقسام) للحضور

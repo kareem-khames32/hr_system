@@ -5,6 +5,7 @@ import { memoryStorage } from 'multer'
 import { RequireFeature, RequireModule } from '../modules-registry/module.guard'
 import { CV_MAX_MB, PUBLIC_CAREERS_FEATURE } from './careers'
 import { CareersService } from './careers.service'
+import { JobShareService } from './job-share.service'
 
 // القيم كلها بتتفحص في الخدمة برسايلها (النموذج متعدد الأجزاء: كله نصوص)
 class PublicApplicationDto {
@@ -25,7 +26,15 @@ class PublicApplicationDto {
 @RequireFeature(PUBLIC_CAREERS_FEATURE)
 @Controller('careers')
 export class CareersController {
-  constructor(private readonly careers: CareersService) {}
+  constructor(private readonly careers: CareersService, private readonly share: JobShareService) {}
+
+  // B-ADD.6: فيد XML للوظائف المنشورة «خارجي» (indeed.xml وlinkedin.xml) على لينك ثابت — نفس خانات الصفحة العامة بس
+  @Get('feed/:name')
+  @Header('Content-Type', 'application/xml; charset=utf-8')
+  @Header('Cache-Control', 'no-store')
+  feed(@Param('name') name: string) {
+    return this.share.feed(name)
+  }
 
   @Get('jobs')
   @Header('Cache-Control', 'no-store')

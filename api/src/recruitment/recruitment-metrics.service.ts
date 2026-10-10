@@ -7,6 +7,7 @@ import { branchScopeOf, inBranchScope } from '../auth/guards'
 import { CandidateApplication } from './candidate-application.entity'
 import { candidateApplicationsReady } from './candidate-applications'
 import { CandidateStageLog } from './candidate-stage-log.entity'
+import { knownSourceLabel } from './job-share'
 import { CANDIDATE_STAGES, CANDIDATE_STAGE_LABELS, candidateStageLogReady } from './candidate-stages.service'
 import { CandidateOffer } from './offer.entity'
 import { offersReady } from './offers.service'
@@ -53,7 +54,11 @@ export class RecruitmentMetricsService {
     const entered = new Map<string, Set<number>>()
     for (const move of moves) (entered.get(move.toStage) ?? entered.set(move.toStage, new Set()).get(move.toStage)!).add(move.candidateId)
     const sources = new Map<string, number>()
-    for (const application of applications) sources.set(application.source ?? 'غير محدد', (sources.get(application.source ?? 'غير محدد') ?? 0) + 1)
+    // B-ADD.6: المصدر المعروف (LinkedIn، Facebook…) بيتجمّع على اسمه مهما اتكتب (مفتاح اللينك، أو كتابة مسؤول التوظيف بالإيد)
+    for (const application of applications) {
+      const source = knownSourceLabel(application.source) ?? application.source ?? 'غير محدد'
+      sources.set(source, (sources.get(source) ?? 0) + 1)
+    }
     return {
       candidates: candidates.length,
       openJobs: { count: open.length, averageAgeDays: average(open.map((job) => daysBetween(job.publishedAt ?? job.createdAt, now))) },

@@ -12,9 +12,9 @@ import { StoredFile } from '../files/stored-file.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { CandidateApplication } from './candidate-application.entity'
-import { assertNotDuplicateOnJob, candidateApplicationsReady, cleanNationalId, cleanSource } from './candidate-applications'
+import { assertNotDuplicateOnJob, candidateApplicationsReady, cleanNationalId } from './candidate-applications'
 import {
-  AttemptLimiter, CAREERS_CV_SIZE, CAREERS_TOO_MANY, CV_ENTITY_TYPE, CV_FILE_TYPES, CV_MAX_MB, SOURCE_PUBLIC, assertConsent, cleanApplicantEmail, cleanApplicantName, cleanApplicantPhone, uploadedFileName,
+  AttemptLimiter, CAREERS_CV_SIZE, CAREERS_TOO_MANY, CV_ENTITY_TYPE, CV_FILE_TYPES, CV_MAX_MB, assertConsent, cleanApplicantEmail, cleanApplicantName, cleanApplicantPhone, publicSource, uploadedFileName,
 } from './careers'
 import { RecruitmentJob } from './recruitment-job.entity'
 import { jobCode, recruitmentJobsReady } from './recruitment-rules'
@@ -46,7 +46,8 @@ export class CareersService {
     }
   }
 
-  private async views(em: EntityManager, jobs: RecruitmentJob[]) {
+  // B-ADD.6: نفس الشكل العام بيتبني عليه بوست «انشر الوظيفة» والفيد (job-share.service.ts) — مفيش خانة بتطلع من غير ما تعدّي من هنا
+  async views(em: EntityManager, jobs: RecruitmentJob[]) {
     if (!jobs.length) return []
     const branches = new Map((await em.getRepository(Branch).find({ where: { id: In([...new Set(jobs.map((job) => job.branchId))]) } })).map((row) => [row.id, row.name]))
     return jobs.map((job) => this.view(job, branches))
@@ -54,8 +55,7 @@ export class CareersService {
 
   async list() {
     const em = this.ds.manager
-    if (!(await this.ready(em))) return { jobs: [] }
-    return { jobs: await this.views(em, await em.getRepository(RecruitmentJob).find({ where: { status: 'PUBLISHED', external: true }, order: { publishedAt: 'DESC', id: 'DESC' } })) }
+    return { jobs: await this.published(em) }
   }
 
   async detail(id: number) {
@@ -63,6 +63,12 @@ export class CareersService {
     const job = (await this.ready(em)) ? await em.getRepository(RecruitmentJob).findOne({ where: { id, status: 'PUBLISHED', external: true } }) : null
     if (!job) throw new NotFoundException(JOB_NOT_FOUND)
     return (await this.views(em, [job]))[0]
+  }
+
+  /** B-ADD.6: كل الوظائف المنشورة «خارجي» بشكلها العام — للفيد */
+  async published(em: EntityManager) {
+    if (!(await this.ready(em))) return []
+    return this.views(em, await em.getRepository(RecruitmentJob).find({ where: { status: 'PUBLISHED', external: true }, order: { publishedAt: 'DESC', id: 'DESC' } }))
   }
 
   private async cvRules() {
@@ -79,7 +85,7 @@ export class CareersService {
   async apply(jobId: number, input: PublicApplicationInput, file: PublicCvFile | undefined, clientKey: string) {
     if (!this.limiter.take(clientKey || 'unknown')) throw new HttpException(CAREERS_TOO_MANY, HttpStatus.TOO_MANY_REQUESTS)
     const fullName = cleanApplicantName(input.fullName), email = cleanApplicantEmail(input.email), phone = cleanApplicantPhone(input.phone)
-    const nationalId = cleanNationalId(input.nationalId), source = cleanSource(input.source, SOURCE_PUBLIC)
+    const nationalId = cleanNationalId(input.nationalId), source = publicSource(input.source)
     assertConsent(input.consent)
     let cv: { storedName: string; mime: string; size: number; originalName: string } | null = null
     if (file) {

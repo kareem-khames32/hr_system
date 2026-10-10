@@ -1,5 +1,7 @@
 import { BadRequestException } from '@nestjs/common'
 import type { FileType } from '../files/file-type'
+import { cleanSource } from './candidate-applications'
+import { knownSourceLabel } from './job-share'
 
 // B3.3-ب: قواعد التقديم من اللينك العام — من غير دخول، فكل قيمة بتتفحص هنا برسالتها، والطلبات محدودة بالعنوان.
 
@@ -34,6 +36,13 @@ export function cleanApplicantPhone(raw: unknown): string {
   const digits = value.replace(/[٠-٩]/g, (digit) => String(digit.charCodeAt(0) - 0x660)).replace(/\D/g, '')
   if (value.length > 50 || !/^[\d٠-٩+\-() ]+$/.test(value) || digits.length < 7 || digits.length > 15) throw new BadRequestException(CAREERS_PHONE)
   return value
+}
+/**
+ * B-ADD.6: مصدر المتقدّم من اللينك العام (`?src=`) — من قايمة المصادر المعروفة بس (LinkedIn، Facebook…)، وأي نص تاني = «لينك عام»:
+ * الصفحة من غير دخول، فمفيش نص حر من برّه بيتخزّن ويتعرض لمسؤول التوظيف. النوع والطول بيتفحصوا زي الأول.
+ */
+export function publicSource(raw: unknown): string {
+  return knownSourceLabel(cleanSource(raw, '')) ?? SOURCE_PUBLIC
 }
 /** اسم الملف زي ما المتقدّم رفعه (multer بيقرا الأسماء العربي latin1 — نفس معالجة التعديل الجماعي للموظفين) */
 export function uploadedFileName(name: unknown): string {

@@ -10,6 +10,8 @@ import { AuthModule } from '../auth/auth.module'
 import { CandidateInterview, InterviewScorecard } from './interview.entities'
 import { MyInterviewsController, RecruitmentInterviewsController } from './interviews.controller'
 import { InterviewsService } from './interviews.service'
+import { JobShareController } from './job-share.controller'
+import { JobShareService } from './job-share.service'
 import { CandidateOffer } from './offer.entity'
 import { OfferLinkController, RecruitmentOffersController } from './offers.controller'
 import { OffersService } from './offers.service'
@@ -26,11 +28,12 @@ import { RecruitmentOpeningsController } from './recruitment-openings.controller
 // B3.4-أ: نقل المرشح بين المراحل وسجله (candidate_stage_log).
 // B3.4-ب: المقابلات وبطاقات التقييم (AuthModule لخدمة البريد: دعوة .ics).
 // B3.5-أ: عروض العمل (candidate_offers) ولينك رد المرشح.
+// B-ADD.6: «انشر الوظيفة» على السوشيال ميديا وفيد XML العام (قراءة بس — ConfigModule وموديول السجل عامّين).
 @Module({
   imports: [AuthModule, TypeOrmModule.forFeature([RecruitmentJob, CandidateApplication, CandidateStageLog, CandidateInterview, InterviewScorecard, CandidateOffer])],
   controllers: [RecruitmentJobsController, RecruitmentOpeningsController, CareersController, RecruitmentInterviewsController, MyInterviewsController, RecruitmentOffersController,
-    OfferLinkController],
-  providers: [RecruitmentJobsService, CandidateApplicationsService, CareersService, CandidateStagesService, InterviewsService, OffersService, RecruitmentMetricsService],
+    OfferLinkController, JobShareController],
+  providers: [RecruitmentJobsService, CandidateApplicationsService, CareersService, CandidateStagesService, InterviewsService, OffersService, RecruitmentMetricsService, JobShareService],
   exports: [RecruitmentJobsService, CandidateApplicationsService, CandidateStagesService],
 })
 export class RecruitmentModule {}
