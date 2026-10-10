@@ -404,3 +404,26 @@ test('RV-05: المعايرة والاعتراض — تعديل بسبب قبل 
   assert.deepEqual(log.map(entry => [JSON.parse(entry.answers).objectionRequestId, Number(entry.score), entry.submittedByUserId]), [[null, 65.5, users.cal.id], [filed.id, 72, users.cal.id]])
   assert.deepEqual([expectStatus(await request(users.rep, 'GET', R + '/' + rep), 200).finalScore, await audits('REVIEW_CALIBRATED')], [72, 2])
 })
+
+// B-ADD.1 (ب): جمهور الدورة بالاستهداف الموحد — وضع AUDIENCE جنب الأوضاع القديمة
+test('RV-06: a cycle with a unified audience (a unit with what is under it, minus the excluded) launches for its people only, inside the manager\'s branches', async () => {
+  const body = (audience, extra = {}) => cycleBody({ name: 'دورة بالاستهداف الموحد', audienceMode: 'AUDIENCE', audienceIds: undefined, audience, ...extra })
+  const unit = (branch, department, exclude) => ({ mode: 'all', ids: [], where: { mode: 'units', ids: [department.id], branchId: branch.id }, ...(exclude ? { exclude } : {}) })
+  // حساب الفروع: من غير تحديد (كل الشركة) أو فرع تاني مرفوض؛ ووحدة مش تبع فرعها 400
+  assert.equal((await request(users.hrB, 'POST', R + '/cycles', body(null))).status, 403)
+  assert.equal((await request(users.hrB, 'POST', R + '/cycles', body(unit(org.branchA, org.sales)))).status, 403)
+  assert.equal((await request(users.admin, 'POST', R + '/cycles', body(unit(org.branchB, org.sales)))).status, 400)
+  assert.equal((await request(users.admin, 'POST', R + '/cycles', body({ mode: 'roles', ids: ['hr'], where: null }))).status, 400)
+  const before = await repo('ReviewCycle').count()
+  const made = expectStatus(await request(users.hrA, 'POST', R + '/cycles', body(unit(org.branchA, org.sales, [emps.peer.id]))), 201)
+  assert.deepEqual([made.audienceMode, made.audienceIds, made.audience], ['AUDIENCE', [], unit(org.branchA, org.sales, [emps.peer.id])])
+  assert.equal(await repo('ReviewCycle').count(), before + 1)
+  // حساب فرع تاني مايشوفهاش؛ والإطلاق لموظفين الوحدة الحاليين ماعدا المستثنى
+  assert.equal(expectStatus(await request(users.hrB, 'GET', R + '/cycles'), 200).cycles.some(row => row.id === made.id), false)
+  const launched = expectStatus(await request(users.hrA, 'POST', R + `/cycles/${made.id}/launch`), 200)
+  const assigned = (await repo('ReviewAssignment').find({ where: { cycleId: made.id } })).map(row => row.employeeId).sort((a, b) => a - b)
+  assert.deepEqual([launched.status, assigned.includes(emps.peer.id), assigned.includes(emps.rep.id), assigned.includes(emps.b1.id), assigned.includes(emps.gone.id)], ['ACTIVE', false, true, false, false])
+  // من غير تحديد من حساب كل الفروع = دورة كل الشركة بوضعها القديم
+  const company = expectStatus(await request(users.admin, 'POST', R + '/cycles', body(null, { name: 'كل الشركة من الحقل الموحد' })), 201)
+  assert.deepEqual([company.audienceMode, company.audience], ['COMPANY', null])
+})

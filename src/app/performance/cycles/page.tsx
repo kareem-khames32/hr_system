@@ -7,11 +7,12 @@ import Link from 'next/link'
 import { Plus, RefreshCcw, X } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import EmptyState from '@/components/EmptyState'
-import { fetchBranches, fetchDepartments, type ApiBranch, type ApiDepartment } from '@/lib/api'
+import { OrgAudienceField } from '@/components/OrgAudienceField'
+import type { StoredAudience } from '@/lib/org-audience'
 import { formatDate } from '@/lib/dates'
 import {
   REVIEW_CYCLE_KIND_LABELS, advanceReviewCycle, closeReviewCycle, createReviewCycle, fetchCycleAssignments, fetchReviewCycles, fetchReviewTemplates, launchReviewCycle,
-  type ApiCycleAssignment, type ApiReviewCycle, type ApiReviewTemplate, type ReviewAudienceMode, type ReviewCycleKind, type ReviewCycleStatus,
+  type ApiCycleAssignment, type ApiReviewCycle, type ApiReviewTemplate, type ReviewCycleKind, type ReviewCycleStatus,
 } from '@/lib/reviews-api'
 import RewardsPanel from './RewardsPanel'
 
@@ -201,8 +202,6 @@ export default function ReviewCyclesPage() {
 
 function CycleModal({ canCompany, onClose, onDone }: { canCompany: boolean; onClose: () => void; onDone: () => void }) {
   const [templates, setTemplates] = useState<ApiReviewTemplate[]>([])
-  const [branches, setBranches] = useState<ApiBranch[]>([])
-  const [departments, setDepartments] = useState<ApiDepartment[]>([])
   const [name, setName] = useState('')
   const [kind, setKind] = useState<ReviewCycleKind>('ANNUAL')
   const [templateId, setTemplateId] = useState('')
@@ -210,27 +209,24 @@ function CycleModal({ canCompany, onClose, onDone }: { canCompany: boolean; onCl
   const [periodEnd, setPeriodEnd] = useState('')
   const [selfDueDate, setSelfDueDate] = useState('')
   const [managerDueDate, setManagerDueDate] = useState('')
-  const [audienceMode, setAudienceMode] = useState<ReviewAudienceMode>(canCompany ? 'COMPANY' : 'DEPARTMENTS')
-  const [audienceIds, setAudienceIds] = useState<number[]>([])
+  // B-ADD.1: جمهور الدورة بالاستهداف الموحد (الشركة ← فرع ← إدارة ← قسم ← فريق ← موظفين بالاسم + «الكل ماعدا…» ومعاينة)
+  const [audience, setAudience] = useState<StoredAudience | null>(null)
+  const [audienceComplete, setAudienceComplete] = useState(canCompany)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
     fetchReviewTemplates().then((data) => setTemplates(data.templates.filter((row) => row.isActive))).catch(() => setTemplates([]))
-    fetchBranches().then(setBranches).catch(() => setBranches([]))
-    fetchDepartments().then(setDepartments).catch(() => setDepartments([]))
   }, [])
 
-  const options = audienceMode === 'BRANCHES' ? branches.map((row) => ({ id: row.id, name: row.name })) : audienceMode === 'DEPARTMENTS' ? departments.map((row) => ({ id: row.id, name: row.name })) : []
-  const toggle = (id: number) => setAudienceIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]))
   const datesOk = periodStart !== '' && periodEnd !== '' && periodEnd >= periodStart && selfDueDate !== '' && managerDueDate !== '' && managerDueDate >= selfDueDate
-  const valid = name.trim().length >= 3 && templateId !== '' && datesOk && (audienceMode === 'COMPANY' || audienceIds.length > 0)
+  const valid = name.trim().length >= 3 && templateId !== '' && datesOk && audienceComplete
 
   const submit = async () => {
     setSaving(true)
     setError('')
     try {
-      await createReviewCycle({ name: name.trim(), kind, templateId: Number(templateId), periodStart, periodEnd, selfDueDate, managerDueDate, audienceMode, ...(audienceMode === 'COMPANY' ? {} : { audienceIds }) })
+      await createReviewCycle({ name: name.trim(), kind, templateId: Number(templateId), periodStart, periodEnd, selfDueDate, managerDueDate, audienceMode: 'AUDIENCE', audience })
       onDone()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'تعذر حفظ الدورة')
@@ -302,25 +298,10 @@ function CycleModal({ canCompany, onClose, onDone }: { canCompany: boolean; onCl
               <input type="date" className="input w-full mt-1" min={selfDueDate} value={managerDueDate} onChange={(e) => setManagerDueDate(e.target.value)} />
             </label>
           </div>
-          <label className="block text-sm text-gray-700">
-            الجمهور
-            <select className="input w-full mt-1" value={audienceMode} onChange={(e) => { setAudienceMode(e.target.value as ReviewAudienceMode); setAudienceIds([]) }}>
-              {canCompany && <option value="COMPANY">كل الشركة</option>}
-              <option value="BRANCHES">فروع محددة</option>
-              <option value="DEPARTMENTS">أقسام محددة</option>
-            </select>
-          </label>
-          {audienceMode !== 'COMPANY' && (
-            <div className="border border-gray-200 rounded-lg max-h-40 overflow-auto divide-y divide-gray-100">
-              {options.map((row) => (
-                <label key={row.id} className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 cursor-pointer hover:bg-gray-50">
-                  <input type="checkbox" checked={audienceIds.includes(row.id)} onChange={() => toggle(row.id)} />
-                  {row.name}
-                </label>
-              ))}
-              {options.length === 0 && <p className="px-3 py-2 text-sm text-gray-500">مفيش اختيارات في نطاقك.</p>}
-            </div>
-          )}
+          <div data-review-cycle-audience>
+            <OrgAudienceField value={audience} disabled={saving} onChange={(next, complete) => { setAudience(next); setAudienceComplete(complete) }} />
+            <p className="text-xs text-gray-500 mt-1">المشاركين بيتحددوا وقت إطلاق الدورة من موظفين الجمهور الحاليين ساعتها.</p>
+          </div>
         </div>
         <div className="p-6 border-t border-gray-100 flex justify-end gap-2">
           <button onClick={onClose} className="btn-secondary">

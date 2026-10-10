@@ -31,6 +31,8 @@ class SessionDto {
 }
 class EnrollDto {
   @IsOptional() employeeIds?: unknown
+  // B-ADD.1: «على مين؟» بالاستهداف الموحد بدل قايمة الأسماء (الجسم خام والحكم في الخدمة)
+  @IsOptional() audience?: unknown
 }
 class MarkDto {
   @IsOptional() status?: unknown
@@ -104,7 +106,7 @@ export class TrainingController {
   @Post('sessions/:id/enroll')
   @HttpCode(200)
   enroll(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: EnrollDto) {
-    return this.training.enroll(user, id, dto.employeeIds)
+    return this.training.enroll(user, id, dto.employeeIds, dto.audience)
   }
 
   @Perm('training.manage')

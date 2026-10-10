@@ -9,12 +9,15 @@ import { User } from '../auth/user.entity'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
+import { audienceMembersNow } from '../org/audience-preview'
+import { assertAudienceTargets, audienceBranchIds, orgAudienceJson } from '../org/org-audience'
 import { ApproverResolver } from '../requests/approver-resolver.service'
+import { parseRequestAudience } from '../requests/request-audience'
 import { Request } from '../requests/entities/request.entity'
 import { Task } from '../tasks/task.entity'
 import { PerformanceGoal } from './goal.entities'
 import { goalsReady } from './goal-rules'
-import { ReviewAssignment, ReviewCycle, ReviewResponse, ReviewTemplate, type ReviewRelation } from './review.entities'
+import { ReviewAssignment, ReviewCycle, ReviewResponse, ReviewTemplate, type ReviewAudienceMode, type ReviewRelation } from './review.entities'
 import { OBJECTION_ACCEPTED, OBJECTION_STATUS_LABELS, objectionDeadline, objectionOf, objectionsOf } from './review-objections'
 import {
   REVIEW_BANDS, REVIEW_CALIBRATE_PERMISSION, REVIEW_CALIBRATION_CHANGED, REVIEW_CALIBRATION_SAME, REVIEW_CALIBRATION_STAGE, bandDistribution, cleanCalibratedScore, cleanCalibrationReason, reviewBand,
@@ -26,7 +29,13 @@ import {
 export interface TemplateInput { name?: unknown; description?: unknown; ratingMax?: unknown; sections?: unknown; isActive?: unknown }
 export interface CycleInput {
   name?: unknown; kind?: unknown; templateId?: unknown; periodStart?: unknown; periodEnd?: unknown; selfDueDate?: unknown; managerDueDate?: unknown; audienceMode?: unknown; audienceIds?: unknown
+  /** B-ADD.1: الجمهور بالاستهداف الموحد (audienceMode = AUDIENCE) */
+  audience?: unknown
 }
+// B-ADD.1: وضع جمهور جديد جنب الأوضاع القديمة (COMPANY / BRANCHES / DEPARTMENTS اللي بتفضل زي ما هي): الجمهور كله (فرع ← إدارة ← قسم
+// ← فريق ← موظفين بالاسم + «الكل ماعدا…») بنفس شكل «مين + فين» في عمود audienceIds نفسه، والفروع اللي بيغطيها في branchIds
+export const REVIEW_AUDIENCE_UNIFIED = 'AUDIENCE'
+const REVIEW_AUDIENCE_TEXT_MAX = 2000
 export const REVIEWS_PERMISSION = 'performance.manage'
 const ENDED = ['terminated', 'archived']
 const day = (value: unknown): string => String(value).slice(0, 10)
@@ -123,7 +132,8 @@ export class ReviewsService {
       return {
         id: row.id, name: row.name, kind: row.kind, kindLabel: REVIEW_CYCLE_KIND_LABELS[row.kind] ?? row.kind, templateId: row.templateId, templateName: templates.get(row.templateId) ?? null,
         periodStart: day(row.periodStart), periodEnd: day(row.periodEnd), selfDueDate: day(row.selfDueDate), managerDueDate: day(row.managerDueDate),
-        audienceMode: row.audienceMode, audienceIds: ids(row.audienceIds), status: row.status, statusLabel: REVIEW_CYCLE_STATUS_LABELS[row.status] ?? row.status, launchedAt: row.launchedAt ?? null,
+        audienceMode: row.audienceMode, audienceIds: ids(row.audienceIds),
+        audience: (row.audienceMode as string) === REVIEW_AUDIENCE_UNIFIED ? parseRequestAudience(row.audienceIds) : null, status: row.status, statusLabel: REVIEW_CYCLE_STATUS_LABELS[row.status] ?? row.status, launchedAt: row.launchedAt ?? null,
         counts: { total: mine.length, self: mine.filter((assignment) => assignment.selfSubmittedAt).length, manager: mine.filter((assignment) => assignment.managerSubmittedAt).length,
           noManager: mine.filter((assignment) => assignment.managerEmployeeId == null).length },
       }
@@ -139,9 +149,19 @@ export class ReviewsService {
   }
 
   /** جمهور الدورة والفروع اللي بتغطيها: كل الشركة لحساب من غير قيد فروع بس؛ والفروع أو الأقسام لازم تبقى موجودة وفي نطاق الحساب (بفرع القسم الحالي) */
-  private async audienceOf(em: EntityManager, user: JwtPayload, rawMode: unknown, rawIds: unknown) {
-    const { audienceMode, ids: chosen } = cleanCycleAudience(rawMode, rawIds)
+  private async audienceOf(em: EntityManager, user: JwtPayload, rawMode: unknown, rawIds: unknown, rawAudience?: unknown) {
     const scope = branchScopeOf(user)
+    // B-ADD.1: الاستهداف الموحد. من غير تحديد = كل الشركة (بقاعدتها)؛ وحساب الفروع جمهوره متثبّت بفرع من فروعه؛ والأرقام تبع فرع اختيارها
+    if (rawMode === REVIEW_AUDIENCE_UNIFIED) {
+      const text = orgAudienceJson(rawAudience, 'جمهور الدورة')
+      const branches = audienceBranchIds(text)
+      if (scope !== null && (!branches || branches.some((id) => !inBranchScope(scope, id)))) throw new ForbiddenException('دورة لكل الشركة لصاحب الصلاحية من غير قيد فروع — اختار جمهور من فروعك')
+      if (text === null) return { audienceMode: 'COMPANY' as ReviewAudienceMode, audienceIds: null, branchIds: null }
+      if (text.length > REVIEW_AUDIENCE_TEXT_MAX) throw new BadRequestException('جمهور الدورة أكبر من الحد — اختار بالإدارة أو القسم أو الفريق بدل أسماء كتير')
+      await assertAudienceTargets(em, text, 'جمهور الدورة')
+      return { audienceMode: REVIEW_AUDIENCE_UNIFIED as ReviewAudienceMode, audienceIds: text, branchIds: branches ? JSON.stringify([...branches].sort((a, b) => a - b)) : null }
+    }
+    const { audienceMode, ids: chosen } = cleanCycleAudience(rawMode, rawIds)
     if (audienceMode === 'COMPANY') {
       if (scope !== null) throw new ForbiddenException('دورة لكل الشركة لصاحب الصلاحية من غير قيد فروع — اختار فروعك أو أقسامك')
       return { audienceMode, audienceIds: null, branchIds: null }
@@ -163,7 +183,7 @@ export class ReviewsService {
     await this.assertReady(em)
     const template = Number.isSafeInteger(input.templateId) ? await em.getRepository(ReviewTemplate).findOne({ where: { id: input.templateId as number } }) : null
     if (!template || template.isActive !== true) throw new BadRequestException('اختار نموذج تقييم متاح')
-    const audience = await this.audienceOf(em, user, input.audienceMode, input.audienceIds)
+    const audience = await this.audienceOf(em, user, input.audienceMode, input.audienceIds, input.audience)
     const row = await em.getRepository(ReviewCycle).save(em.getRepository(ReviewCycle).create({ name, kind, templateId: template.id, ...dates, ...audience, status: 'DRAFT', templateSnapshot: null,
       launchedAt: null, launchedByUserId: null, createdByUserId: user.sub, createdAt: new Date(), closedAt: null }))
     return (await this.cycleViews(em, [row]))[0]
@@ -189,7 +209,10 @@ export class ReviewsService {
     if (!seen || !this.cycleInScope(user, seen)) throw new NotFoundException(REVIEW_CYCLE_NOT_FOUND)
     if (seen.status !== 'DRAFT') throw new BadRequestException('الدورة اتطلقت قبل كده')
     const chosen = ids(seen.audienceIds)
-    const where = seen.audienceMode === 'COMPANY' ? {} : seen.audienceMode === 'BRANCHES' ? { branchId: In(chosen) } : { departmentId: In(chosen) }
+    // B-ADD.1: جمهور بالاستهداف الموحد = موظفينه الحاليين دلوقتي بنفس المقيّم (الإدارة بتشمل اللي تحتها، والمستثنى برّه)
+    const unified = (seen.audienceMode as string) === REVIEW_AUDIENCE_UNIFIED
+    const members = unified ? (await audienceMembersNow(em0, seen.audienceIds, null)).map((member) => member.id) : []
+    const where = unified ? { id: In(members.length ? members : [-1]) } : seen.audienceMode === 'COMPANY' ? {} : seen.audienceMode === 'BRANCHES' ? { branchId: In(chosen) } : { departmentId: In(chosen) }
     const participants = (await em0.getRepository(Employee).find({ where: { isActive: true, ...where }, order: { id: 'ASC' } })).filter((row) => !ENDED.includes(row.status) && row.branchId != null)
     if (!participants.length) throw new BadRequestException('مفيش موظفين شغالين في جمهور الدورة')
     const managers = new Map<number, number | null>()

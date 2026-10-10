@@ -41,6 +41,9 @@ export const fetchTrainingSessions = () => apiFetch<{ available: boolean; messag
 export const createTrainingSession = (body: SessionBody) => apiFetch<ApiTrainingSession>(`${T}/sessions`, json('POST', body))
 export const fetchTrainingSession = (id: number) => apiFetch<ApiSessionDetail>(`${T}/sessions/${id}`)
 export const updateTrainingSession = (id: number, body: Partial<SessionBody> & { status?: TrainingSessionStatus }) => apiFetch<ApiSessionDetail>(`${T}/sessions/${id}`, json('PATCH', body))
+// B-ADD.1: تسجيل مجموعة بالاستهداف الموحد (الخادم بيفكّها لموظفينها الحاليين جوه نطاق الحساب)
+export const enrollAudienceInTraining = (id: number, audience: unknown) =>
+  apiFetch<ApiSessionDetail & { enrolled: number; already: number }>(`${T}/sessions/${id}/enroll`, json('POST', { audience }))
 export const enrollInTraining = (id: number, employeeIds: number[]) => apiFetch<ApiSessionDetail & { enrolled: number; already: number }>(`${T}/sessions/${id}/enroll`, json('POST', { employeeIds }))
 export const markTrainingEnrollment = (id: number, status: Exclude<TrainingEnrollmentStatus, 'ENROLLED'>, result?: string) =>
   apiFetch<ApiSessionDetail>(`${T}/enrollments/${id}/mark`, json('POST', { status, ...(result ? { result } : {}) }))

@@ -6,7 +6,9 @@ import { recordAudit } from '../audit/audit'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, inBranchScope, userHasPerm } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
+import { audienceMembersNow } from '../org/audience-preview'
 import { Branch } from '../org/entities/branch.entity'
+import { assertAudienceTargets, orgAudienceJson } from '../org/org-audience'
 import { TrainingCourse, TrainingEnrollment, TrainingSession, type TrainingEnrollmentStatus } from './training.entities'
 import {
   TRAINING_CERT_CODE, TRAINING_CERT_NAME, TRAINING_COURSE_NOT_FOUND, TRAINING_ENROLLMENT_NOT_FOUND, TRAINING_ENROLLMENT_STATUS_LABELS, TRAINING_FULL, TRAINING_KIND_LABELS, TRAINING_MARK_FINAL,
@@ -198,8 +200,18 @@ export class TrainingService {
    * تسجيل مجموعة في جلسة — تحت قفل صف الجلسة (السعة بتتحسب تحته): الجلسة مجدولة، وكل موظف شغال وفرعه الحالي في نطاق الحساب وإلا «غير موجود»،
    * والمسجّل قبل كده بيتعدّى. كلهم أو ولا واحد لو السعة ماتكفّيش.
    */
-  async enroll(user: JwtPayload, sessionId: number, rawIds: unknown) {
+  async enroll(user: JwtPayload, sessionId: number, rawIds: unknown, rawAudience?: unknown) {
     this.assertManager(user)
+    // B-ADD.1: التسجيل بجمهور (فرع ← إدارة ← قسم ← فريق ← موظفين + «الكل ماعدا…») بيتفك لموظفينه الحاليين جوه نطاق الحساب دلوقتي، وبعدها
+    // نفس أحكام التسجيل بالأسماء بالحرف (الجلسة مجدولة، والسعة، والمسجّل قبل كده بيتعدّى)
+    if (rawAudience !== undefined) {
+      const audience = orgAudienceJson(rawAudience, 'جمهور التسجيل')
+      await assertAudienceTargets(this.ds.manager, audience, 'جمهور التسجيل')
+      const members = await audienceMembersNow(this.ds.manager, audience, branchScopeOf(user))
+      if (!members.length) throw new BadRequestException('مفيش موظفين في الجمهور ده جوه نطاقك')
+      if (members.length > 500) throw new BadRequestException('الجمهور أكبر من 500 موظف — قسّمه على أكتر من مرة')
+      rawIds = members.map((member) => member.id)
+    }
     if (!Array.isArray(rawIds) || !rawIds.length || rawIds.length > 500 || rawIds.some((id) => typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1)) throw new BadRequestException('اختار موظفين (من 1 لـ500)')
     const ids = [...new Set(rawIds as number[])]
     const result = await this.ds.transaction(async (em) => {

@@ -14,17 +14,18 @@ export interface TemplateBody {
 
 export type ReviewCycleKind = 'ANNUAL' | 'SEMI_ANNUAL' | 'PROBATION' | 'PROJECT'
 export const REVIEW_CYCLE_KIND_LABELS: Record<ReviewCycleKind, string> = { ANNUAL: 'سنوي', SEMI_ANNUAL: 'نصف سنوي', PROBATION: 'فترة تجربة', PROJECT: 'مشروع' }
-export type ReviewAudienceMode = 'COMPANY' | 'BRANCHES' | 'DEPARTMENTS'
+// AUDIENCE (B-ADD.1): الجمهور بالاستهداف الموحد في خانة audience؛ الأوضاع التانية للدورات القديمة
+export type ReviewAudienceMode = 'COMPANY' | 'BRANCHES' | 'DEPARTMENTS' | 'AUDIENCE'
 export type ReviewCycleStatus = 'DRAFT' | 'ACTIVE' | 'CLOSED'
 export interface ApiReviewCycle {
   id: number; name: string; kind: ReviewCycleKind; kindLabel: string; templateId: number; templateName: string | null
   periodStart: string; periodEnd: string; selfDueDate: string; managerDueDate: string
-  audienceMode: ReviewAudienceMode; audienceIds: number[]; status: ReviewCycleStatus; statusLabel: string; launchedAt: string | null
+  audienceMode: ReviewAudienceMode; audienceIds: number[]; audience?: unknown; status: ReviewCycleStatus; statusLabel: string; launchedAt: string | null
   counts: { total: number; self: number; manager: number; noManager: number }
 }
 export interface CycleBody {
   name: string; kind: ReviewCycleKind; templateId: number; periodStart: string; periodEnd: string; selfDueDate: string; managerDueDate: string
-  audienceMode: ReviewAudienceMode; audienceIds?: number[]
+  audienceMode: ReviewAudienceMode; audienceIds?: number[]; audience?: unknown
 }
 export type ReviewStatus = 'OPEN' | 'COMPLETED' | 'APPROVED' | 'ANNOUNCED' | 'ACKNOWLEDGED'
 export interface ApiCycleAssignment {

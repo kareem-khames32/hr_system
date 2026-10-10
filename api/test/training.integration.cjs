@@ -382,3 +382,25 @@ test('TR-05: ميزانية الأقسام وتقرير التكلفة مقاب�
   const none = expectStatus(await remove(users.admin, company), 200)
   assert.deepEqual([none.requirements, none.missing], [[], []])
 })
+
+// B-ADD.1 (ب): تسجيل مجموعة في جلسة بالاستهداف الموحد
+test('TR-06: enrolling by a unified audience registers the current employees of the audience inside the account scope, under the same session rules', async () => {
+  const fresh = expectStatus(await request(users.hrA, 'POST', T + '/sessions', session({ capacity: 10, startDate: '2026-12-01', endDate: '2026-12-02' })), 201).id
+  const group = (user, audience, target = fresh) => request(user, 'POST', T + `/sessions/${target}/enroll`, { audience })
+  const branch = id => ({ mode: 'all', ids: [], where: { mode: 'branches', ids: [id] } })
+  // فرع برّه نطاق الحساب: مفيش حد؛ وجمهور بشكل مش من المنتقي مرفوض
+  assert.deepEqual(answer(await group(users.hrA, branch(org.branchB.id))), [400, 'مفيش موظفين في الجمهور ده جوه نطاقك'])
+  assert.equal((await group(users.hrA, { mode: 'roles', ids: ['hr'], where: null })).status, 400)
+  // الفرع كله ماعدا واحد: الحاليين بس (المنتهي برّه)، والمستثنى مايتسجّلش
+  const made = expectStatus(await group(users.hrA, { ...branch(org.branchA.id), exclude: [emps.a3.id] }), 200)
+  const enrolled = (await repo('TrainingEnrollment').find({ where: { sessionId: fresh } })).map(row => row.employeeId)
+  assert.deepEqual([enrolled.includes(emps.a1.id), enrolled.includes(emps.a2.id), enrolled.includes(emps.a3.id), enrolled.includes(emps.gone.id), enrolled.includes(emps.b1.id), made.enrolled === enrolled.length],
+    [true, true, false, false, false, true])
+  // مرة تانية: المسجّل قبل كده بيتعدّى
+  const again = expectStatus(await group(users.hrA, branch(org.branchA.id)), 200)
+  assert.deepEqual([again.enrolled, again.already], [1, enrolled.length])
+  // السعة لسه بتحكم: جلسة بمقعدين وجمهور أكبر = ولا واحد
+  const small = expectStatus(await request(users.hrA, 'POST', T + '/sessions', session({ capacity: 2, startDate: '2026-12-05', endDate: '2026-12-06' })), 201).id
+  assert.equal((await group(users.hrA, branch(org.branchA.id), small)).status, 400)
+  assert.equal(await repo('TrainingEnrollment').count({ where: { sessionId: small } }), 0)
+})

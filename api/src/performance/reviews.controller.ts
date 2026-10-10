@@ -23,6 +23,8 @@ class CycleDto {
   @IsOptional() managerDueDate?: unknown
   @IsOptional() audienceMode?: unknown
   @IsOptional() audienceIds?: unknown
+  // B-ADD.1: «على مين؟» بالاستهداف الموحد (مع audienceMode = AUDIENCE). الجسم خام والحكم في الخدمة
+  @IsOptional() audience?: unknown
 }
 class AdvanceDto {
   @IsOptional() to?: unknown

@@ -9,7 +9,9 @@ import { GraduationCap } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import { fetchEmployees, type ApiEmployee } from '@/lib/api'
 import { formatDate } from '@/lib/dates'
-import { enrollInTraining, fetchTrainingSession, markTrainingEnrollment, updateTrainingSession, type ApiSessionDetail, type ApiTrainingEnrollment, type TrainingEnrollmentStatus } from '@/lib/training-api'
+import { OrgAudienceField } from '@/components/OrgAudienceField'
+import type { StoredAudience } from '@/lib/org-audience'
+import { enrollAudienceInTraining, enrollInTraining, fetchTrainingSession, markTrainingEnrollment, updateTrainingSession, type ApiSessionDetail, type ApiTrainingEnrollment, type TrainingEnrollmentStatus } from '@/lib/training-api'
 
 const OPEN: TrainingEnrollmentStatus[] = ['ENROLLED', 'ATTENDED', 'ABSENT']
 
@@ -51,6 +53,16 @@ export default function TrainingSessionPage() {
     const result = status === 'COMPLETED' ? results[row.id] ?? '' : ''
     setData(await markTrainingEnrollment(row.id, status, result.trim() || undefined))
     return status === 'COMPLETED' ? `اتسجّل إكمال ${row.employeeName ?? ''}.` : 'اتحدّثت الحالة.'
+  })
+  // B-ADD.1: تسجيل مجموعة بالحقل الموحد
+  const [groupOpen, setGroupOpen] = useState(false)
+  const [audience, setAudience] = useState<StoredAudience | null>(null)
+  const [audienceComplete, setAudienceComplete] = useState(true)
+  const enrollGroup = () => run(async () => {
+    const made = await enrollAudienceInTraining(id, audience)
+    setData(made)
+    setGroupOpen(false)
+    return `اتسجّل ${made.enrolled} موظف${made.already ? ` (${made.already} مسجّل قبل كده)` : ''}.`
   })
   const enroll = () => run(async () => {
     const made = await enrollInTraining(id, picked)
@@ -195,6 +207,18 @@ export default function TrainingSessionPage() {
             <button onClick={enroll} disabled={busy || picked.length === 0} className="btn-primary text-sm disabled:opacity-50">
               سجّل المختارين ({picked.length})
             </button>
+            {/* B-ADD.1: أو مجموعة كاملة (فرع / إدارة / قسم / فريق) بالاستهداف الموحد */}
+            <div className="border-t border-gray-100 pt-3" data-enroll-group>
+              <button type="button" onClick={() => setGroupOpen((open) => !open)} className="text-sm text-primary-600 hover:underline">
+                {groupOpen ? 'إخفاء تسجيل المجموعة' : 'أو سجّل مجموعة كاملة (فرع / إدارة / قسم / فريق)'}
+              </button>
+              {groupOpen && (
+                <div className="mt-3 space-y-3">
+                  <OrgAudienceField value={audience} disabled={busy} onChange={(next, complete) => { setAudience(next); setAudienceComplete(complete) }} />
+                  <button onClick={enrollGroup} disabled={busy || !audienceComplete} className="btn-primary text-sm disabled:opacity-50">سجّل المجموعة</button>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
