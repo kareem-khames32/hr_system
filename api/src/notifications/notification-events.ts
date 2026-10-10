@@ -15,6 +15,17 @@ export interface NotificationChannel {
   enabled(): Promise<boolean>
 }
 
+// B-ADD.5: قنوات التوصيل = قنوات النص (فوق) + الواتساب. الواتساب مالوش نص هنا: رسالته قالب معتمد عند Meta مربوط بالحدث من شاشة
+// «قنوات الإشعارات» (channels/)، فمش داخل NOTIFICATION_CHANNELS (قنوات القوالب النصية).
+export const NOTIFICATION_DELIVERY_CHANNELS = [...NOTIFICATION_CHANNELS, 'WHATSAPP'] as const
+export type NotificationDeliveryChannelCode = typeof NOTIFICATION_DELIVERY_CHANNELS[number]
+export const NOTIFICATION_DELIVERY_CHANNEL_LABELS: Record<NotificationDeliveryChannelCode, string> = { ...NOTIFICATION_CHANNEL_LABELS, WHATSAPP: 'الواتساب' }
+/** لغات القوالب: العربي الأصل (نصه الافتراضي هنا)، والإنجليزي بيتكتب من الإعدادات للي لغة حسابه إنجليزي (B6.2) — من غيره بياخد العربي */
+export const NOTIFICATION_TEMPLATE_LANGUAGES = ['ar', 'en'] as const
+export type NotificationTemplateLanguage = typeof NOTIFICATION_TEMPLATE_LANGUAGES[number]
+export const isNotificationTemplateLanguage = (value: unknown): value is NotificationTemplateLanguage =>
+  (NOTIFICATION_TEMPLATE_LANGUAGES as readonly unknown[]).includes(value)
+
 export const NOTIFICATION_CATEGORIES = {
   approval: 'طلبات بانتظار اعتمادي',
   request: 'قرارات طلباتي',

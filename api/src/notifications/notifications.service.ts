@@ -6,6 +6,7 @@ import { recordAudit } from '../audit/audit'
 import { AuthService, type JwtPayload } from '../auth/auth.service'
 import { MailSendError, MailService, maskEmail } from '../auth/mail.service'
 import { User } from '../auth/user.entity'
+import { userLanguageReady } from '../auth/user-language'
 import { CommentsService } from '../comments/comments.service'
 import { AnnouncementsService } from '../announcements/announcements.service'
 import { publicationAudience } from '../attendance/schedule-tools'
@@ -27,12 +28,16 @@ import { RequestsService } from '../requests/requests.service'
 import { Task, TASK_OPEN_STATUSES, type TaskStatus } from '../tasks/task.entity'
 import { taskExtrasOfOne } from '../tasks/task-extras'
 import { taskAccess, taskAwaitsAccount, taskLocalDate, taskStampCurrent, tasksTableReady, TASK_ROLE_LABELS } from '../tasks/task-rules'
+import { maskPhone, whatsappParameters, type WhatsappBinding } from './channels/channel-rules'
+import { NotificationChannelsService } from './channels/notification-channels.service'
+import { WhatsappSendError } from './channels/whatsapp-meta'
 import { Notification, NotificationDelivery, NotificationPreference, NotificationTemplate } from './notification.entities'
 import { notificationTablesReady, NOTIFICATIONS_MIGRATION_MISSING } from './notification-store'
 import {
-  isNotificationCategory, isNotificationEvent, notificationEventDef, parseQuietHours, pickNotificationAddress, quietHoursEnd, renderNotificationText,
-  validateNotificationTemplate, NOTIFICATION_CATEGORIES, NOTIFICATION_CHANNELS, NOTIFICATION_CHANNEL_LABELS, NOTIFICATION_EVENTS, NOTIFICATION_EVENT_CODES,
-  NOTIFICATION_MODES, type NotificationCategoryCode, type NotificationChannelCode, type NotificationEventCode, type NotificationMode, type NotificationText,
+  isNotificationCategory, isNotificationEvent, isNotificationTemplateLanguage, notificationEventDef, parseQuietHours, pickNotificationAddress, quietHoursEnd, renderNotificationText,
+  validateNotificationTemplate, NOTIFICATION_CATEGORIES, NOTIFICATION_CHANNELS, NOTIFICATION_CHANNEL_LABELS, NOTIFICATION_DELIVERY_CHANNELS, NOTIFICATION_EVENTS, NOTIFICATION_EVENT_CODES,
+  NOTIFICATION_MODES, type NotificationCategoryCode, type NotificationChannelCode, type NotificationEventCode, type NotificationMode, type NotificationTemplateLanguage,
+  type NotificationText,
 } from './notification-events'
 
 // B2.4: محرك الإشعارات — أول مستهلك للـoutbox (B2.3).
@@ -43,6 +48,8 @@ import {
 
 export const NOTIFICATIONS_DISPATCH_JOB = 'notifications.dispatch'
 export const NOTIFICATIONS_EMAIL_JOB = 'notifications.email'
+// B-ADD.5: مهمة لكل رسالة واتساب — بنفس فحوص وإعادة محاولة مهمة البريد (attemptOutbound)
+export const NOTIFICATIONS_WHATSAPP_JOB = 'notifications.whatsapp'
 export const NOTIFICATIONS_DIGEST_JOB = 'notifications.daily-digest'
 // الملخص اللي ميعاده جه في ساعات الهدوء: مهمة في الطابور بتبعته بعد آخرها
 export const NOTIFICATIONS_DIGEST_SEND_JOB = 'notifications.digest-send'
@@ -54,6 +61,8 @@ export const NOTIFICATIONS_DIGEST_HOUR_DEFAULT = 8
 export const NOTIFICATIONS_EMAIL_MAX_ATTEMPTS = 10
 // دفعة كبيرة (قسايم مسير كامل) بتتوزع: العدد ده في الدقيقة، فالطابور مايتسدّش وخادم البريد مايترفضش من الكتر
 export const NOTIFICATIONS_EMAIL_PER_MINUTE = 20
+// B-ADD.5: نفس التوزيع للواتساب (حد Meta أعلى من خادم بريد عادي)
+export const NOTIFICATIONS_WHATSAPP_PER_MINUTE = 60
 // خادم البريد مش بيرد: الإرسال بيقف المدة دي (الرسايل بتفشل بسرعة وتتعاد) بدل ما كل رسالة تستنى مهلة الاتصال وتوقّف باقي مهام الطابور
 export const NOTIFICATIONS_MAIL_PAUSE_MS = 60_000
 // الأحداث اللي المحرك مشترك فيها
@@ -74,7 +83,9 @@ export const NOTIFICATION_SOURCE_EVENTS: readonly DomainEventType[] = ['REQUEST_
 const DIGEST_MAX_ATTEMPTS = 3
 // رسالة «مستنية» من غير مهمة شغالة أكتر من المدة دي = مهمتها وقفت من غير ما تسجّل نتيجة
 const STUCK_AFTER_MS = 15 * 60_000
-const LANGUAGE = 'ar'
+const LANGUAGE: NotificationTemplateLanguage = 'ar'
+/** B-ADD.5: قنوات برّه النظام اللي رسالتها بتطلع بمهمة في الطابور */
+type OutboundChannelCode = 'EMAIL' | 'WHATSAPP'
 
 const DECISIONS: Record<string, { text: string; kind: 'success' | 'error' | 'warning' }> = {
   REQUEST_APPROVED: { text: 'تمت الموافقة على طلبك', kind: 'success' },
@@ -93,6 +104,29 @@ const MAIL_ADDRESS = /[^\s<>"'(),;:[\]]+@[^\s<>"'(),;:[\]]+/g
 const mailFailureText = (error: unknown) => (error instanceof MailSendError ? error.detail : String((error as Error)?.message ?? error))
   .replace(/\s+/g, ' ').trim().replace(MAIL_ADDRESS, address => maskEmail(address)).slice(0, 1000)
 const mailFailureRaw = (error: unknown) => error instanceof MailSendError ? error.detail : String((error as Error)?.message ?? error)
+
+/**
+ * B-ADD.5: اللي بيفرق بين قناة وقناة في مهمة الإرسال — الباقي (القناة مفتوحة، الحساب شغال، الإشعار لسه صحيح، اختيار المستخدم و«إلزامي»، ساعات
+ * الهدوء، الإعادة والتوقف) واحد للبريد والواتساب في attemptOutbound.
+ */
+interface OutboundDriver {
+  channel: OutboundChannelCode
+  job: string
+  /** القناة مفتوحة دلوقتي على مستوى الشركة؟ وسبب التخطّي لو اتقفلت قبل الإرسال */
+  open(): Promise<boolean>
+  closedDetail: string
+  offDetail: string
+  noAddressDetail: string
+  pausedDetail: string
+  failurePrefix: string
+  /** الملخص اليومي للبريد بس */
+  digest: boolean
+  addressOf(user: User): Promise<string | null>
+  mask(address: string): string
+  send(address: string, delivery: NotificationDelivery): Promise<void>
+  /** rejected = المزوّد رفض الرسالة نفسها (الإعادة مش هتغيّر حاجة)؛ unreachable = المزوّد نفسه مش بيرد (كل الرسايل هتفشل زيها) */
+  failure(error: unknown): { detail: string; rejected: boolean; unreachable: boolean }
+}
 
 interface SourceEvent { id: string; type: string; entityType: string | null; entityId: string | null; payload: Record<string, unknown> | null; at?: unknown }
 interface DeliverInput {
@@ -115,6 +149,8 @@ export class NotificationsService implements OnModuleInit {
   private readonly logger = new Logger(NotificationsService.name)
   // لحد إمتى الإرسال واقف بعد عطل في الوصول لخادم البريد (في الذاكرة: نسخة تانية من الخادم بتكتشفه بأول رسالة ليها)
   private mailPausedUntil = 0
+  // B-ADD.5: نفس التوقف للواتساب (Meta مش بترد أو التوكن اترفض)
+  private whatsappPausedUntil = 0
 
   constructor(
     @InjectDataSource() private readonly ds: DataSource,
@@ -126,7 +162,8 @@ export class NotificationsService implements OnModuleInit {
     private readonly config: ConfigService,
     private readonly resolver: ApproverResolver,
     private readonly comments: CommentsService,
-    private readonly announcements: AnnouncementsService
+    private readonly announcements: AnnouncementsService,
+    private readonly channels: NotificationChannelsService
   ) {}
 
   onModuleInit() {
@@ -136,6 +173,9 @@ export class NotificationsService implements OnModuleInit {
     for (const type of NOTIFICATION_SOURCE_EVENTS) this.queue.subscribe(type, NOTIFICATIONS_DISPATCH_JOB)
     this.queue.registerHandler(NOTIFICATIONS_EMAIL_JOB, async (payload, context) => {
       await this.sendEmail(String((payload as { deliveryId?: unknown } | null)?.deliveryId ?? ''), context)
+    }, { maxAttempts: NOTIFICATIONS_EMAIL_MAX_ATTEMPTS })
+    this.queue.registerHandler(NOTIFICATIONS_WHATSAPP_JOB, async (payload, context) => {
+      await this.sendWhatsapp(String((payload as { deliveryId?: unknown } | null)?.deliveryId ?? ''), context)
     }, { maxAttempts: NOTIFICATIONS_EMAIL_MAX_ATTEMPTS })
     this.queue.registerHandler(NOTIFICATIONS_DIGEST_SEND_JOB, async () => {
       await this.digestOrDefer(new Date(), true)
@@ -164,11 +204,22 @@ export class NotificationsService implements OnModuleInit {
 
   /** البريد شغال فعلًا: مفتوح من الإعدادات، وخادمه مضبوط، وعنوان الواجهة اللي اللينك بيتبني عليه موجود */
   private async emailWorking(): Promise<boolean> {
+    await this.mail.refreshStoredConfig()
     return this.mail.isConfigured() && !!this.frontendBase() && await this.emailRequested()
   }
 
   /** للاختبارات: الإرسال يرجع فورًا بعد توقف عطل خادم البريد */
   resumeMail() { this.mailPausedUntil = 0 }
+  /** للاختبارات: نفس الشيء للواتساب */
+  resumeWhatsapp() { this.whatsappPausedUntil = 0 }
+
+  /**
+   * B-ADD.5: فيه قناة برّه النظام مفتوحة على مستوى الشركة (البريد أو الواتساب)؟ الأحداث اللي جوه النظام عدّاد محسوب (طلب مستني، قرار،
+   * مهمة) مالهاش حاجة تتكتب من غيرها — زي ما كانت بتقف والبريد مقفول.
+   */
+  private async outboundRequested(): Promise<boolean> {
+    return (await this.emailRequested()) || (await this.channels.whatsappOpen())
+  }
 
   // ===== التوزيع: من الحدث للمستلمين =====
   async dispatch(event: SourceEvent | null): Promise<number> {
@@ -222,7 +273,7 @@ export class NotificationsService implements OnModuleInit {
 
   /** طلب وصل لخطوة مستنية معتمد (أو اتصعّد): للي الخطوة عليهم فعلًا. بريد بس — جوه التطبيق العدّاد المحسوب الموجود */
   private async onStepPending(event: SourceEvent): Promise<number> {
-    if (!(await this.emailRequested())) return 0
+    if (!(await this.outboundRequested())) return 0
     const requestId = Number(event.payload?.requestId), stepOrder = Number(event.payload?.stepOrder)
     const req = Number.isSafeInteger(requestId) ? await this.ds.getRepository(Request).findOne({ where: { id: requestId } }) : null
     // الطلب اتحرك (اتعتمد، اترفض، راح لخطوة تانية) قبل ما المهمة تشتغل: الحدث قديم
@@ -242,7 +293,7 @@ export class NotificationsService implements OnModuleInit {
 
   /** قرار على الطلب (اعتماد، رفض، إرجاع): لصاحب الطلب. بريد بس — جوه التطبيق عنصر «قرار طلبك» المحسوب الموجود */
   private async onDecision(event: SourceEvent): Promise<number> {
-    if (!(await this.emailRequested())) return 0
+    if (!(await this.outboundRequested())) return 0
     const decision = DECISIONS[event.type]
     const requestId = Number(event.payload?.requestId)
     const req = Number.isSafeInteger(requestId) ? await this.ds.getRepository(Request).findOne({ where: { id: requestId } }) : null
@@ -367,7 +418,7 @@ export class NotificationsService implements OnModuleInit {
 
   /** مهمة اتكلّف بيها مسؤول، أو موعدها قرّب (للمسؤول)، أو اتأخرت (لمدير المسؤول). العنوان والموعد بس — الوصف مابيتبعتش */
   private async onTask(event: SourceEvent): Promise<number> {
-    if (!(await this.emailRequested()) || !(await tasksTableReady(this.ds.manager))) return 0
+    if (!(await this.outboundRequested()) || !(await tasksTableReady(this.ds.manager))) return 0
     const taskId = Number(event.payload?.taskId)
     const task = Number.isSafeInteger(taskId) ? await this.ds.getRepository(Task).findOne({ where: { id: taskId } }) : null
     // المهمة اتقفلت أو اتلغت قبل ما مهمة التوزيع تشتغل: الحدث قديم
@@ -443,13 +494,36 @@ export class NotificationsService implements OnModuleInit {
     return (mentions.targets.includes('ASSIGNEE') && taskAwaitsAccount(account, task)) || (mentions.targets.includes('CREATOR') && task.createdByUserId === account.sub)
   }
 
-  private async templatesOf(code: NotificationEventCode): Promise<Record<NotificationChannelCode, NotificationText>> {
-    const rows = await this.ds.getRepository(NotificationTemplate).find({ where: { eventCode: code, language: LANGUAGE } })
+  /**
+   * نص الحدث لكل قناة بلغة المستلم (B-ADD.5): النص المعدَّل بلغته، وإلا المعدَّل العربي، وإلا الافتراضي. english = فيه نص إنجليزي محفوظ للحدث
+   * (من غيره لغة المستلمين مابتتقراش أصلًا).
+   */
+  private async templatesOf(code: NotificationEventCode): Promise<{ english: boolean; of(language: NotificationTemplateLanguage): Record<NotificationChannelCode, NotificationText> }> {
+    const rows = await this.ds.getRepository(NotificationTemplate).find({ where: { eventCode: code } })
     const def = notificationEventDef(code)
-    return Object.fromEntries(NOTIFICATION_CHANNELS.map(channel => {
-      const row = rows.find(item => item.channel === channel)
-      return [channel, row ? { title: row.title, body: row.body } : def.templates[channel]]
-    })) as Record<NotificationChannelCode, NotificationText>
+    const built = new Map<string, Record<NotificationChannelCode, NotificationText>>()
+    const of = (language: NotificationTemplateLanguage) => {
+      if (!built.has(language)) {
+        built.set(language, Object.fromEntries(NOTIFICATION_CHANNELS.map(channel => {
+          const row = rows.find(item => item.channel === channel && item.language === language) ?? rows.find(item => item.channel === channel && item.language === LANGUAGE)
+          return [channel, row ? { title: row.title, body: row.body } : def.templates[channel]]
+        })) as Record<NotificationChannelCode, NotificationText>)
+      }
+      return built.get(language)!
+    }
+    return { english: rows.some(row => row.language === 'en'), of }
+  }
+
+  /** لغة حساب كل مستلم (B6.2). قبل ترحيل 182، أو حساب من غير لغة = عربي (مابيتحطش في الخريطة) */
+  private async languagesOf(userIds: number[]): Promise<Map<number, NotificationTemplateLanguage>> {
+    const out = new Map<number, NotificationTemplateLanguage>()
+    if (!userIds.length || !(await userLanguageReady(this.ds.manager))) return out
+    for (let offset = 0; offset < userIds.length; offset += 1000) {
+      const rows: Array<{ id: number; language: string | null }> = await this.ds.query(
+        'SELECT [id], [language] FROM dbo.users WHERE [id] IN (SELECT CAST([value] AS int) FROM OPENJSON(@0))', [JSON.stringify(userIds.slice(offset, offset + 1000))])
+      for (const row of rows) if (isNotificationTemplateLanguage(row.language)) out.set(Number(row.id), row.language)
+    }
+    return out
   }
 
   private async modesOf(userIds: number[], category: string): Promise<Map<string, NotificationMode>> {
@@ -464,11 +538,19 @@ export class NotificationsService implements OnModuleInit {
   /**
    * كتابة الإشعار وسجل توصيله لكل مستلم (معاملة لكل مستلم). منع التكرار بمفتاح «الحدث:الكود:المستلم»: مهمة اتعادت مابتكررش.
    * صف التوصيل بيتكتب للقناة المفتوحة على مستوى الشركة بس: حدث بريد والبريد مقفول = ولا صف.
+   * B-ADD.5: والقناة لازم تكون مفتوحة للحدث نفسه من «قنوات الإشعارات» (من غير قاعدة محفوظة: داخل النظام والبريد زي ما هم، والواتساب
+   * مقفول). الحدث «الإلزامي» اختيار المستخدم مابيتطبقش عليه. والواتساب رسالته قالب Meta المربوط بالحدث بقيم نفس متغيراته — من غير ربط «اتخطّى».
    */
   private async deliver(input: DeliverInput): Promise<number> {
     const def = notificationEventDef(input.code)
-    const emailRequested = await this.emailRequested()
-    if ((!def.storedInApp && !emailRequested) || !input.recipients.length) return 0
+    const { rule, bindings } = await this.channels.ruleOf(input.code)
+    const emailRequested = rule.email && await this.emailRequested()
+    const whatsapp = rule.whatsapp ? await this.channels.whatsappSetup() : null
+    const whatsappOpen = whatsapp?.open === true
+    const storesInApp = def.storedInApp && rule.inApp
+    if ((!storesInApp && !emailRequested && !whatsappOpen) || !input.recipients.length) return 0
+    // إعداد خادم البريد المحفوظ من الشاشة (لو اتغيّر من نسخة تانية من الخادم) قبل الحكم «الخادم مضبوط؟»
+    if (emailRequested) await this.mail.refreshStoredConfig()
     const templates = await this.templatesOf(input.code)
     const company = await this.setting('company.name', '')
     const base = this.frontendBase()
@@ -484,17 +566,32 @@ export class NotificationsService implements OnModuleInit {
     for (let offset = 0; offset < employeeIds.length; offset += 1000) {
       for (const row of await this.ds.getRepository(Employee).find({ where: { id: In(employeeIds.slice(offset, offset + 1000)) }, select: { id: true, email: true } })) fileEmails.set(row.id, row.email ?? null)
     }
+    const languages = templates.english || bindings.en ? await this.languagesOf(userIds) : new Map<number, NotificationTemplateLanguage>()
+    const numbers = whatsappOpen ? await this.channels.whatsappNumbers(employeeIds, whatsapp.settings) : new Map<number, string>()
     const path = input.link.split('?')[0]
-    let created = 0, queued = 0
+    let created = 0, queued = 0, queuedWhatsapp = 0
     for (const account of input.recipients) {
       // نفس قاعدة القايمة: الشاشة اللي اللينك بيوديها متاحة للمستلم (الموديول مفعّل له)؟
       if (!routeAvailable(path, await this.modules.enabledFor(account))) continue
       const values = { ...input.values, 'recipient.name': names.get(account.sub) ?? '', 'company.name': company, link: base ? `${base}${input.link}` : '' }
-      const inAppText = renderNotificationText(templates.IN_APP, values)
-      const inApp = def.storedInApp && (modes.get(`${account.sub}:IN_APP`) ?? 'ON') !== 'OFF'
-      const emailMode = modes.get(`${account.sub}:EMAIL`) ?? 'ON'
+      const language = languages.get(account.sub) ?? LANGUAGE
+      const text = templates.of(language)
+      const inAppText = renderNotificationText(text.IN_APP, values)
+      // «إلزامي» من الإدارة: «مقفول» و«ملخص يومي» بتوع المستخدم مابيتطبقوش على الحدث ده
+      const modeOf = (channel: string): NotificationMode => rule.mandatory ? 'ON' : modes.get(`${account.sub}:${channel}`) ?? 'ON'
+      const inApp = storesInApp && modeOf('IN_APP') !== 'OFF'
+      const emailMode = modeOf('EMAIL')
       const address = pickNotificationAddress(account.email, account.employeeId != null ? fileEmails.get(account.employeeId) : null)
+      // قالب الواتساب بلغة المستلم، وإلا العربي
+      const binding: WhatsappBinding | null = bindings[language] ?? bindings.ar ?? null
+      const number = account.employeeId != null ? numbers.get(account.employeeId) ?? null : null
       const now = new Date()
+      // في ساعات الهدوء المهمة بتتأجل لآخرها، والدفعة الكبيرة بتتوزع على دقايق
+      const runAfter = (index: number, perMinute: number) => {
+        const spread = Math.floor(index / perMinute) * 60_000
+        const quietEnd = quietHoursEnd(now, quiet)
+        return quietEnd ? new Date(quietEnd.getTime() + spread) : spread ? new Date(now.getTime() + spread) : null
+      }
       const done = await this.ds.transaction(async em => {
         const dedupeKey = `${event_key(input.event)}:${input.code}:${account.sub}`
         if (await em.getRepository(Notification).count({ where: { dedupeKey } })) return false
@@ -511,7 +608,8 @@ export class NotificationsService implements OnModuleInit {
         const deliveries = em.getRepository(NotificationDelivery)
         if (def.storedInApp) {
           await deliveries.save(deliveries.create({ notificationId: notification.id, channel: 'IN_APP', status: inApp ? 'SENT' : 'SKIPPED', attempts: 0,
-            address: null, subject: null, body: null, detail: inApp ? null : 'المستخدم قافل الإشعار داخل النظام للفئة دي', createdAt: now, sentAt: inApp ? now : null }))
+            address: null, subject: null, body: null, createdAt: now, sentAt: inApp ? now : null,
+            detail: inApp ? null : !rule.inApp ? 'الإشعار داخل النظام مقفول للحدث ده من «قنوات الإشعارات»' : 'المستخدم قافل الإشعار داخل النظام للفئة دي' }))
         }
         if (emailRequested) {
           const [status, detail] = !this.mail.isConfigured() ? ['SKIPPED', 'خادم البريد غير مضبوط (SMTP)']
@@ -520,16 +618,29 @@ export class NotificationsService implements OnModuleInit {
             : !address ? ['SKIPPED', 'مفيش بريد صالح على الحساب ولا في ملف الموظف']
             : emailMode === 'DIGEST' ? ['DIGEST', null] : ['PENDING', null]
           // نص الرسالة بيتخزن للي هتتبعت بس (ومابيفضلش بعد الإرسال): السجل بيعرض الحالة والسبب مش النص
-          const text = status === 'PENDING' ? renderNotificationText(templates.EMAIL, values) : null
+          const mailText = status === 'PENDING' ? renderNotificationText(text.EMAIL, values) : null
           const delivery = await deliveries.save(deliveries.create({ notificationId: notification.id, channel: 'EMAIL', status, attempts: 0,
-            address: address ? maskEmail(address) : null, subject: text?.title ?? null, body: text?.body ?? null, detail, createdAt: now, sentAt: null }))
+            address: address ? maskEmail(address) : null, subject: mailText?.title ?? null, body: mailText?.body ?? null, detail, createdAt: now, sentAt: null }))
           // مهمة البريد في نفس معاملة صف التوصيل: «مستني» = ليه مهمة. في ساعات الهدوء بتتأجل لآخرها، والدفعة الكبيرة بتتوزع على دقايق
           if (status === 'PENDING') {
-            const spread = Math.floor(queued++ / NOTIFICATIONS_EMAIL_PER_MINUTE) * 60_000
-            const quietEnd = quietHoursEnd(now, quiet)
             await enqueueQueueJob(em, { jobType: NOTIFICATIONS_EMAIL_JOB, payload: { deliveryId: delivery.id }, key: `${NOTIFICATIONS_EMAIL_JOB}:${delivery.id}`,
-              maxAttempts: NOTIFICATIONS_EMAIL_MAX_ATTEMPTS,
-              runAfter: quietEnd ? new Date(quietEnd.getTime() + spread) : spread ? new Date(now.getTime() + spread) : null })
+              maxAttempts: NOTIFICATIONS_EMAIL_MAX_ATTEMPTS, runAfter: runAfter(queued++, NOTIFICATIONS_EMAIL_PER_MINUTE) })
+          }
+        }
+        if (whatsappOpen) {
+          const [status, detail] = !binding ? ['SKIPPED', 'الحدث مالوش قالب واتساب مربوط']
+            : binding.variables.includes('link') && !base ? ['SKIPPED', 'عنوان الواجهة مش مضبوط على الخادم (FRONTEND_URL)، وقالب الواتساب محتاج اللينك']
+            : modeOf('WHATSAPP') === 'OFF' ? ['SKIPPED', 'المستخدم قافل واتساب الفئة دي']
+            : !number ? ['SKIPPED', 'مفيش رقم واتساب في ملف الموظف']
+            : ['PENDING', null]
+          // المتخزن للي هتتبعت بس: اسم القالب وقيم متغيراته (من غير مبالغ ولا محتوى طلب — نفس متغيرات الحدث)، وبيتمسح بعد الإرسال
+          const sending = status === 'PENDING' && binding ? { binding, parameters: whatsappParameters(binding, values) } : null
+          const delivery = await deliveries.save(deliveries.create({ notificationId: notification.id, channel: 'WHATSAPP', status, attempts: 0,
+            address: number ? maskPhone(number) : null, subject: sending ? sending.binding.templateName.slice(0, 300) : null, body: sending ? JSON.stringify(sending) : null,
+            detail, createdAt: now, sentAt: null }))
+          if (sending) {
+            await enqueueQueueJob(em, { jobType: NOTIFICATIONS_WHATSAPP_JOB, payload: { deliveryId: delivery.id }, key: `${NOTIFICATIONS_WHATSAPP_JOB}:${delivery.id}`,
+              maxAttempts: NOTIFICATIONS_EMAIL_MAX_ATTEMPTS, runAfter: runAfter(queuedWhatsapp++, NOTIFICATIONS_WHATSAPP_PER_MINUTE) })
           }
         }
         return true
@@ -642,17 +753,65 @@ export class NotificationsService implements OnModuleInit {
     return null
   }
 
-  // ===== البريد: مهمة لكل رسالة =====
+  // ===== البريد والواتساب: مهمة لكل رسالة =====
+  private readonly emailDriver: OutboundDriver = {
+    channel: 'EMAIL', job: NOTIFICATIONS_EMAIL_JOB, digest: true,
+    open: () => this.emailRequested(),
+    closedDetail: 'البريد اتقفل من الإعدادات قبل الإرسال', offDetail: 'المستخدم قافل بريد الفئة دي', noAddressDetail: 'مفيش بريد صالح على الحساب ولا في ملف الموظف',
+    pausedDetail: 'خادم البريد مش بيرد — الإرسال واقف دقيقة وهيتجرّب تاني', failurePrefix: 'تعذر إرسال بريد الإشعار',
+    addressOf: user => this.addressOf(user), mask: maskEmail,
+    send: async (address, delivery) => { await this.mail.send({ to: address, subject: delivery.subject ?? '', text: delivery.body ?? '' }) },
+    failure: error => {
+      const raw = mailFailureRaw(error), rejected = MAIL_REJECTED.test(raw)
+      return { detail: mailFailureText(error), rejected, unreachable: !rejected && MAIL_UNREACHABLE.test(raw) }
+    },
+  }
+
+  private readonly whatsappDriver: OutboundDriver = {
+    channel: 'WHATSAPP', job: NOTIFICATIONS_WHATSAPP_JOB, digest: false,
+    open: () => this.channels.whatsappOpen(),
+    closedDetail: 'الواتساب اتقفل من الإعدادات قبل الإرسال', offDetail: 'المستخدم قافل واتساب الفئة دي', noAddressDetail: 'مفيش رقم واتساب في ملف الموظف',
+    pausedDetail: 'مزوّد الواتساب مش بيرد — الإرسال واقف دقيقة وهيتجرّب تاني', failurePrefix: 'تعذر إرسال واتساب الإشعار',
+    // الرقم بيتقري من ملف الموظف وقت الإرسال (السجل شايله متخفي بس)
+    addressOf: async user => user.employeeId
+      ? (await this.channels.whatsappNumbers([user.employeeId], (await this.channels.whatsappSetup()).settings)).get(user.employeeId) ?? null : null,
+    mask: maskPhone,
+    send: async (address, delivery) => {
+      const sending = preparedWhatsapp(delivery.body)
+      if (!sending) throw new WhatsappSendError('الرسالة المجهّزة مش موجودة في السجل', true, false)
+      await this.channels.sendWhatsapp(address, sending.binding, sending.parameters)
+    },
+    failure: error => error instanceof WhatsappSendError ? { detail: error.detail.slice(0, 1000), rejected: error.rejected, unreachable: error.unreachable }
+      : { detail: String((error as Error)?.message ?? error).replace(/\s+/g, ' ').trim().slice(0, 1000), rejected: false, unreachable: false },
+  }
+
+  private pausedUntil(channel: OutboundChannelCode): number {
+    return channel === 'EMAIL' ? this.mailPausedUntil : this.whatsappPausedUntil
+  }
+
+  private pause(channel: OutboundChannelCode) {
+    if (channel === 'EMAIL') this.mailPausedUntil = Date.now() + NOTIFICATIONS_MAIL_PAUSE_MS; else this.whatsappPausedUntil = Date.now() + NOTIFICATIONS_MAIL_PAUSE_MS
+  }
+
   /**
    * الفشل بيترمي عشان الطابور يعيد بمهلة بتزيد، وآخر محاولة بتسيب السجل «فشل» بسببه والمهمة «ميتة» — وإعادتها من شاشة الطابور بتبعت الرسالة
    * تاني. العنوان اللي خادم البريد رفضه «فشل» من أول مرة من غير إعادة. وقبل الإرسال كل حاجة بتتفحص بحالتها دلوقتي: البريد مفتوح،
    * والحساب شغال، والإشعار لسه صحيح، واختيار المستخدم، وساعات الهدوء.
    */
   async sendEmail(deliveryId: string, context: { attempt: number; maxAttempts: number }): Promise<void> {
+    await this.sendOutbound(this.emailDriver, deliveryId, context)
+  }
+
+  /** B-ADD.5: رسالة الواتساب بنفس مسار البريد بالحرف (نفس الفحوص ونفس سياسة الفشل)، والفرق في OutboundDriver بس */
+  async sendWhatsapp(deliveryId: string, context: { attempt: number; maxAttempts: number }): Promise<void> {
+    await this.sendOutbound(this.whatsappDriver, deliveryId, context)
+  }
+
+  private async sendOutbound(driver: OutboundDriver, deliveryId: string, context: { attempt: number; maxAttempts: number }): Promise<void> {
     if (!/^\d+$/.test(deliveryId) || !(await this.ready())) return
     // مهمتين لنفس الرسالة (مهمة اتعادت بعد عطل، أو نسختين من الخادم) مايبعتوش مع بعض ولا ورا بعض والأولى لسه عند خادم البريد:
     // قفل التوصيل ممسوك طول المحاولة، والتانية بتلاقيه ممسوك فبتسيبها للأولى
-    await this.holding(`hr:notification-delivery:${deliveryId}`, () => this.attemptEmail(deliveryId, context))
+    await this.holding(`hr:notification-delivery:${deliveryId}`, () => this.attemptOutbound(driver, deliveryId, context))
   }
 
   /**
@@ -671,30 +830,33 @@ export class NotificationsService implements OnModuleInit {
     })
   }
 
-  private async attemptEmail(deliveryId: string, context: { attempt: number; maxAttempts: number }): Promise<void> {
+  private async attemptOutbound(driver: OutboundDriver, deliveryId: string, context: { attempt: number; maxAttempts: number }): Promise<void> {
     const deliveries = this.ds.getRepository(NotificationDelivery)
     const delivery = await deliveries.findOne({ where: { id: deliveryId } })
     // اتبعتت قبل كده (مهمة اتعادت) أو اتخطّت. «فشل» بييجي هنا لما المهمة الميتة تتعاد من شاشة الطابور
-    if (!delivery || delivery.channel !== 'EMAIL' || !['PENDING', 'FAILED'].includes(delivery.status)) return
+    if (!delivery || delivery.channel !== driver.channel || !['PENDING', 'FAILED'].includes(delivery.status)) return
     const skip = (detail: string) => deliveries.update({ id: delivery.id }, { status: 'SKIPPED', detail, subject: null, body: null })
-    if (!(await this.emailRequested())) { await skip('البريد اتقفل من الإعدادات قبل الإرسال'); return }
+    if (!(await driver.open())) { await skip(driver.closedDetail); return }
     const notification = await this.ds.getRepository(Notification).findOne({ where: { id: delivery.notificationId } })
     const user = notification ? await this.ds.getRepository(User).findOne({ where: { id: notification.recipientUserId } }) : null
     if (!notification || !user?.isActive) { await skip('حساب المستلم مش نشط'); return }
     const stale = await this.staleReason(notification, user)
     if (stale) { await skip(stale); return }
+    // B-ADD.5: قاعدة الحدث دلوقتي — القناة ممكن تكون اتقفلت للحدث ده بعد ما الرسالة اتجهّزت، و«إلزامي» بيلغي اختيار المستخدم
+    const setup = isNotificationEvent(notification.eventCode) ? await this.channels.ruleOf(notification.eventCode) : null
+    if (setup && !(driver.channel === 'EMAIL' ? setup.rule.email : setup.rule.whatsapp)) { await skip('القناة اتقفلت للحدث ده من «قنوات الإشعارات» قبل الإرسال'); return }
     // اختيار المستخدم دلوقتي: ممكن يكون قفل بريد الفئة أو اختار الملخص بعد ما الرسالة اتجهّزت
-    const mode = (await this.modesOf([user.id], notification.category)).get(`${user.id}:EMAIL`) ?? 'ON'
-    if (mode === 'OFF') { await skip('المستخدم قافل بريد الفئة دي'); return }
-    if (mode === 'DIGEST') { await deliveries.update({ id: delivery.id }, { status: 'DIGEST', detail: null, subject: null, body: null }); return }
-    const address = await this.addressOf(user)
-    if (!address) { await skip('مفيش بريد صالح على الحساب ولا في ملف الموظف'); return }
+    const mode = setup?.rule.mandatory ? 'ON' : (await this.modesOf([user.id], notification.category)).get(`${user.id}:${driver.channel}`) ?? 'ON'
+    if (mode === 'OFF') { await skip(driver.offDetail); return }
+    if (mode === 'DIGEST' && driver.digest) { await deliveries.update({ id: delivery.id }, { status: 'DIGEST', detail: null, subject: null, body: null }); return }
+    const address = await driver.addressOf(user)
+    if (!address) { await skip(driver.noAddressDetail); return }
     // ساعات الهدوء دلوقتي (محاولة اتأخرت ودخلت فيها، أو دفعة اتوزعت): مهمة جديدة لآخرها، والرسالة تفضل مستنية
     const quietEnd = quietHoursEnd(new Date(), parseQuietHours(await this.setting(NOTIFICATIONS_QUIET_HOURS_KEY, '')))
     if (quietEnd) {
       await this.ds.transaction(async em => {
         await em.getRepository(NotificationDelivery).update({ id: delivery.id }, { status: 'PENDING' })
-        await enqueueQueueJob(em, { jobType: NOTIFICATIONS_EMAIL_JOB, payload: { deliveryId: delivery.id }, key: `${NOTIFICATIONS_EMAIL_JOB}:${delivery.id}:${Date.now()}`,
+        await enqueueQueueJob(em, { jobType: driver.job, payload: { deliveryId: delivery.id }, key: `${driver.job}:${delivery.id}:${Date.now()}`,
           maxAttempts: NOTIFICATIONS_EMAIL_MAX_ATTEMPTS, runAfter: new Date(quietEnd.getTime() + 1000) })
       })
       return
@@ -703,18 +865,18 @@ export class NotificationsService implements OnModuleInit {
     // المحاولة فشلت: آخر محاولة (أو عنوان مرفوض) = «فشل». الخطأ اللي بيترمي للطابور بنص الإشعارات ومن غير عناوين كاملة
     const failed = async (detail: string, rejected: boolean) => {
       await deliveries.update({ id: delivery.id }, { attempts, detail, status: rejected || context.attempt >= context.maxAttempts ? 'FAILED' : 'PENDING' })
-      if (!rejected) throw new Error(`تعذر إرسال بريد الإشعار: ${detail}`)
+      if (!rejected) throw new Error(`${driver.failurePrefix}: ${detail}`)
     }
-    if (Date.now() < this.mailPausedUntil) { await failed('خادم البريد مش بيرد — الإرسال واقف دقيقة وهيتجرّب تاني', false); return }
+    if (Date.now() < this.pausedUntil(driver.channel)) { await failed(driver.pausedDetail, false); return }
     try {
-      await this.mail.send({ to: address, subject: delivery.subject ?? '', text: delivery.body ?? '' })
+      await driver.send(address, delivery)
     } catch (error) {
-      const raw = mailFailureRaw(error), rejected = MAIL_REJECTED.test(raw)
-      if (!rejected && MAIL_UNREACHABLE.test(raw)) this.mailPausedUntil = Date.now() + NOTIFICATIONS_MAIL_PAUSE_MS
-      await failed(mailFailureText(error), rejected)
+      const { detail, rejected, unreachable } = driver.failure(error)
+      if (unreachable) this.pause(driver.channel)
+      await failed(detail, rejected)
       return
     }
-    await deliveries.update({ id: delivery.id }, { status: 'SENT', attempts, detail: null, address: maskEmail(address), sentAt: new Date(), subject: null, body: null })
+    await deliveries.update({ id: delivery.id }, { status: 'SENT', attempts, detail: null, address: driver.mask(address), sentAt: new Date(), subject: null, body: null })
   }
 
   // ===== الملخص اليومي =====
@@ -745,11 +907,13 @@ export class NotificationsService implements OnModuleInit {
    * الميتة من شاشة الطابور بتبعتها.
    */
   async settleStuck(now: Date = new Date()): Promise<void> {
-    await this.ds.query(`UPDATE d SET d.[status] = N'FAILED', d.[detail] = COALESCE(d.[detail], N'المهمة وقفت قبل ما تسجّل النتيجة')
-      FROM [notification_deliveries] d
-      WHERE d.[channel] = N'EMAIL' AND d.[status] = N'PENDING' AND d.[createdAt] < @0
-        AND NOT EXISTS (SELECT 1 FROM [jobs_queue] j WHERE j.[jobType] = @1 AND j.[status] IN (N'PENDING', N'RUNNING')
-          AND JSON_VALUE(j.[payload], '$.deliveryId') = CAST(d.[id] AS nvarchar(30)))`, [new Date(now.getTime() - STUCK_AFTER_MS), NOTIFICATIONS_EMAIL_JOB])
+    for (const driver of [this.emailDriver, this.whatsappDriver]) {
+      await this.ds.query(`UPDATE d SET d.[status] = N'FAILED', d.[detail] = COALESCE(d.[detail], N'المهمة وقفت قبل ما تسجّل النتيجة')
+        FROM [notification_deliveries] d
+        WHERE d.[channel] = @2 AND d.[status] = N'PENDING' AND d.[createdAt] < @0
+          AND NOT EXISTS (SELECT 1 FROM [jobs_queue] j WHERE j.[jobType] = @1 AND j.[status] IN (N'PENDING', N'RUNNING')
+            AND JSON_VALUE(j.[payload], '$.deliveryId') = CAST(d.[id] AS nvarchar(30)))`, [new Date(now.getTime() - STUCK_AFTER_MS), driver.job, driver.channel])
+    }
   }
 
   /** رسالة واحدة لكل مستخدم باللي اتجمع له في الملخص. بيرجّع عدد الرسائل اللي اتبعتت. تشغيلين في نفس اللحظة (الموعد ومهمة التأجيل): واحد بس */
@@ -776,6 +940,7 @@ export class NotificationsService implements OnModuleInit {
     for (const row of rows) byUser.set(Number(row.userId), [...(byUser.get(Number(row.userId)) ?? []), row])
     const company = await this.setting('company.name', '')
     const base = this.frontendBase()
+    const mandatory = new Set<string>(await this.channels.mandatoryEvents())
     let sent = 0
     for (const [userId, collected] of byUser) {
       const user = await this.ds.getRepository(User).findOne({ where: { id: userId } })
@@ -789,7 +954,8 @@ export class NotificationsService implements OnModuleInit {
       const modes = new Map<string, NotificationMode>()
       for (const item of collected) {
         if (!modes.has(item.category)) modes.set(item.category, (await this.modesOf([userId], item.category)).get(`${userId}:EMAIL`) ?? 'ON')
-        const reason = modes.get(item.category) === 'OFF' ? 'المستخدم قافل بريد الفئة دي'
+        // B-ADD.5: حدث بقى «إلزامي» بعد ما اتجمع: قفل المستخدم مابيتطبقش عليه
+        const reason = modes.get(item.category) === 'OFF' && !mandatory.has(item.eventCode) ? 'المستخدم قافل بريد الفئة دي'
           : await this.staleReason({ id: item.notificationId, recipientUserId: userId, eventCode: item.eventCode, category: item.category, entityType: item.entityType,
             entityId: item.entityId, link: item.link, dedupeKey: item.dedupeKey }, user)
         if (reason) await deliveries.update({ id: String(item.id) }, { status: 'SKIPPED', detail: reason }); else items.push(item)
@@ -820,20 +986,38 @@ export class NotificationsService implements OnModuleInit {
   }
 
   // ===== تفضيلات المستخدم =====
-  /** فئات الإشعارات وقنواتها للمستخدم. قناة «داخل النظام» بتظهر للفئة اللي ليها إشعار مخزّن بس (الباقي عدّادات محسوبة دايمًا ظاهرة) */
+  /**
+   * فئات الإشعارات وقنواتها للمستخدم. قناة «داخل النظام» بتظهر للفئة اللي ليها إشعار مخزّن بس (الباقي عدّادات محسوبة دايمًا ظاهرة).
+   * B-ADD.5 (برّه صفوف الفئات — شكل الصف القايم زي ما هو): اختيار الواتساب لكل فئة، والأحداث اللي الإدارة معلّماها «إلزامي» (اختيار المستخدم
+   * مابيتطبقش عليها)، والفئات المقفولة (كل أحداثها إلزامية)، وبيانات الحساب اللي الرسايل بتتبعت عليها.
+   */
   async preferences(user: JwtPayload) {
     const available = await this.ready()
     const rows = available ? await this.ds.getRepository(NotificationPreference).find({ where: { userId: user.sub } }) : []
     const modeOf = (category: string, channel: string) => (rows.find(row => row.category === category && row.channel === channel)?.mode ?? 'ON') as NotificationMode
+    const categories = Object.keys(NOTIFICATION_CATEGORIES) as NotificationCategoryCode[]
+    const mandatory = available ? await this.channels.mandatoryEvents() : []
     return {
       available,
       emailEnabled: available && await this.emailWorking(),
-      categories: (Object.keys(NOTIFICATION_CATEGORIES) as NotificationCategoryCode[]).map(category => ({
+      categories: categories.map(category => ({
         key: category, label: NOTIFICATION_CATEGORIES[category],
         inApp: this.categoryStoresInApp(category) ? modeOf(category, 'IN_APP') : null,
         email: modeOf(category, 'EMAIL'),
       })),
+      whatsappEnabled: available && await this.channels.whatsappOpen(),
+      whatsapp: Object.fromEntries(categories.map(category => [category, modeOf(category, 'WHATSAPP') === 'OFF' ? 'OFF' : 'ON'])) as Record<NotificationCategoryCode, NotificationMode>,
+      mandatory: Object.fromEntries(categories.map(category => [category, mandatory.filter(code => NOTIFICATION_EVENTS[code].category === category).map(code => NOTIFICATION_EVENTS[code].label)])
+        .filter(([, labels]) => labels.length)) as Partial<Record<NotificationCategoryCode, string[]>>,
+      locked: categories.filter(category => this.categoryLocked(category, mandatory)),
+      contact: available ? await this.channels.myContact(user) : { email: null, whatsapp: null },
     }
+  }
+
+  /** كل أحداث الفئة إلزامية = الفئة مقفولة على المستخدم (مفيش حدث فيها اختياره بيتطبق عليه) */
+  private categoryLocked(category: string, mandatory: readonly NotificationEventCode[]): boolean {
+    const events = NOTIFICATION_EVENT_CODES.filter(code => NOTIFICATION_EVENTS[code].category === category)
+    return events.length > 0 && events.every(code => mandatory.includes(code))
   }
 
   private categoryStoresInApp(category: string): boolean {
@@ -844,10 +1028,12 @@ export class NotificationsService implements OnModuleInit {
     if (!(await this.ready())) throw new BadRequestException(NOTIFICATIONS_MIGRATION_MISSING)
     const { category, channel, mode } = input
     if (!isNotificationCategory(category)) throw new BadRequestException('فئة الإشعار غير معروفة')
-    if (!(NOTIFICATION_CHANNELS as readonly unknown[]).includes(channel)) throw new BadRequestException('قناة الإشعار غير معروفة')
+    if (!(NOTIFICATION_DELIVERY_CHANNELS as readonly unknown[]).includes(channel)) throw new BadRequestException('قناة الإشعار غير معروفة')
     if (!(NOTIFICATION_MODES as readonly unknown[]).includes(mode)) throw new BadRequestException('اختيار غير صالح')
     if (mode === 'DIGEST' && channel !== 'EMAIL') throw new BadRequestException('الملخص اليومي للبريد بس')
     if (channel === 'IN_APP' && !this.categoryStoresInApp(category)) throw new BadRequestException('الفئة دي بتظهر داخل النظام دايمًا (عدّاد محسوب)')
+    // B-ADD.5: فئة كل أحداثها «إلزامي» من الإدارة: القفل والملخص مابيتحفظوش (كانوا هيتحفظوا ومايتطبقوش)
+    if (mode !== 'ON' && this.categoryLocked(category, await this.channels.mandatoryEvents())) throw new BadRequestException('إشعارات الفئة دي إلزامية من الإدارة ومابتتقفلش')
     const repo = this.ds.getRepository(NotificationPreference)
     const where = { userId: user.sub, category, channel: channel as string }
     for (let attempt = 0; ; attempt++) {
@@ -864,11 +1050,23 @@ export class NotificationsService implements OnModuleInit {
   }
 
   // ===== إدارة القوالب وسجل الإرسال (حساب الشركة) =====
-  async templatesAdmin() {
+  /**
+   * B-ADD.5: language = 'en' بيعرض ويعدّل النص الإنجليزي (للي لغة حسابه إنجليزي). من غير نص إنجليزي محفوظ المعروض هو اللي هيوصله فعلًا:
+   * النص العربي (المعدَّل أو الافتراضي).
+   */
+  private templateLanguage(language: unknown): NotificationTemplateLanguage {
+    if (language === undefined || language === null || language === '') return LANGUAGE
+    if (!isNotificationTemplateLanguage(language)) throw new BadRequestException('لغة القالب غير معروفة')
+    return language
+  }
+
+  async templatesAdmin(language?: unknown) {
+    const wanted = this.templateLanguage(language)
     const available = await this.ready()
-    const rows = available ? await this.ds.getRepository(NotificationTemplate).find({ where: { language: LANGUAGE } }) : []
+    const rows = available ? await this.ds.getRepository(NotificationTemplate).find({ where: { language: In([...new Set([LANGUAGE, wanted])]) } }) : []
     return {
       available,
+      language: wanted,
       channels: NOTIFICATION_CHANNEL_LABELS,
       events: NOTIFICATION_EVENT_CODES.map(code => {
         const def = notificationEventDef(code)
@@ -877,8 +1075,10 @@ export class NotificationsService implements OnModuleInit {
           // false = الحدث مالوش عنصر في القايمة: نص «داخل النظام» بتاعه هو السطر المختصر في الملخص اليومي
           storedInApp: def.storedInApp,
           templates: Object.fromEntries(NOTIFICATION_CHANNELS.map(channel => {
-            const row = rows.find(item => item.eventCode === code && item.channel === channel)
-            return [channel, { title: row?.title ?? def.templates[channel].title, body: row?.body ?? def.templates[channel].body, customized: !!row, default: def.templates[channel] }]
+            const row = rows.find(item => item.eventCode === code && item.channel === channel && item.language === wanted)
+            const arabic = wanted === LANGUAGE ? undefined : rows.find(item => item.eventCode === code && item.channel === channel && item.language === LANGUAGE)
+            const fallback = arabic ? { title: arabic.title, body: arabic.body } : def.templates[channel]
+            return [channel, { title: row?.title ?? fallback.title, body: row?.body ?? fallback.body, customized: !!row, default: fallback }]
           })),
         }
       }),
@@ -886,14 +1086,15 @@ export class NotificationsService implements OnModuleInit {
   }
 
   /** حفظ نص قالب (text) أو الرجوع للافتراضي (text = null) — التعديل وسطر تدقيقه في معاملة واحدة */
-  async saveTemplate(user: JwtPayload, code: unknown, channel: unknown, text: unknown) {
+  async saveTemplate(user: JwtPayload, code: unknown, channel: unknown, text: unknown, language?: unknown) {
+    const wanted = this.templateLanguage(language)
     if (!(await this.ready())) throw new BadRequestException(NOTIFICATIONS_MIGRATION_MISSING)
     if (!isNotificationEvent(code)) throw new BadRequestException('حدث الإشعار غير معروف')
     if (!(NOTIFICATION_CHANNELS as readonly unknown[]).includes(channel)) throw new BadRequestException('قناة الإشعار غير معروفة')
     const clean = text === null ? null : validateNotificationTemplate(code, text)
     await this.ds.transaction(async em => {
       const repo = em.getRepository(NotificationTemplate)
-      const where = { eventCode: code, channel: channel as string, language: LANGUAGE }
+      const where = { eventCode: code, channel: channel as string, language: wanted }
       const row = await repo.findOne({ where })
       // undefined (مش null) لما مفيش قيمة: عمود «قبل» و«بعد» في سجل التدقيق JSON أو فاضي
       const before = row ? { title: row.title, body: row.body } : undefined
@@ -901,31 +1102,53 @@ export class NotificationsService implements OnModuleInit {
       else if (row) await repo.delete({ id: row.id })
       else return
       await recordAudit(em, { category: 'SETTINGS', action: clean ? 'NOTIFICATION_TEMPLATE_CHANGED' : 'NOTIFICATION_TEMPLATE_RESET', entityType: 'notification_template',
-        entityId: `${code}:${channel}`, actorUserId: user.sub, summary: `${clean ? 'تعديل' : 'رجوع للافتراضي في'} قالب إشعار «${notificationEventDef(code).label}» (${NOTIFICATION_CHANNEL_LABELS[channel as NotificationChannelCode]})`,
+        entityId: `${code}:${channel}${wanted === LANGUAGE ? '' : `:${wanted}`}`, actorUserId: user.sub,
+        summary: `${clean ? 'تعديل' : 'رجوع للافتراضي في'} قالب إشعار «${notificationEventDef(code).label}» (${NOTIFICATION_CHANNEL_LABELS[channel as NotificationChannelCode]}${wanted === LANGUAGE ? '' : '، إنجليزي'})`,
         before, after: clean ?? undefined })
     })
-    return this.templatesAdmin()
+    return this.templatesAdmin(wanted)
   }
 
   /**
    * آخر الرسائل بحالتها وسببها (من غير نص الرسالة ولا عنوانها). status اختياري. العدّ للبريد بس (آخر 30 يوم).
    * إشعار الطلب السري بيظهر بحالته وسببه من غير مستلمه: «فلان عنده طلب سري» معلومة عن الطلب نفسه، ومدير الإعدادات مش طرف فيه.
    * وسبب الفشل متخزن من غير عناوين كاملة (mailFailureText).
+   * B-ADD.5: بحث في السجل — القناة، والحالة، والحدث، واسم المستلم، ومن تاريخ لتاريخ، وصفحات. البحث باسم المستلم مابيطابقش إشعار الطلب السري
+   * (مستلمه مخفي: لو كان بيطابق كان الاسم يتعرف بالتجربة).
    */
-  async deliveriesAdmin(status?: string, limit = 100) {
+  async deliveriesAdmin(filter?: string | DeliveriesFilter, limit = 100) {
     if (!(await this.ready())) return { available: false, emailEnabled: false, mailConfigured: this.mail.isConfigured(), linkConfigured: !!this.frontendBase(), counts: {}, rows: [] }
-    const wanted = ['PENDING', 'SENT', 'FAILED', 'SKIPPED', 'DIGEST'].includes(String(status)) ? String(status) : null
-    const take = Math.max(1, Math.min(300, Math.trunc(Number(limit)) || 100))
+    const wanted = typeof filter === 'object' && filter ? filter : { status: filter }
+    const status = ['PENDING', 'SENT', 'FAILED', 'SKIPPED', 'DIGEST'].includes(String(wanted.status)) ? String(wanted.status) : null
+    const channel = (NOTIFICATION_DELIVERY_CHANNELS as readonly unknown[]).includes(wanted.channel) ? String(wanted.channel) : null
+    const event = isNotificationEvent(wanted.event) ? wanted.event : null
+    const name = typeof wanted.recipient === 'string' && wanted.recipient.trim() ? `%${wanted.recipient.trim().slice(0, 100).replace(/[\\%_[]/g, char => `\\${char}`)}%` : null
+    const day = (value: unknown, addDays: number) => {
+      const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value ?? ''))
+      const date = match ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + addDays) : null
+      return date && !Number.isNaN(date.getTime()) ? date : null
+    }
+    // اليوم بتوقيت النظام: «من» من أول اليوم، و«إلى» لحد آخره
+    const from = day(wanted.from, 0), to = day(wanted.to, 1)
+    const take = Math.max(1, Math.min(300, Math.trunc(Number(wanted.pageSize ?? limit)) || 100))
+    const page = Math.max(1, Math.min(100_000, Math.trunc(Number(wanted.page)) || 1))
     const rows: Array<Record<string, unknown>> = await this.ds.query(
-      `SELECT TOP (${take}) d.[id], d.[channel], d.[status], d.[attempts], d.[address], d.[detail], d.[createdAt], d.[sentAt],
-          n.[eventCode], n.[recipientUserId], u.[displayName] AS [recipientName]
+      `SELECT d.[id], d.[channel], d.[status], d.[attempts], d.[address], d.[detail], d.[createdAt], d.[sentAt],
+          n.[eventCode], n.[recipientUserId], u.[displayName] AS [recipientName], COUNT(*) OVER () AS [total]
        FROM [notification_deliveries] d INNER JOIN [notifications] n ON n.[id] = d.[notificationId] LEFT JOIN [users] u ON u.[id] = n.[recipientUserId]
-       WHERE (@0 IS NULL OR d.[status] = @0) ORDER BY d.[id] DESC`, [wanted])
-    const counts: Array<{ status: string; n: number }> = await this.ds.query(
-      `SELECT [status], COUNT(*) AS [n] FROM [notification_deliveries] WHERE [channel] = N'EMAIL' AND [createdAt] >= @0 GROUP BY [status]`, [new Date(Date.now() - 30 * 86_400_000)])
+       WHERE (@0 IS NULL OR d.[status] = @0) AND (@1 IS NULL OR d.[channel] = @1) AND (@2 IS NULL OR n.[eventCode] = @2)
+         AND (@3 IS NULL OR (n.[eventCode] <> N'request.confidential' AND u.[displayName] LIKE @3 ESCAPE N'\\'))
+         AND (@4 IS NULL OR d.[createdAt] >= @4) AND (@5 IS NULL OR d.[createdAt] < @5)
+       ORDER BY d.[id] DESC OFFSET @6 ROWS FETCH NEXT @7 ROWS ONLY`, [status, channel, event, name, from, to, (page - 1) * take, take])
+    const counts: Array<{ channel: string; status: string; n: number }> = await this.ds.query(
+      `SELECT [channel], [status], COUNT(*) AS [n] FROM [notification_deliveries] WHERE [channel] IN (N'EMAIL', N'WHATSAPP') AND [createdAt] >= @0 GROUP BY [channel], [status]`,
+      [new Date(Date.now() - 30 * 86_400_000)])
+    const countsOf = (code: string) => Object.fromEntries(counts.filter(row => row.channel === code).map(row => [row.status, Number(row.n)]))
     return {
       available: true, emailEnabled: await this.emailRequested(), mailConfigured: this.mail.isConfigured(), linkConfigured: !!this.frontendBase(),
-      counts: Object.fromEntries(counts.map(row => [row.status, Number(row.n)])),
+      counts: countsOf('EMAIL'),
+      whatsappEnabled: await this.channels.whatsappOpen(), whatsappCounts: countsOf('WHATSAPP'),
+      total: rows.length ? Number(rows[0].total) : 0, page, pageSize: take,
       rows: rows.map(row => {
         const hidden = row.eventCode === 'request.confidential'
         return { id: String(row.id), channel: row.channel, status: row.status, attempts: Number(row.attempts ?? 0), address: hidden ? null : row.address ?? null,
@@ -935,6 +1158,17 @@ export class NotificationsService implements OnModuleInit {
       }),
     }
   }
+}
+
+/** B-ADD.5: فلاتر البحث في سجل الإرسال (كلها اختيارية؛ القيمة اللي مش معروفة بتتساب) */
+export interface DeliveriesFilter { status?: unknown; channel?: unknown; event?: unknown; recipient?: unknown; from?: unknown; to?: unknown; page?: unknown; pageSize?: unknown }
+
+/** رسالة الواتساب المجهّزة في صف التوصيل (اسم القالب وقيم متغيراته). null = مش موجودة أو مش مقروءة */
+function preparedWhatsapp(body: string | null): { binding: WhatsappBinding; parameters: string[] } | null {
+  try {
+    const parsed = JSON.parse(body ?? 'null') as { binding?: WhatsappBinding; parameters?: unknown } | null
+    return parsed?.binding ? { binding: parsed.binding, parameters: Array.isArray(parsed.parameters) ? parsed.parameters.map(String) : [] } : null
+  } catch { return null }
 }
 
 // مفتاح الحدث في منع التكرار: رقم حدث الـoutbox (المهمة اللي اتعادت شايلة نفس الرقم)

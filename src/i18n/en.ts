@@ -76,6 +76,7 @@ const SHELL: Record<string, string> = {
   'المهارات والإحلال': 'Skills & succession',
   'المهام': 'Tasks',
   'المهام المجدولة': 'Scheduled jobs',
+  'قنوات الإشعارات': 'Notification channels',
   'الموديولات': 'Modules',
   'الهيكل التنظيمي': 'Organization chart',
   'الورديات': 'Shifts',

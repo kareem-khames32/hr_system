@@ -55,6 +55,9 @@ export interface MailConfig {
   timeoutMs: number
 }
 
+/** B-ADD.5: الإعداد المحفوظ من الشاشة بيتقري تاني قبل الإرسال لو عدّت عليه المدة دي */
+export const MAIL_STORED_REFRESH_MS = 30_000
+
 const text = (value: unknown): string => (typeof value === 'string' ? value.trim() : '')
 const flag = (value: unknown, fallback: boolean): boolean => {
   const raw = text(value).toLowerCase()
@@ -103,11 +106,16 @@ export function maskEmail(address: string): string {
 @Injectable()
 export class MailService implements MailProvider, OnApplicationBootstrap {
   private readonly logger = new Logger(MailService.name)
-  readonly config: MailConfig
+  // B-ADD.5: الإعداد الشغال دلوقتي — المحفوظ من شاشة «قنوات الإشعارات» لو موجود ومفعّل، وإلا إعداد api/.env زي ما هو
+  config: MailConfig
+  private readonly envConfig: MailConfig
+  private storedSource: (() => Promise<MailConfig | null>) | null = null
+  private storedCheckedAt = 0
+  private storedKey = ''
   private transport: { sendMail(options: Record<string, unknown>): Promise<Record<string, unknown>> } | null = null
 
   constructor(config: ConfigService) {
-    this.config = readMailConfig({
+    this.config = this.envConfig = readMailConfig({
       SMTP_HOST: config.get('SMTP_HOST'),
       SMTP_PORT: config.get('SMTP_PORT'),
       SMTP_SECURE: config.get('SMTP_SECURE'),
@@ -140,6 +148,34 @@ export class MailService implements MailProvider, OnApplicationBootstrap {
     return mailConfigGaps(this.config).length === 0
   }
 
+  /**
+   * B-ADD.5: إعداد خادم البريد المحفوظ من الشاشة بياخد مكان إعداد api/.env (null = رجوع لإعداد api/.env). الاتصال بيتبني تاني مع أول
+   * رسالة — من غير إعادة تشغيل. نفس الإعداد مرتين = مفيش تغيير (الاتصال القايم بيفضل).
+   */
+  useStoredConfig(stored: MailConfig | null): void {
+    const key = stored ? JSON.stringify(stored) : ''
+    if (key === this.storedKey) return
+    this.storedKey = key
+    this.config = stored ?? this.envConfig
+    this.transport = null
+  }
+
+  /** مصدر الإعداد المحفوظ (قاعدة البيانات): بيتقري قبل الإرسال كل شوية، فنسخة تانية من الخادم بتشوف التغيير من غير إعادة تشغيل */
+  setStoredSource(source: () => Promise<MailConfig | null>): void {
+    this.storedSource = source
+  }
+
+  /** قراءة الإعداد المحفوظ دلوقتي (force) أو لو عدّت عليه MAIL_STORED_REFRESH_MS. فشل القراءة بيسيب الإعداد الحالي زي ما هو */
+  async refreshStoredConfig(force = false): Promise<void> {
+    if (!this.storedSource || (!force && Date.now() - this.storedCheckedAt < MAIL_STORED_REFRESH_MS)) return
+    this.storedCheckedAt = Date.now()
+    try {
+      this.useStoredConfig(await this.storedSource())
+    } catch (error) {
+      this.logger.warn(`تعذر قراءة إعداد البريد المحفوظ — الإعداد الحالي مستمر: ${String((error as Error)?.message ?? error).slice(0, 200)}`)
+    }
+  }
+
   /** ملخص للشاشة — بلا كلمة مرور البريد. */
   status() {
     return {
@@ -150,10 +186,13 @@ export class MailService implements MailProvider, OnApplicationBootstrap {
       requireTls: this.config.requireTls,
       from: this.config.from || null,
       authConfigured: this.config.user.length > 0,
+      // B-ADD.5: الإعداد جاي منين — شاشة «قنوات الإشعارات» ولا api/.env
+      source: this.config === this.envConfig ? 'env' : 'screen',
     }
   }
 
   async send(message: MailMessage): Promise<MailSendResult> {
+    await this.refreshStoredConfig()
     if (!this.isConfigured()) {
       throw new MailSendError(`إعداد البريد ناقص: ${mailConfigGaps(this.config).join(', ')}`, false)
     }

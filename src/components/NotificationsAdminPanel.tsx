@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
 import { Mail, RotateCcw, Save } from 'lucide-react'
 import {
   DELIVERY_STATUS_LABELS, fetchNotificationDeliveries, fetchNotificationTemplates, resetNotificationTemplate, saveNotificationTemplate,
@@ -20,8 +21,10 @@ const STATUS_TONE: Record<NotificationDeliveryStatus, string> = {
 }
 const CHANNELS: NotificationChannel[] = ['EMAIL', 'IN_APP']
 
-function TemplateEditor({ event, channel, channelLabel, onSaved }: { event: ApiNotificationEvent; channel: NotificationChannel; channelLabel: string;
-  onSaved: (data: ApiNotificationTemplates) => void }) {
+// B-ADD.5: نفس المحرر بيتستعمل في «قنوات الإشعارات» للنص الإنجليزي — save و reset بيبدّلوا النداء بس (من غيرهم: النص العربي زي ما كان)
+export function TemplateEditor({ event, channel, channelLabel, onSaved, save, reset }: { event: ApiNotificationEvent; channel: NotificationChannel; channelLabel: string;
+  onSaved: (data: ApiNotificationTemplates) => void
+  save?: (text: { title: string; body: string }) => Promise<ApiNotificationTemplates>; reset?: () => Promise<ApiNotificationTemplates> }) {
   const template = event.templates[channel]
   const [title, setTitle] = useState(template.title)
   const [body, setBody] = useState(template.body)
@@ -61,12 +64,12 @@ function TemplateEditor({ event, channel, channelLabel, onSaved }: { event: ApiN
       </div>
       <div className="flex flex-wrap gap-2">
         <button type="button" className="btn-primary flex items-center gap-1 text-xs" disabled={busy || !dirty}
-          onClick={() => run(() => saveNotificationTemplate(event.code, channel, { title, body }), 'تعذر حفظ القالب')}>
+          onClick={() => run(() => save ? save({ title, body }) : saveNotificationTemplate(event.code, channel, { title, body }), 'تعذر حفظ القالب')}>
           <Save size={14} />حفظ
         </button>
         {template.customized && (
           <button type="button" className="btn-secondary flex items-center gap-1 text-xs" disabled={busy}
-            onClick={() => run(() => resetNotificationTemplate(event.code, channel), 'تعذر الرجوع للنص الافتراضي')}>
+            onClick={() => run(() => reset ? reset() : resetNotificationTemplate(event.code, channel), 'تعذر الرجوع للنص الافتراضي')}>
             <RotateCcw size={14} />النص الافتراضي
           </button>
         )}
@@ -99,6 +102,10 @@ export default function NotificationsAdminPanel() {
     <div className="card space-y-4" data-notifications-admin>
       <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2"><Mail size={20} className="text-primary-600" />الإشعارات</h2>
       <p className="text-sm text-gray-500">كل رسالة النظام بعتها أو اتخطّاها، بحالتها وسببها. البريد من غير مبالغ ومن غير محتوى الطلب، وعنوان المستلم متخفي.</p>
+      {/* B-ADD.5: الشاشة الكاملة (إعداد البريد والواتساب، وقنوات كل حدث، والبحث في السجل) */}
+      <p className="text-sm" data-notifications-channels-link>
+        <Link href="/settings/notification-channels" className="text-primary-600 underline">البحث في السجل وإعداد البريد والواتساب من «قنوات الإشعارات»</Link>
+      </p>
       {error && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 text-sm">{error}</div>}
       {deliveries && !deliveries.available && (
         <div className="bg-amber-50 text-amber-900 rounded-xl p-3 text-sm" data-notifications-unavailable>

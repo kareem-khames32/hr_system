@@ -6,14 +6,16 @@ import {
   EMAIL_MODE_LABELS, fetchNotificationPreferences, setNotificationPreference,
   type ApiNotificationPreferences, type NotificationChannel, type NotificationMode,
 } from '@/lib/notifications-api'
+import { setWhatsappPreference, type PreferenceExtras } from '@/lib/notification-channels-api'
 
 // B2.4: اختيارات المستخدم لإشعاراته في صفحة الإشعارات — لكل فئة: البريد (فورًا، ملخص يومي، مقفول)، وداخل النظام للفئات المخزّنة.
 // الفئات اللي بتظهر كعدّاد محسوب (طلبات بانتظار اعتمادي، قرارات طلباتي) ظاهرة داخل النظام دايمًا ومالهاش اختيار.
+// B-ADD.5: + الواتساب (شغال أو مقفول) لما الشركة فاتحاه، والأحداث اللي الإدارة معلّماها «إلزامي» مابتتقفلش، وبيانات الحساب اللي الرسايل بتتبعت عليها.
 const EMAIL_MODES: NotificationMode[] = ['ON', 'DIGEST', 'OFF']
 
 export default function NotificationPreferences() {
   const [open, setOpen] = useState(false)
-  const [data, setData] = useState<ApiNotificationPreferences | null>(null)
+  const [data, setData] = useState<(ApiNotificationPreferences & PreferenceExtras) | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
 
@@ -31,6 +33,15 @@ export default function NotificationPreferences() {
       setError(cause instanceof Error ? cause.message : 'تعذر حفظ الاختيار')
     } finally { setBusy('') }
   }
+  const changeWhatsapp = async (category: string, mode: 'ON' | 'OFF') => {
+    setBusy(`${category}:WHATSAPP`); setError('')
+    try { setData(await setWhatsappPreference(category, mode)) } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'تعذر حفظ الاختيار')
+    } finally { setBusy('') }
+  }
+
+  // فئة كل أحداثها إلزامية من الإدارة: اختيارها مقفول
+  const locked = (category: string) => data?.locked?.includes(category) === true
 
   return (
     <div className="card" data-notification-preferences>
@@ -55,32 +66,56 @@ export default function NotificationPreferences() {
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50">
-                    <tr>{['الفئة', 'داخل النظام', 'البريد'].map(title => <th key={title} className="px-3 py-2 text-start font-medium text-gray-600 whitespace-nowrap">{title}</th>)}</tr>
+                    <tr>{['الفئة', 'داخل النظام', 'البريد', ...(data.whatsappEnabled ? ['الواتساب'] : [])].map(title => <th key={title} className="px-3 py-2 text-start font-medium text-gray-600 whitespace-nowrap">{title}</th>)}</tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {data.categories.map(category => (
                       <tr key={category.key} data-notification-category={category.key}>
-                        <td className="px-3 py-2 font-medium text-gray-800">{category.label}</td>
+                        <td className="px-3 py-2 font-medium text-gray-800">
+                          {category.label}
+                          {data.mandatory?.[category.key]?.length ? (
+                            <span className="block text-xs font-normal text-amber-700" data-notification-mandatory={category.key}>
+                              إلزامي من الإدارة ومابيتقفلش: {data.mandatory[category.key].join('، ')}
+                            </span>
+                          ) : null}
+                        </td>
                         <td className="px-3 py-2">
                           {category.inApp === null ? <span className="text-gray-500">ظاهرة دايمًا</span> : (
                             <label className="inline-flex items-center gap-2">
-                              <input type="checkbox" checked={category.inApp !== 'OFF'} disabled={busy === `${category.key}:IN_APP`}
+                              <input type="checkbox" checked={category.inApp !== 'OFF'} disabled={busy === `${category.key}:IN_APP` || locked(category.key)}
                                 onChange={event => change(category.key, 'IN_APP', event.target.checked ? 'ON' : 'OFF')} />
                               <span>{category.inApp !== 'OFF' ? 'ظاهرة' : 'مقفولة'}</span>
                             </label>
                           )}
                         </td>
                         <td className="px-3 py-2">
-                          <select className="input w-40" aria-label={`بريد ${category.label}`} value={category.email} disabled={busy === `${category.key}:EMAIL`}
+                          <select className="input w-40" aria-label={`بريد ${category.label}`} value={category.email} disabled={busy === `${category.key}:EMAIL` || locked(category.key)}
                             onChange={event => change(category.key, 'EMAIL', event.target.value as NotificationMode)}>
                             {EMAIL_MODES.map(mode => <option key={mode} value={mode}>{EMAIL_MODE_LABELS[mode]}</option>)}
                           </select>
                         </td>
+                        {data.whatsappEnabled && (
+                          <td className="px-3 py-2">
+                            <label className="inline-flex items-center gap-2">
+                              <input type="checkbox" aria-label={`واتساب ${category.label}`} checked={data.whatsapp?.[category.key] !== 'OFF'}
+                                disabled={busy === `${category.key}:WHATSAPP` || locked(category.key)}
+                                onChange={event => changeWhatsapp(category.key, event.target.checked ? 'ON' : 'OFF')} />
+                              <span>{data.whatsapp?.[category.key] !== 'OFF' ? 'شغال' : 'مقفول'}</span>
+                            </label>
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+              {data.contact && (
+                <p className="text-sm text-gray-500" data-notification-contact>
+                  الرسايل بتتبعت على: بريد <span dir="ltr" className="font-mono">{data.contact.email ?? '—'}</span>
+                  {data.whatsappEnabled && <> · واتساب <span dir="ltr" className="font-mono">{data.contact.whatsapp ?? '—'}</span></>}
+                  . كلّم الموارد البشرية لتعديلهم.
+                </p>
+              )}
             </>
           )}
         </div>

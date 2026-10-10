@@ -171,6 +171,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/settings/login-log', 'سجل الدخول'],
   ['/settings/audit', 'سجل التدقيق'],
   ['/settings/scheduled-jobs', 'المهام المجدولة'],
+  ['/settings/notification-channels', 'قنوات الإشعارات'],
   ['/settings/roles', 'الأدوار والصلاحيات'],
   ['/settings/modules', 'الموديولات'],
   ['/settings', 'الإعدادات العامة'],

@@ -76,6 +76,7 @@ import { loadCurrencyContext, currencyCodeFor, currencyLabel, useCurrency } from
 import { useModuleEnabled } from '@/lib/modules'
 import EmployeeSuspensionDialog from '@/components/EmployeeSuspensionDialog'
 import EmployeeCustomFieldsCard from '@/components/EmployeeCustomFieldsCard'
+import EmployeeWhatsappCard from '@/components/EmployeeWhatsappCard'
 import DependentsCard from '@/components/DependentsCard'
 import EmploymentPeriodsCard from '@/components/EmploymentPeriodsCard'
 import { EmployeePayrollRunsCard } from '@/components/payroll/PayrollRunMoveMemberModal'
@@ -1333,6 +1334,8 @@ export default function EmployeeProfilePage() {
                   </div>
                 </div>
               </div>
+              {/* B-ADD.5: رقم الواتساب اللي إشعارات الواتساب بتتبعت عليه */}
+              <EmployeeWhatsappCard employeeId={employee.id} />
               {/* B2.9-ب: الحقول المخصصة اللي الشركة عرّفتها من الإعدادات */}
               <EmployeeCustomFieldsCard employeeId={employee.id} />
               {/* B3.14: معالين الموظف — لصاحب صلاحية سجل المعالين، ولما الموديول مفتوح */}
