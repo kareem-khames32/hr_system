@@ -139,7 +139,8 @@ export function OrgAudienceField({
   const covered = mode === 'branches' ? employees.filter((e) => e.branchId != null && branchIds.includes(e.branchId))
     : (() => { const ids = new Set(resolveOrgTarget(target, employees, departments)); return employees.filter((e) => ids.has(e.id)) })()
   const matches = employeeSearchMatcher(query)
-  const canExclude = exclusion && !(mode === 'target' && target.level === 'employees')
+  // العطلة وفترة الإضافي (multiBranch = false): الاستثناء جوه فرع بس — «الشركة كلها ماعدا…» مش من شكلهم، فالزرار مابيظهرش هناك
+  const canExclude = exclusion && !(mode === 'target' && (target.level === 'employees' || (!multiBranch && target.level === 'company')))
   const toggleExclude = (id: number) => {
     const next = exclude.includes(id) ? exclude.filter((x) => x !== id) : [...exclude, id]
     setExclude(next)

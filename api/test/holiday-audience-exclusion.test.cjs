@@ -59,6 +59,8 @@ test('HAX-03: the screens — holidays and overtime periods use the unified fiel
   assert.match(lib, /if \(where\.mode === 'branches'\) return ids\.length === 1 \? \{ level: 'branch', branchId: ids\[0\], \.\.\.extra \} : undefined/, 'أكتر من فرع مش من شكل العطلة')
   assert.match(lib, /if \(where\.mode === 'units'\) return \{ level: 'departments', branchId, departmentIds: ids, \.\.\.extra \}/, 'الإدارة والقسم = وحدة بتشمل اللي تحتها')
   assert.match(lib, /const excluded = Object\.prototype\.hasOwnProperty\.call\(row, 'excludeEmployeeIds'\)/, 'العطلة اللي عليها مستثنين مقروءة في الشاشة')
+  // «الشركة كلها ماعدا…» مش من شكل العطلة ولا فترة الإضافي: زرار الاستثناء مابيظهرش على «الشركة كلها» في الشاشتين (لقاها فحص المتصفح)
+  assert.match(src('components/OrgAudienceField.tsx'), /target\.level === 'employees' \|\| \(!multiBranch && target\.level === 'company'\)/)
   const holidays = src('app/leaves/holidays/page.tsx')
   assert.match(holidays, /<OrgAudienceField value=\{formAudience\} disabled=\{saving\} multiBranch=\{false\}/)
   assert.match(holidays, /if \(!formAudienceComplete \|\| holidayInputOfStored\(formAudience\) === undefined\) \{/)
