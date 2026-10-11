@@ -76,7 +76,7 @@ test('HU-03: knowledge base — article values, search matching, the reader limi
   const service = read('api/src/helpdesk/knowledge.service.ts')
   const readable = service.slice(service.indexOf('private async readable('), service.indexOf('private async typeNames('))
   assert.match(readable, /find\(\{ where: \{ isPublished: true \}/, 'المنشور بس')
-  assert.match(readable, /rows\.filter\(\(row\) => this\.inAudience\(row, employee, user\.role, positions, paths\)\)/, 'وفي جمهور موظف الحساب')
+  assert.match(readable, /rows\.filter\(\(row\) => this\.inAudience\(row, employee, user\.role, positions, places\)\)/, 'وفي جمهور موظف الحساب')
   assert.match(service, /announcementAudienceIntact\(row\.audience\) && requestAudienceAllows\(row\.audience, subject, 'submit'\)/, 'نفس مقيّم جمهور الإعلانات')
   const update = service.slice(service.indexOf('async update('), service.indexOf('private async managed('))
   const order = ['this.assertManager(user)', 'this.ds.transaction(', "lock: { mode: 'pessimistic_write' }", '!announcementAudienceInScope(row.audience, branchScopeOf(user))', 'await this.fields(em, user, input, row)'].map(part => update.indexOf(part))

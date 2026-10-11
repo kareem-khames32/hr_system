@@ -12,7 +12,7 @@ import { StoredFile } from '../files/stored-file.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
-import { assertAudienceTargets, audienceExcludeIds, audienceWhereBranchId, departmentPathsFor, type DepartmentPaths } from '../org/org-audience'
+import { assertAudienceTargets, audienceExcludeIds, audienceWhereBranchId, orgPlaceOf, orgPlacesFor, type OrgPlaces } from '../org/org-audience'
 import { AUDIENCE_ORG_WHERE_MODES, AUDIENCE_WHO_MODES, audienceNeedsPositions, parseRequestAudience, requestAudienceAllows,
   type AudiencePositions, type AudienceSubject } from '../requests/request-audience'
 import { PolicyGate } from './policy-gate'
@@ -45,7 +45,7 @@ type PolicyWithVersions = { policy: Policy; versions: VersionRow[] }
 type OrgPositions = { departmentManagers: Set<number>; teamLeaders: Set<number>; branchManagers: Set<number> }
 type AudienceEmployee = Pick<Employee, 'id' | 'employeeCode' | 'fullName' | 'branchId' | 'departmentId' | 'teamId' | 'joinDate'>
 /** موظفين (شغالين، في نطاق) ومعاهم اللي المقيّم محتاجه: دور حساب كل واحد ومنصبه في الهيكل */
-type AudiencePool = { employees: AudienceEmployee[]; roles: Map<number, string>; positions: OrgPositions | null; paths: DepartmentPaths | null }
+type AudiencePool = { employees: AudienceEmployee[]; roles: Map<number, string>; positions: OrgPositions | null; places: OrgPlaces | null }
 
 const COMPANY_SCOPE_ONLY = 'إدارة السياسات لحساب نطاقه كل الفروع — السياسة بتسري على الشركة كلها'
 const VERSION_COLUMNS = `v.[id], v.[policyId], v.[versionNo], CONVERT(nvarchar(10), v.[effectiveDate], 23) AS [effectiveDate], v.[isMaterial], v.[contentHash], v.[fileId],
@@ -165,15 +165,15 @@ export class PoliciesService {
    * مدير النظام في أي جمهور (معناها هناك «يقدر يقدّم»)، وهنا السؤال «مين عليه يقرّ»، فمدير النظام عليه اللي على موظفه بس.
    */
   private subjectOf(employee: Pick<Employee, 'id' | 'departmentId' | 'teamId' | 'branchId'>, role: string | null | undefined, positions: AudiencePositions,
-    paths: DepartmentPaths | null): AudienceSubject {
+    places: OrgPlaces | null): AudienceSubject {
     // B-ADD.1: مسار القسم لجمهور «إدارات أو أقسام» (الوحدة بتشمل اللي تحتها)
     return { role: role && role !== 'super_admin' ? role : null, permissions: [], employeeId: employee.id, departmentId: employee.departmentId ?? null,
-      teamId: employee.teamId ?? null, branchId: employee.branchId ?? null, positions, departmentPath: paths ? paths(employee.departmentId) : null }
+      teamId: employee.teamId ?? null, branchId: employee.branchId ?? null, positions, ...orgPlaceOf(places, employee) }
   }
 
   /** الموظف ده في جمهور السياسة؟ */
   private inAudience(policy: Policy, employee: AudienceEmployee, pool: AudiencePool): boolean {
-    return requestAudienceAllows(policy.audience, this.subjectOf(employee, pool.roles.get(employee.id), this.positionsOf(pool.positions, employee.id), pool.paths), 'submit')
+    return requestAudienceAllows(policy.audience, this.subjectOf(employee, pool.roles.get(employee.id), this.positionsOf(pool.positions, employee.id), pool.places), 'submit')
   }
 
   /** الموظفين الشغالين في نطاق القارئ، باللي المقيّم محتاجه للسياسات دي */
@@ -189,7 +189,7 @@ export class PoliciesService {
       }
     }
     return { employees, roles, positions: policies.some(policy => audienceNeedsPositions(policy.audience)) ? await this.orgPositions(em) : null,
-      paths: await departmentPathsFor(em, policies.map(policy => policy.audience)) }
+      places: await orgPlacesFor(em, policies.map(policy => policy.audience)) }
   }
 
   /**
@@ -223,7 +223,7 @@ export class PoliciesService {
     const published = await this.withVersions(em, await em.getRepository(Policy).find({
       where: { status: 'PUBLISHED', ...(onlyMandatory ? { isMandatory: true } : {}) }, order: { id: 'ASC' } }))
     const positions = published.some(item => audienceNeedsPositions(item.policy.audience)) ? this.positionsOf(await this.orgPositions(em), employee.id) : {}
-    const subject = this.subjectOf(employee, user.role, positions, await departmentPathsFor(em, published.map(item => item.policy.audience)))
+    const subject = this.subjectOf(employee, user.role, positions, await orgPlacesFor(em, published.map(item => item.policy.audience)))
     const applicable = published.filter(item => requestAudienceAllows(item.policy.audience, subject, 'submit') && currentPolicyVersion(item.versions, today))
     const acknowledged = new Map<number, Array<{ versionId: number; acknowledgedAt: Date }>>()
     if (applicable.length) {

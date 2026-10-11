@@ -24,6 +24,7 @@ import {
   OVERTIME_COUNTED_STATUSES, absenceOutsideServiceSql, currentEmployeeSql, percent, serviceEndSql, serviceStartSql,
 } from '../reports/metrics'
 import { MetricsService } from '../reports/metrics.service'
+import { LOAN_DEFERRAL_TYPE } from '../requests/loan-installment-requests'
 import { TASK_ROLE_LABELS, tasksTableReady } from '../tasks/task-rules'
 import { notPersonalTask, taskExtrasReady } from '../tasks/task-extras'
 import { TASK_OPEN_STATUSES } from '../tasks/task.entity'
@@ -33,8 +34,13 @@ import {
   type AttendanceBucket, type BucketCounts, type CardGroup, type CardGroupRow, type CardTree, type DashboardCardKey,
 } from './dashboard-cards'
 
-// عمر الحسابات المشتركة بين الكروت (الشجرة، وموظفو النطاق، وتصنيف اليوم): الكروت بتتطلب مع بعض عند فتح اللوحة
+// عمر الحساب المشترك بين الكروت (تصنيف اليوم بس — الشجرة وموظفو النطاق بيتقروا لكل طلب): الكروت بتتطلب مع بعض عند فتح اللوحة
 const SHARED_TTL_MS = 30_000
+// Codex P7A-B07: الطلب سري؟ بحكم محرك الطلبات (ونفس حكم مصدر «الطلبات» في منشئ التقارير): نوعه الفعلي هو تعريفه (definitionCode) وإلا نوعه
+// العام؛ وسري لو تعريفه سري، أو نوعه العام سري، أو تأجيل قسط سلفة ونوع السلفة سري (سرية موروثة). r = الطلب، وt = نوعه العام.
+const CONFIDENTIAL_REQUEST_SQL = `(ISNULL(t.isConfidential, 0) = 1
+  OR EXISTS (SELECT 1 FROM request_types dt WHERE dt.code = NULLIF(r.definitionCode, N'') AND dt.isConfidential = 1)
+  OR (COALESCE(NULLIF(r.definitionCode, N''), r.typeCode) = N'${LOAN_DEFERRAL_TYPE}' AND EXISTS (SELECT 1 FROM request_types lt WHERE lt.code = N'LOAN' AND lt.isConfidential = 1)))`
 // أقصى أسماء في قايمة واحدة
 const LIST_LIMIT = 500
 // نافذة «هتنتهي» في كارت القوى العاملة
@@ -178,17 +184,18 @@ export class DashboardCardsService {
     return raw
   }
 
-  private treeOf(scope: BranchScope) {
-    return this.share(`tree|${scopeKey(scope)}`, async () => {
-      const context = await this.moduleRef.get(OrgService, { strict: false }).filterContext(scope)
-      const names = new Map(context.branches.map(branch => [branch.id, branch.name]))
-      return { tree: cardTree(context.units, context.teams), names }
-    })
+  // Codex P7A-B06: الشجرة وموظفين النطاق بيتقروا من القاعدة **لكل طلب** — مش من الحساب المشترك: موظف (أو وحدة) اتنقل برّه نطاق الحساب
+  // كان بيفضل اسمه وتليفونه راجعين من اللقطة لحد ما مدتها تخلص. اللقطة القديمة مش إذن لعرض بيانات شخصية؛ الحساب المشترك فاضل لخانات
+  // اليوم بس (أرقام حالة بتتربط بموظفين الطلب الحاليين).
+  private async treeOf(scope: BranchScope) {
+    const context = await this.moduleRef.get(OrgService, { strict: false }).filterContext(scope)
+    const names = new Map(context.branches.map(branch => [branch.id, branch.name]))
+    return { tree: cardTree(context.units, context.teams), names }
   }
 
   /** موظفو النطاق الحاليون (شرط «الموظف الحالي» من قاموس المؤشرات) — استعلام واحد للكل */
   private peopleOf(scope: BranchScope): Promise<Person[]> {
-    return this.share(`people|${scopeKey(scope)}`, async () => {
+    return (async () => {
       const params: unknown[] = []
       const rows: Array<Record<string, unknown>> = await this.ds.query(
         `SELECT e.id AS id, e.fullName AS fullName, e.employeeCode AS employeeCode, e.jobTitle AS jobTitle, e.phone AS phone, e.branchId AS branchId,
@@ -207,7 +214,7 @@ export class DashboardCardsService {
         joinDate: day10(row.joinDate), actualStartDate: day10(row.actualStartDate), probationEndDate: day10(row.probationEndDate),
         contractEnd: day10(row.contractEnd), passportExpiry: day10(row.passportExpiry),
       }))
-    })
+    })()
   }
 
   /**
@@ -623,7 +630,8 @@ export class DashboardCardsService {
   /**
    * المعلّق (متقدّم أو قيد المراجعة) بالنوع والعمر، والمتأخر عن مهلة خطوته الحالية (dueAt من resolvedSteps — نفس قراءة تصعيد الطلبات)،
    * و«معتمد ومااتنفذش» (APPROVED أو IN_EXECUTION — تعريف كونسول الطلبات). النطاق بفرع الطلب، والفلتر بمكان صاحبه جوه نطاق القارئ،
-   * والسرّي بفرعه بس (نفس قاعدة تقرير الطلبات بالحرف).
+   * والسرّي بفرعه بس: فلتر إدارة أو قسم أو فريق مابيعدّوش (العدد كان هيكشف مكان صاحبه). Codex P7A-B07: «سرّي» بحكم محرك الطلبات الموحد
+   * (CONFIDENTIAL_REQUEST_SQL) — تعريف الطلب الفعلي سري، أو نوعه العام سري، أو تأجيل قسط سلفة ونوع السلفة سري — مش بنوعه العام لوحده.
    */
   async requestsCard(ctx: CardContext) {
     const params: unknown[] = []
@@ -635,7 +643,7 @@ export class DashboardCardsService {
       const clauses = orgFilterSql({ branch: 'oe.branchId', department: 'oe.departmentId', team: 'oe.teamId' }, ctx.filter, params)
       const readerScope = branchScopeSql('oe.branchId', ctx.scope, params)
       if (readerScope) clauses.push(readerScope)
-      inOrg = `AND ((t.isConfidential = 1 AND ${confidential}) OR (ISNULL(t.isConfidential, 0) = 0
+      inOrg = `AND ((${CONFIDENTIAL_REQUEST_SQL} AND ${confidential}) OR (NOT ${CONFIDENTIAL_REQUEST_SQL}
         AND r.requesterId IN (SELECT oe.id FROM employees oe WHERE ${clauses.join(' AND ')})))`
     }
     const rows: Array<Record<string, unknown>> = await this.ds.query(
@@ -682,6 +690,8 @@ export class DashboardCardsService {
   /**
    * المهام المفتوحة والمتأخرة (مفتوحة وميعادها فات — تعريف شاشة المهام) بالمسؤول: موظف أو دور. المهمة الشخصية برّه زي شاشة «المهام».
    * النطاق بفرع المهمة، وفلتر الإدارة والقسم والفريق بمكان المسؤول جوه نطاق القارئ (مهمة مسنودة لدور مالهاش مكان، فمابتطابقش).
+   * Codex P7A-B06: اسم المسؤول ورقمه بفرعه **الحالي** — موظف اتنقل برّه نطاق الحساب مهامه القديمة بتتعدّ (بفرع المهمة) في صف واحد
+   * «موظفين برّه نطاقك» من غير اسم ولا رقم.
    */
   async tasksCard(ctx: CardContext) {
     const em = this.ds.manager
@@ -697,19 +707,24 @@ export class DashboardCardsService {
     }
     const personal = (await taskExtrasReady(em)) ? `AND ${notPersonalTask('t')}` : ''
     const rows: Array<Record<string, unknown>> = await this.ds.query(
-      `SELECT t.assigneeEmployeeId AS employeeId, t.assigneeRole AS role, e.fullName AS fullName, COUNT(*) AS openCount,
+      `SELECT t.assigneeEmployeeId AS employeeId, t.assigneeRole AS role, e.fullName AS fullName, e.branchId AS employeeBranchId, COUNT(*) AS openCount,
               SUM(CASE WHEN t.dueDate IS NOT NULL AND t.dueDate < @0 THEN 1 ELSE 0 END) AS overdue
        FROM tasks t LEFT JOIN employees e ON e.id = t.assigneeEmployeeId
        WHERE t.status IN (${TASK_OPEN_STATUSES.map(status => `'${status}'`).join(', ')}) ${inScope} ${clauses.map(clause => `AND ${clause}`).join(' ')} ${personal}
-       GROUP BY t.assigneeEmployeeId, t.assigneeRole, e.fullName`,
+       GROUP BY t.assigneeEmployeeId, t.assigneeRole, e.fullName, e.branchId`,
       params
     )
-    const assignees = rows.map(row => ({
+    // المسؤول اللي فرعه الحالي برّه نطاق القارئ (أو صفه مش موجود): من غير اسم ولا رقم، وكلهم في صف واحد
+    const hidden = (row: Record<string, unknown>) => ctx.scope !== null && row.employeeId !== null && row.employeeId !== undefined
+      && (row.employeeBranchId === null || row.employeeBranchId === undefined || !inBranchScope(ctx.scope, Number(row.employeeBranchId)))
+    const outside = rows.filter(hidden)
+    const assignees = rows.filter(row => !hidden(row)).map(row => ({
       employeeId: num(row.employeeId), role: (row.role as string | null) ?? null,
       name: row.employeeId !== null && row.employeeId !== undefined ? String(row.fullName ?? `موظف #${row.employeeId}`)
         : (TASK_ROLE_LABELS as Record<string, string>)[String(row.role)] ?? String(row.role ?? 'من غير مسؤول'),
       open: Number(row.openCount ?? 0), overdue: Number(row.overdue ?? 0),
-    })).sort((a, b) => b.overdue - a.overdue || b.open - a.open || byArabic(a.name, b.name))
+    })).concat(outside.length ? [{ employeeId: null, role: null, name: 'موظفين برّه نطاقك',
+      open: outside.reduce((sum, row) => sum + Number(row.openCount ?? 0), 0), overdue: outside.reduce((sum, row) => sum + Number(row.overdue ?? 0), 0) }] : []).sort((a, b) => b.overdue - a.overdue || b.open - a.open || byArabic(a.name, b.name))
     return {
       available: true, open: assignees.reduce((sum, row) => sum + row.open, 0), overdue: assignees.reduce((sum, row) => sum + row.overdue, 0),
       people: assignees.length, assignees: assignees.slice(0, 10),

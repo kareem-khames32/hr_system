@@ -88,10 +88,10 @@ export function TasksCard({ filter, href }: CardProps) {
                 </thead>
                 <tbody>
                   {data.assignees.map((row) => (
-                    <tr key={`${row.employeeId ?? ''}|${row.role ?? ''}`} className="table-row">
+                    <tr key={`${row.employeeId ?? ''}|${row.role ?? ''}|${row.name}`} className="table-row">
                       <td className="px-3 py-2 text-gray-800">
                         {row.name}
-                        {row.employeeId === null && <span className="ms-2 text-xs text-gray-400">دور</span>}
+                        {row.role !== null && <span className="ms-2 text-xs text-gray-400">دور</span>}
                       </td>
                       <td className="px-3 py-2 text-center text-gray-700">{num(row.open)}</td>
                       <td className={`px-3 py-2 text-center font-semibold ${row.overdue ? 'text-danger-600' : 'text-gray-300'}`}>{num(row.overdue)}</td>

@@ -642,3 +642,65 @@ test('NC-12: القالب الإنجليزي للي لغة حسابه إنجلي
   assert.equal(reset.events.find(event => event.code === 'request.pending_approval').templates.EMAIL.customized, false)
   assert.equal(Number((await query('SELECT COUNT(*) AS [n] FROM [notification_templates]'))[0].n), 0)
 })
+
+// ===== Codex P7A (CRP7A) =====
+test('NC-13 (P7A-B08): الملخص اليومي بيحترم قفل بريد الحدث من «قنوات الإشعارات» — اللي اتجمّع قبل القفل «اتخطّى»', async () => {
+  await setting('notifications.email.enabled', 'true')
+  await setting('notifications.quiet_hours', '')
+  expectStatus(await rule('request.pending_approval', { email: true }), 200)
+  expectStatus(await request(users.manager, 'PATCH', '/notifications/preferences', { category: 'approval', channel: 'EMAIL', mode: 'DIGEST' }), 200)
+  try {
+    const req = await submit(users.requester, types.general)
+    await drain()
+    assert.equal((await deliveriesOf('request', req.id, 'EMAIL'))[0]?.status, 'DIGEST')
+    // الإدارة قفلت بريد الحدث بعد ما اتجمّع
+    expectStatus(await rule('request.pending_approval', { email: false }), 200)
+    clear()
+    await notifications.sendDigests()
+    const [skipped] = await deliveriesOf('request', req.id, 'EMAIL')
+    assert.deepEqual([skipped.status, /قنوات الإشعارات/.test(skipped.detail ?? ''), mailbox.sent.some(message => message.text.includes(types.general.nameAr))], ['SKIPPED', true, false])
+    // والحدث المفتوح بريده لسه بيتبعت في الملخص
+    expectStatus(await rule('request.pending_approval', { email: true }), 200)
+    const next = await submit(users.requester, types.general)
+    await drain()
+    clear()
+    assert.ok(await notifications.sendDigests() > 0)
+    assert.equal((await deliveriesOf('request', next.id, 'EMAIL'))[0]?.status, 'SENT')
+  } finally {
+    expectStatus(await rule('request.pending_approval', { email: true }), 200)
+    expectStatus(await request(users.manager, 'PATCH', '/notifications/preferences', { category: 'approval', channel: 'EMAIL', mode: 'ON' }), 200)
+  }
+})
+
+test('NC-14 (P7A-B09): حفظ رقم واتساب الموظف بيقفل صفه — نقله لفرع تاني بيستنى لحد ما الحفظ يخلص، ومابيتكتبش رقم لموظف برّه نطاق الكاتب', async () => {
+  const { Repository } = require('../node_modules/typeorm')
+  const original = Repository.prototype.findOne
+  const before = (await repo('EmployeeWhatsappNumber').findOneBy({ employeeId: emps.requester.id }))?.number ?? null
+  let move = null, movedBeforeCommit = null
+  Repository.prototype.findOne = async function (...args) {
+    if (!move && this.manager.connection === ds && this.metadata.name === 'EmployeeWhatsappNumber' && this.manager.queryRunner?.isTransactionActive) {
+      // بعد حكم النطاق وقبل الكتابة: النقل بيبدأ من اتصال تاني
+      let done = false
+      move = repo('Employee').update({ id: emps.requester.id }, { branchId: org.branchB.id }).then(() => { done = true })
+      await new Promise(resolve => setTimeout(resolve, 500))
+      movedBeforeCommit = done
+    }
+    return original.apply(this, args)
+  }
+  try {
+    await request(users.hrA, 'PUT', `/notification-channels/contacts/${emps.requester.id}`, { whatsappNumber: '+966500009999' })
+    await move
+    assert.equal(movedBeforeCommit, false, 'النقل استنى معاملة الحفظ')
+    // بعد النقل: الموظف برّه نطاق الكاتب — 404 ومن غير كتابة
+    Repository.prototype.findOne = original
+    const saved = (await repo('EmployeeWhatsappNumber').findOneBy({ employeeId: emps.requester.id }))?.number ?? null
+    assert.equal(saved, '966500009999', 'اتكتب والموظف لسه في نطاق الكاتب')
+    expectStatus(await request(users.hrA, 'PUT', `/notification-channels/contacts/${emps.requester.id}`, { whatsappNumber: '+966500001111' }), 404)
+    assert.equal((await repo('EmployeeWhatsappNumber').findOneBy({ employeeId: emps.requester.id }))?.number ?? null, '966500009999')
+  } finally {
+    Repository.prototype.findOne = original
+    await repo('Employee').update({ id: emps.requester.id }, { branchId: org.branchA.id })
+    if (before) await repo('EmployeeWhatsappNumber').update({ employeeId: emps.requester.id }, { number: before })
+    else await repo('EmployeeWhatsappNumber').delete({ employeeId: emps.requester.id })
+  }
+})

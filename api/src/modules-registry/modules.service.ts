@@ -6,7 +6,7 @@ import { Employee } from '../employees/employee.entity'
 import { audienceNeedsEmployee, audienceNeedsPositions, parseRequestAudience, requestAudienceAllows, AUDIENCE_ORG_WHERE_MODES,
   AUDIENCE_WHO_MODES, type AudienceSubject } from '../requests/request-audience'
 import { orgPositionsOf } from '../requests/request-audience-positions'
-import { assertAudienceTargets, audienceExcludeIds, audienceNeedsDepartmentPath, audienceWhereBranchId, departmentPaths } from '../org/org-audience'
+import { assertAudienceTargets, audienceExcludeIds, audienceWhereBranchId, orgPlaceOf, orgPlaces, orgPlacesFor } from '../org/org-audience'
 import {
   enabledDependents, enabledSnapshot, featureEnabled, isFeatureKey, isModuleKey, missingDependencies, moduleDefOf, moduleEnabled, moduleOfJob,
   moduleOfRequestType, modulesOfPreset, MODULE_FEATURES, MODULE_KEYS, MODULE_PRESETS, type ModuleKey, type ModulePreset, type ModulesState,
@@ -165,8 +165,8 @@ export class ModulesService {
       const employee = await em.getRepository(Employee).findOne({ where: { id: user.employeeId }, select: { id: true, departmentId: true, teamId: true, branchId: true } })
       return requestAudienceAllows(audience, { ...base, departmentId: employee?.departmentId ?? null, teamId: employee?.teamId ?? null, branchId: employee?.branchId ?? user.branchId ?? null,
         positions: await orgPositionsOf(em, user.employeeId),
-        // B-ADD.1: مسار القسم لجمهور «إدارات أو أقسام» — بمدير المعاملة نفسه
-        departmentPath: audienceNeedsDepartmentPath(audience) ? (await departmentPaths(em))(employee?.departmentId) : null }, 'submit')
+        // B-ADD.1: مكان الموظف في الهيكل لجمهور «إدارات أو أقسام» أو فرق فرع — بمدير المعاملة نفسه
+        ...orgPlaceOf(await orgPlacesFor(em, [audience]), employee) }, 'submit')
     }
     return allowed(module, new Set())
   }
@@ -204,8 +204,8 @@ export class ModulesService {
       ...base,
       departmentId: employee?.departmentId ?? null, teamId: employee?.teamId ?? null, branchId: employee?.branchId ?? user.branchId ?? null,
       positions: await orgPositionsOf(this.ds.manager, user.employeeId),
-      // B-ADD.1: مسار القسم (قسمه واللي فوقه جوه فرعه) — بيتحسب دايمًا مع الموضوع المحفوظ مؤقتًا: جمهور موديول تاني ممكن يحتاجه
-      departmentPath: employee?.departmentId != null ? (await departmentPaths(this.ds.manager))(employee.departmentId) : [],
+      // B-ADD.1: مكان الموظف في الهيكل (مسار قسمه، وفرع قسمه وفريقه الحالي) — بيتحسب دايمًا مع الموضوع المحفوظ مؤقتًا: جمهور موديول تاني ممكن يحتاجه
+      ...orgPlaceOf(await orgPlaces(this.ds.manager), employee),
     }
     this.subjects.set(user.sub, { at: Date.now(), subject })
     return subject
@@ -276,6 +276,11 @@ export class ModulesService {
     // B-ADD.1: ومعاهم «إدارات أو أقسام من فرع» (units) بالاستهداف الموحد
     if (!(AUDIENCE_ORG_WHERE_MODES as readonly string[]).includes(whereMode)) throw new BadRequestException('اختيار «فين» في جمهور التفعيل غير معروف')
     const whereIds = Array.isArray(value.where?.ids) ? value.where!.ids.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0).slice(0, 500) : []
+    // Codex P7A-B02: الاختيار الجديد الناقص (إدارات/أقسام، أو أي «فين» بفرع اختيار) من غير أرقام مرفوض — مايتطبّعش لـ«كل الشركة» ويفتح
+    // الموديول للكل. الشكل القديم (فروع/أقسام/فرق من غير فرع اختيار) بقايمة فاضية = «كل الشركة» زي ما كان.
+    if (!whereIds.length && (whereMode === 'units' || value.where?.branchId != null)) {
+      throw new BadRequestException('اختار الإدارات أو الأقسام أو الفرق في جمهور التفعيل، أو خلّيه «كل الشركة»')
+    }
     const located = whereMode !== 'company' && whereIds.length > 0
     // B-ADD.1: فرع الاختيار و«الكل ماعدا…» — بيتكتبوا لما يكونوا موجودين بس، فالنص القديم زي ما هو بالحرف
     const whereBranchId = located ? audienceWhereBranchId(value.where, whereMode, 'جمهور التفعيل') : null

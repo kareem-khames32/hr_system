@@ -468,3 +468,50 @@ test('DC-08: the dashboard opens within the 3-second target for 600 employees', 
   assert.equal(pending.employees.every(row => row.shift === 'الجدول الافتراضي (08:00–16:00)'), true, JSON.stringify(pending.employees[0]))
   t.diagnostic(`600 employees, 300 without a row — first open ${hard.total} ms (cards in parallel: ${JSON.stringify(hard.timings)}); the attendance engine's own live-absence pass for the same scope: ${engineMs} ms (${engineRows} rows); names of one team with shifts ${Date.now() - pendingList} ms`)
 })
+
+// ===== Codex P7A (CRP7A) =====
+test('DC-09 (P7A-B06): an employee who moved outside the reader\'s branches is not named anywhere — not in the tasks card, and not from an older snapshot', async () => {
+  // اللوحة اتفتحت قبل النقل (أي حساب مشترك اتملى)
+  const tasksBefore = await card(U.hr, '/tasks'), absentBefore = await card(U.hr, '/absent-late')
+  const mine = tasksBefore.assignees.find(row => row.employeeId === E.j1.id)
+  assert.ok(mine && mine.open > 0, 'j1 عليه مهام مفتوحة في فرع القارئ')
+  assert.ok(JSON.stringify(absentBefore).includes(E.j3.fullName))
+  try {
+    await repo('Employee').update({ id: E.j1.id }, { branchId: B.r.id, fullName: 'اسم جديد في فرع تاني' })
+    await repo('Employee').update({ id: E.j3.id }, { branchId: B.r.id })
+    // كارت المهام: مهام فرع القارئ لسه بتتعدّ، بس من غير اسم المسؤول ولا رقمه
+    const tasks = await card(U.hr, '/tasks'), text = JSON.stringify(tasks)
+    const outside = tasks.assignees.find(row => row.name === 'موظفين برّه نطاقك')
+    assert.deepEqual([tasks.assignees.some(row => row.employeeId === E.j1.id), text.includes('اسم جديد في فرع تاني'), text.includes(E.j1.fullName)], [false, false, false])
+    assert.deepEqual([outside?.employeeId ?? null, outside?.open, tasks.open], [null, mine.open, tasksBefore.open], 'العدد زي ما هو بفرع المهمة')
+    // الغائبين والمتأخرين: من غير مسح أي ذاكرة — الاسم والتليفون مابيرجعوش
+    const absent = JSON.stringify(await card(U.hr, '/absent-late'))
+    assert.deepEqual([absent.includes(E.j3.fullName), !!E.j3.phone && absent.includes(E.j3.phone)], [false, false])
+    assert.equal(JSON.stringify(await card(U.hr, '/workforce')).includes(E.j3.fullName), false)
+    // وحساب الشركة كلها لسه شايف الاسم
+    assert.equal((await card(U.admin, '/tasks')).assignees.some(row => row.employeeId === E.j1.id && row.name === 'اسم جديد في فرع تاني'), true)
+  } finally {
+    await repo('Employee').update({ id: E.j1.id }, { branchId: B.j.id, fullName: E.j1.fullName })
+    await repo('Employee').update({ id: E.j3.id }, { branchId: B.j.id })
+  }
+  assert.ok((await card(U.hr, '/tasks')).assignees.some(row => row.employeeId === E.j1.id))
+})
+
+test('DC-10 (P7A-B07): a request whose definition is confidential is confidential in the requests card — a unit filter never counts it', async () => {
+  await repo('RequestType').save({ code: 'DC_SECRET_DEF', nameAr: 'تعريف سري', category: 'inquiries', destinationHandler: 'NONE', isConfidential: true })
+  const filtered = `/requests?departmentIds=${D.retail.id}`
+  const before = await card(U.hr, filtered), wide = await card(U.hr, '/requests')
+  const row = await repo('Request').save({ typeCode: 'DC_TEST', definitionCode: 'DC_SECRET_DEF', requesterId: E.j1.id, createdByUserId: U.admin.id,
+    branchId: B.j.id, status: 'SUBMITTED', currentStep: 1, payload: '{}', submittedAt: new Date() })
+  try {
+    // نوعه العام عادي وتعريفه سري: فلتر القسم مابيعدّوش (العدد كان هيكشف مكان صاحبه)، ومن غير فلتر بيتعدّ بفرعه زي أي سري
+    assert.equal((await card(U.hr, filtered)).pending, before.pending)
+    assert.equal((await card(U.hr, '/requests')).pending, wide.pending + 1)
+    // تعريف عادي على نفس النوع العام: بيتعدّ جوه القسم
+    await repo('Request').update({ id: row.id }, { definitionCode: null })
+    assert.equal((await card(U.hr, filtered)).pending, before.pending + 1)
+    // النوع العام نفسه سري: برّه فلتر القسم
+    await repo('Request').update({ id: row.id }, { typeCode: 'DC_SECRET_DEF' })
+    assert.equal((await card(U.hr, filtered)).pending, before.pending)
+  } finally { await repo('Request').delete({ id: row.id }); await repo('RequestType').delete({ code: 'DC_SECRET_DEF' }) }
+})

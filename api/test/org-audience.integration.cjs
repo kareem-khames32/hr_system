@@ -244,3 +244,81 @@ test('OA-05: a group task gives every employee of the audience their own task, i
   expect(await group(U.tasksAll, units(B.a, D.sales), { dueDate: '2020-01-01' }), 400)
   assert.equal(Number((await query('SELECT COUNT(*) AS [n] FROM [tasks]'))[0].n), before)
 })
+
+// ===== Codex P7A (CRP7A) =====
+test('OA-06 (P7A-B01): a team or a unit that moved to another branch is out of its old branch audience — on the board and in the preview', async () => {
+  const title = 'لفريق المحل قبل النقل'
+  const row = expect(await call(U.hrA, 'POST', '/announcements', { title, body: 'نص', audience: teams(B.a, T.shop) }), 201)
+  expect(await call(U.hrA, 'POST', `/announcements/${row.id}/publish`), 201)
+  assert.equal((await boardTitles(U.retail1)).includes(title), true)
+  assert.deepEqual(await previewNames(U.hrA, teams(B.a, T.shop)), names('retail1'))
+  try {
+    // الفريق اتنقل لقسم في فرع ب، وموظفه لسه في فرع أ ورقم الفريق لسه على ملفه
+    await repo('Team').update({ id: T.shop.id }, { departmentId: D.other.id })
+    assert.equal((await boardTitles(U.retail1)).includes(title), false, 'الفريق مابقاش تبع فرع الاختيار')
+    assert.deepEqual(await previewNames(U.hrA, teams(B.a, T.shop)), [], 'المعاينة بنفس الحكم')
+    assert.deepEqual(await previewNames(U.hr, teams(B.a, T.shop)), [])
+  } finally { await repo('Team').update({ id: T.shop.id }, { departmentId: D.retail.id }) }
+  assert.equal((await boardTitles(U.retail1)).includes(title), true, 'رجع الفريق = رجع جمهوره')
+  // الشكل القديم (فرق من غير فرع اختيار) زي ما هو: بيطابق برقم الفريق بس
+  const legacy = { mode: 'all', ids: [], where: { mode: 'teams', ids: [T.shop.id] } }
+  try {
+    await repo('Team').update({ id: T.shop.id }, { departmentId: D.other.id })
+    assert.deepEqual(await previewNames(U.hr, legacy), names('retail1'))
+    // قسم اتنقل لفرع ب وموظفينه لسه في فرع أ: مش من جمهور «إدارات/أقسام» فرع أ
+    await repo('Department').update({ id: D.wholesale.id }, { branchId: B.b.id, parentId: null })
+    assert.deepEqual(await previewNames(U.hr, units(B.a, D.wholesale)), [])
+  } finally {
+    await repo('Team').update({ id: T.shop.id }, { departmentId: D.retail.id })
+    await repo('Department').update({ id: D.wholesale.id }, { branchId: B.a.id, parentId: D.sales.id })
+  }
+  assert.deepEqual(await previewNames(U.hr, units(B.a, D.wholesale)), names('wholesale1'))
+})
+
+test('OA-07 (P7A-B02): an incomplete new-shape audience is refused, and a damaged stored one opens for nobody', async () => {
+  const before = (await repo('SystemModule').findOneBy({ key: 'surveys' }))?.audience ?? null
+  for (const where of [{ mode: 'units', ids: [], branchId: B.a.id }, { mode: 'units', ids: [] }, { mode: 'teams', ids: [], branchId: B.a.id }, { mode: 'company', ids: [], branchId: B.a.id }]) {
+    const refused = await call(U.admin, 'PUT', '/modules/surveys', { enabled: true, audience: { mode: 'all', ids: [], where } })
+    assert.equal(refused.status, 400, JSON.stringify(where))
+  }
+  assert.equal((await repo('SystemModule').findOneBy({ key: 'surveys' }))?.audience ?? null, before, 'ولا كتابة')
+  // الشكل القديم بقايمة فاضية = «كل الشركة» زي ما كان
+  expect(await call(U.admin, 'PUT', '/modules/surveys', { enabled: true, audience: { mode: 'all', ids: [], where: { mode: 'departments', ids: [] } } }), 200)
+  assert.equal((await repo('SystemModule').findOneBy({ key: 'surveys' }))?.audience ?? null, null)
+  // نص محفوظ تالف من الشكل الجديد: مش لحد (حتى من غير أرقام أو من غير فرع اختيار)
+  const { requestAudienceAllows } = require('../src/requests/request-audience')
+  const subject = { role: null, permissions: [], employeeId: E.retail1.id, branchId: B.a.id, departmentId: D.retail.id, teamId: T.shop.id,
+    departmentPath: [D.retail.id, D.sales.id], departmentBranchId: B.a.id, teamBranchId: B.a.id }
+  const allows = where => requestAudienceAllows(JSON.stringify({ mode: 'all', ids: [], where }), subject, 'submit')
+  assert.deepEqual([allows({ mode: 'units', ids: [], branchId: B.a.id }), allows({ mode: 'units', ids: [D.sales.id] }), allows({ mode: 'teams', ids: [], branchId: B.a.id }),
+    allows({ mode: 'units', ids: [D.sales.id], branchId: 'x' }), allows({ mode: 'units', ids: [D.sales.id], branchId: B.a.id }), allows({ mode: 'teams', ids: [T.shop.id], branchId: B.a.id })],
+    [false, false, false, false, true, true])
+  // والقديم التالف زي ما هو (الباب لا يُقفل صامتًا)
+  assert.deepEqual([allows({ mode: 'departments', ids: [] }), allows({ mode: 'nope', ids: [1] })], [true, true])
+})
+
+test('OA-08 (P7A-B03): a group task holds its employees\' rows — a transfer waits until the tasks are written, and never lands between the rule and the write', async () => {
+  const tasks = app.get(require('../src/tasks/tasks.service').TasksService), original = tasks.assignment
+  let move = null, movedBeforeCommit = null
+  tasks.assignment = async function (user, input, em) {
+    const judged = await original.call(this, user, input, em)
+    if (input.assigneeEmployeeId === E.retail1.id && !move) {
+      let done = false
+      move = repo('Employee').update({ id: E.retail1.id }, { branchId: B.b.id, departmentId: D.other.id, teamId: null }).then(() => { done = true })
+      await new Promise(resolve => setTimeout(resolve, 500))
+      movedBeforeCommit = done
+    }
+    return judged
+  }
+  try {
+    const body = expect(await call(U.tasksA, 'POST', '/tasks/group', { title: 'مهمة تحت القفل', audience: { mode: 'employees', ids: [String(E.retail1.id)] } }), 201)
+    await move
+    assert.deepEqual([movedBeforeCommit, body.created], [false, 1], 'النقل استنى لحد ما المعاملة خلصت')
+    // بعد النقل: نفس الطلب مابيكلّفش حد برّه النطاق
+    const again = await call(U.tasksA, 'POST', '/tasks/group', { title: 'مهمة بعد النقل', audience: { mode: 'employees', ids: [String(E.retail1.id)] } })
+    assert.deepEqual([again.status, /مفيش موظفين/.test(messageOf(again))], [400, true])
+  } finally {
+    tasks.assignment = original
+    await repo('Employee').update({ id: E.retail1.id }, { branchId: B.a.id, departmentId: D.retail.id, teamId: T.shop.id })
+  }
+})

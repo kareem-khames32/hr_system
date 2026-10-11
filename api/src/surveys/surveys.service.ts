@@ -12,7 +12,7 @@ import { Team } from '../org/entities/team.entity'
 import { isCurrentEmployee } from '../reports/metrics'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { audienceNeedsPositions, requestAudienceAllows, type AudiencePositions, type AudienceSubject } from '../requests/request-audience'
-import { assertAudienceTargets, departmentPathsFor } from '../org/org-audience'
+import { assertAudienceTargets, orgPlaceOf, orgPlacesFor } from '../org/org-audience'
 import {
   SURVEYS_MIGRATION_MISSING, SURVEYS_PERMISSION, SURVEY_ANSWERED, SURVEY_BRANCH_AUDIENCE, SURVEY_CLOSE_DATE, SURVEY_COMMENT_MIN_KEY, SURVEY_EMPTY_AUDIENCE, SURVEY_KIND_LABELS, SURVEY_NOT_DRAFT,
   SURVEY_BUSY, SURVEY_NOT_FOUND, SURVEY_NOT_OPEN, SURVEY_RESULTS_AFTER_CLOSE, SURVEY_STATUS_LABELS, Survey, SurveyInvitation, SurveyResponse, cleanMinGroup, cleanSurveyAnswers, cleanSurveyKind, cleanSurveyQuestions, cleanSurveyTitle,
@@ -53,12 +53,12 @@ export class SurveysService {
     if (!announcementAudienceIntact(audience)) return []
     const people = (await em.getRepository(Employee).find({ select: { id: true, departmentId: true, teamId: true, branchId: true, status: true, isActive: true } })).filter((row) => isCurrentEmployee(row))
     const positions = audienceNeedsPositions(audience) ? await this.positions(em) : null
-    // B-ADD.1: مسارات الأقسام لجمهور «إدارات أو أقسام»
-    const paths = await departmentPathsFor(em, [audience])
+    // B-ADD.1: أماكن الهيكل لجمهور «إدارات أو أقسام» أو فرق فرع
+    const places = await orgPlacesFor(em, [audience])
     return people.filter((employee) => {
       const held: AudiencePositions = positions ? { departmentManager: positions.departmentManagers.has(employee.id), teamLeader: positions.teamLeaders.has(employee.id), branchManager: positions.branchManagers.has(employee.id) } : {}
       const subject: AudienceSubject = { role: null, permissions: [], employeeId: employee.id, departmentId: employee.departmentId ?? null, teamId: employee.teamId ?? null, branchId: employee.branchId ?? null, positions: held,
-        departmentPath: paths ? paths(employee.departmentId) : null }
+        ...orgPlaceOf(places, employee) }
       return requestAudienceAllows(audience, subject, 'submit')
     })
   }

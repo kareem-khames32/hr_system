@@ -12,7 +12,7 @@ import { PoliciesService } from '../policies/policies.service'
 import { isCurrentEmployee } from '../reports/metrics'
 import { RequestType } from '../requests/entities/request-type.entity'
 import { audienceNeedsPositions, requestAudienceAllows, type AudiencePositions, type AudienceSubject } from '../requests/request-audience'
-import { assertAudienceTargets, departmentPathsFor, type DepartmentPaths } from '../org/org-audience'
+import { assertAudienceTargets, orgPlaceOf, orgPlacesFor, type OrgPlaces } from '../org/org-audience'
 import { HELPDESK_CATEGORY, HELPDESK_PERMISSION } from './helpdesk-rules'
 
 // B3.10-ب (ترحيل 123): قاعدة المعرفة — مقالات بجمهور «مين + فين» (نفس صيغة ومقيّم جمهور الإعلانات)، مرتبطة بنوع استفسار وبكلمات بحث،
@@ -127,10 +127,10 @@ export class KnowledgeService {
     const ids = (values: Array<number | null | undefined>) => new Set(values.filter((value): value is number => !!value))
     return { departmentManagers: ids(departments.map((row) => row.managerEmployeeId)), teamLeaders: ids(teams.map((row) => row.leaderEmployeeId)), branchManagers: ids(branches.map((row) => row.managerEmployeeId)) }
   }
-  private inAudience(row: Pick<KbArticle, 'audience'>, employee: Member, role: string | null | undefined, positions: Positions | null, paths: DepartmentPaths | null): boolean {
+  private inAudience(row: Pick<KbArticle, 'audience'>, employee: Member, role: string | null | undefined, positions: Positions | null, places: OrgPlaces | null): boolean {
     const held: AudiencePositions = positions ? { departmentManager: positions.departmentManagers.has(employee.id), teamLeader: positions.teamLeaders.has(employee.id), branchManager: positions.branchManagers.has(employee.id) } : {}
     const subject: AudienceSubject = { role: role && role !== 'super_admin' ? role : null, permissions: [], employeeId: employee.id, departmentId: employee.departmentId ?? null, teamId: employee.teamId ?? null,
-      branchId: employee.branchId ?? null, positions: held, departmentPath: paths ? paths(employee.departmentId) : null }
+      branchId: employee.branchId ?? null, positions: held, ...orgPlaceOf(places, employee) }
     // نص جمهور تالف = المقال مش لحد
     return announcementAudienceIntact(row.audience) && requestAudienceAllows(row.audience, subject, 'submit')
   }
@@ -146,9 +146,9 @@ export class KnowledgeService {
     if (!employee) return []
     const rows = await em.getRepository(KbArticle).find({ where: { isPublished: true }, order: { id: 'DESC' } })
     const positions = rows.some((row) => audienceNeedsPositions(row.audience)) ? await this.positions(em) : null
-    // B-ADD.1: مسارات الأقسام لجمهور «إدارات أو أقسام»
-    const paths = await departmentPathsFor(em, rows.map((row) => row.audience))
-    return rows.filter((row) => this.inAudience(row, employee, user.role, positions, paths))
+    // B-ADD.1: أماكن الهيكل لجمهور «إدارات أو أقسام» أو فرق فرع
+    const places = await orgPlacesFor(em, rows.map((row) => row.audience))
+    return rows.filter((row) => this.inAudience(row, employee, user.role, positions, places))
   }
 
   private async typeNames(em: EntityManager): Promise<Map<string, string>> {

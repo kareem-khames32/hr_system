@@ -29,7 +29,17 @@ export interface OrgMember {
   branchId: number | null
   departmentPath: readonly number[]
   teamId: number | null
+  /** الفرع الحالي لقسم الموظف (ومساره كله جوه الفرع ده)، ولفريقه (فرع قسم الفريق) — بيتحكم بيهم لما فرع الاختيار متحدد */
+  unitBranchId?: number | null
+  teamBranchId?: number | null
 }
+
+/**
+ * Codex P7A-B01: لما فرع الاختيار متحدد، الوحدة أو الفريق نفسه لازم يكون لسه تبعه دلوقتي — فريق اتنقل لقسم في فرع تاني مابقاش من
+ * جمهور فرعه القديم حتى لو موظفه لسه في الفرع القديم. من غير معلومة عن فرع المرجع = مش عضو (القيد مايفتحش).
+ */
+const refInChosenBranch = (target: OrgTarget, branchId: number | null | undefined): boolean =>
+  !target.branchIds.length || (branchId != null && target.branchIds.includes(branchId))
 
 /** الموظف ده من الجمهور ده؟ من غير جمهور = الكل؛ ومن غير عضو = الجمهور المفتوح بس. */
 export function isMember(target: OrgTarget | null | undefined, member: OrgMember | null | undefined): boolean {
@@ -42,16 +52,14 @@ export function isMember(target: OrgTarget | null | undefined, member: OrgMember
   switch (target.level) {
     case 'branch': return target.branchIds.length > 0
     case 'administrations':
-    case 'departments': return member.departmentPath.some(id => target.ids.includes(id))
-    case 'teams': return member.teamId !== null && target.ids.includes(member.teamId)
+    case 'departments': return refInChosenBranch(target, member.unitBranchId) && member.departmentPath.some(id => target.ids.includes(id))
+    case 'teams': return member.teamId !== null && target.ids.includes(member.teamId) && refInChosenBranch(target, member.teamBranchId)
     case 'employees': return member.employeeId !== null && target.ids.includes(member.employeeId)
     default: return false
   }
 }
 
-// ===== مسار القسم =====
-
-export type DepartmentPaths = (departmentId: number | null | undefined) => readonly number[]
+// ===== مسار القسم ومكان الموظف =====
 
 /** القسم واللي فوقه (من غير لف لو الشجرة فيها دايرة). */
 export function departmentPathFrom(departmentId: number | null | undefined, parentOf: (id: number) => number | null | undefined): number[] {
@@ -60,19 +68,38 @@ export function departmentPathFrom(departmentId: number | null | undefined, pare
   return path
 }
 
-/** مسارات كل الأقسام جوه فروعها (قراءة واحدة لجدول الأقسام — جدول صغير). */
-export async function departmentPaths(em: EntityManager): Promise<DepartmentPaths> {
-  const rows: Array<{ id: number; parentId: number | null; branchId: number | null }> = await em.query('SELECT [id], [parentId], [branchId] FROM [departments]')
-  const parentOf = branchLocalParentOfRows(rows.map(row => ({ id: Number(row.id), parentId: row.parentId == null ? null : Number(row.parentId), branchId: row.branchId == null ? null : Number(row.branchId) })))
+/** مكان الموظف في الهيكل قدام مقيّم الجمهور: مسار قسمه، والفرع الحالي لقسمه ولفريقه. */
+export interface OrgPlace { departmentPath: readonly number[]; departmentBranchId: number | null; teamBranchId: number | null }
+export type OrgPlaces = (row: { departmentId?: number | null; teamId?: number | null }) => OrgPlace
+
+/**
+ * أماكن الهيكل الحالية (قراءتين لجدولين صغيرين: الأقسام والفرق): مسار كل قسم جوه فرعه، وفرع كل قسم، وفرع كل فريق (فرع قسمه).
+ * قسم أو فريق مش موجود = من غير فرع (مايطابقش جمهور فرع اختياره متحدد).
+ */
+export async function orgPlaces(em: EntityManager): Promise<OrgPlaces> {
+  const num = (value: unknown) => (value == null ? null : Number(value))
+  const departments: Array<{ id: number; parentId: number | null; branchId: number | null }> = await em.query('SELECT [id], [parentId], [branchId] FROM [departments]')
+  const teams: Array<{ id: number; departmentId: number | null }> = await em.query('SELECT [id], [departmentId] FROM [teams]')
+  const parentOf = branchLocalParentOfRows(departments.map(row => ({ id: Number(row.id), parentId: num(row.parentId), branchId: num(row.branchId) })))
+  const branchOf = new Map(departments.map(row => [Number(row.id), num(row.branchId)]))
+  const teamDepartment = new Map(teams.map(row => [Number(row.id), num(row.departmentId)]))
   const cache = new Map<number, number[]>()
-  return (departmentId) => {
-    if (departmentId === null || departmentId === undefined) return []
-    const id = Number(departmentId)
+  const pathOf = (id: number) => {
     let path = cache.get(id)
     if (!path) { path = departmentPathFrom(id, parentOf); cache.set(id, path) }
     return path
   }
+  return (row) => {
+    const departmentId = num(row.departmentId), teamId = num(row.teamId)
+    const teamHome = teamId === null ? null : teamDepartment.get(teamId) ?? null
+    return { departmentPath: departmentId === null ? [] : pathOf(departmentId), departmentBranchId: departmentId === null ? null : branchOf.get(departmentId) ?? null,
+      teamBranchId: teamHome === null ? null : branchOf.get(teamHome) ?? null }
+  }
 }
+
+/** مكان الموظف على موضوع المقيّم (من غير أماكن مقروءة = من غير إضافة: المطابقة بقسمه بس زي الشكل القديم). */
+export const orgPlaceOf = (places: OrgPlaces | null | undefined, row: { departmentId?: number | null; teamId?: number | null } | null | undefined): Partial<OrgPlace> =>
+  places && row ? places(row) : {}
 
 // ===== إضافات شكل «مين + فين» المحفوظ (request-audience.ts) =====
 //   where: { mode: 'units', ids, branchId }   ← إدارات أو أقسام من فرع، وكل واحدة بتشمل اللي تحتها جوه الفرع
@@ -178,12 +205,15 @@ export async function assertAudienceTargets(em: EntityManager, audience: string 
   await check('SELECT [id] FROM [employees] WHERE [id] IN ($IDS)', idList(value.exclude).filter(id => !keptOut.has(id)), [], `في موظف مستثنى في ${label} مش موجود`)
 }
 
-/** الجمهور محتاج مسار قسم الموظف (إدارات أو أقسام بأقسامها الفرعية)؟ */
-export const audienceNeedsDepartmentPath = (audience: string | null | undefined): boolean => parsed(audience)?.where?.mode === 'units'
+/** الجمهور محتاج أماكن الهيكل: إدارات أو أقسام بأقسامها الفرعية، أو فرق فرع اختيارها متحدد (فرع الفريق الحالي جزء من الحكم)؟ */
+export const audienceNeedsOrgPlaces = (audience: string | null | undefined): boolean => {
+  const where = parsed(audience)?.where
+  return where?.mode === 'units' || (where?.mode === 'teams' && where.branchId != null)
+}
 
-/** مسارات الأقسام لو واحد من الجماهير دي محتاجها، وإلا null (من غير قراءة). */
-export async function departmentPathsFor(em: EntityManager, audiences: ReadonlyArray<string | null | undefined>): Promise<DepartmentPaths | null> {
-  return audiences.some(audienceNeedsDepartmentPath) ? departmentPaths(em) : null
+/** أماكن الهيكل لو واحد من الجماهير دي محتاجها، وإلا null (من غير قراءة). */
+export async function orgPlacesFor(em: EntityManager, audiences: ReadonlyArray<string | null | undefined>): Promise<OrgPlaces | null> {
+  return audiences.some(audienceNeedsOrgPlaces) ? orgPlaces(em) : null
 }
 
 /**

@@ -58,6 +58,9 @@ export type AudienceSubject = {
   attributes?: AudienceAttributes | null
   /** B-ADD.1: قسم الموظف واللي فوقه جوه فرعه (لجمهور «إدارات أو أقسام»). من غيره المطابقة بقسمه بس */
   departmentPath?: readonly number[] | null
+  /** Codex P7A-B01: الفرع الحالي لقسم الموظف ولفريقه (orgPlaceOf) — جمهور فرع اختياره متحدد بيتحكم بيهم، ومن غيرهم مش عضو */
+  departmentBranchId?: number | null
+  teamBranchId?: number | null
 }
 
 // جمهور «حسب المنصب» وحده يحتاج قراءة الهيكل؛ باقي الأوضاع لا تكلّف استعلامًا
@@ -115,7 +118,8 @@ function audienceExcludeOf(audience: RequestAudience | null | undefined): number
 function audienceMemberOf(subject: AudienceSubject, exact: boolean): OrgMember {
   const own = subject.departmentId != null ? [Number(subject.departmentId)] : []
   return { employeeId: subject.employeeId != null ? Number(subject.employeeId) : null, branchId: subject.branchId != null ? Number(subject.branchId) : null,
-    teamId: subject.teamId != null ? Number(subject.teamId) : null, departmentPath: exact || !subject.departmentPath ? own : subject.departmentPath }
+    teamId: subject.teamId != null ? Number(subject.teamId) : null, departmentPath: exact || !subject.departmentPath ? own : subject.departmentPath,
+    unitBranchId: subject.departmentBranchId, teamBranchId: subject.teamBranchId }
 }
 
 // شروط الجمهور بعد التطبيع: غايبة = من غير شروط؛ وقيمة مش قايمة = شرط تالف (مش من الجمهور)
@@ -201,6 +205,10 @@ const WHERE_LEVELS: Record<Exclude<AudienceWhereMode, 'company'>, OrgTargetLevel
 
 function audienceWhereAllows(audience: RequestAudience, subject: AudienceSubject): boolean {
   const where = audienceWhereOf(audience)
+  // Codex P7A-B02: الشكل الجديد (إدارات/أقسام، أو أي «فين» بفرع اختيار) لازم يكون كامل — أرقام وفرع اختيار صالح. التالف منه قيد مايفتحش
+  // (مش لحد)؛ الشكل القديم التالف زي ما هو (قرار أنواع الطلبات: الباب لا يُقفل صامتًا).
+  const raw = audience.where
+  if (raw && (raw.mode === 'units' || raw.branchId != null) && ((where.mode !== 'units' && where.mode !== 'teams') || where.branchId == null)) return false
   if (where.mode === 'company') return true
   // «فروع محددة»: الفروع هي الاختيار نفسه؛ وغيرها: فرع الاختيار قيد لو متحدد
   return isMember({ level: WHERE_LEVELS[where.mode], branchIds: where.mode === 'branches' ? where.ids : where.branchId != null ? [where.branchId] : [],

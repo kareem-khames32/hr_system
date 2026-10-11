@@ -13,7 +13,7 @@ import { ModulesService } from '../modules-registry/modules.service'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
-import { assertAudienceTargets, departmentPathsFor, type DepartmentPaths } from '../org/org-audience'
+import { assertAudienceTargets, orgPlaceOf, orgPlacesFor, type OrgPlaces } from '../org/org-audience'
 import { recordOutboxEvent } from '../queue/outbox'
 import { isCurrentEmployee } from '../reports/metrics'
 import { audienceNeedsPositions, parseRequestAudience, requestAudienceAllows, type AudiencePositions, type AudienceSubject } from '../requests/request-audience'
@@ -32,7 +32,7 @@ export interface AnnouncementInput {
 type Attachment = { id: number; name: string; size: number }
 type Positions = { departmentManagers: Set<number>; teamLeaders: Set<number>; branchManagers: Set<number> }
 // B-ADD.1: اللي المقيّم محتاجه من الهيكل لمجموعة إعلانات — المناصب («حسب المنصب») ومسارات الأقسام («إدارات أو أقسام»)، كل واحد لما يتحتاج بس
-type OrgFacts = { positions: Positions | null; paths: DepartmentPaths | null }
+type OrgFacts = { positions: Positions | null; places: OrgPlaces | null }
 type Member = Pick<Employee, 'id' | 'departmentId' | 'teamId' | 'branchId'>
 const day = (value: unknown): string | null => (value == null || value === '' ? null : String(value).slice(0, 10))
 
@@ -69,7 +69,7 @@ export class AnnouncementsService {
     const held: AudiencePositions = positions ? { departmentManager: positions.departmentManagers.has(employee.id), teamLeader: positions.teamLeaders.has(employee.id),
       branchManager: positions.branchManagers.has(employee.id) } : {}
     return { role: role && role !== 'super_admin' ? role : null, permissions: [], employeeId: employee.id, departmentId: employee.departmentId ?? null,
-      teamId: employee.teamId ?? null, branchId: employee.branchId ?? null, positions: held, departmentPath: org.paths ? org.paths(employee.departmentId) : null }
+      teamId: employee.teamId ?? null, branchId: employee.branchId ?? null, positions: held, ...orgPlaceOf(org.places, employee) }
   }
 
   private inAudience(row: Pick<Announcement, 'audience'>, employee: Member, role: string | null | undefined, org: OrgFacts): boolean {
@@ -79,7 +79,7 @@ export class AnnouncementsService {
 
   private async positionsFor(em: EntityManager, rows: ReadonlyArray<Pick<Announcement, 'audience'>>): Promise<OrgFacts> {
     return { positions: rows.some(row => audienceNeedsPositions(row.audience)) ? await this.positions(em) : null,
-      paths: await departmentPathsFor(em, rows.map(row => row.audience)) }
+      places: await orgPlacesFor(em, rows.map(row => row.audience)) }
   }
 
   /** موظف الحساب الحالي (ملف مفعّل وحالته مش خارج)، أو null */

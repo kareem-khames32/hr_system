@@ -5,14 +5,15 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs'), path = require('node:path')
 const apiRoot = path.resolve(__dirname, '..')
 require('../node_modules/ts-node').register({ project: path.join(apiRoot, 'tsconfig.json'), transpileOnly: true })
-const { isMember, departmentPathFrom, audienceExcludeIds, audienceWhereBranchId, audienceBranchIds, audienceNeedsDepartmentPath } = require('../src/org/org-audience')
+const { isMember, departmentPathFrom, audienceExcludeIds, audienceWhereBranchId, audienceBranchIds, audienceNeedsOrgPlaces, orgPlaceOf } = require('../src/org/org-audience')
 const { requestAudienceAllows, audienceWhereOf, AUDIENCE_WHERE_MODES, AUDIENCE_ORG_WHERE_MODES } = require('../src/requests/request-audience')
 const { announcementAudienceJson, announcementAudienceIntact, announcementAudienceInScope } = require('../src/announcements/announcement-rules')
 const { holidayAudienceMatches } = require('../src/attendance/holiday-audience')
 const web = file => fs.readFileSync(path.join(apiRoot, '..', file), 'utf8').replace(/\r\n/g, '\n')
 
 // فرع 1: إدارة 10 فوق قسم 11 (فوق قسم 12)؛ فرع 2: قسم 20
-const member = (employeeId, branchId, departmentPath, teamId = null) => ({ employeeId, branchId, departmentPath, teamId })
+// فرع القسم والفريق الحالي = فرع الموظف (الوضع الطبيعي)؛ الحالات اللي المرجع فيها اتنقل في OAU-07
+const member = (employeeId, branchId, departmentPath, teamId = null) => ({ employeeId, branchId, departmentPath, teamId, unitBranchId: branchId, teamBranchId: branchId })
 const target = (level, branchIds, ids, excludeEmployeeIds) => ({ level, branchIds, ids, ...(excludeEmployeeIds ? { excludeEmployeeIds } : {}) })
 
 test('OAU-01: isMember — one function for company, branch, administration, department, team, named employees and the exclusion', () => {
@@ -39,7 +40,7 @@ test('OAU-01: isMember — one function for company, branch, administration, dep
 })
 
 test('OAU-02: the who-and-where evaluator understands units (with the sub-tree), the choice branch and the exclusion; the old shapes judge as before', () => {
-  const subject = extra => ({ role: null, permissions: [], employeeId: 7, branchId: 1, departmentId: 12, teamId: 5, departmentPath: [12, 11, 10], ...extra })
+  const subject = extra => ({ role: null, permissions: [], employeeId: 7, branchId: 1, departmentId: 12, teamId: 5, departmentPath: [12, 11, 10], departmentBranchId: 1, teamBranchId: 1, ...extra })
   const allows = (audience, extra) => requestAudienceAllows(JSON.stringify(audience), subject(extra), 'submit')
   const unitsOf = (ids, branchId = 1) => ({ mode: 'all', ids: [], where: { mode: 'units', ids, branchId } })
   assert.deepEqual([allows(unitsOf([10])), allows(unitsOf([11])), allows(unitsOf([12])), allows(unitsOf([20])), allows(unitsOf([10], 2))], [true, true, true, false, false])
@@ -95,8 +96,10 @@ test('OAU-03: the announcement audience writer — the old text is kept to the l
     scoped({ mode: 'all', ids: [], where: { mode: 'departments', ids: [5] } }), scoped({ mode: 'all', ids: [], where: null, exclude: [4] })],
   [false, true, false, true, false, true, false, false, false])
   assert.equal(announcementAudienceInScope(JSON.stringify({ mode: 'all', ids: [], where: { mode: 'units', ids: [5], branchId: 3 } }), null), true)
-  assert.deepEqual([audienceBranchIds(null), audienceBranchIds('{"where":{"mode":"units","ids":[1],"branchId":4}}'), audienceNeedsDepartmentPath('{"where":{"mode":"units","ids":[1],"branchId":4}}'),
-    audienceNeedsDepartmentPath('{"where":{"mode":"departments","ids":[1]}}')], [null, [4], true, false])
+  assert.deepEqual([audienceBranchIds(null), audienceBranchIds('{"where":{"mode":"units","ids":[1],"branchId":4}}'), audienceNeedsOrgPlaces('{"where":{"mode":"units","ids":[1],"branchId":4}}'),
+    audienceNeedsOrgPlaces('{"where":{"mode":"departments","ids":[1]}}')], [null, [4], true, false])
+  // فرق فرع اختيارها متحدد محتاجة فرع الفريق الحالي؛ والشكل القديم من غير قراءة
+  assert.deepEqual([audienceNeedsOrgPlaces('{"where":{"mode":"teams","ids":[1],"branchId":4}}'), audienceNeedsOrgPlaces('{"where":{"mode":"teams","ids":[1]}}'), audienceNeedsOrgPlaces(null)], [true, false, false])
   assert.deepEqual([audienceExcludeIds(undefined, 'x'), audienceExcludeIds(['3', 2, 3], 'x'), audienceWhereBranchId({}, 'teams', 'x'), audienceWhereBranchId({ branchId: '7' }, 'units', 'x')], [[], [2, 3], null, 7])
 })
 
@@ -111,7 +114,7 @@ test('OAU-04: every audience writer built in the plan goes through the shared he
   for (const file of ['announcements/announcements.service.ts', 'policies/policies.service.ts', 'helpdesk/knowledge.service.ts', 'surveys/surveys.service.ts', 'modules-registry/modules.service.ts']) {
     const source = api(file)
     assert.match(source, /assertAudienceTargets\(em, /, `${file}: التحقق من أرقام الجمهور وقت الحفظ`)
-    assert.match(source, /departmentPath/, `${file}: مسار القسم قدام المقيّم`)
+    assert.match(source, /\.\.\.orgPlaceOf\(/, `${file}: مكان الموظف في الهيكل (مسار قسمه وفرع قسمه وفريقه الحالي) قدام المقيّم`)
   }
   assert.doesNotMatch(api('settings/settings.controller.ts'), /AUDIENCE_ORG_WHERE_MODES|org-audience/, 'جمهور أنواع الطلبات (قبل الخطة) زي ما هو')
   assert.match(api('requests/request-audience.ts'), /return isMember\(\{ level: WHERE_LEVELS\[where\.mode\]/)
@@ -143,4 +146,47 @@ test('OAU-06: the holiday audience matcher keeps its answers', () => {
     holidayAudienceMatches({ level: 'departments', branchId: 1, departmentIds: [10] }, m(1, 1, [12, 10])), holidayAudienceMatches({ level: 'departments', branchId: 1, departmentIds: [10] }, m(null, 1, [])),
     holidayAudienceMatches({ level: 'teams', branchId: 1, teamIds: [5] }, m(1, 1, [], 5)), holidayAudienceMatches({ level: 'employees', branchId: 1, employeeIds: [1] }, m(1, 2, []))],
   [true, false, true, true, false, true, true])
+})
+
+// ===== Codex P7A (CRP7A) =====
+test('OAU-07 (P7A-B01, B02): the unit\'s or the team\'s current branch is part of the judgement when a choice branch is set, and a damaged new shape opens for nobody', () => {
+  const base = { employeeId: 1, branchId: 1, departmentPath: [12, 11, 10], teamId: 5 }
+  const teamsIn = (branchIds) => target('teams', branchIds, [5]), unitsIn = (branchIds) => target('departments', branchIds, [10])
+  // فريق اتنقل لقسم في فرع 2 وموظفه لسه في فرع 1: برّه جمهور فرع 1؛ ومن غير معلومة عن فرع المرجع = مش عضو
+  assert.deepEqual([isMember(teamsIn([1]), { ...base, teamBranchId: 1 }), isMember(teamsIn([1]), { ...base, teamBranchId: 2 }), isMember(teamsIn([1]), { ...base, teamBranchId: null }),
+    isMember(teamsIn([1]), base)], [true, false, false, false])
+  assert.deepEqual([isMember(unitsIn([1]), { ...base, unitBranchId: 1 }), isMember(unitsIn([1]), { ...base, unitBranchId: 2 }), isMember(unitsIn([1]), base),
+    isMember(target('administrations', [1], [10]), { ...base, unitBranchId: 2 })], [true, false, false, false])
+  // من غير فرع اختيار (العطلات وفترات الإضافي والشكل القديم): الحكم زي ما كان — من غير نظر لفرع المرجع
+  assert.deepEqual([isMember(teamsIn([]), base), isMember(unitsIn([]), base), isMember(teamsIn([]), { ...base, teamBranchId: 2 })], [true, true, true])
+  // المقيّم: مكان الموظف من orgPlaceOf
+  const places = row => ({ departmentPath: [12, 11, 10], departmentBranchId: row.departmentId === 12 ? 1 : null, teamBranchId: row.teamId === 5 ? 2 : null })
+  assert.deepEqual(orgPlaceOf(places, { departmentId: 12, teamId: 5 }), { departmentPath: [12, 11, 10], departmentBranchId: 1, teamBranchId: 2 })
+  assert.deepEqual([orgPlaceOf(null, { departmentId: 12 }), orgPlaceOf(places, null)], [{}, {}])
+  const subject = extra => ({ role: null, permissions: [], employeeId: 7, branchId: 1, departmentId: 12, teamId: 5, ...extra })
+  const allows = (where, extra) => requestAudienceAllows(JSON.stringify({ mode: 'all', ids: [], where }), subject(extra), 'submit')
+  const moved = orgPlaceOf(places, { departmentId: 12, teamId: 5 })
+  assert.deepEqual([allows({ mode: 'teams', ids: [5], branchId: 1 }, moved), allows({ mode: 'teams', ids: [5], branchId: 1 }, { ...moved, teamBranchId: 1 }),
+    allows({ mode: 'teams', ids: [5], branchId: 1 }, {}), allows({ mode: 'teams', ids: [5] }, moved), allows({ mode: 'units', ids: [10], branchId: 1 }, moved),
+    allows({ mode: 'units', ids: [10], branchId: 1 }, { ...moved, departmentBranchId: 2 })], [false, true, false, true, true, false])
+  // B02: الشكل الجديد الناقص أو التالف مايفتحش، والقديم التالف زي ما هو
+  assert.deepEqual([allows({ mode: 'units', ids: [], branchId: 1 }, moved), allows({ mode: 'units', ids: [10] }, moved), allows({ mode: 'units', ids: [10], branchId: 0 }, moved),
+    allows({ mode: 'teams', ids: [], branchId: 1 }, moved), allows({ mode: 'company', ids: [], branchId: 1 }, moved), allows({ mode: 'departments', ids: [] }, moved),
+    allows({ mode: 'nope', ids: [3] }, moved)], [false, false, false, false, false, true, true])
+  // مدير النظام بيعدّي زي ما كان
+  assert.equal(requestAudienceAllows(JSON.stringify({ mode: 'all', ids: [], where: { mode: 'units', ids: [], branchId: 1 } }), { role: 'super_admin', permissions: ['*'] }, 'submit'), true)
+  // السطور المثبّتة في الكتّاب والخدمات
+  const api = file => fs.readFileSync(path.join(apiRoot, 'src', file), 'utf8').replace(/\r\n/g, '\n')
+  assert.match(api('modules-registry/modules.service.ts'), /if \(!whereIds\.length && \(whereMode === 'units' \|\| value\.where\?\.branchId != null\)\) \{\n      throw new BadRequestException/)
+  assert.match(api('tasks/tasks.service.ts'), /FROM \[employees\] WITH \(UPDLOCK, ROWLOCK\) WHERE \[id\] IN[^\n]+\n      const locked = new Set\(lockIds\)\n      const members = \(await audienceMembersNow\(em, audience, branchScopeOf\(user\)\)\)\.filter\(member => locked\.has\(member\.id\)\)/)
+  const attendance = api('attendance/attendance.service.ts')
+  assert.match(attendance, /private async overtimePeriodAudiences\(periodIds: number\[\], em: EntityManager = this\.overtimePeriods\.manager\)/)
+  assert.match(attendance, /const stored = \(await this\.overtimePeriodAudiences\(\[p\.id\], em\)\)\.get\(p\.id\)/)
+  assert.match(attendance, /const names = audiences\.size \? await this\.overtimeAudienceNames\(scope\) : \{\}/)
+  assert.doesNotMatch(attendance, /holidayAudienceNames/, 'وصف جمهور الفترة مابياخدش أسماء من غير نطاق')
+  const dashboard = api('dashboard/dashboard-cards.service.ts')
+  assert.deepEqual([...dashboard.matchAll(/this\.share\(`([a-z]+)\|/g)].map(match => match[1]), ['day'], 'الحساب المشترك لخانات اليوم بس — من غير موظفين ولا شجرة')
+  assert.match(dashboard, /AND \(\(\$\{CONFIDENTIAL_REQUEST_SQL\} AND \$\{confidential\}\) OR \(NOT \$\{CONFIDENTIAL_REQUEST_SQL\}/)
+  assert.match(api('notifications/notifications.service.ts'), /const reason = !\(await eventEmailOn\(item\.eventCode\)\) \? /)
+  assert.match(api('notifications/channels/notification-channels.service.ts'), /const employee = await this\.scopedEmployee\(user, employeeId, em, true\)/)
 })

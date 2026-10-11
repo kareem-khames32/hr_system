@@ -3,7 +3,7 @@ import type { EntityManager } from 'typeorm'
 import type { BranchScope } from '../auth/guards'
 import { isCurrentEmployee } from '../reports/metrics'
 import { audienceNeedsPositions, parseRequestAudience, requestAudienceAllows, type AudiencePositions } from '../requests/request-audience'
-import { departmentPathsFor } from './org-audience'
+import { orgPlaceOf, orgPlacesFor } from './org-audience'
 
 // B-ADD.1: معاينة الجمهور قبل الحفظ — «N موظف» وأسماؤهم — بنفس المقيّم اللي هيحكم بعد الحفظ (requestAudienceAllows + isMember)،
 // وبنطاق فروع الحساب اللي بيسأل: موظف من فرع برّه نطاقه لا بيتعدّ ولا اسمه بيرجع.
@@ -42,14 +42,14 @@ export async function audienceMembersNow(em: EntityManager, audience: string | n
     }
   }
   const held = audienceNeedsPositions(audience) ? await positionSets(em) : null
-  const paths = await departmentPathsFor(em, [audience])
+  const places = await orgPlacesFor(em, [audience])
   return current.filter(row => {
     const role = roles.get(Number(row.id))
     const positions: AudiencePositions = held ? { departmentManager: held.departmentManagers.has(Number(row.id)), teamLeader: held.teamLeaders.has(Number(row.id)), branchManager: held.branchManagers.has(Number(row.id)) } : {}
     // زي الإعلانات والسياسات: دور مدير النظام مش دور وظيفي، ومن غير صلاحيات — السؤال «الموظف ده من الجمهور؟»
     return requestAudienceAllows(audience, { role: role && role !== 'super_admin' ? role : null, permissions: [], employeeId: Number(row.id),
       departmentId: row.departmentId == null ? null : Number(row.departmentId), teamId: row.teamId == null ? null : Number(row.teamId),
-      branchId: row.branchId == null ? null : Number(row.branchId), positions, departmentPath: paths ? paths(row.departmentId) : null }, 'submit')
+      branchId: row.branchId == null ? null : Number(row.branchId), positions, ...orgPlaceOf(places, row) }, 'submit')
   }).map(strip)
 }
 

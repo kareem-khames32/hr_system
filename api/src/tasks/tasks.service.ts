@@ -362,9 +362,16 @@ export class TasksService {
     const now = new Date()
     return this.ds.transaction(async em => {
       await assertAudienceTargets(em, audience, 'جمهور المهمة')
-      const members = (await audienceMembersNow(em, audience, branchScopeOf(user))).filter(member => member.id !== user.employeeId)
+      const seen = (await audienceMembersNow(em, audience, branchScopeOf(user))).filter(member => member.id !== user.employeeId)
+      if (!seen.length) throw new BadRequestException('مفيش موظفين في الجمهور ده جوه نطاقك')
+      if (seen.length > TASK_GROUP_MAX) throw new BadRequestException(`المهمة الجماعية لـ${TASK_GROUP_MAX} موظف بالكتير — قسّم الجمهور`)
+      // Codex P7A-B03: صفوف الموظفين بتتقفل (بترتيب أرقامهم) قبل أي حكم بيتكتب عليه: نقل موظف لفرع تاني أو تغيير حالته بيستنى لحد ما
+      // المعاملة تخلص. وبعد القفل الجمهور بيتحكم تاني (مكان الموظف ونطاق الحساب)، وحكم التكليف (assignment) بيقرا الصف المقفول.
+      const lockIds = seen.map(member => member.id).sort((a, b) => a - b)
+      await em.query(`SELECT [id] FROM [employees] WITH (UPDLOCK, ROWLOCK) WHERE [id] IN (${lockIds.map((_, index) => `@${index}`).join(', ')}) ORDER BY [id]`, lockIds)
+      const locked = new Set(lockIds)
+      const members = (await audienceMembersNow(em, audience, branchScopeOf(user))).filter(member => locked.has(member.id))
       if (!members.length) throw new BadRequestException('مفيش موظفين في الجمهور ده جوه نطاقك')
-      if (members.length > TASK_GROUP_MAX) throw new BadRequestException(`المهمة الجماعية لـ${TASK_GROUP_MAX} موظف بالكتير — قسّم الجمهور`)
       const repo = em.getRepository(Task)
       const created: Task[] = [], skipped: Array<{ employeeId: number; fullName: string; reason: string }> = []
       for (const member of members) {

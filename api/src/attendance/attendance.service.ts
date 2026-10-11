@@ -78,9 +78,9 @@ import { readStatutoryEntries } from '../statutory/statutory.service'
 import { appendOvertimeEvent, assertOvertimeDayAvailable, claimOvertimeDay, describeOvertimeSubmission, findActiveOvertimeEntries, releaseOvertimeDayClaim } from '../requests/overtime-day-claims'
 import { queueOvertimeDispatch } from '../requests/overtime-dispatch'
 import { holidayWorkCoversDay } from './holiday-work'
-import { assertHolidayAudienceTargets, describeHolidayAudience, holidayAudienceColumn, holidayAudienceFromInput, holidayAudienceMatches, holidayAudienceNames,
+import { assertHolidayAudienceTargets, describeHolidayAudience, holidayAudienceColumn, holidayAudienceFromInput, holidayAudienceMatches,
   holidayAudienceNeedsOrg, parseHolidayAudienceColumn } from './holiday-audience'
-import type { HolidayAudience, HolidayAudienceMember } from './holiday-audience'
+import type { HolidayAudience, HolidayAudienceMember, HolidayAudienceNames } from './holiday-audience'
 import { createCalendarResolverCache, employeeAudienceMemberOn, employeeHolidayName, resolveBranchCalendarDay, resolveEmployeeCalendarDay, resolveGlobalCalendarDay } from './attendance-calendar-resolver'
 import { employmentOverlaps, employmentWindowOf, employmentWindowsOf, inEmploymentWindow, lastWorkingDaysOf, schedulableOn } from './attendance-employment'
 import type { EmploymentWindow } from './attendance-employment'
@@ -629,18 +629,20 @@ export class AttendanceService {
   // ===== B-ADD.2: جمهور فترة الإضافي (overtime_period_audiences — ترحيل 186) =====
   // الفترة اللي ليها جمهور بتسري على اللي جوه جمهورها بس (بمكانه في يوم العمل)؛ واللي برّه الجمهور الفترة دي مش موجودة بالنسبة له
   // (بيحكمه باقي الفترات أو الإعداد العام — السلوك الحالي). الفترة من غير صف جمهور = فرعها كله زي زمان، وقبل الترحيل مفيش جماهير.
-  private async overtimeAudiencesReady(): Promise<boolean> {
+  // Codex P7A-B04: كل قراءة هنا بتاخد مدير المنادي — جوه معاملة تعديل أو حذف الفترة القراءة على اتصال المعاملة نفسها (اتصال تاني تحت
+  // معاملة ماسكة اتصالها كان بيستنفد المخزن: عشر تعديلات متزامنة = عشر ردود 500).
+  private async overtimeAudiencesReady(em: EntityManager = this.overtimePeriods.manager): Promise<boolean> {
     if (overtimeAudienceTableReady) return true
-    const [row] = await this.overtimePeriods.manager.query(`SELECT CASE WHEN OBJECT_ID(N'dbo.overtime_period_audiences', N'U') IS NOT NULL THEN 1 ELSE 0 END AS [ready]`)
+    const [row] = await em.query(`SELECT CASE WHEN OBJECT_ID(N'dbo.overtime_period_audiences', N'U') IS NOT NULL THEN 1 ELSE 0 END AS [ready]`)
     overtimeAudienceTableReady = Number(row?.ready) === 1
     return overtimeAudienceTableReady
   }
 
   /** جمهور كل فترة ليها جمهور. نص تالف = 'INVALID' (مايتقراش «للكل» أبدًا) */
-  private async overtimePeriodAudiences(periodIds: number[]): Promise<Map<number, HolidayAudience | 'INVALID'>> {
+  private async overtimePeriodAudiences(periodIds: number[], em: EntityManager = this.overtimePeriods.manager): Promise<Map<number, HolidayAudience | 'INVALID'>> {
     const out = new Map<number, HolidayAudience | 'INVALID'>()
-    if (!periodIds.length || !(await this.overtimeAudiencesReady())) return out
-    const rows = await this.overtimePeriods.manager.getRepository(OvertimePeriodAudience).find({ where: { periodId: In(periodIds) } })
+    if (!periodIds.length || !(await this.overtimeAudiencesReady(em))) return out
+    const rows = await em.getRepository(OvertimePeriodAudience).find({ where: { periodId: In(periodIds) } })
     for (const row of rows) {
       try {
         const audience = parseHolidayAudienceColumn(row.audience, message => { throw new Error(message) })
@@ -773,12 +775,28 @@ export class AttendanceService {
     })
     // B-ADD.2: جمهور كل فترة ووصفه («فرع المعادي — قسم المبيعات (ماعدا موظف واحد)») — الفترة من غير جمهور = فرعها كله
     const audiences = await this.overtimePeriodAudiences(periods.map(p => p.id))
-    const names = audiences.size ? await holidayAudienceNames(this.overtimePeriods.manager) : {}
+    const names = audiences.size ? await this.overtimeAudienceNames(scope) : {}
     return periods.map(p => {
       const audience = audiences.get(p.id)
       return { ...p, audience: audience && audience !== 'INVALID' ? audience : null, audienceInvalid: audience === 'INVALID',
         audienceText: audience === 'INVALID' ? 'جمهور الفترة تالف — عدّله' : audience ? describeHolidayAudience(audience, names) : null }
     })
+  }
+
+  /**
+   * Codex P7A-B05: أسماء مراجع الجمهور للوصف بنطاق القارئ وبمكان المرجع **الحالي**: قسم أو فريق اتنقل لفرع برّه نطاق الحساب مايتسمّاش
+   * (الوصف بيقول رقمه بس — نفس الرقم المحفوظ في جمهور الفترة اللي الحساب شايفها)، حتى لو اسمه اتغيّر بعد النقل.
+   */
+  private async overtimeAudienceNames(scope: BranchScope): Promise<Required<HolidayAudienceNames>> {
+    const em = this.overtimePeriods.manager
+    const visible = (branchId: unknown) => scope === null || (branchId != null && scope.includes(Number(branchId)))
+    const named = (rows: Array<{ id: number; name: string | null; branchId: number | null }>) =>
+      new Map(rows.filter(row => visible(row.branchId)).map(row => [Number(row.id), String(row.name ?? '')]))
+    return {
+      branches: named(await em.query('SELECT [id], [name], [id] AS [branchId] FROM [branches]')),
+      departments: named(await em.query('SELECT [id], [name], [branchId] FROM [departments]')),
+      teams: named(await em.query('SELECT t.[id], t.[name], d.[branchId] FROM [teams] t LEFT JOIN [departments] d ON d.[id] = t.[departmentId]')),
+    }
   }
 
   /**
@@ -797,13 +815,13 @@ export class AttendanceService {
     let audience: HolidayAudience | null
     try { audience = holidayAudienceFromInput(raw) } catch (error) { return renamed(error) }
     if (!audience) return null
-    if (!(await this.overtimeAudiencesReady())) throw new BadRequestException(OVERTIME_AUDIENCE_MIGRATION_MISSING)
+    if (!(await this.overtimeAudiencesReady(em))) throw new BadRequestException(OVERTIME_AUDIENCE_MIGRATION_MISSING)
     try { await assertHolidayAudienceTargets(em, audience, user ? branchScopeOf(user) : null, previous) } catch (error) { return renamed(error) }
     return audience
   }
 
   private async saveOvertimePeriodAudience(em: EntityManager, periodId: number, audience: HolidayAudience | null) {
-    if (!(await this.overtimeAudiencesReady())) return
+    if (!(await this.overtimeAudiencesReady(em))) return
     const repo = em.getRepository(OvertimePeriodAudience)
     if (audience) await repo.save({ periodId, audience: holidayAudienceColumn(audience)! })
     else await repo.delete({ periodId })
@@ -818,11 +836,11 @@ export class AttendanceService {
     if (!inBranchScope(scope, branchId)) throw new ForbiddenException(`الفرع خارج نطاق ${scopeWord(scope)}`)
   }
 
-  private async overtimePeriodBranch(value: unknown): Promise<number | null> {
+  private async overtimePeriodBranch(value: unknown, em: EntityManager = this.branches.manager): Promise<number | null> {
     if (value === null || value === undefined || value === '') return null
     const id = Number(value)
     if (!Number.isInteger(id) || id < 1) throw new BadRequestException('الفرع (branchId) رقم صحيح')
-    if (!(await this.branches.existsBy({ id }))) throw new BadRequestException('الفرع غير موجود')
+    if (!(await em.getRepository(Branch).existsBy({ id }))) throw new BadRequestException('الفرع غير موجود')
     return id
   }
 
@@ -922,14 +940,14 @@ export class AttendanceService {
       if (dto.effect !== undefined) p.effect = dto.effect as any
       if (dto.branchId !== undefined) {
         // null لازم يتكتب null صريح — undefined كان بيسيب الفرع القديم في القاعدة
-        p.branchId = (await this.overtimePeriodBranch(dto.branchId)) as any
+        p.branchId = (await this.overtimePeriodBranch(dto.branchId, em)) as any
         this.assertOvertimePeriodScope(user, p.branchId)
       }
       if (dto.isActive !== undefined) p.isActive = !!dto.isActive
       if (dto.autoApprove != null) p.autoApprove = dto.autoApprove
       // B-ADD.2: الجمهور (لو اتبعت) تحت قفل صف الفترة: فرع الفترة بيمشي ورا فرع جمهورها؛ وتغيير فرع فترة ليها جمهور من غير ما
       // الجمهور يتبعت معاه مرفوض (جمهورها متثبّت بفرعه)
-      const stored = (await this.overtimePeriodAudiences([p.id])).get(p.id)
+      const stored = (await this.overtimePeriodAudiences([p.id], em)).get(p.id)
       const previous = stored && stored !== 'INVALID' ? stored : null
       const audience = await this.overtimePeriodAudienceInput(em, dto.audience, user, previous)
       if (audience) { p.branchId = audience.branchId as any; this.assertOvertimePeriodScope(user, p.branchId) }

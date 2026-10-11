@@ -319,9 +319,11 @@ export class NotificationChannelsService implements OnApplicationBootstrap {
   }
 
   // ===== رقم واتساب الموظف وبريده =====
-  private async scopedEmployee(user: JwtPayload, employeeId: number, em: EntityManager = this.ds.manager) {
+  // lock (Codex P7A-B09): صف الموظف بيتقفل لآخر معاملة الحفظ، فنطاق الكاتب بيتحكم على فرع الموظف **وقت الكتابة** — نقله لفرع تاني
+  // يا إما خلص قبل القفل (404 ومفيش كتابة) يا إما بيستنى لحد ما الحفظ يخلص
+  private async scopedEmployee(user: JwtPayload, employeeId: number, em: EntityManager = this.ds.manager, lock = false) {
     const [employee]: Array<{ id: number; branchId: number | null; fullName: string; email: string | null; phone: string | null }> = Number.isSafeInteger(employeeId) && employeeId > 0
-      ? await em.query('SELECT [id], [branchId], [fullName], [email], [phone] FROM [employees] WHERE [id] = @0', [employeeId]) : []
+      ? await em.query(`SELECT [id], [branchId], [fullName], [email], [phone] FROM [employees]${lock ? ' WITH (UPDLOCK, ROWLOCK)' : ''} WHERE [id] = @0`, [employeeId]) : []
     if (!employee || !inBranchScope(branchScopeOf(user), employee.branchId)) throw new NotFoundException(EMPLOYEE_NOT_FOUND)
     return employee
   }
@@ -343,7 +345,7 @@ export class NotificationChannelsService implements OnApplicationBootstrap {
       throw new BadRequestException('رقم الواتساب لازم يتكتب دولي بكود الدولة (مثال: +966500000000)')
     }
     await this.ds.transaction(async em => {
-      const employee = await this.scopedEmployee(user, employeeId, em)
+      const employee = await this.scopedEmployee(user, employeeId, em, true)
       const repo = em.getRepository(EmployeeWhatsappNumber)
       const row = await repo.findOne({ where: { employeeId: employee.id } })
       if ((row?.number ?? null) === wanted) return

@@ -199,3 +199,55 @@ test('OTA-04: a damaged audience never opens overtime, and before migration 186 
   await make(U.hr, period('بعد الترحيل', 'CLOSED', { audience: { level: 'employees', branchId: B.a.id, employeeIds: [E.retail1.id] } }))
   assert.deepEqual(await openFor('retail1', 'accounts1'), { retail1: false, accounts1: true })
 })
+
+// ===== Codex P7A (CRP7A) =====
+test('OTA-05 (P7A-B04): editing or deleting a period reads its audience on the transaction\'s own connection — ten concurrent edits with a full pool all succeed', async () => {
+  await clear()
+  const ids = []
+  for (let n = 0; n < 10; n++) ids.push((await make(U.hr, period(`زحمة ${n}`, 'OPEN', n % 2 ? { audience: { level: 'teams', branchId: B.a.id, teamIds: [T.shop.id] } } : { branchId: B.a.id }))).id)
+  const original = attendance.overtimePeriodAudiences, pool = ds.driver.master.pool, previous = pool.acquireTimeoutMillis
+  let entered = 0, release
+  const gate = new Promise(resolve => { release = resolve }), pending = []
+  pool.acquireTimeoutMillis = 1500
+  // كل تعديل بيقف جوه معاملته (ماسك اتصاله) لحد ما العشرة يدخلوا: المخزن كله محجوز، وقراءة الجمهور لازم تكمّل على اتصال المعاملة
+  attendance.overtimePeriodAudiences = async function (...args) { entered++; await gate; return original.apply(this, args) }
+  try {
+    for (let n = 0; n < 10; n++) {
+      pending.push(call(U.hr, 'PATCH', `/attendance/overtime-periods/${ids[n]}`, n % 2 ? { name: `تعديل ${n}`, audience: { level: 'departments', branchId: B.a.id, departmentIds: [D.retail.id] } } : { name: `تعديل ${n}` }))
+      const until = Date.now() + 6000
+      while (entered < n + 1 && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 10))
+      assert.equal(entered, n + 1)
+    }
+    assert.deepEqual([pool.numUsed(), pool.numFree()], [10, 0])
+    release()
+    assert.deepEqual((await Promise.all(pending)).map(row => row.status), Array(10).fill(200))
+  } finally { release(); await Promise.allSettled(pending); attendance.overtimePeriodAudiences = original }
+  // والحذف كمان من غير اتصال تاني
+  const { EntityManager } = require('../node_modules/typeorm')
+  const getRepository = EntityManager.prototype.getRepository, manager = attendance.overtimePeriods.manager, transaction = manager.transaction
+  let inside = false, outsideReads = 0
+  manager.transaction = function (...args) { const run = args.pop(); return transaction.call(this, ...args, async em => { inside = true; try { return await run(em) } finally { inside = false } }) }
+  EntityManager.prototype.getRepository = function (target) {
+    if (inside && this.connection === ds && !this.queryRunner?.isTransactionActive && (target.name || target) === 'OvertimePeriodAudience') outsideReads++
+    return getRepository.call(this, target)
+  }
+  try {
+    expect(await call(U.hr, 'PATCH', `/attendance/overtime-periods/${ids[1]}`, { name: 'آخر تعديل' }), 200)
+    expect(await call(U.hr, 'DELETE', `/attendance/overtime-periods/${ids[1]}`), 200)
+    assert.equal(outsideReads, 0)
+  } finally { EntityManager.prototype.getRepository = getRepository; manager.transaction = transaction; pool.acquireTimeoutMillis = previous; await clear() }
+}, { timeout: 60000 })
+
+test('OTA-06 (P7A-B05): the period list names a team or a department only while it is inside the reader\'s branches', async () => {
+  await clear()
+  const made = await make(U.hrA, period('مرجع اتنقل', 'OPEN', { audience: { level: 'teams', branchId: B.a.id, teamIds: [T.shop.id] } }))
+  const textFor = async user => expect(await call(user, 'GET', '/attendance/overtime-periods'), 200).find(row => row.id === made.id).audienceText
+  assert.match(await textFor(U.hrA), new RegExp(T.shop.name))
+  try {
+    // الفريق اتنقل لقسم في فرع ب واسمه اتغيّر: حساب فرع أ يشوف رقمه بس، وحساب الشركة يشوف اسمه
+    await repo('Team').update({ id: T.shop.id }, { departmentId: D.other.id, name: 'اسم سري في فرع ب' })
+    const seen = await textFor(U.hrA)
+    assert.deepEqual([seen.includes('اسم سري في فرع ب'), seen.includes(`#${T.shop.id}`)], [false, true], seen)
+    assert.equal((await textFor(U.hr)).includes('اسم سري في فرع ب'), true)
+  } finally { await repo('Team').update({ id: T.shop.id }, { departmentId: D.retail.id, name: T.shop.name }); await clear() }
+})
