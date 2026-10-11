@@ -74,13 +74,6 @@ export const MODULES = {
     permissions: ['users.manage', 'roles.manage', 'settings.manage', 'settings.modules', 'dashboard.view_all', 'audit.view'],
     // أيام العمل والعطلات الرسمية أساسي: الحضور والإجازات والرواتب كلهم بيحسبوا منهم، فمايتقفلوش مع موديول واحد
     routes: ['/', '/settings', '/login', '/leaves/holidays'],
-    features: {
-      'platform.demo_screens': {
-        nameAr: 'شاشات العرض التجريبية',
-        description: 'روابط شاشات العرض القديمة (إضافة وظيفة، صفحة الوظيفة، تقييم جديد، تقارير مخصصة): الشاشات نفسها اتشالت وكل رابط بيحوّل لشاشته الحقيقية. كانت: شاشات ببيانات عرض ثابتة من غير خلفية: الأداء، والتدريب، والوظائف والمقابلات والعروض، والتقارير المخصصة. بتتقفل لحد ما الموديول الحقيقي ينزل.',
-        default: false,
-      },
-    },
   }),
   org: moduleDef({
     nameAr: 'الهيكل التنظيمي', group: 'core', core: true,
@@ -312,7 +305,7 @@ export const MODULES = {
     nameAr: 'التوظيف', group: 'talent', dependsOn: ['employees'], preset: 'standard',
     description: 'احتياج التوظيف والوظائف الشاغرة، ومسار المرشحين والتعيين منه',
     permissions: ['candidates.manage', 'candidates.approve_offers'],
-    // المتقدمين والوظائف الشاغرة (B3.2) شاشات حقيقية؛ باقي ما تحت /recruitment شاشات عرض (DEMO_ROUTES) لحد ما الموديول الكامل ينزل
+    // المتقدمين والوظائف الشاغرة (B3.2) شاشات حقيقية؛ باقي ما تحت /recruitment كانت شاشات عرض (اتشالت 11 أكتوبر 2026) لحد ما الموديول الكامل ينزل
     // B3.3-أ: «وظائف داخلية» في البوابة (/my/jobs). B3.3-ب: صفحة الوظائف العامة (/careers) — صفحتها من غير دخول، والخادم بيقفلها بميزتها
     // B3.4-ب: شاشة المقابلات بقت حقيقية (كانت شاشة عرض)، و«مقابلاتي» للمحاور في البوابة
     // B3.5-أ: شاشة العروض بقت حقيقية (كانت شاشة عرض)، ولينك رد المرشح على عرضه (/careers/offers/<رمز>)
@@ -548,14 +541,10 @@ export const MODULE_FEATURES: Record<string, ModuleFeatureDef & { module: Module
 )
 export const isFeatureKey = (value: unknown): value is string => typeof value === 'string' && Object.prototype.hasOwnProperty.call(MODULE_FEATURES, value)
 
-/**
- * مسارات واجهة ببيانات عرض ثابتة من غير خلفية (الشاشات الوهمية): مقفولة دايمًا إلا مع ميزة platform.demo_screens.
- * بتتشال من هنا لما الموديول الحقيقي ينزل (المرحلة 3 و5) وشاشته تاخد مكانها.
- * النجمة = جزء واحد من المسار (رقم سجل)، والمسارات الثابتة تحت نفس الأب بتكسب عليها.
- */
-export const DEMO_SCREENS_FEATURE = 'platform.demo_screens'
-// B3.9-ب: شاشات التدريب خرجت من هنا (بقت تبع موديول التدريب)
-export const DEMO_ROUTES = ['/performance/new', '/recruitment/add', '/recruitment/*', '/reports/custom']
+// طلب المالك 11 أكتوبر 2026 («أي حاجة ديمو في النظام شيلها»): ميزة «شاشات العرض التجريبية» (platform.demo_screens) ومساراتها اتشالوا من السجل —
+// مفيش شاشة ببيانات عرض ثابتة. الشاشات الأربعة القديمة بقت تحويل لشاشتها الحقيقية وتبع موديولها. صف الميزة اللي ترحيل 077 زرعه في
+// system_module_features بيفضل في القاعدة من غير أثر (مفتاح مش مسجّل = متجاهَل)، واسمه القديم لسجل التغييرات في RETIRED_FEATURE_NAMES.
+export const RETIRED_FEATURE_NAMES: Readonly<Record<string, string>> = { 'platform.demo_screens': 'شاشات العرض التجريبية (اتشالت)' }
 
 const segmentsOf = (path: string) => path.split('?')[0].split('#')[0].split('/').filter(Boolean)
 
@@ -577,13 +566,12 @@ const score = (pattern: string, path: string): number => {
 export interface RouteOwner {
   /** الموديول صاحب المسار، أو null لو المسار مش مسجّل (بيتعامل كأساسي) */
   module: ModuleKey | null
-  /** ميزة فرعية لازم تبقى مفعّلة (الشاشات الوهمية، أو ميزة ليها مساراتها) */
+  /** ميزة فرعية ليها مساراتها ولازم تبقى مفعّلة */
   feature: string | null
 }
 
 /**
  * صاحب مسار الواجهة: أطول نمط مطابق بيكسب، والثابت قبل النجمة عند نفس الطول.
- * مسار العرض (DEMO_ROUTES) بيكسب لو نمطه أدق من أدق مسار موديول: /recruitment/add عرض، و/recruitment/applicants حقيقي.
  */
 export function routeOwner(pathname: string): RouteOwner {
   let module: ModuleKey | null = null, moduleScore = -1
@@ -601,9 +589,8 @@ export function routeOwner(pathname: string): RouteOwner {
       if (value > featureScore) { featureScore = value; feature = key }
     }
   }
-  const demoScore = DEMO_ROUTES.reduce((best, pattern) => Math.max(best, score(pattern, pathname)), -1)
-  if (feature !== null && featureScore >= moduleScore && featureScore >= demoScore) return { module: MODULE_FEATURES[feature].module, feature }
-  return { module, feature: demoScore > moduleScore ? DEMO_SCREENS_FEATURE : null }
+  if (feature !== null && featureScore >= moduleScore) return { module: MODULE_FEATURES[feature].module, feature }
+  return { module, feature: null }
 }
 
 /** موديول نوع طلب: بالكود لو مسجّل بالاسم، وإلا بمعالج التنفيذ؛ غير كده محرك الطلبات نفسه (أساسي). */

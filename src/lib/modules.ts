@@ -8,7 +8,7 @@ import { apiFetch, getCurrentUser, onApiRouteMissing, sessionMark } from './api'
 // نفس سجل الخادم بالحرف (ملف بيانات صرف مشترك): الموديولات ومساراتها والمزايا والباقات
 import { enabledSnapshot, routeAvailable } from '../../api/src/modules-registry/registry'
 export {
-  DEMO_SCREENS_FEATURE, MODULE_GROUPS, MODULE_PRESETS, routeAvailable, routeOwner,
+  MODULE_GROUPS, MODULE_PRESETS, routeAvailable, routeOwner,
   type ModuleGroup, type ModuleKey, type ModulePreset,
 } from '../../api/src/modules-registry/registry'
 

@@ -356,7 +356,9 @@ test('ME-06: جمهور التفعيل — الموديول لجمهوره بس�
 })
 
 test('ME-07: المزايا الفرعية والباقات', async () => {
-  const demo = registry.DEMO_SCREENS_FEATURE
+  // مثال ميزة فرعية (ميزة «شاشات العرض التجريبية» اتشالت من السجل — طلب المالك 11 أكتوبر 2026)
+  const demo = 'reports.builder'
+  await refused(() => modules.setFeature(admin(), 'platform.demo_screens', true), 404)
   assert.deepEqual((await enabledFor(U.cairo)).features, [])
   await modules.setFeature(admin(), demo, true)
   assert.deepEqual((await enabledFor(U.cairo)).features, [demo])
@@ -580,7 +582,7 @@ test('ME-09: قبل ترحيل 076 (الجداول مش موجودة) — كل �
   assert.deepEqual(ok(await request(admin(), 'GET', '/modules/events')), [])
   ok(await request(admin(), 'GET', '/modules/recruitment/impact'))
   ok(await request(admin(), 'GET', '/modules/presets/standard/diff'))
-  for (const [method, route, body] of [['PUT', '/modules/recruitment', { enabled: false }], ['PUT', `/modules/features/${registry.DEMO_SCREENS_FEATURE}`, { enabled: true }],
+  for (const [method, route, body] of [['PUT', '/modules/recruitment', { enabled: false }], ['PUT', '/modules/features/reports.builder', { enabled: true }],
     ['POST', '/modules/presets/basic/apply', undefined]]) {
     const refusal = await request(admin(), method, route, body)
     assert.equal(refusal.status, 409, `${method} ${route}: ${JSON.stringify(refusal.body)}`)

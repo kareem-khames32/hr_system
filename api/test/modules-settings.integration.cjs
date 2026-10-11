@@ -119,7 +119,7 @@ test('MS-01: الصلاحية — settings.modules بس، والكتابة لح�
     for (const user of [U.hr, U.cairo]) assert.equal((await request(user, 'GET', route)).status, 403, `${user.email} ${route}`)
     for (const user of [U.admin, U.modulesAll, U.modulesBranch]) ok(await request(user, 'GET', route))
   }
-  const writes = [['PUT', '/modules/recruitment', { enabled: false }], ['PUT', '/modules/features/platform.demo_screens', { enabled: true }], ['POST', '/modules/presets/basic/apply', undefined]]
+  const writes = [['PUT', '/modules/recruitment', { enabled: false }], ['PUT', '/modules/features/reports.builder', { enabled: true }], ['POST', '/modules/presets/basic/apply', undefined]]
   for (const [method, route, body] of writes) {
     for (const user of [U.hr, U.cairo]) assert.equal((await request(user, method, route, body)).status, 403, `${user.email} ${route}`)
     // حساب مقفول على فرع معاه الصلاحية: يشوف بس — الموديول بيتفتح أو يتقفل لكل الشركة
@@ -151,7 +151,9 @@ test('MS-02: الكتالوج — الموديولات بمجموعاتها وح
   assert.deepEqual(moduleOf(catalog, 'shifts').dependsOn, ['attendance'])
   assert.deepEqual(moduleOf(catalog, 'loans').dependsOn, ['payroll'])
   assert.deepEqual(moduleOf(catalog, 'recruitment').preset, 'standard')
-  assert.deepEqual(moduleOf(catalog, 'platform').features.map(row => [row.key, row.enabled]), [['platform.demo_screens', false]])
+  // ميزة «شاشات العرض التجريبية» اتشالت من السجل (طلب المالك 11 أكتوبر 2026): المنصة من غير مزايا فرعية
+  assert.deepEqual(moduleOf(catalog, 'platform').features.map(row => [row.key, row.enabled]), [])
+  assert.deepEqual(moduleOf(catalog, 'reports').features.map(row => [row.key, row.enabled]), [['reports.builder', false]])
 })
 
 test('MS-03: التفعيل والقفل من الشاشة — الأثر فوري والتغيير متسجّل باسم اللي عمله', async () => {
@@ -182,7 +184,9 @@ test('MS-04: الرفض — تبعيات وأساسي ومجهول وجسم غل
   refused(await request(U.admin, 'GET', '/modules/presets/platinum/diff'), 404, /الباقة غير موجودة/)
   refused(await request(U.admin, 'POST', '/modules/presets/platinum/apply'), 404)
   for (const body of [{ enabled: 'yes' }, { enabled: 1 }, { audience: 'all' }, { audience: ['x'] }]) refused(await request(U.admin, 'PUT', '/modules/custody', body), 400)
-  refused(await request(U.admin, 'PUT', '/modules/features/platform.demo_screens', {}), 400)
+  refused(await request(U.admin, 'PUT', '/modules/features/reports.builder', {}), 400)
+  // الميزة اللي اتشالت: مفتاحها مش موجود
+  assert.equal((await request(U.admin, 'PUT', '/modules/features/platform.demo_screens', { enabled: true })).status, 404)
   refused(await request(U.admin, 'PUT', '/modules/custody', { audience: { mode: 'nobody' } }), 400, /مين/)
   assert.equal(await repo('SystemModule').count(), 0); assert.equal(await repo('SystemModuleEvent').count(), 0)
   // بالترتيب الصح بيعدّي، وتفعيل اللي بيعتمد والحضور مقفول مرفوض
@@ -246,10 +250,10 @@ test('MS-06: الباقات — معاينة الفرق من غير كتابة،
 })
 
 test('MS-07: المزايا الفرعية وجمهور التفعيل من الشاشة', async () => {
-  const on = ok(await request(U.admin, 'PUT', '/modules/features/platform.demo_screens', { enabled: true }))
-  assert.equal(moduleOf(on, 'platform').features[0].enabled, true)
-  assert.deepEqual(ok(await request(U.cairo, 'GET', '/modules/enabled')).features, ['platform.demo_screens'])
-  ok(await request(U.admin, 'PUT', '/modules/features/platform.demo_screens', { enabled: false }))
+  const on = ok(await request(U.admin, 'PUT', '/modules/features/reports.builder', { enabled: true }))
+  assert.equal(moduleOf(on, 'reports').features[0].enabled, true)
+  assert.deepEqual(ok(await request(U.cairo, 'GET', '/modules/enabled')).features, ['reports.builder'])
+  ok(await request(U.admin, 'PUT', '/modules/features/reports.builder', { enabled: false }))
   assert.deepEqual(ok(await request(U.cairo, 'GET', '/modules/enabled')).features, [])
 
   const scoped = ok(await request(U.admin, 'PUT', '/modules/custody', { audience: { mode: 'all', where: { mode: 'branches', ids: [B.cairo.id] } } }))
@@ -265,7 +269,7 @@ test('MS-07: المزايا الفرعية وجمهور التفعيل من ال
   // تغيير الجمهور لوحده حدث من غير حالة (enabled = null: «غيّر جمهور» مش «فعّل»)، ومابيغيّرش «مين فتح أو قفل وإمتى»
   const events = ok(await request(U.admin, 'GET', '/modules/events'))
   assert.deepEqual(events.map(row => [row.kind, row.key, row.enabled, row.audience?.where?.ids ?? null]),
-    [['module', 'custody', null, null], ['module', 'custody', null, [B.cairo.id]], ['feature', 'platform.demo_screens', false, null], ['feature', 'platform.demo_screens', true, null]])
+    [['module', 'custody', null, null], ['module', 'custody', null, [B.cairo.id]], ['feature', 'reports.builder', false, null], ['feature', 'reports.builder', true, null]])
   // طلب من غير تغيير: لا حدث ولا كتابة
   const untouched = await repo('SystemModule').findOneByOrFail({ key: 'custody' })
   ok(await request(U.admin, 'PUT', '/modules/custody', {}))

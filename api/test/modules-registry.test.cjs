@@ -16,7 +16,9 @@ const assert = require('node:assert/strict')
 const path = require('node:path')
 require('../node_modules/ts-node').register({ project: path.join(__dirname, '..', 'tsconfig.json'), transpileOnly: true })
 const registry = require('../src/modules-registry/registry')
-const { MODULES, MODULE_KEYS, MODULE_FEATURES, MODULE_PRESET_ORDER, DEMO_ROUTES, DEMO_SCREENS_FEATURE } = registry
+const { MODULES, MODULE_KEYS, MODULE_FEATURES, MODULE_PRESET_ORDER } = registry
+// مثال ميزة فرعية للاختبارات (مقفولة افتراضيًا، وموديولها مفعّل افتراضيًا). ميزة «شاشات العرض التجريبية» اتشالت من السجل (طلب المالك 11 أكتوبر 2026)
+const SAMPLE_FEATURE = 'reports.builder', RETIRED_DEMO = 'platform.demo_screens'
 
 const state = (modules = {}, features = {}) => ({ modules, features })
 
@@ -42,8 +44,12 @@ test('MR-01: السجل سليم — تبعيات مسجّلة ومن غير د�
   // مفيش مسار واجهة متسجّل لموديولين
   const routes = MODULE_KEYS.flatMap(key => MODULES[key].routes)
   assert.equal(new Set(routes).size, routes.length, 'مسار واجهة متكرر في موديولين')
-  assert.equal(MODULE_FEATURES[DEMO_SCREENS_FEATURE].module, 'platform')
-  assert.equal(MODULE_FEATURES[DEMO_SCREENS_FEATURE].default, false)
+  assert.equal(MODULE_FEATURES[SAMPLE_FEATURE].module, 'reports')
+  assert.equal(MODULE_FEATURES[SAMPLE_FEATURE].default, false)
+  // مفيش ميزة «شاشات عرض» في السجل، ولا مسارات عرض؛ واسمها القديم محفوظ لسجل التغييرات بس
+  assert.deepEqual([Object.prototype.hasOwnProperty.call(MODULE_FEATURES, RETIRED_DEMO), registry.DEMO_ROUTES, registry.DEMO_SCREENS_FEATURE, Object.keys(MODULES.platform.features)],
+    [false, undefined, undefined, []])
+  assert.equal(registry.RETIRED_FEATURE_NAMES[RETIRED_DEMO], 'شاشات العرض التجريبية (اتشالت)')
 })
 
 test('MR-02: الحالة — الصف الغايب افتراضي السجل، والأساسي مايتقفلش، والقفل بينزل على المعتمدين', () => {
@@ -66,10 +72,13 @@ test('MR-02: الحالة — الصف الغايب افتراضي السجل، 
   assert.equal(registry.moduleEnabled(noPayroll, 'loans'), false)
   assert.equal(registry.moduleEnabled(noPayroll, 'expenses'), true)
   // الميزة: موديولها مفعّل وصفها (أو افتراضيها) مفعّل، ومفتاح مش مسجّل = مقفول
-  assert.equal(registry.featureEnabled(empty, DEMO_SCREENS_FEATURE), false)
-  assert.equal(registry.featureEnabled(state({}, { [DEMO_SCREENS_FEATURE]: true }), DEMO_SCREENS_FEATURE), true)
+  assert.equal(registry.featureEnabled(empty, SAMPLE_FEATURE), false)
+  assert.equal(registry.featureEnabled(state({}, { [SAMPLE_FEATURE]: true }), SAMPLE_FEATURE), true)
   assert.equal(registry.featureEnabled(state({}, { 'nope.feature': true }), 'nope.feature'), false)
-  assert.equal(registry.isFeatureKey(DEMO_SCREENS_FEATURE), true)
+  // صف الميزة اللي اتشالت (مزروع من ترحيل 077) في القاعدة: مفتاح مش مسجّل = من غير أثر
+  assert.deepEqual([registry.featureEnabled(state({}, { [RETIRED_DEMO]: true }), RETIRED_DEMO), registry.isFeatureKey(RETIRED_DEMO),
+    registry.enabledSnapshot(state({}, { [RETIRED_DEMO]: true })).features], [false, false, []])
+  assert.equal(registry.isFeatureKey(SAMPLE_FEATURE), true)
   assert.equal(registry.isFeatureKey('constructor'), false)
   assert.equal(registry.isModuleKey('constructor'), false)
   assert.equal(registry.isModuleKey('payroll'), true)
@@ -142,8 +151,8 @@ test('MR-03: صاحب مسار الواجهة — أطول نمط بيكسب، �
   // مسار مش مسجّل لأي موديول = مالوش صاحب (بيتعامل كأساسي)
   assert.deepEqual(owner('/something-new'), { module: null, feature: null })
 
-  // الشاشات الوهمية: ورا الميزة، ومسار العرض الأدق بيكسب على مسار الموديول
-  const demo = (pathname, module) => assert.deepEqual(owner(pathname), { module, feature: DEMO_SCREENS_FEATURE }, pathname)
+  // الشاشات الأربعة اللي كانت شاشات عرض بقت تحويل لشاشتها الحقيقية: تبع موديولها، من غير ميزة
+  const demo = (pathname, module) => assert.deepEqual(owner(pathname), { module, feature: null }, pathname)
   // B3.6 وB3.7: شاشات الأداء بقت حقيقية تبع موديوله (الأهداف، التقييمات، نموذج التقييم، الدورات، النماذج)؛ «تقييم جديد» لسه شاشة عرض
   for (const route of ['/performance/goals', '/performance', '/performance/15', '/performance/cycles', '/performance/templates']) {
     assert.deepEqual(registry.routeOwner(route), { module: 'performance', feature: null }, route)
@@ -158,25 +167,25 @@ test('MR-03: صاحب مسار الواجهة — أطول نمط بيكسب، �
   // B3.5-أ: شاشة العروض بقت حقيقية
   assert.deepEqual(registry.routeOwner('/recruitment/offers'), registry.routeOwner('/recruitment/jobs'))
   demo('/recruitment/15', 'recruitment')
-  assert.ok(DEMO_ROUTES.length >= 4) // B3.4-ب وB3.5-أ: شاشتي المقابلات والعروض خرجوا من شاشات العرض؛ B3.9-ب: وشاشات التدريب
 
   // routeAvailable: الموديول مفعّل والميزة (لو فيه) مفعّلة
   const basic = registry.enabledSnapshot(state())
   assert.equal(registry.routeAvailable('/payroll', basic), true)
   assert.equal(registry.routeAvailable('/performance', basic), false)
-  assert.equal(registry.routeAvailable('/recruitment/add', basic), false)
+  assert.equal(registry.routeAvailable('/recruitment/add', basic), true)
   assert.equal(registry.routeAvailable('/recruitment/applicants', basic), true)
   assert.equal(registry.routeAvailable('/something-new', basic), true)
-  const withDemo = registry.enabledSnapshot(state({}, { [DEMO_SCREENS_FEATURE]: true }))
-  // شاشة العرض بتفتح بالميزة؛ وشاشات الأداء والتدريب الحقيقية بموديولها (المقفول افتراضيًا) مش بميزة العرض
+  const withDemo = registry.enabledSnapshot(state({}, { [RETIRED_DEMO]: true }))
+  // صف الميزة القديمة مابيفتحش ولا بيقفل حاجة: كل شاشة بموديولها
   assert.equal(registry.routeAvailable('/reports/custom', withDemo), true)
+  assert.equal(registry.routeAvailable('/reports/custom', basic), true)
   assert.equal(registry.routeAvailable('/training', withDemo), false)
   assert.equal(registry.routeAvailable('/training', registry.enabledSnapshot(state({ training: true }))), true)
   assert.equal(registry.routeAvailable('/performance', withDemo), false)
   assert.equal(registry.routeAvailable('/performance', registry.enabledSnapshot(state({ performance: true }))), true)
   assert.equal(registry.routeAvailable('/recruitment/add', withDemo), true)
-  // التوظيف مقفول: شاشاته الحقيقية والوهمية مقفولة حتى مع ميزة العرض
-  const demoNoRecruitment = registry.enabledSnapshot(state({ recruitment: false }, { [DEMO_SCREENS_FEATURE]: true }))
+  // التوظيف مقفول: كل شاشاته مقفولة
+  const demoNoRecruitment = registry.enabledSnapshot(state({ recruitment: false }, { [RETIRED_DEMO]: true }))
   assert.equal(registry.routeAvailable('/recruitment', demoNoRecruitment), false)
   assert.equal(registry.routeAvailable('/recruitment/add', demoNoRecruitment), false)
   assert.equal(registry.routeAvailable('/reports/custom', demoNoRecruitment), true)

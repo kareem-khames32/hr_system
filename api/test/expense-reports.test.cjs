@@ -72,9 +72,9 @@ test('EXU-05: الميزة الفرعية بتملك مساراتها — الش
   const on = { modules: ['expenses', 'requests', 'recruitment', 'benefits'], features: ['expenses.reports'] }, off = { ...on, features: [] }
   assert.deepEqual(['/expenses', '/my/expenses'].map(route => [registry.routeAvailable(route, on), registry.routeAvailable(route, off), registry.routeAvailable(route, { modules: ['requests'], features: ['expenses.reports'] })]),
     [[true, false, false], [true, false, false]])
-  // مسارات مالهاش ميزة ماتغيّرتش: موديولها بس، وشاشات العرض بميزتها
+  // مسارات مالهاش ميزة ماتغيّرتش: موديولها بس (وميزة شاشات العرض اتشالت من السجل)
   assert.deepEqual([registry.routeOwner('/benefits'), registry.routeOwner('/recruitment/add'), registry.routeOwner('/my/raises'), registry.routeOwner('/requests')],
-    [{ module: 'benefits', feature: null }, { module: 'recruitment', feature: registry.DEMO_SCREENS_FEATURE }, { module: 'compensation', feature: null }, registry.routeOwner('/requests')])
+    [{ module: 'benefits', feature: null }, { module: 'recruitment', feature: null }, { module: 'compensation', feature: null }, registry.routeOwner('/requests')])
   assert.equal(registry.moduleOfRequestType({ code: 'ANY', destinationHandler: 'expense_report' }), 'expenses')
 })
 

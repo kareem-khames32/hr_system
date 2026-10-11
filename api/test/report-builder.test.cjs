@@ -81,7 +81,7 @@ test('RBU-03: الاستعلام — تعبيرات القاموس بس، وكل
 test('RBU-04: سجل الموديولات — ميزة reports.builder مقفولة افتراضيًا بمسار شاشتها، وشاشة العرض القديمة زي ما هي', () => {
   const feature = registry.MODULE_FEATURES[rules.REPORT_BUILDER_FEATURE]
   assert.deepEqual([feature.module, feature.default, feature.routes], ['reports', false, ['/reports/builder']])
-  assert.deepEqual([registry.routeOwner('/reports/builder').feature, registry.routeOwner('/reports').module, registry.DEMO_ROUTES.includes('/reports/custom')], [rules.REPORT_BUILDER_FEATURE, 'reports', true])
+  assert.deepEqual([registry.routeOwner('/reports/builder').feature, registry.routeOwner('/reports').module, registry.routeOwner('/reports/custom')], [rules.REPORT_BUILDER_FEATURE, 'reports', { module: 'reports', feature: null }])
 })
 
 test('RBU-05: مصدر الكود — التشغيل بصلاحيات القارئ ونطاقه (حتى المتشارك)، وصلاحية الحقل على كل عمود التعريف بيلمسه، والحفظ بصلاحيته تحت قفل مدى', () => {

@@ -57,7 +57,9 @@ function signIn(user, enabled) {
   if (enabled) sessionStorage.setItem('hr_enabled_modules', JSON.stringify({ session: sessionOf(user), enabled }))
 }
 const state = (moduleRows = {}, featureRows = {}) => registry.enabledSnapshot({ modules: moduleRows, features: featureRows })
-const DEMO_ON = { [registry.DEMO_SCREENS_FEATURE]: true }
+// مثال ميزة فرعية (ميزة «شاشات العرض التجريبية» اتشالت من السجل — طلب المالك 11 أكتوبر 2026)
+const SAMPLE_FEATURE = 'reports.builder'
+const DEMO_ON = { [SAMPLE_FEATURE]: true }
 async function fetched(responder, fn) {
   const original = global.fetch, calls = []
   global.fetch = async (url, options) => { calls.push(String(url)); return responder(String(url), options) }
@@ -77,16 +79,15 @@ const pages = (() => {
   return out.sort()
 })()
 
-test('MU-01: كل شاشة لها صاحب (موديول أو ميزة شاشات العرض)، وكل مسار في السجل له صفحة', () => {
+test('MU-01: كل شاشة لها صاحب (موديول)، وكل مسار في السجل له صفحة، ومفيش شاشات عرض', () => {
   assert.ok(pages.length >= 116, `${pages.length} صفحة`)
   const owners = Object.fromEntries(pages.map(route => [route, registry.routeOwner(route)]))
   const unowned = pages.filter(route => owners[route].module === null && owners[route].feature === null)
   assert.deepEqual(unowned, [], `شاشات من غير صاحب في سجل الموديولات: ${unowned.join(', ')}`)
-  // الشاشات الوهمية بالظبط — أي شاشة ببيانات عرض جديدة لازم تتسجّل، وأي شاشة حقيقية ماتتحسبش وهمية
-  assert.deepEqual(pages.filter(route => owners[route].feature === registry.DEMO_SCREENS_FEATURE), [
-    '/performance/new',
-    // B3.9-ب: شاشات التدريب بقت حقيقية تبع موديولها
-    '/recruitment/5', '/recruitment/add', '/reports/custom'])
+  // مفيش شاشات عرض: الأربعة القديمة تبع موديولها ومن غير ميزة، ومفيش ميزة عرض في السجل
+  assert.deepEqual(['/performance/new', '/recruitment/5', '/recruitment/add', '/reports/custom'].map(route => owners[route]),
+    [{ module: 'performance', feature: null }, { module: 'recruitment', feature: null }, { module: 'recruitment', feature: null }, { module: 'reports', feature: null }])
+  assert.deepEqual([registry.DEMO_ROUTES, registry.DEMO_SCREENS_FEATURE], [undefined, undefined])
   // أمثلة من كل موديول (المطابقة الكاملة في modules-registry.test.cjs)
   for (const [route, module] of [['/', 'platform'], ['/settings/modules', 'platform'], ['/employees/5', 'employees'], ['/employees/5/terminate', 'offboarding'],
     ['/my/payslips', 'payroll'], ['/payroll/payslip/5', 'payroll'], ['/payroll/loans', 'loans'], ['/attendance/overtime', 'overtime'], ['/leaves/holidays', 'platform'],
@@ -95,7 +96,6 @@ test('MU-01: كل شاشة لها صاحب (موديول أو ميزة شاشا�
   const exists = pattern => pages.some(route => registry.routeOwner(route) && route.split('/').length >= pattern.split('/').length
     && pattern.split('/').every((part, index) => part === '*' || part === route.split('/')[index]))
   for (const key of registry.MODULE_KEYS) for (const pattern of registry.MODULES[key].routes) assert.ok(exists(pattern), `${key}: المسار ${pattern} مالوش صفحة`)
-  for (const pattern of registry.DEMO_ROUTES) assert.ok(exists(pattern), `مسار العرض ${pattern} مالوش صفحة`)
 })
 
 test('MU-02: القايمة الجانبية من السجل — الوهمي ورا ميزته، وبنود الموديول المقفول مختفية', () => {
@@ -154,14 +154,16 @@ test('MU-02: القايمة الجانبية من السجل — الوهمي و
   assert.match(source, /item\.children\.filter\(\(c\) => \(!c\.perm \|\| can\(c\.perm\)\) && available\(c\.href\)\)/)
   assert.match(source, /portalItems\.filter\(\(item\) => available\(item\.href\)\)/)
   assert.match(source, /const enabledModules = useModules\(\) \?\? DEFAULT_MODULES/)
-  // بنود مجموعة التوظيف والتقارير: الوهمي منها بيتشال لوحده
+  // بنود مجموعة التوظيف والتقارير: كلها بموديولها، وبند الميزة («بانِي التقارير») بميزته
   const visible = (enabled, hrefs) => hrefs.filter(href => registry.routeAvailable(href, enabled))
-  const recruitment = ['/recruitment', '/recruitment/jobs', '/recruitment/applicants', '/recruitment/interviews', '/recruitment/offers', '/recruitment/metrics', '/recruitment/add']
-  assert.deepEqual(visible(state(), recruitment), ['/recruitment', '/recruitment/jobs', '/recruitment/applicants', '/recruitment/interviews', '/recruitment/offers', '/recruitment/metrics'])
+  const recruitment = ['/recruitment', '/recruitment/jobs', '/recruitment/applicants', '/recruitment/interviews', '/recruitment/offers', '/recruitment/metrics']
+  assert.deepEqual(visible(state(), recruitment), recruitment)
   assert.deepEqual(visible(state({ recruitment: false }, DEMO_ON), recruitment), [], 'موديول التوظيف مقفول = ولا بند')
-  assert.deepEqual(visible(state({}, DEMO_ON), recruitment), recruitment)
-  assert.deepEqual(visible(state(), ['/reports', '/reports/custom', '/reports/cost-centers']), ['/reports', '/reports/cost-centers'])
-  assert.deepEqual(visible(state({ payroll: false }), ['/reports', '/reports/custom', '/reports/cost-centers']), ['/reports'])
+  assert.deepEqual(visible(state(), ['/reports', '/reports/builder', '/reports/cost-centers']), ['/reports', '/reports/cost-centers'])
+  assert.deepEqual(visible(state({}, DEMO_ON), ['/reports', '/reports/builder', '/reports/cost-centers']), ['/reports', '/reports/builder', '/reports/cost-centers'])
+  assert.deepEqual(visible(state({ payroll: false }), ['/reports', '/reports/builder', '/reports/cost-centers']), ['/reports'])
+  // والبنود الوهمية التلاتة مش في القايمة أصلًا
+  for (const href of ['/recruitment/add', '/performance/new', '/reports/custom']) assert.ok(!source.includes(`href: '${href}'`), href)
   const attendance = ['/attendance', '/attendance/weekly-schedule', '/attendance/shifts', '/attendance/permissions', '/attendance/exemptions', '/attendance/overtime',
     '/attendance/holiday-work', '/attendance/manual-entry', '/attendance/devices', '/attendance/monthly-sheet', '/attendance/reports']
   assert.deepEqual(visible(state({ shifts: false, overtime: false }), attendance), ['/attendance', '/attendance/permissions', '/attendance/exemptions', '/attendance/manual-entry',
@@ -231,7 +233,7 @@ test('MU-04: حارس المسارات — «الصفحة دي مش متاحة»
     assert.equal(registry.routeAvailable(route, basic), true, route); assert.equal(registry.routeAvailable(route, noPayroll), false, route)
   }
   for (const route of ['/', '/employees/9', '/requests', '/settings', '/reports', '/leaves']) assert.equal(registry.routeAvailable(route, noPayroll), true, route)
-  for (const route of ['/performance', '/training/add', '/recruitment/add', '/reports/custom']) assert.equal(registry.routeAvailable(route, basic), false, route)
+  for (const route of ['/performance', '/performance/new', '/training/add', '/reports/builder']) assert.equal(registry.routeAvailable(route, basic), false, route)
 })
 
 test('MU-05: <ModuleGate> — الجزء بيختفي لو الموديول أو الميزة مقفولين', () => {
@@ -240,10 +242,10 @@ test('MU-05: <ModuleGate> — الجزء بيختفي لو الموديول أو
   assert.equal(render({ module: 'custody' }), '')
   assert.equal(render({ module: 'custody', fallback: React.createElement('i', null, 'مش مفعّل') }), '<i>مش مفعّل</i>')
   assert.equal(render({ module: 'leave' }), '<p>تاب العهد</p>')
-  assert.equal(render({ feature: registry.DEMO_SCREENS_FEATURE }), '')
+  assert.equal(render({ feature: SAMPLE_FEATURE }), '')
   modules.invalidateModules(); localStorage.clear(); sessionStorage.clear()
   signIn(admin, state({}, DEMO_ON))
-  assert.equal(render({ module: 'custody', feature: registry.DEMO_SCREENS_FEATURE }), '<p>تاب العهد</p>')
+  assert.equal(render({ module: 'custody', feature: SAMPLE_FEATURE }), '<p>تاب العهد</p>')
   // لسه بيتقري: ولا الجزء ولا البديل (مفيش وميض)
   modules.invalidateModules(); localStorage.clear(); sessionStorage.clear()
   signIn(admin, null)

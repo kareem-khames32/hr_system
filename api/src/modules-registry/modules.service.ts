@@ -9,7 +9,7 @@ import { orgPositionsOf } from '../requests/request-audience-positions'
 import { assertAudienceTargets, audienceExcludeIds, audienceNeedsOrgPlaces, audienceWhereBranchId, orgPlaceOf, orgPlaces, orgPlacesFor } from '../org/org-audience'
 import {
   enabledDependents, enabledSnapshot, featureEnabled, isFeatureKey, isModuleKey, missingDependencies, moduleDefOf, moduleEnabled, moduleOfJob,
-  moduleOfRequestType, modulesOfPreset, MODULE_FEATURES, MODULE_KEYS, MODULE_PRESETS, type ModuleKey, type ModulePreset, type ModulesState,
+  moduleOfRequestType, modulesOfPreset, MODULE_FEATURES, MODULE_KEYS, MODULE_PRESETS, RETIRED_FEATURE_NAMES, type ModuleKey, type ModulePreset, type ModulesState,
 } from './registry'
 import { RequestType } from '../requests/entities/request-type.entity'
 import { Request } from '../requests/entities/request.entity'
@@ -418,6 +418,8 @@ export class ModulesService {
     const names = new Map(users.map((row) => [row.id, row.displayName]))
     const nameOf = (row: SystemModuleEvent) => row.kind === 'module' && isModuleKey(row.key) ? moduleDefOf(row.key).nameAr
       : row.kind === 'feature' && isFeatureKey(row.key) ? MODULE_FEATURES[row.key].nameAr
+        // ميزة اتشالت من السجل: تغييراتها القديمة بتفضل في السجل باسمها
+        : row.kind === 'feature' && Object.prototype.hasOwnProperty.call(RETIRED_FEATURE_NAMES, row.key) ? RETIRED_FEATURE_NAMES[row.key]
         : row.kind === 'preset' && Object.prototype.hasOwnProperty.call(MODULE_PRESETS, row.key) ? MODULE_PRESETS[row.key as ModulePreset].nameAr : row.key
     return rows.map((row) => ({ id: row.id, kind: row.kind, key: row.key, nameAr: nameOf(row), enabled: row.enabled,
       audience: row.audience ? parseRequestAudience(row.audience) : null, byName: names.get(row.byUserId) ?? null, at: row.at }))

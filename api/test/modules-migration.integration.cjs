@@ -224,9 +224,10 @@ test('MM-2: المخطط القديم ببيانات قائمة — المُرح
   const plan = await migrate.plan({ database, base })
   assert.equal(plan.readOnly, true); assert.equal(plan.pendingCount, 0); assert.deepEqual(plan.problems, [])
   assert.equal(plan.schemaDiffCount, 0, JSON.stringify(plan.schemaDiff))
-  // الخدمة بعد الترحيل: نفس الموديولات اللي كانت شغالة قبله بالظبط، وزيادة عليها شاشات العرض
+  // الخدمة بعد الترحيل: نفس الموديولات اللي كانت شغالة قبله بالظبط. صف «شاشات العرض» المزروع لسه في القاعدة، بس الميزة اتشالت من السجل
+  // (طلب المالك 11 أكتوبر 2026): مفتاح مش مسجّل = من غير أثر
   modules.invalidate()
-  assert.deepEqual(await modules.enabledFor(null), { modules: beforeEnabled.modules, features: [DEMO] })
+  assert.deepEqual(await modules.enabledFor(null), { modules: beforeEnabled.modules, features: [] })
 })
 
 test('MM-3: آمن للتكرار، وصف غيّره المالك من الشاشة مايرجعش لقيمة الترحيل', async () => {
@@ -236,16 +237,17 @@ test('MM-3: آمن للتكرار، وصف غيّره المالك من الشا
   for (let round = 0; round < 2; round++) { await runFile(TABLES); await runFile(SEED) }
   assert.deepEqual(await shape(), EXPECTED_SHAPE)
   assert.deepEqual(await moduleRows(), seeded); assert.deepEqual(await featureRows(), [[DEMO, true, null, null]])
-  // المالك قفل العهد وشاشات العرض من الشاشة: إعادة تشغيل الترحيل مابترجّعهمش
+  // المالك قفل العهد من الشاشة، وصف شاشات العرض اتغيّر (الميزة اتشالت من السجل، فالتغيير على الصف نفسه): إعادة تشغيل الترحيل مابترجّعهمش
   const owner = await repo('User').save({ email: 'owner@modules-migration.test', displayName: 'المالك', passwordHash: 'isolated-test-token-only', role: 'super_admin', permissions: '["*"]' })
   const actor = { sub: owner.id, email: owner.email, role: 'super_admin', branchId: null, employeeId: null, permissions: ['*'], tokenVersion: 0 }
   await modules.setModule(actor, 'custody', { enabled: false })
-  await modules.setFeature(actor, DEMO, false)
+  await assert.rejects(() => modules.setFeature(actor, DEMO, false), /الميزة غير موجودة/)
+  await repo('SystemModuleFeature').update({ key: DEMO }, { enabled: false, updatedAt: new Date(), updatedBy: owner.id })
   await runFile(TABLES); await runFile(SEED)
   const rows = Object.fromEntries((await moduleRows()).map(row => [row[0], row[1]]))
   assert.equal(rows.custody, false); assert.equal(rows.attendance, true)
   assert.equal((await featureRows())[0][1], false)
-  assert.equal(await repo('SystemModuleEvent').count(), 2, 'سجل تغييرات المالك زي ما هو')
+  assert.equal(await repo('SystemModuleEvent').count(), 1, 'سجل تغييرات المالك زي ما هو')
 })
 
 test('MM-4: التوظيف — من غير مرشحين ولا حامل للصلاحية مقفول؛ ومرشح واحد أو منحة لمستخدم مفعّل', async () => {
