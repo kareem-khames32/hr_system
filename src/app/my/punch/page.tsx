@@ -14,7 +14,12 @@ const sendPunch = (position: { latitude: number; longitude: number; accuracy: nu
   apiFetch<{ accepted: boolean; at: string; siteName: string | null; distanceMeters: number | null }>('/attendance/mobile-punch', { method: 'POST', body: JSON.stringify(position) })
 const locate = () => new Promise<GeolocationPosition>((resolve, reject) => {
   if (typeof navigator === 'undefined' || !navigator.geolocation) return reject(new Error('المتصفح ده مابيدعمش تحديد الموقع'))
-  navigator.geolocation.getCurrentPosition(resolve, () => reject(new Error('تعذر تحديد موقعك — اسمح للمتصفح بتحديد الموقع وجرّب تاني')), { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 })
+  // السبب بيتقال بالظبط (طلب المالك 12 أكتوبر 2026 بعد أول تجربة): إذن مرفوض، أو الجهاز نفسه مش مدّي موقع، أو الوقت خلص — كل واحد وحلّه
+  navigator.geolocation.getCurrentPosition(resolve, (error) => reject(new Error(
+    typeof window !== 'undefined' && !window.isSecureContext ? 'المتصفح مابيدّيش الموقع غير على رابط آمن (https) — افتح النظام من رابطه الآمن'
+      : error.code === error.PERMISSION_DENIED ? 'الموقع مقفول للصفحة دي — افتح علامة القفل جنب عنوان الصفحة، واسمح بـ«الموقع»، وحدّث الصفحة'
+        : error.code === error.TIMEOUT ? 'الجهاز اتأخر في تحديد الموقع — اتأكد إن خدمة الموقع (GPS) شغالة وجرّب تاني في مكان مفتوح'
+          : 'الجهاز مش قادر يحدد موقعه — شغّل خدمة الموقع في إعدادات الجهاز (الموبايل: GPS، ويندوز: الإعدادات ← الخصوصية ← الموقع) وجرّب تاني')), { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 })
 })
 
 export default function MyPunchPage() {
