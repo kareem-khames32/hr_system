@@ -187,6 +187,12 @@ test('OAU-07 (P7A-B01, B02): the unit\'s or the team\'s current branch is part o
   const dashboard = api('dashboard/dashboard-cards.service.ts')
   assert.deepEqual([...dashboard.matchAll(/this\.share\(`([a-z]+)\|/g)].map(match => match[1]), ['day'], 'الحساب المشترك لخانات اليوم بس — من غير موظفين ولا شجرة')
   assert.match(dashboard, /AND \(\(\$\{CONFIDENTIAL_REQUEST_SQL\} AND \$\{confidential\}\) OR \(NOT \$\{CONFIDENTIAL_REQUEST_SQL\}/)
-  assert.match(api('notifications/notifications.service.ts'), /const reason = !\(await eventEmailOn\(item\.eventCode\)\) \? /)
+  // P7B: حكم بريد الحدث لكل رسالة (جوه حلقة المستلمين، بعد فحوص التقادم) من غير ذاكرة للدفعة؛ وموضوع الموديولات للشكل الجديد من غير الذاكرة المؤقتة
+  const notifications = api('notifications/notifications.service.ts')
+  assert.doesNotMatch(notifications, /eventEmailOn|emailOn = new Map/)
+  assert.match(notifications, /else kept\.push\(item\)\n      \}\n[^]*?for \(const code of new Set\(kept\.map\(item => item\.eventCode\)\)\) \{\n        if \(isNotificationEvent\(code\) && !\(await this\.channels\.ruleOf\(code\)\)\.rule\.email\) closed\.add\(code\)/)
+  const modules = api('modules-registry/modules.service.ts')
+  assert.match(modules, /const fresh = audienceNeedsOrgPlaces\(audience\)\n    const hit = fresh \? undefined : this\.subjects\.get\(user\.sub\)/)
+  assert.match(modules, /if \(fresh\) return \{ \.\.\.subject, \.\.\.orgPlaceOf\(await orgPlaces\(this\.ds\.manager\), employee\) \}\n    this\.subjects\.set\(/)
   assert.match(api('notifications/channels/notification-channels.service.ts'), /const employee = await this\.scopedEmployee\(user, employeeId, em, true\)/)
 })

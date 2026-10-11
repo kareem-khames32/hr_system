@@ -322,3 +322,24 @@ test('OA-08 (P7A-B03): a group task holds its employees\' rows — a transfer wa
     await repo('Employee').update({ id: E.retail1.id }, { branchId: B.a.id, departmentId: D.retail.id, teamId: T.shop.id })
   }
 })
+
+test('OA-09 (P7A-B01, P7B): a module opened for a team of a branch closes for its people the moment the team moves to another branch — no cached answer', async () => {
+  const on = async user => (await call(user, 'GET', '/surveys/mine')).status
+  expect(await call(U.admin, 'PUT', '/modules/surveys', { enabled: true, audience: teams(B.a, T.shop) }), 200)
+  try {
+    // أول سؤال بيملى أي ذاكرة مؤقتة
+    assert.deepEqual([await on(U.retail1), await on(U.retail2)], [200, 404])
+    // الفريق اتنقل لقسم في فرع ب من شاشة الهيكل نفسها — من غير أي إبطال يدوي
+    expect(await call(U.admin, 'PATCH', `/teams/${T.shop.id}`, { departmentId: D.other.id }), 200)
+    assert.equal(await on(U.retail1), 404, 'الفريق مابقاش تبع فرع الاختيار')
+    expect(await call(U.admin, 'PATCH', `/teams/${T.shop.id}`, { departmentId: D.retail.id }), 200)
+    assert.equal(await on(U.retail1), 200, 'رجع الفريق = رجع الموديول')
+    // والموظف نفسه لو اتنقل لفرع تاني: برّه جمهور فرعه القديم على طول
+    await repo('Employee').update({ id: E.retail1.id }, { branchId: B.b.id })
+    assert.equal(await on(U.retail1), 404)
+  } finally {
+    await repo('Employee').update({ id: E.retail1.id }, { branchId: B.a.id })
+    await repo('Team').update({ id: T.shop.id }, { departmentId: D.retail.id })
+    expect(await call(U.admin, 'PUT', '/modules/surveys', { enabled: true, audience: null }), 200)
+  }
+})

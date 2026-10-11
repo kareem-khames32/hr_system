@@ -6,7 +6,7 @@ import { Employee } from '../employees/employee.entity'
 import { audienceNeedsEmployee, audienceNeedsPositions, parseRequestAudience, requestAudienceAllows, AUDIENCE_ORG_WHERE_MODES,
   AUDIENCE_WHO_MODES, type AudienceSubject } from '../requests/request-audience'
 import { orgPositionsOf } from '../requests/request-audience-positions'
-import { assertAudienceTargets, audienceExcludeIds, audienceWhereBranchId, orgPlaceOf, orgPlaces, orgPlacesFor } from '../org/org-audience'
+import { assertAudienceTargets, audienceExcludeIds, audienceNeedsOrgPlaces, audienceWhereBranchId, orgPlaceOf, orgPlaces, orgPlacesFor } from '../org/org-audience'
 import {
   enabledDependents, enabledSnapshot, featureEnabled, isFeatureKey, isModuleKey, missingDependencies, moduleDefOf, moduleEnabled, moduleOfJob,
   moduleOfRequestType, modulesOfPreset, MODULE_FEATURES, MODULE_KEYS, MODULE_PRESETS, type ModuleKey, type ModulePreset, type ModulesState,
@@ -197,16 +197,19 @@ export class ModulesService {
   private async subjectOf(user: JwtPayload, audience: string): Promise<AudienceSubject> {
     const base: AudienceSubject = { role: user.role, permissions: user.permissions ?? [], employeeId: user.employeeId ?? null, branchId: user.branchId ?? null }
     if (!user.employeeId || (!audienceNeedsEmployee(audience) && !audienceNeedsPositions(audience))) return base
-    const hit = this.subjects.get(user.sub)
+    // Codex P7A-B01 (P7B): جمهور فرع اختياره متحدد (إدارات/أقسام، أو فرق من فرع) بيتحكم بمكان الموظف **والمرجع** الحالي — من القاعدة لكل
+    // سؤال، من غير الموضوع المحفوظ مؤقتًا: فريق أو قسم اتنقل لفرع تاني (أو موظف اتنقل) كان بيفضل «مفعّل له» لحد ما الذاكرة تخلص، ونقل المرجع
+    // مابيبطّلهاش. الموضوع المحفوظ فاضل للشكل القديم بس (قسم الموظف وفريقه وفرعه ومنصبه)، ومن غير أماكن الهيكل.
+    const fresh = audienceNeedsOrgPlaces(audience)
+    const hit = fresh ? undefined : this.subjects.get(user.sub)
     if (hit && Date.now() - hit.at < ModulesService.SUBJECT_CACHE_MS) return { ...hit.subject, role: user.role, permissions: user.permissions ?? [] }
     const employee = await this.ds.getRepository(Employee).findOne({ where: { id: user.employeeId }, select: { id: true, departmentId: true, teamId: true, branchId: true } })
     const subject: AudienceSubject = {
       ...base,
       departmentId: employee?.departmentId ?? null, teamId: employee?.teamId ?? null, branchId: employee?.branchId ?? user.branchId ?? null,
       positions: await orgPositionsOf(this.ds.manager, user.employeeId),
-      // B-ADD.1: مكان الموظف في الهيكل (مسار قسمه، وفرع قسمه وفريقه الحالي) — بيتحسب دايمًا مع الموضوع المحفوظ مؤقتًا: جمهور موديول تاني ممكن يحتاجه
-      ...orgPlaceOf(await orgPlaces(this.ds.manager), employee),
     }
+    if (fresh) return { ...subject, ...orgPlaceOf(await orgPlaces(this.ds.manager), employee) }
     this.subjects.set(user.sub, { at: Date.now(), subject })
     return subject
   }

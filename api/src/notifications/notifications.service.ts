@@ -941,13 +941,6 @@ export class NotificationsService implements OnModuleInit {
     const company = await this.setting('company.name', '')
     const base = this.frontendBase()
     const mandatory = new Set<string>(await this.channels.mandatoryEvents())
-    // Codex P7A-B08: بريد الحدث نفسه لسه مفتوح في «قنوات الإشعارات» وقت الإرسال؟ (نفس فحص الرسالة الفورية في attemptOutbound) — حدث
-    // اتجمّع في الملخص وبعدها الإدارة قفلت بريده مابيتبعتش
-    const emailOn = new Map<string, boolean>()
-    const eventEmailOn = async (code: string) => {
-      if (!emailOn.has(code)) emailOn.set(code, !isNotificationEvent(code) || (await this.channels.ruleOf(code)).rule.email)
-      return emailOn.get(code)!
-    }
     let sent = 0
     for (const [userId, collected] of byUser) {
       const user = await this.ds.getRepository(User).findOne({ where: { id: userId } })
@@ -957,16 +950,26 @@ export class NotificationsService implements OnModuleInit {
         continue
       }
       // اللي اتجمع من امبارح ومابقاش صحيح (طلب اتعتمد من حد تاني، مسير اتفتح)، أو صاحبه قفل بريد فئته بعدها، مابيدخلش الملخص
-      const items: typeof collected = []
+      const kept: typeof collected = []
       const modes = new Map<string, NotificationMode>()
       for (const item of collected) {
         if (!modes.has(item.category)) modes.set(item.category, (await this.modesOf([userId], item.category)).get(`${userId}:EMAIL`) ?? 'ON')
         // B-ADD.5: حدث بقى «إلزامي» بعد ما اتجمع: قفل المستخدم مابيتطبقش عليه
-        const reason = !(await eventEmailOn(item.eventCode)) ? 'القناة اتقفلت للحدث ده من «قنوات الإشعارات» قبل الإرسال'
-          : modes.get(item.category) === 'OFF' && !mandatory.has(item.eventCode) ? 'المستخدم قافل بريد الفئة دي'
+        const reason = modes.get(item.category) === 'OFF' && !mandatory.has(item.eventCode) ? 'المستخدم قافل بريد الفئة دي'
           : await this.staleReason({ id: item.notificationId, recipientUserId: userId, eventCode: item.eventCode, category: item.category, entityType: item.entityType,
             entityId: item.entityId, link: item.link, dedupeKey: item.dedupeKey }, user)
-        if (reason) await deliveries.update({ id: String(item.id) }, { status: 'SKIPPED', detail: reason }); else items.push(item)
+        if (reason) await deliveries.update({ id: String(item.id) }, { status: 'SKIPPED', detail: reason }); else kept.push(item)
+      }
+      // Codex P7A-B08: بريد كل حدث لسه مفتوح في «قنوات الإشعارات»؟ — بيتقري من القاعدة **لكل رسالة** وآخر حاجة قبل إرسالها (نفس فحص الرسالة
+      // الفورية في attemptOutbound)، من غير ذاكرة للدفعة: الإدارة لو قفلت بريد الحدث بعد رسالة مستلم، المستلم اللي بعده مابيتبعتلوش
+      const closed = new Set<string>()
+      for (const code of new Set(kept.map(item => item.eventCode))) {
+        if (isNotificationEvent(code) && !(await this.channels.ruleOf(code)).rule.email) closed.add(code)
+      }
+      const items = kept.filter(item => !closed.has(item.eventCode))
+      const dropped = kept.filter(item => closed.has(item.eventCode))
+      if (dropped.length) {
+        await deliveries.update({ id: In(dropped.map(item => String(item.id))) }, { status: 'SKIPPED', detail: 'القناة اتقفلت للحدث ده من «قنوات الإشعارات» قبل الإرسال' })
       }
       if (!items.length) continue
       const ids = JSON.stringify(items.map(item => String(item.id)))

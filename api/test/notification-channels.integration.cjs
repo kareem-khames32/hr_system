@@ -704,3 +704,36 @@ test('NC-14 (P7A-B09): حفظ رقم واتساب الموظف بيقفل صفه
     else await repo('EmployeeWhatsappNumber').delete({ employeeId: emps.requester.id })
   }
 })
+
+test('NC-15 (P7A-B08, P7B): بريد الحدث بيتحكم لكل رسالة في الملخص — لو اتقفل بعد رسالة مستلم، المستلم اللي بعده مابيتبعتلوش', async () => {
+  await setting('notifications.email.enabled', 'true')
+  await setting('notifications.quiet_hours', '')
+  expectStatus(await rule('request.pending_approval', { email: true }), 200)
+  const manager2 = await employee(), requester2 = await employee({ managerEmployeeId: manager2.id })
+  const second = await account('digest-manager2', 'employee', [], { employeeId: manager2.id })
+  const sender2 = await account('digest-requester2', 'employee', [], { employeeId: requester2.id })
+  for (const user of [users.manager, second]) expectStatus(await request(user, 'PATCH', '/notifications/preferences', { category: 'approval', channel: 'EMAIL', mode: 'DIGEST' }), 200)
+  const send = mail.send
+  try {
+    // ملخصات قديمة لنفس المستلمين ماتدخلش في العدّ
+    await notifications.sendDigests()
+    const requests = [await submit(users.requester, types.general), await submit(sender2, types.general)]
+    await drain()
+    for (const req of requests) assert.equal((await deliveriesOf('request', req.id, 'EMAIL'))[0].status, 'DIGEST')
+    clear()
+    let disabled = false
+    // بعد أول رسالة: الإدارة بتقفل بريد الحدث، والحفظ بيخلص قبل ما الإرسال يكمّل
+    mail.send = async message => {
+      const result = await send(message)
+      if (!disabled) { expectStatus(await rule('request.pending_approval', { email: false }), 200); disabled = true }
+      return result
+    }
+    assert.deepEqual([await notifications.sendDigests(), disabled, mailbox.sent.length], [1, true, 1])
+    const statuses = (await Promise.all(requests.map(req => deliveriesOf('request', req.id, 'EMAIL')))).map(rows => rows[0].status).sort()
+    assert.deepEqual(statuses, ['SENT', 'SKIPPED'])
+  } finally {
+    mail.send = send
+    expectStatus(await rule('request.pending_approval', { email: true }), 200)
+    for (const user of [users.manager, second]) expectStatus(await request(user, 'PATCH', '/notifications/preferences', { category: 'approval', channel: 'EMAIL', mode: 'ON' }), 200)
+  }
+})
