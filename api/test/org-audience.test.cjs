@@ -190,7 +190,17 @@ test('OAU-07 (P7A-B01, B02): the unit\'s or the team\'s current branch is part o
   // P7B: حكم بريد الحدث لكل رسالة (جوه حلقة المستلمين، بعد فحوص التقادم) من غير ذاكرة للدفعة؛ وموضوع الموديولات للشكل الجديد من غير الذاكرة المؤقتة
   const notifications = api('notifications/notifications.service.ts')
   assert.doesNotMatch(notifications, /eventEmailOn|emailOn = new Map/)
-  assert.match(notifications, /else kept\.push\(item\)\n      \}\n[^]*?for \(const code of new Set\(kept\.map\(item => item\.eventCode\)\)\) \{\n        if \(isNotificationEvent\(code\) && !\(await this\.channels\.ruleOf\(code\)\)\.rule\.email\) closed\.add\(code\)/)
+  // P7C: قراءة واحدة لأحداث الرسالة، وهي آخر انتظار قبل تسليمها لخدمة البريد — من بعدها لحد mail.send ولا await (تسجيل «اتخطّى» بعد التسليم)
+  const digest = notifications.slice(notifications.indexOf('private async sendDigestsNow()'))
+  const read = digest.indexOf('const closed = await this.channels.emailClosedAmong(kept.map(item => item.eventCode))')
+  const handed = digest.indexOf('try { await this.mail.send({ to: address, subject: `ملخص إشعاراتك')
+  assert.ok(read > 0 && handed > read)
+  const between = digest.slice(read + 'const closed = await'.length, handed)
+  assert.deepEqual(between.match(/await [^\n;]+/g), ['await deliveries.update({ id: In(dropped.map(item => String(item.id))) }, { status: \'SKIPPED\', detail: \'القناة اتقفلت للحدث ده من «قنوات الإشعارات» قبل الإرسال\' })', 'await skipDropped()'],
+    'الانتظارين الوحيدين بين القراءة والتسليم: جسم دالة التسجيل المؤجلة، وفرع «مفيش بنود» اللي مابيبعتش')
+  assert.match(between, /if \(!items\.length\) \{ await skipDropped\(\); continue \}/)
+  assert.match(digest, /catch \(error\) \{ failure = error \}\n      await skipDropped\(\)/)
+  assert.match(api('notifications/channels/notification-channels.service.ts'), /async emailClosedAmong\(codes: readonly string\[\]\): Promise<Set<string>> \{[^]*?find\(\{ where: \{ eventCode: In\(known\), email: false \}/)
   const modules = api('modules-registry/modules.service.ts')
   assert.match(modules, /const fresh = audienceNeedsOrgPlaces\(audience\)\n    const hit = fresh \? undefined : this\.subjects\.get\(user\.sub\)/)
   assert.match(modules, /if \(fresh\) return \{ \.\.\.subject, \.\.\.orgPlaceOf\(await orgPlaces\(this\.ds\.manager\), employee\) \}\n    this\.subjects\.set\(/)

@@ -960,24 +960,23 @@ export class NotificationsService implements OnModuleInit {
             entityId: item.entityId, link: item.link, dedupeKey: item.dedupeKey }, user)
         if (reason) await deliveries.update({ id: String(item.id) }, { status: 'SKIPPED', detail: reason }); else kept.push(item)
       }
-      // Codex P7A-B08: بريد كل حدث لسه مفتوح في «قنوات الإشعارات»؟ — بيتقري من القاعدة **لكل رسالة** وآخر حاجة قبل إرسالها (نفس فحص الرسالة
-      // الفورية في attemptOutbound)، من غير ذاكرة للدفعة: الإدارة لو قفلت بريد الحدث بعد رسالة مستلم، المستلم اللي بعده مابيتبعتلوش
-      const closed = new Set<string>()
-      for (const code of new Set(kept.map(item => item.eventCode))) {
-        if (isNotificationEvent(code) && !(await this.channels.ruleOf(code)).rule.email) closed.add(code)
-      }
+      // Codex P7A-B08 (P7C): بريد أحداث الرسالة دي لسه مفتوح في «قنوات الإشعارات»؟ — بيتقري من القاعدة **لكل رسالة**، في **قراءة واحدة** لكل
+      // أحداثها، وهي **آخر انتظار** قبل تسليم الرسالة لخدمة البريد: من غير ذاكرة للدفعة، ومن غير أي كتابة أو قراءة تانية بين الحكم والتسليم
+      // (تسجيل «اتخطّى» للبنود المقفولة بيتكتب بعد التسليم). اللي بعد القراءة دي كله من غير انتظار لحد mail.send.
+      const closed = await this.channels.emailClosedAmong(kept.map(item => item.eventCode))
       const items = kept.filter(item => !closed.has(item.eventCode))
       const dropped = kept.filter(item => closed.has(item.eventCode))
-      if (dropped.length) {
-        await deliveries.update({ id: In(dropped.map(item => String(item.id))) }, { status: 'SKIPPED', detail: 'القناة اتقفلت للحدث ده من «قنوات الإشعارات» قبل الإرسال' })
+      const skipDropped = async () => {
+        if (dropped.length) await deliveries.update({ id: In(dropped.map(item => String(item.id))) }, { status: 'SKIPPED', detail: 'القناة اتقفلت للحدث ده من «قنوات الإشعارات» قبل الإرسال' })
       }
-      if (!items.length) continue
+      if (!items.length) { await skipDropped(); continue }
       const ids = JSON.stringify(items.map(item => String(item.id)))
       const lines = items.map(item => `• ${item.title}${item.body ? ` — ${item.body}` : ''}${base ? `\n  ${base}${item.link}` : ''}`)
       const text = `السلام عليكم ${user.displayName ?? ''}،\n\nملخص إشعاراتك:\n\n${lines.join('\n')}\n\n${company}`.trim()
       // فشل الإرسال لوحده هو اللي بيرجّع البنود للملخص الجاي؛ تسجيل النتيجة بعد إرسال ناجح مابيتحسبش فشل إرسال (الرسالة مابتتبعتش تاني)
       let failure: unknown = null
       try { await this.mail.send({ to: address, subject: `ملخص إشعاراتك (${items.length})`, text }) } catch (error) { failure = error }
+      await skipDropped()
       if (!failure) {
         await this.ds.query(`UPDATE [notification_deliveries] SET [status] = N'SENT', [detail] = N'ضمن الملخص اليومي', [address] = @1, [sentAt] = @2, [attempts] = [attempts] + 1
           WHERE [id] IN (SELECT CAST([value] AS bigint) FROM OPENJSON(@0))`, [ids, maskEmail(address), new Date()])

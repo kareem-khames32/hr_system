@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException, type OnApplicationBootstrap } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { InjectDataSource } from '@nestjs/typeorm'
-import { DataSource, type EntityManager } from 'typeorm'
+import { DataSource, In, type EntityManager } from 'typeorm'
 import { recordAudit } from '../../audit/audit'
 import type { JwtPayload } from '../../auth/auth.service'
 import { andBranchScopeSql, branchScopeOf, inBranchScope } from '../../auth/guards'
@@ -137,6 +137,17 @@ export class NotificationChannelsService implements OnApplicationBootstrap {
     // الحدث اللي جوه النظام عدّاد محسوب: «داخل النظام» مش اختيار (دايمًا ظاهر)
     return { rule: { inApp: row.inApp || !notificationEventDef(code).storedInApp, email: row.email, whatsapp: row.whatsapp, mandatory: row.mandatory },
       bindings: storedWhatsappBindings(code, row.whatsappTemplates), customized: true }
+  }
+
+  /**
+   * الأحداث اللي بريدها مقفول دلوقتي من القايمة دي — **قراءة واحدة** لكل الأحداث مع بعض (Codex P7A-B08، P7C): الملخص بينادي دي آخر حاجة
+   * قبل ما يسلّم الرسالة لخدمة البريد، فمفيش حكم حدث بيتقادم وهو مستني قراءة حدث تاني. حدث من غير صف = الافتراضي (البريد مفتوح).
+   */
+  async emailClosedAmong(codes: readonly string[]): Promise<Set<string>> {
+    const known = [...new Set(codes)].filter(isNotificationEvent)
+    if (!known.length || !DEFAULT_EVENT_RULE.email || !(await this.ready())) return new Set()
+    const rows = await this.ds.getRepository(NotificationEventRule).find({ where: { eventCode: In(known), email: false }, select: { id: true, eventCode: true } })
+    return new Set(rows.map(row => row.eventCode))
   }
 
   /** الأحداث اللي الإدارة معلّماها «إلزامي» (لصفحة اختيارات المستخدم) */

@@ -737,3 +737,51 @@ test('NC-15 (P7A-B08, P7B): بريد الحدث بيتحكم لكل رسالة �
     for (const user of [users.manager, second]) expectStatus(await request(user, 'PATCH', '/notifications/preferences', { category: 'approval', channel: 'EMAIL', mode: 'ON' }), 200)
   }
 })
+
+test('NC-16 (P7A-B08, P7C): حكم بريد أحداث الملخص قراءة واحدة وآخر حاجة قبل تسليم الرسالة — تسجيل «اتخطّى» بييجي بعد التسليم ومابيفصلش بينهم', async () => {
+  await setting('notifications.email.enabled', 'true')
+  await setting('notifications.quiet_hours', '')
+  for (const code of ['request.pending_approval', 'task.assigned']) expectStatus(await rule(code, { email: true }), 200)
+  for (const category of ['approval', 'task']) expectStatus(await request(users.manager, 'PATCH', '/notifications/preferences', { category, channel: 'EMAIL', mode: 'DIGEST' }), 200)
+  const { Repository } = require('../node_modules/typeorm')
+  const update = Repository.prototype.update, send = mail.send, closedAmong = channels.emailClosedAmong, ruleOf = channels.ruleOf
+  try {
+    await notifications.sendDigests()
+    const req = await submit(users.requester, types.general)
+    const task = expectStatus(await request(users.admin, 'POST', '/tasks', { title: 'مهمة في ملخص مختلط', assigneeEmployeeId: emps.manager.id }), 201)
+    await drain()
+    for (const [type, id] of [['request', req.id], ['task', task.id]]) assert.equal((await deliveriesOf(type, id, 'EMAIL'))[0].status, 'DIGEST')
+    // بريد المهمة اتقفل، وبريد الطلب مفتوح
+    expectStatus(await rule('task.assigned', { email: false }), 200)
+    clear()
+    const steps = []
+    let single = 0
+    channels.emailClosedAmong = async function (codes) { const closed = await closedAmong.call(this, codes); steps.push(`rules:${[...new Set(codes)].sort().join('+')}`); return closed }
+    channels.ruleOf = async function (code) { single++; return ruleOf.call(this, code) }
+    mail.send = async message => { steps.push('handed'); return send(message) }
+    Repository.prototype.update = async function (criteria, partial) {
+      if (this.manager.connection === ds && this.metadata.name === 'NotificationDelivery' && partial?.status === 'SKIPPED') {
+        steps.push('skip-write')
+        // الإدارة بتقفل بريد الطلب والتسجيل ده واقف: الرسالة لازم تكون اتسلّمت قبل كده بحكمها (مش بعده بحكم قديم)
+        assert.equal(mailbox.attempts.length, 1, 'تسجيل «اتخطّى» بعد تسليم الرسالة')
+      }
+      return update.call(this, criteria, partial)
+    }
+    assert.equal(await notifications.sendDigests(), 1)
+    assert.deepEqual([steps, single], [['rules:request.pending_approval+task.assigned', 'handed', 'skip-write'], 0])
+    assert.deepEqual([mailbox.sent.length, mailbox.sent[0].text.includes(types.general.nameAr), mailbox.sent[0].text.includes('مهمة في ملخص مختلط')], [1, true, false])
+    assert.deepEqual([(await deliveriesOf('request', req.id, 'EMAIL'))[0].status, (await deliveriesOf('task', task.id, 'EMAIL'))[0].status], ['SENT', 'SKIPPED'])
+    // كل أحداث الرسالة مقفولة: ولا تسليم، والكل «اتخطّى»
+    Repository.prototype.update = update
+    expectStatus(await rule('task.assigned', { email: true }), 200)
+    const again = await submit(users.requester, types.general)
+    await drain()
+    expectStatus(await rule('request.pending_approval', { email: false }), 200)
+    clear()
+    assert.deepEqual([await notifications.sendDigests(), mailbox.attempts.length, (await deliveriesOf('request', again.id, 'EMAIL'))[0].status], [0, 0, 'SKIPPED'])
+  } finally {
+    Repository.prototype.update = update; mail.send = send; channels.emailClosedAmong = closedAmong; channels.ruleOf = ruleOf
+    for (const code of ['request.pending_approval', 'task.assigned']) expectStatus(await rule(code, { email: true }), 200)
+    for (const category of ['approval', 'task']) expectStatus(await request(users.manager, 'PATCH', '/notifications/preferences', { category, channel: 'EMAIL', mode: 'ON' }), 200)
+  }
+})
