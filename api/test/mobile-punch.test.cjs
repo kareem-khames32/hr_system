@@ -71,4 +71,11 @@ test('MPU-04: الواجهة — «بصمتي» بتبعت الموقع ودقت
   assert.match(sidebar, /\{ label: 'بصمة الموبايل', href: '\/attendance\/punch-sites', perm: 'attendance\.view_all' \}/)
   assert.match(sidebar, /\{ id: 'my-punch', label: 'بصمتي', icon: <Clock size=\{20\} \/>, href: '\/my\/punch' \}/)
   assert.match(titles, /\['\/attendance\/punch-sites', 'بصمة الموبايل'\]/); assert.match(titles, /\['\/my\/punch', 'بصمتي'\]/)
+  // رؤوس الحماية بتسمح بالموقع لصفحات النظام نفسه — من غيرها كل متصفح بيرفض «بصمتي» من غير ما يسأل (عيب أول تجربة للمالك، 12 أكتوبر 2026)
+  const next = fs.readFileSync(path.join(apiRoot, '..', 'next.config.js'), 'utf8')
+  assert.match(next, /\{ key: 'Permissions-Policy', value: 'camera=\(\), microphone=\(\), geolocation=\(self\)' \}/)
+  assert.doesNotMatch(next, /geolocation=\(\)'/, 'الموقع مش ممنوع على صفحات النظام')
+  assert.match(next, /source: '\/:path\*', headers: SECURITY_HEADERS/, 'على كل الصفحات: السياسة بتتاخد من أول صفحة اتحمّلت')
+  // والصفحة بتقول سبب فشل قراءة الموقع بالظبط
+  for (const part of ['error.code === error.PERMISSION_DENIED', 'error.code === error.TIMEOUT', '!window.isSecureContext']) assert.ok(mine.includes(part), part)
 })
