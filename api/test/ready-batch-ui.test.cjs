@@ -16,11 +16,17 @@ test('B1.2: «تغيير كلمة المرور» في كارت المستخدم 
   assert.ok(read('src/lib/api.ts').includes('domainAccount?: boolean'))
 })
 
-test('B1.2: اللينك المكسور في صفحة الوظيفة بيودّي لصفحة المتقدمين، ومفيش أزرار من غير فعل', () => {
-  const job = read('src/app/recruitment/[id]/page.tsx')
-  assert.ok(!job.includes('/recruitment/applicants/${'), 'مفيش صفحة متقدم لوحده')
-  assert.ok(job.includes('href="/recruitment/applicants"'))
-  assert.doesNotMatch(job, /<Edit2|<Trash2/)
+test('B1.2 ثم طلب المالك 11 أكتوبر: مفيش شاشات عرض ببيانات ثابتة — الأربعة القديمة بقوا تحويل لشاشتهم الحقيقية ومش في القايمة', () => {
+  const targets = { 'recruitment/add': '/recruitment/jobs', 'recruitment/[id]': '/recruitment/jobs', 'performance/new': '/performance', 'reports/custom': '/reports' }
+  for (const [route, target] of Object.entries(targets)) {
+    const page = read(`src/app/${route}/page.tsx`)
+    assert.ok(page.includes(`router.replace('${target}')`), route)
+    assert.ok(page.split('\n').length < 20, `${route}: تحويل بس، من غير نموذج ولا بيانات ثابتة`)
+    assert.doesNotMatch(page, /MainLayout|useState|<button|<input/, route)
+    assert.ok(fs.existsSync(path.join(root, `src/app${target}/page.tsx`)), `${target} شاشة موجودة`)
+  }
+  const sidebar = read('src/components/layout/Sidebar.tsx')
+  for (const href of ['/recruitment/add', '/performance/new', '/reports/custom']) assert.ok(!sidebar.includes(`href: '${href}'`), `${href} مش في القايمة`)
   assert.ok(fs.existsSync(path.join(root, 'src/app/recruitment/applicants/page.tsx')))
 })
 

@@ -254,7 +254,6 @@ const adminMenuDefs: MenuItem[] = [
       { label: 'المقابلات', href: '/recruitment/interviews' },
       { label: 'عروض العمل', href: '/recruitment/offers' },
       { label: 'أرقام التوظيف', href: '/recruitment/metrics' },
-      { label: 'إضافة وظيفة', href: '/recruitment/add' },
     ],
   },
   {
@@ -264,7 +263,6 @@ const adminMenuDefs: MenuItem[] = [
     perm: 'employees.view',
     children: [
       { label: 'التقييمات', href: '/performance' },
-      { label: 'تقييم جديد', href: '/performance/new' },
       { label: 'الأهداف', href: '/performance/goals' },
       // B3.7: الدورات والنماذج لإدارة الأداء
       { label: 'دورات التقييم', href: '/performance/cycles', perm: 'performance.manage' },
@@ -295,7 +293,6 @@ const adminMenuDefs: MenuItem[] = [
     perm: 'reports.view',
     children: [
       { label: 'لوحة التقارير', href: '/reports' },
-      { label: 'تقارير مخصصة', href: '/reports/custom' },
       // B5.9: بانِي التقارير (بيظهر لما ميزة «بانِي التقارير» مفتوحة)
       { label: 'بانِي التقارير', href: '/reports/builder' },
       { label: 'تقرير مراكز التكلفة', href: '/reports/cost-centers', perm: 'payroll.view' },
