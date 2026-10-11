@@ -25,6 +25,7 @@ import { LeaveYearEndModule } from './requests/leave-year-end.module'
 import { DashboardController } from './dashboard/dashboard.controller'
 import { DashboardCardsController } from './dashboard/dashboard-cards.controller'
 import { DashboardCardsService } from './dashboard/dashboard-cards.service'
+import { DashboardModulesService } from './dashboard/dashboard-modules.service'
 import { ReportsController } from './reports/reports.controller'
 import { MetricsService } from './reports/metrics.service'
 import { ReportPdfRenderer } from './reports/report-pdf.renderer'
@@ -185,6 +186,6 @@ import { dbPacketSize } from './common/sql-packet-size'
     AnnouncementsModule,
   ],
   controllers: [HealthController, DashboardController, DashboardCardsController, ReportsController, CostCenterReportController, TeamController],
-  providers: [CostCenterReportService, MetricsService, ReportPdfRenderer, TeamService, DashboardCardsService],
+  providers: [CostCenterReportService, MetricsService, ReportPdfRenderer, TeamService, DashboardCardsService, DashboardModulesService],
 })
 export class AppModule {}

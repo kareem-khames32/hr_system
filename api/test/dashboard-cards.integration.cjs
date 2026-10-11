@@ -515,3 +515,79 @@ test('DC-10 (P7A-B07): a request whose definition is confidential is confidentia
     assert.equal((await card(U.hr, filtered)).pending, before.pending)
   } finally { await repo('Request').delete({ id: row.id }); await repo('RequestType').delete({ code: 'DC_SECRET_DEF' }) }
 })
+
+// ===== B-ADD.7: اللوحة الإحصائية =====
+test('DC-11 (B-ADD.7): hires against exits month by month — counts only, inside the scope and the dashboard filter, with the workforce card permission', async () => {
+  const month = today.slice(0, 7)
+  const all = await card(U.admin, '/workforce/monthly'), jeddah = await card(U.hr, '/workforce/monthly')
+  assert.deepEqual([all.months.length, jeddah.months.length, all.to, all.months[5].month], [6, 6, month, month])
+  assert.deepEqual(Object.keys(all.months[0]).sort(), ['joiners', 'leavers', 'month'], 'أعداد بس')
+  // فرع جدة: j11 اتعيّن النهارده، و«gone» آخر يوم له النهارده — وباقي الشهور صفر (كلهم متعيّنين 2024)
+  const now = jeddah.months[5], workforce = await card(U.hr, '/workforce')
+  assert.deepEqual([now.joiners, now.leavers, workforce.leavers], [1, 1, 1], 'نفس «خرجوا» بتاع كارت القوى العاملة')
+  assert.deepEqual(jeddah.months.slice(0, 5).map(row => [row.joiners, row.leavers]), Array(5).fill([0, 0]))
+  // حساب الشركة: نفس أرقام جدة لما يفلتر عليها، وصفر على الرياض؛ وقسم من غير تعيينات صفر
+  assert.deepEqual((await card(U.admin, `/workforce/monthly?branchId=${B.j.id}`)).months[5], now)
+  assert.deepEqual([(await card(U.admin, `/workforce/monthly?branchId=${B.r.id}`)).months[5].joiners, (await card(U.hr, `/workforce/monthly?departmentIds=${D.ops.id}`)).months[5].joiners], [0, 0])
+  // الصلاحية والنطاق: من غير عرض الموظفين 403، وفرع برّه النطاق 403، ومن غير اللوحة 403
+  for (const [user, route] of [[U.att, '/workforce/monthly'], [U.hr, `/workforce/monthly?branchId=${B.r.id}`], [U.plain, '/workforce/monthly']]) {
+    assert.equal((await call(user, `/dashboard/cards${route}`)).status, 403, `${user.email} ${route}`)
+  }
+})
+
+test('DC-12 (B-ADD.7): the modules strip — a tile only with its module and its screen permission, counts inside the reader\'s branches, and nothing but counts', async () => {
+  const account = (key, permissions, branch) => repo('User').save({ email: `${key}@dashboard-cards.invalid`, displayName: `حساب ${key}`, passwordHash: 'test-only', role: 'employee',
+    permissions: JSON.stringify(permissions), isActive: true, branchId: branch ? branch.id : null }).then(saved => { U[key] = saved })
+  await account('strip', ['dashboard.view_all', 'candidates.manage', 'custody.assign', 'offboarding.manage', 'employees.view', 'payroll.view'], B.j)
+  // توظيف: مرشح في جدة، ومرشح في الرياض، ومرشح من غير فرع، ومرشح اتعيّن (برّه العدّ)؛ ووظيفة منشورة في كل فرع ووظيفة مقفولة
+  const candidate = (name, branch, stage) => repo('Candidate').save({ fullName: name, positionTitle: 'محاسب', branchId: branch ? branch.id : null, stage })
+  const saved = [await candidate('مرشح جدة', B.j, 'applied'), await candidate('مرشح الرياض', B.r, 'screening'), await candidate('مرشح من غير فرع', null, 'interview'), await candidate('اتعيّن', B.j, 'hired')]
+  const job = (branch, status) => repo('RecruitmentJob').save({ title: 'وظيفة لوحة', branchId: branch.id, openings: 1, status, internal: false, external: true, createdByUserId: U.admin.id, createdAt: new Date(), updatedAt: new Date() })
+  const jobs = [await job(B.j, 'PUBLISHED'), await job(B.j, 'PAUSED'), await job(B.j, 'CLOSED'), await job(B.r, 'PUBLISHED')]
+  // سلف: واحدة قايمة في جدة، وواحدة متسددة، وواحدة قايمة في الرياض
+  const loan = (who, status) => repo('Loan').save({ employeeId: E[who].id, amount: 1000, status })
+  const loans = [await loan('j1', 'DISBURSED'), await loan('j2', 'SETTLED'), await loan('r1', 'APPROVED')]
+  // عهد: واحدة مع موظف جدة، وواحدة مستنية تأكيده، وواحدة مترجّعة، وواحدة مع موظف الرياض
+  const asset = await repo('Asset').save({ name: 'لابتوب لوحة', category: 'أجهزة', status: 'ASSIGNED', branchId: B.j.id })
+  const custody = (who, status) => repo('CustodyAssignment').save({ assetId: asset.id, employeeId: E[who].id, status })
+  const held = [await custody('j1', 'ACTIVE'), await custody('j2', 'PENDING_ACK'), await custody('j3', 'RETURNED'), await custody('r1', 'ACTIVE')]
+  // تهيئة: مهمتين مفتوحتين لموظف جدة واحد، ومهمة خلصت لتاني، ومهمة مفتوحة لموظف الرياض؛ وإنهاء خدمة: ملف في الإخلاء في جدة وملف مقفول
+  const task = (who, status) => repo('OnboardingTask').save({ employeeId: E[who].id, label: 'تسليم لابتوب', party: 'it', dueDate: today, status })
+  const tasks = [await task('j11', 'PENDING'), await task('j11', 'PENDING'), await task('j10', 'DONE'), await task('r2', 'PENDING')]
+  const exit = (who, status) => repo('OffboardingCase').save({ employeeId: E[who].id, lastWorkingDay: addDays(today, 10), status })
+  const exits = [await exit('j12', 'IN_CLEARANCE'), await exit('j9', 'CLOSED'), await exit('r3', 'IN_SETTLEMENT')]
+  try {
+    const tilesOf = async (user, query = '') => Object.fromEntries((await card(user, `/modules${query}`)).modules.map(tile => [tile.key, Object.fromEntries(tile.stats.map(stat => [stat.label, stat.value]))]))
+    // حساب فرع جدة: كل رقم جوه فرعه — والمرشح اللي من غير فرع ظاهر له زي قايمة المرشحين
+    const mine = await tilesOf(U.strip)
+    assert.deepEqual(mine.recruitment, { 'وظايف مفتوحة': 2, 'مرشحين في المسار': 2 })
+    assert.deepEqual(mine.loans, { 'سلف قايمة': 1 })
+    assert.deepEqual(mine.custody, { 'مع الموظفين': 1, 'مستنية إجراء': 1 })
+    assert.deepEqual(mine.onboarding, { 'موظفين تهيئتهم لسه مفتوحة': 1 })
+    assert.deepEqual(mine.offboarding, { 'في الإخلاء': 1, 'في التسوية': 0 })
+    // بنود من غير صلاحيتها (أو موديولها مقفول افتراضيًا) مش راجعة أصلًا
+    for (const key of ['performance', 'training', 'announcements', 'surveys', 'helpdesk', 'cases', 'documents']) assert.equal(mine[key], undefined, key)
+    // حساب الشركة: الفرعين، وبفلتر الرياض الرياض بس
+    const company = await tilesOf(U.admin), riyadh = await tilesOf(U.admin, `?branchId=${B.r.id}`)
+    assert.deepEqual([company.recruitment, company.loans, company.custody, company.offboarding],
+      [{ 'وظايف مفتوحة': 3, 'مرشحين في المسار': 3 }, { 'سلف قايمة': 2 }, { 'مع الموظفين': 2, 'مستنية إجراء': 1 }, { 'في الإخلاء': 1, 'في التسوية': 1 }])
+    assert.deepEqual([riyadh.recruitment, riyadh.loans, riyadh.custody, riyadh.onboarding, riyadh.offboarding],
+      [{ 'وظايف مفتوحة': 1, 'مرشحين في المسار': 2 }, { 'سلف قايمة': 1 }, { 'مع الموظفين': 1, 'مستنية إجراء': 0 }, { 'موظفين تهيئتهم لسه مفتوحة': 1 }, { 'في الإخلاء': 0, 'في التسوية': 1 }])
+    // أعداد بس: ولا اسم ولا مبلغ في الرد
+    const text = JSON.stringify(await card(U.admin, '/modules'))
+    assert.deepEqual([text.includes('مرشح جدة'), text.includes('1000'), text.includes(E.j1.fullName)], [false, false, false])
+    // حساب بصلاحية اللوحة بس: ولا بند؛ فرع برّه النطاق 403؛ ومن غير اللوحة 403
+    assert.deepEqual((await card(U.bare, '/modules')).modules, [])
+    assert.equal((await call(U.strip, `/dashboard/cards/modules?branchId=${B.r.id}`)).status, 403)
+    assert.equal((await call(U.plain, '/dashboard/cards/modules')).status, 403)
+    // موديول مقفول = بنده مش راجع
+    await modules.setModule({ sub: U.admin.id, email: U.admin.email, role: 'super_admin', branchId: null, employeeId: null, permissions: ['*'], tokenVersion: 0 }, 'custody', { enabled: false })
+    assert.equal((await tilesOf(U.admin)).custody, undefined)
+  } finally {
+    await modules.setModule({ sub: U.admin.id, email: U.admin.email, role: 'super_admin', branchId: null, employeeId: null, permissions: ['*'], tokenVersion: 0 }, 'custody', { enabled: true })
+    for (const [name, rows] of [['OffboardingCase', exits], ['OnboardingTask', tasks], ['CustodyAssignment', held], ['Loan', loans], ['RecruitmentJob', jobs], ['Candidate', saved]]) {
+      await repo(name).delete(rows.map(row => row.id))
+    }
+    await repo('Asset').delete({ id: asset.id })
+  }
+})

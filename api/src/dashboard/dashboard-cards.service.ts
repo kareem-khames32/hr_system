@@ -47,6 +47,8 @@ const LIST_LIMIT = 500
 const EXPIRY_WINDOW_DAYS = 30
 // نافذة الاتجاهات
 const TREND_DAYS = 30
+// B-ADD.7: شهور سلسلة «تعيينات مقابل خروج»
+const WORKFORCE_MONTHS = 6
 
 const round2 = (value: unknown): number => Math.round(Number(value ?? 0) * 100) / 100
 const num = (value: unknown): number | null => (value === null || value === undefined ? null : Number(value))
@@ -579,23 +581,59 @@ export class DashboardCardsService {
     }
   }
 
-  /** اللي آخر يوم لهم جوه الفترة — تعريف «دوران العمالة» في قاموس المؤشرات (serviceSpans) بالحرف، من غير متوسط العدد */
-  private async leavers(ctx: CardContext, from: string, to: string): Promise<number> {
-    const params: unknown[] = [from, to]
+  /**
+   * فترات الخدمة جوه نطاق الحساب وفلتر اللوحة (serviceSpans — تعريف قاموس المؤشرات بالحرف): خدمة الموظف الحالية، ومعاها فتراته
+   * المقفولة لما جدولها موجود. params لازم يبدأ بـ[from, to]: شروط النطاق والفلتر بتتضاف بعدهم.
+   */
+  private async spansCte(ctx: CardContext, params: unknown[]): Promise<string> {
     const within = (alias: string) => `${andBranchScopeSql(`${alias}.branchId`, ctx.scope, params)} ${this.orgSql(alias, ctx.filter, params)}`
     const closed = !(await employmentPeriodsReady(this.ds.manager)) ? '' : `
            UNION ALL
            SELECT p.startDate AS startDate, p.endDate AS endDate
            FROM employment_periods p JOIN employees pe ON pe.id = p.employeeId WHERE 1=1 ${within('pe')}`
-    const [row] = await this.ds.query(
-      `WITH spans AS (
+    return `WITH spans AS (
            SELECT ${serviceStartSql('e')} AS startDate, ${serviceEndSql('e')} AS endDate
            FROM employees e WHERE 1=1 ${within('e')}${closed}
-       )
+       )`
+  }
+
+  /** اللي آخر يوم لهم جوه الفترة — تعريف «دوران العمالة» في قاموس المؤشرات (serviceSpans) بالحرف، من غير متوسط العدد */
+  private async leavers(ctx: CardContext, from: string, to: string): Promise<number> {
+    const params: unknown[] = [from, to]
+    const [row] = await this.ds.query(
+      `${await this.spansCte(ctx, params)}
        SELECT SUM(CASE WHEN endDate >= @0 AND endDate <= @1 THEN 1 ELSE 0 END) AS leavers FROM spans`,
       params
     )
     return Number(row?.leavers ?? 0)
+  }
+
+  /**
+   * B-ADD.7: «تعيينات مقابل خروج» لآخر WORKFORCE_MONTHS شهر ميلادي (الشهر الحالي لحد النهارده) — أعداد بس، من نفس فترات الخدمة:
+   * التعيين = فترة خدمة بدأت في الشهر، والخروج = فترة آخر يوم لها في الشهر (نفس تعريف «خرجوا» في الكارت). جوه النطاق وفلتر اللوحة.
+   */
+  async workforceMonthly(ctx: CardContext) {
+    const months: string[] = []
+    const [year, month] = ctx.today.split('-').map(Number)
+    for (let back = WORKFORCE_MONTHS - 1; back >= 0; back--) {
+      const at = new Date(Date.UTC(year, month - 1 - back, 1))
+      months.push(`${at.getUTCFullYear()}-${String(at.getUTCMonth() + 1).padStart(2, '0')}`)
+    }
+    const params: unknown[] = [`${months[0]}-01`, ctx.today]
+    const rows: Array<{ m: string; joined: number; gone: number }> = await this.ds.query(
+      `${await this.spansCte(ctx, params)}
+       SELECT x.m AS m, SUM(x.joined) AS joined, SUM(x.gone) AS gone FROM (
+         SELECT CONVERT(varchar(7), startDate, 23) AS m, 1 AS joined, 0 AS gone FROM spans WHERE startDate >= @0 AND startDate <= @1
+         UNION ALL
+         SELECT CONVERT(varchar(7), endDate, 23) AS m, 0 AS joined, 1 AS gone FROM spans WHERE endDate >= @0 AND endDate <= @1
+       ) x GROUP BY x.m`,
+      params
+    )
+    const byMonth = new Map(rows.map(row => [String(row.m), row]))
+    return {
+      from: months[0], to: months[months.length - 1],
+      months: months.map(key => ({ month: key, joiners: Number(byMonth.get(key)?.joined ?? 0), leavers: Number(byMonth.get(key)?.gone ?? 0) })),
+    }
   }
 
   /** مستندات هتنتهي في 30 يوم أو انتهت — نفس شرط تقرير انتهاء المستندات (GET documents/expiry) بالحرف، جوه فلتر اللوحة */

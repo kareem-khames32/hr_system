@@ -3,6 +3,7 @@ import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { RequireModule } from '../modules-registry/module.guard'
 import { DashboardCardsService } from './dashboard-cards.service'
+import { DashboardModulesService } from './dashboard-modules.service'
 import type { DashboardCardKey } from './dashboard-cards'
 
 interface CardQuery {
@@ -22,7 +23,7 @@ interface CardQuery {
 @Perm('dashboard.view_all')
 @Controller('dashboard/cards')
 export class DashboardCardsController {
-  constructor(private readonly cards: DashboardCardsService) {}
+  constructor(private readonly cards: DashboardCardsService, private readonly strip: DashboardModulesService) {}
 
   private async open(key: DashboardCardKey, user: JwtPayload, request: { originalUrl?: string; url?: string }, query: CardQuery) {
     await this.cards.requireCard(key, user, request.originalUrl ?? request.url ?? '')
@@ -33,6 +34,12 @@ export class DashboardCardsController {
   @Get()
   access(@CurrentUser() user: JwtPayload) {
     return this.cards.access(user)
+  }
+
+  // B-ADD.7: شريط الموديولات — أعداد بس، وكل بند بموديوله وصلاحية شاشته ونطاقها (الفحص في الخدمة لكل بند)
+  @Get('modules')
+  modules(@CurrentUser() user: JwtPayload, @Query() query: CardQuery) {
+    return this.strip.strip(user, { branchId: query.branchId })
   }
 
   @Get('attendance')
@@ -63,6 +70,12 @@ export class DashboardCardsController {
   @Get('workforce')
   async workforce(@CurrentUser() user: JwtPayload, @Req() request: any, @Query() query: CardQuery) {
     return this.cards.workforceCard(await this.open('workforce', user, request, query), query.group)
+  }
+
+  // B-ADD.7: تعيينات مقابل خروج بالشهور — أعداد بس، بنفس صلاحية كارت القوى العاملة
+  @Get('workforce/monthly')
+  async workforceMonthly(@CurrentUser() user: JwtPayload, @Req() request: any, @Query() query: CardQuery) {
+    return this.cards.workforceMonthly(await this.open('workforce', user, request, query))
   }
 
   @Get('requests')

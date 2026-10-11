@@ -215,3 +215,18 @@ export const RUN_STATUS_LABELS: Record<string, { label: string; tone: DashboardT
   PAID: { label: 'مصروف', tone: 'green' },
   CANCELLED: { label: 'ملغي', tone: 'gray' },
 }
+
+// ===== B-ADD.7: اللوحة الإحصائية =====
+/** تعيينات مقابل خروج لآخر شهور (أعداد بس) — بنفس صلاحية كارت القوى العاملة */
+export interface WorkforceMonthly { from: string; to: string; months: Array<{ month: string; joiners: number; leavers: number }> }
+export const fetchWorkforceMonthly = (filter: { org: OrgFilterParams }) => apiFetch<WorkforceMonthly>(withFilter('/workforce/monthly', filter))
+
+/** شريط الموديولات: رقم أو اتنين من كل موديول مفعّل للحساب ومعاه صلاحية شاشته — الخادم بيرجّع المسموح بس */
+export interface ModuleTile {
+  key: string
+  title: string
+  href: string
+  stats: Array<{ label: string; value: number; tone: DashboardTone; suffix?: string }>
+}
+export interface ModulesStrip { modules: ModuleTile[] }
+export const fetchModulesStrip = (filter: { org: OrgFilterParams }) => apiFetch<ModulesStrip>(withFilter('/modules', filter))

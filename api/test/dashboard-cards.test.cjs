@@ -119,10 +119,11 @@ test('DB-04: the server guards every card, adds money and phone only by permissi
   has(controller, /@RequireModule\('platform'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)\n@Perm\('dashboard\.view_all'\)\n@Controller\('dashboard\/cards'\)/)
   // كل مسار كارت بيعدّي على فحص كارته (صلاحية وموديول) قبل أي حساب؛ المسار الوحيد من غيره هو قايمة الكروت المتاحة
   const handlers = controller.split(/\n  @Get\(/).slice(1)
-  assert.equal(handlers.length, 11)
+  // B-ADD.7: + السلسلة الشهرية (بفحص كارت القوى العاملة) + شريط الموديولات (كل بند بيفحص موديوله وصلاحيته في خدمته)
+  assert.equal(handlers.length, 13)
   const guarded = handlers.filter(text => /this\.open\('(attendance|absentLate|leaves|workforce|requests|tasks|overtime|payroll|trends)', user, request, query\)/.test(text))
-  assert.equal(guarded.length, 10)
-  has(handlers.find(text => !guarded.includes(text)), /^\)\n  access\(/)
+  assert.equal(guarded.length, 11)
+  assert.deepEqual(handlers.filter(text => !guarded.includes(text)).map(text => text.match(/^[^\n]*\n  (?:async )?(\w+)\(/)?.[1]), ['access', 'modules'])
   has(controller, /await this\.cards\.requireCard\(key, user, request\.originalUrl \?\? request\.url \?\? ''\)/)
   has(service, /if \(!allowed\.module\) throw new NotFoundException\(`Cannot GET \$\{url\}`\)\n    if \(!allowed\.perm\) throw new ForbiddenException/)
   // الفلوس: حقل بيتضاف بالصلاحية والموديول، والتليفون بصلاحية عرض الموظفين، والمستندات بصلاحيتها
@@ -150,7 +151,7 @@ test('DB-04: the server guards every card, adds money and phone only by permissi
   hasNot(service + controller, /wa\.me|tel:|MailService|sendWhatsapp|notifications/i)
   // الكنترولر والخدمة متسجّلين، ولوحة الأرقام القديمة زي ما هي
   const app = read('api/src/app.module.ts')
-  assert.ok(app.includes('DashboardCardsController,') && app.includes('DashboardCardsService]'))
+  assert.ok(app.includes('DashboardCardsController,') && app.includes('DashboardCardsService, DashboardModulesService]'))
 })
 
 test('DB-05: the admin dashboard screen — no clearance items, one unified filter with a date, per-card links, contact links and mobile rules', () => {
@@ -332,4 +333,88 @@ test('DB-07: each of the nine cards renders its numbers from the server answer �
     alerts: [{ tone: 'red', text: 'موظفين صافيهم صفر أو بالسالب في مسير مستني اعتماد', count: 1 }] })
   assert.ok(payroll.includes('href="/payroll?run=7"') && payroll.includes('محسوب — مستني اعتماد') && payroll.includes('125,000.00'))
   assert.ok(payroll.includes('data-payroll-accrued') && payroll.includes('39,660.00') && payroll.includes('المستحق لحد امبارح') && payroll.includes('data-payroll-alerts'))
+})
+
+// ===== B-ADD.7: اللوحة الإحصائية =====
+test('DB-08: the statistical dashboard — charts without a library, every number with its label, details behind a click, and the same mobile rules', () => {
+  const React = require('../../node_modules/react')
+  const { renderToStaticMarkup } = require('../../node_modules/react-dom/server')
+  const charts = require('../../src/components/dashboard/charts')
+  const render = (component, props) => renderToStaticMarkup(React.createElement(component, props))
+  // الدايرة: كل شريحة باسمها ورقمها ونسبتها، والإجمالي في النص، والصفر مش زرار
+  const donut = render(charts.Donut, { centerLabel: 'موظف', centerValue: '10', onPick: () => {}, segments: [
+    { key: 'present', label: 'حاضر', value: 7, tone: 'green' }, { key: 'late', label: 'متأخر', value: 2, tone: 'yellow' }, { key: 'absent', label: 'غايب', value: 1, tone: 'red' },
+    { key: 'leave', label: 'إجازة', value: 0, tone: 'blue' }] })
+  assert.ok(donut.includes('role="img"') && donut.includes('aria-label="موظف: حاضر 7، متأخر 2، غايب 1"'))
+  assert.deepEqual([...donut.matchAll(/w-9 text-end">(\d+)%/g)].map(match => Number(match[1])), [70, 20, 10, 0])
+  assert.equal(donut.split('<button type="button"').length - 1, 3, 'الشريحة الصفر مش زرار')
+  assert.equal(donut.split('<circle').length - 1, 4, 'حلقة الخلفية وتلات شرايح')
+  // خط الاتجاه: خط لكل سلسلة، واليوم من غير قيمة فجوة (M جديدة)، والمتقطّع متقطّع
+  const line = render(charts.LineChart, { label: 'اتجاه', labels: ['2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04'], series: [
+    { key: 'a', label: 'حضور', tone: 'green', values: [90, null, 80, 100] }, { key: 'l', label: 'تأخير', tone: 'yellow', dashed: true, values: [5, 6, 7, 8] }] })
+  const paths = [...line.matchAll(/<path d="([^"]+)"[^>]*>/g)]
+  assert.equal(paths.length, 2)
+  assert.equal(paths[0][1].split('M').length - 1, 2, 'فجوة = جزئين')
+  assert.equal(paths[1][1].split('M').length - 1, 1)
+  assert.ok(paths[1][0].includes('stroke-dasharray="6 4"') && !paths[0][0].includes('stroke-dasharray'))
+  assert.ok(line.includes('aria-label="اتجاه"') && line.includes('>100%<') && line.includes('>0%<') && line.includes('dir="ltr"'))
+  // الأعمدة الأفقية: الطول بنسبة القيمة لأكبر قيمة (أو للحد المبعوت)، والصف زرار لما بيفتح تفاصيل بس
+  const bars = render(charts.HBars, { empty: 'فاضي', rows: [{ key: 'a', label: 'المبيعات', value: 50, tone: 'blue', onClick: () => {} }, { key: 'b', label: 'المالية', value: 25, tone: 'red', hint: 'متأخر 2' }] })
+  assert.deepEqual([...bars.matchAll(/style="width:(\d+)%"/g)].map(match => Number(match[1])), [100, 50])
+  assert.ok(bars.split('<button type="button"').length - 1 === 1 && bars.includes('متأخر 2') && bars.includes('bg-danger-500'))
+  assert.ok(render(charts.HBars, { empty: 'مفيش بيانات', rows: [] }).includes('مفيش بيانات'))
+  assert.deepEqual([...render(charts.HBars, { empty: '', max: 100, rows: [{ key: 'a', label: 'أ', value: 40, tone: 'green' }] }).matchAll(/style="width:(\d+)%"/g)].map(match => Number(match[1])), [40])
+  // الأعمدة المزدوجة والشريط المقسّم والمؤشر
+  const pairs = render(charts.PairedColumns, { label: 'تعيينات مقابل خروج', first: { label: 'تعيين', tone: 'green' }, second: { label: 'خروج', tone: 'red' },
+    groups: [{ key: '2026-09', label: 'سبتمبر', first: 4, second: 2 }, { key: '2026-10', label: 'أكتوبر', first: 0, second: 1 }] })
+  assert.ok(pairs.includes('aria-label="تعيينات مقابل خروج: سبتمبر تعيين 4 خروج 2، أكتوبر تعيين 0 خروج 1"') && pairs.includes('height:100%') && pairs.includes('height:50%') && pairs.includes('height:0%'))
+  const stacked = render(charts.StackedBar, { label: 'عمر الطلبات', segments: [{ key: 'new', label: 'أقل من 3 أيام', value: 3, tone: 'green' }, { key: 'old', label: 'أكتر من أسبوع', value: 1, tone: 'red' }] })
+  assert.ok(stacked.includes('width:75%') && stacked.includes('width:25%') && stacked.includes('أكتر من أسبوع'))
+  const kpi = render(charts.Kpi, { label: 'غياب', value: '5', hint: '2 لسه مابصمش', tone: 'red', icon: null, onClick: () => {} })
+  assert.ok(kpi.startsWith('<button type="button"') && kpi.includes('data-kpi') && kpi.includes('>5<') && kpi.includes('2 لسه مابصمش'))
+  assert.ok(render(charts.Kpi, { label: 'الموظفين', value: '10', tone: 'blue', icon: null }).startsWith('<div class="block w-full'))
+
+  const stats = read('src/components/dashboard/StatsDashboard.tsx'), chartsSource = read('src/components/dashboard/charts.tsx'), admin = read('src/components/dashboard/AdminDashboard.tsx')
+  const lib = read('src/lib/dashboard-api.ts')
+  // من غير مكتبة رسم، ومن غير بنود إخلاء، ومن غير شرط صلاحية في الواجهة: القسم بيترسم لو الخادم بعت كارته
+  hasNot([stats, chartsSource].join('\n'), /recharts|chart\.js|from 'd3|clearance|can\('/)
+  has(stats, /const allowed = new Set\(access\.cards\.map\(\(card\) => card\.key\)\)/)
+  has(stats, /const gate = <T,>\(on: boolean, load: \(\) => Promise<T>\) => \(\): Promise<T \| null> => \(on \? load\(\) : Promise\.resolve\(null\)\)/)
+  for (const key of ['attendance', 'trends', 'leaves', 'workforce', 'requests', 'tasks', 'overtime', 'payroll']) has(stats, new RegExp(`useCard\\(gate\\(has\\('${key}'\\)`), key)
+  // الجداول والأسماء ورا الضغطة: المؤشر والرسمة بيفتحوا الكارت التفصيلي، والجداول كلها مقفولة لحد ما تتطلب
+  assert.ok(stats.split('onDetail(').length - 1 >= 14)
+  has(admin, /<StatsDashboard filter=\{filter\} filterKey=\{filterKey\} access=\{access\} onDetail=\{setDetail\} \/>/)
+  has(admin, /const \[showTables, setShowTables\] = useState\(false\)/)
+  has(admin, /\{showTables && \(\n              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">\n                \{CARD_COMPONENTS\.filter/)
+  has(admin, /const DetailCard = detail && hrefOf\.has\(detail\) \? CARD_COMPONENTS\.find\(\(\[key\]\) => key === detail\)\?\.\[1\] : undefined/)
+  // المبلغ: من حقول الخادم بس (كارت الرواتب مش راجع من غير صلاحيته، ومبلغ الإضافي حقل اختياري)
+  has(stats, /unit\.amounts\?\.length \? /)
+  // شريط الموديولات ونداءاته في ملف اللوحة
+  has(lib, /fetchWorkforceMonthly = [^\n]*withFilter\('\/workforce\/monthly', filter\)/); has(lib, /fetchModulesStrip = [^\n]*withFilter\('\/modules', filter\)/)
+  has(stats, /modules\.data\.modules\.map\(\(tile\) => \(/)
+  // قواعد الموبايل نفسها
+  for (const [name, source] of Object.entries({ stats, chartsSource })) {
+    hasNot(source, /(^|["'`\s])(ml|mr|pl|pr)-\d|(^|["'`\s])text-(left|right)(?=["'`\s])|(^|["'`\s])(left|right)-\d/m, `${name}: اتجاه فيزيائي`)
+    hasNot(source, /<table\b/, `${name}: الجداول في الكروت التفصيلية`)
+    for (const cls of [...source.matchAll(/className=(?:"([^"]*)"|\{`([^`]*)`\})/g)].map(m => m[1] ?? m[2])) {
+      const tokens = cls.split(/\s+/)
+      if (tokens.some(token => /^grid-cols-(\d+)$/.test(token) && Number(token.slice(10)) >= 3)) assert.ok(tokens.some(token => /^(sm|md|lg|xl):grid-cols-\d+$/.test(token)), `${name}: «${cls}»`)
+      hasNot(cls, /(^|\s)col-span-([2-9]|1[0-2])(\s|$)/, `${name}: col-span من غير بادئة`)
+    }
+  }
+  // الخادم: شريط الموديولات — كل بند بموديوله وصلاحيته، وأعداد بس (من غير اسم ولا مبلغ)، والسلسلة الشهرية بنفس فترات الخدمة
+  const strip = read('api/src/dashboard/dashboard-modules.service.ts'), service = read('api/src/dashboard/dashboard-cards.service.ts'), controller = read('api/src/dashboard/dashboard-cards.controller.ts')
+  has(strip, /const open = async \(module: ModuleKey, \.\.\.perms: string\[\]\) => perms\.some\(perm => userHasPerm\(user, perm\)\) && \(await this\.modules\.allowedFor\(module, user\)\)/)
+  for (const [module, perm] of [['recruitment', 'candidates.manage'], ['performance', 'performance.manage'], ['training', 'training.manage'], ['loans', 'payroll.view'], ['custody', 'custody.assign'],
+    ['onboarding', 'employees.view'], ['offboarding', 'offboarding.manage'], ['announcements', 'announcements.manage'], ['surveys', 'surveys.manage'], ['helpdesk', 'helpdesk.manage'], ['cases', 'cases.investigate']]) {
+    assert.ok(strip.includes(`open('${module}', '${perm}')`), module)
+  }
+  has(strip, /userHasPerm\(user, 'documents\.manage'\) && \(await documentAckSchemaReady\(em\)\)/)
+  hasNot(strip, /fullName|\[amount\]|settlementNet|phone/, 'أعداد بس')
+  has(strip, /if \(filter\.branchId !== null && !inBranchScope\(own, filter\.branchId\)\) \{\n      throw new ForbiddenException/)
+  has(strip, /const mine = \[\.\.\.\(await handledCaseIds\(em, user\)\)\]/, 'القضايا: اللي الحساب مطّلع عليها بس')
+  has(strip, /ISNULL\(d\.\[isFinancial\], 0\) = 0/, 'المستندات المالية برّه العدّ')
+  has(controller, /@Get\('modules'\)\n  modules\(@CurrentUser\(\) user: JwtPayload, @Query\(\) query: CardQuery\) \{\n    return this\.strip\.strip\(user, \{ branchId: query\.branchId \}\)/)
+  has(controller, /@Get\('workforce\/monthly'\)\n[^\n]*\n    return this\.cards\.workforceMonthly\(await this\.open\('workforce', user, request, query\)\)/)
+  has(service, /private async leavers\(ctx: CardContext, from: string, to: string\): Promise<number> \{\n    const params: unknown\[\] = \[from, to\]\n    const \[row\] = await this\.ds\.query\(\n      `\$\{await this\.spansCte\(ctx, params\)\}/)
 })

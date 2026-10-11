@@ -1,15 +1,19 @@
 'use client'
 
+// B-ADD.7 (طلب المالك 11 أكتوبر 2026): اللوحة بقت إحصائية — مؤشرات ورسوم فوق (StatsDashboard)، والكروت التفصيلية (الجداول والأسماء) ورا الضغطة:
+// أي مؤشر أو رسمة بتفتح كارتها في نافذة، و«عرض الجداول التفصيلية» بيفتحهم كلهم تحت. الصلاحيات والنطاق والفلتر زي B-ADD.3 بالحرف.
 // B-ADD.3: لوحة الإدارة — فلتر واحد للوحة كلها (الفلتر الموحد: فرع، إدارة، قسم، فريق + اليوم، والنهارده افتراضي)، وتحته الكروت.
 // الكروت اللي بتترسم هي اللي الخادم قال إن الحساب يشوفها (كل كارت بصلاحيته وموديوله)، وكل كارت بيتحمّل لوحده. الأرقام كلها من
 // الخادم جوه نطاق فروع الحساب: مدير HR فرع جدة يشوف جدة بس. لوحة الموظف العادي («لوحتي») مكوّن تاني (EmployeeHome).
 import { useEffect, useMemo, useState } from 'react'
-import { CalendarDays } from 'lucide-react'
+import { CalendarDays, ChevronDown, Table2 } from 'lucide-react'
 import { useOrgFilter } from '@/components/OrgFilter'
 import { fetchDashboardAccess, type DashboardAccess, type DashboardCardKey, type DashboardFilter } from '@/lib/dashboard-api'
 import { AbsentLateCard, AttendanceTodayCard, TrendsCard } from './cards/AttendanceCards'
 import { LeavesCard, WorkforceCard } from './cards/PeopleCards'
 import { OvertimeCard, PayrollCard, RequestsCard, TasksCard } from './cards/WorkCards'
+import { ListModal } from './cards/shared'
+import StatsDashboard from './StatsDashboard'
 
 interface CardProps { filter: DashboardFilter; filterKey: string; href: string; access: DashboardAccess }
 
@@ -32,6 +36,9 @@ export default function AdminDashboard() {
   const [error, setError] = useState('')
   // اليوم المختار: يوم الشركة من الخادم (مش ساعة المتصفح) أول ما الكروت المتاحة تتعرف
   const [date, setDate] = useState('')
+  // الكارت التفصيلي المفتوح في نافذة (بالضغط على مؤشر أو رسمة)، والجداول التفصيلية كلها (مقفولة لحد ما تتطلب)
+  const [detail, setDetail] = useState<DashboardCardKey | null>(null)
+  const [showTables, setShowTables] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -53,6 +60,8 @@ export default function AdminDashboard() {
     )
   }
   const hrefOf = new Map(access.cards.map((card) => [card.key, card.href]))
+  const titleOf = new Map(access.cards.map((card) => [card.key, card.title]))
+  const DetailCard = detail && hrefOf.has(detail) ? CARD_COMPONENTS.find(([key]) => key === detail)?.[1] : undefined
 
   return (
     <div className="space-y-6" data-admin-dashboard>
@@ -88,11 +97,32 @@ export default function AdminDashboard() {
           حسابك معاه «لوحة التحكم الإدارية» من غير صلاحية أي شاشة من شاشات كروتها (الحضور، الإجازات، الموظفين، الطلبات، المهام، الرواتب) — اطلب الصلاحية من مدير النظام.
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {CARD_COMPONENTS.filter(([key]) => hrefOf.has(key)).map(([key, Card]) => (
-            <Card key={key} filter={filter} filterKey={filterKey} href={hrefOf.get(key)!} access={access} />
-          ))}
-        </div>
+        <>
+          <StatsDashboard filter={filter} filterKey={filterKey} access={access} onDetail={setDetail} />
+
+          {/* الجداول التفصيلية: نفس كروت B-ADD.3 (أعداد لكل قسم وفريق، وقوايم الأسماء) — مقفولة لحد ما تتطلب */}
+          <section data-detail-tables>
+            <button type="button" onClick={() => setShowTables((open) => !open)} aria-expanded={showTables}
+              className="inline-flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-primary-600 px-1 py-2">
+              <Table2 size={16} />
+              {showTables ? 'إخفاء الجداول التفصيلية' : 'عرض الجداول التفصيلية'}
+              <ChevronDown size={14} className={showTables ? 'rotate-180 transition-transform' : 'transition-transform'} />
+            </button>
+            {showTables && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {CARD_COMPONENTS.filter(([key]) => hrefOf.has(key)).map(([key, Card]) => (
+                  <Card key={key} filter={filter} filterKey={filterKey} href={hrefOf.get(key)!} access={access} />
+                ))}
+              </div>
+            )}
+          </section>
+
+          {detail && DetailCard && (
+            <ListModal title={titleOf.get(detail) ?? 'التفاصيل'} subtitle="الأعداد لكل قسم وفريق، والضغط على رقم بيفتح الأسماء" onClose={() => setDetail(null)}>
+              <DetailCard filter={filter} filterKey={filterKey} href={hrefOf.get(detail)!} access={access} />
+            </ListModal>
+          )}
+        </>
       )}
     </div>
   )
