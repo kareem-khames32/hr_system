@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common'
 import type { EntityManager } from 'typeorm'
+import { orgAudienceJson } from '../org/org-audience'
 
 // B-ADD.15: الاجتماعات — القواعد من غير قاعدة: حالة الاجتماع من أوقاته، وقيم الإنشاء والتعديل، والرسايل.
 
@@ -13,6 +14,7 @@ export const MEET_RING_MS = 60_000
 export const MEET_KNOCK_FRESH_MS = 20_000
 /** الدخول تاني في خلال المدة دي مش صف حضور جديد */
 export const MEET_REJOIN_MS = 2 * 60_000
+/** أكتر عدد مدعوين لاجتماع واحد — بالاسم، وبالفلاتر (B-ADD.22)، والاتنين مع بعض */
 export const MEET_MAX_INVITES = 500
 /** «اجتماعاتي»: الجاي، وآخر كام يوم */
 export const MEET_LIST_DAYS = 60
@@ -33,6 +35,13 @@ export const MEET_LOBBY = '«غرفة الانتظار» نعم أو لا'
 export const MEET_INVITES = 'قايمة المدعوين غير صحيحة (500 بالكتير)'
 export const MEET_USER = 'المشارك غير صحيح'
 export const MEET_TRACK = 'الكتم للمايك أو للكاميرا'
+// B-ADD.22: الدعوة بالاستهداف الموحد «على مين؟»
+export const MEET_AUDIENCE_LABEL = 'جمهور الاجتماع'
+export const MEET_AUDIENCE_PERM = 'الدعوة بالفلاتر للي معاه صلاحية شاشة من شاشات تحديد الجمهور — ادعي بالاسم'
+export const MEET_AUDIENCE_NOBODY = 'مفيش موظفين في الجمهور ده جوه نطاقك'
+export const MEET_AUDIENCE_NO_ACCOUNTS = 'ولا موظف في الجمهور ده له حساب نشط يتدعى'
+export const MEET_AUDIENCE_ON_CREATE = 'الدعوة بالفلاتر وقت إنشاء الاجتماع بس — في التعديل ضيف أو شيل بالاسم'
+export const meetTooManyInvites = (count: number) => `الاجتماع لـ${MEET_MAX_INVITES} مدعو بالكتير — الاختيار ده ${count}. صغّر الجمهور`
 
 export type MeetStatus = 'scheduled' | 'live' | 'ended' | 'cancelled'
 
@@ -77,6 +86,15 @@ export function cleanMeetInvites(raw: unknown): number[] | undefined {
   if (raw === undefined || raw === null) return undefined
   if (!Array.isArray(raw) || raw.length > MEET_MAX_INVITES || !raw.every((id) => Number.isSafeInteger(id) && id > 0)) throw new BadRequestException(MEET_INVITES)
   return [...new Set(raw as number[])]
+}
+
+/**
+ * B-ADD.22: جمهور الدعوة من منتقي الاستهداف الموحد — undefined لو الخانة مااتبعتتش (الدعوة بالاسم بس)، وإلا نص الجمهور «مين + فين»
+ * (null جواه = الشركة كلها: الكائن الفاضي أو { mode: 'all' }). أي شكل تاني (نص، قايمة، أدوار، شروط) مرفوض.
+ */
+export function cleanMeetAudience(raw: unknown): { text: string | null } | undefined {
+  if (raw === undefined || raw === null) return undefined
+  return { text: orgAudienceJson(raw, MEET_AUDIENCE_LABEL) }
 }
 
 export function cleanMeetUserId(raw: unknown): number {

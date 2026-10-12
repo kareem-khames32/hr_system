@@ -1,5 +1,6 @@
 // B-ADD.15: الاجتماعات — نداءات الخادم وأنواعها. الملف ده من غير livekit-client (مكتبة الغرفة بتتحمّل لما اجتماع يتفتح بس).
 import { ApiError, apiFetch } from './api'
+import type { StoredAudience } from './org-audience'
 
 export const MEET_BASE = '/meet'
 export const meetPath = (id: string) => `${MEET_BASE}/${id}`
@@ -31,7 +32,18 @@ export interface MeetKnock { meetingId: string; title: string; user: MeetPerson;
 export interface MeetDecline { meetingId: string; title: string; user: MeetPerson; at: string }
 /** صندوق الاجتماعات: الواجهة بتسأله كل كام ثانية (النظام من غير اتصال لحظي) */
 export interface MeetInbox { ready: boolean; configured: boolean; invites: MeetRing[]; knocks: MeetKnock[]; declines: MeetDecline[] }
-export interface MeetingBody { title?: string; startsAt?: string | null; lobby?: boolean; inviteUserIds?: number[] }
+export interface MeetingBody { title?: string; startsAt?: string | null; lobby?: boolean; inviteUserIds?: number[]; audience?: StoredAudience }
+/** B-ADD.22: رد الإنشاء — ومع الدعوة بالفلاتر: كام اتدعى، وكام موظف في الجمهور، وكام منهم من غير حساب نشط (مااتدعاش) */
+export interface MeetingCreated { id: string; invited?: number; audience?: { employees: number; withoutAccount: number } }
+/** صلاحيات شاشات تحديد الجمهور (ORG_AUDIENCE_PERMS في الخادم): اللي معاه واحدة بيدعو بالفلاتر — والخادم هو اللي بيحكم */
+export const MEET_AUDIENCE_PERMS = ['announcements.manage', 'policies.manage', 'helpdesk.manage', 'surveys.manage', 'settings.modules', 'settings.manage',
+  'performance.manage', 'training.manage', 'tasks.manage', 'tasks.assign_any', 'employees.view', 'attendance.manage']
+/** كلمة ما بعد الإنشاء بالفلاتر: «اتدعى N — وM موظف من غير حساب مااتدعوش» */
+export function meetInvitedText(created: MeetingCreated): string {
+  if (created.invited === undefined) return ''
+  const skipped = created.audience?.withoutAccount ?? 0
+  return `اتدعى ${created.invited}${skipped > 0 ? ` — و${skipped} موظف من غير حساب على النظام مااتدعوش` : ''}`
+}
 
 export const MEET_NOT_CONFIGURED_TEXT = 'الاجتماعات لسه ماتظبطتش'
 export const MEET_NOT_READY_TEXT = 'الاجتماعات محتاجة ترحيل 20261012_191 على قاعدة البيانات'
@@ -49,7 +61,7 @@ export const fetchMeetInbox = () => apiFetch<MeetInbox>(`${MEET_BASE}/inbox`)
 export const fetchMeetDirectory = () => apiFetch<{ users: MeetPerson[] }>(`${MEET_BASE}/directory`)
 export const fetchMeetings = () => apiFetch<{ ready: boolean; configured: boolean; meetings: MeetingSummary[] }>(R)
 export const fetchMeeting = (id: string) => apiFetch<MeetingDetail>(`${R}/${id}`)
-export const createMeeting = (body: MeetingBody) => post<{ id: string }>(R, body)
+export const createMeeting = (body: MeetingBody) => post<MeetingCreated>(R, body)
 export const updateMeeting = (id: string, body: MeetingBody) => apiFetch<{ ok: true }>(`${R}/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
 export const cancelMeeting = (id: string) => apiFetch<{ ok: true }>(`${R}/${id}`, { method: 'DELETE' })
 export const endMeeting = (id: string) => post<{ ok: true }>(`${R}/${id}/end`)

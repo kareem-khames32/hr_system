@@ -11,6 +11,8 @@ class MeetingDto {
   @IsOptional() startsAt?: unknown
   @IsOptional() lobby?: unknown
   @IsOptional() inviteUserIds?: unknown
+  // B-ADD.22: «على مين؟» بالاستهداف الموحد (وقت الإنشاء بس)
+  @IsOptional() audience?: unknown
 }
 class ParticipantDto {
   @IsOptional() userId?: unknown
