@@ -224,6 +224,14 @@ const EXCEPTIONS = {
   'RequestsController.myDecisions': 'SELF', // GET /requests/my-decisions
   'TypedDeductionsController.mine': 'SELF', // GET /deductions/mine
   'TypedDeductionsController.object': 'SELF', // POST /deductions/:id/objection
+  // B-ADD.15: الاجتماعات — صندوق الحساب نفسه (دعوات بترن، طلبات دخول لاجتماعاته)، واجتماعاته، وإنشاء اجتماعه، واعتذاره، وطلب دخوله
+  'MeetController.cancelKnock': 'SELF', // DELETE /meet/rooms/:id/knock
+  'MeetController.create': 'SELF', // POST /meet/rooms
+  'MeetController.decline': 'SELF', // POST /meet/rooms/:id/decline
+  'MeetController.inbox': 'SELF', // GET /meet/inbox
+  'MeetController.knock': 'SELF', // POST /meet/rooms/:id/knock
+  'MeetController.knockState': 'SELF', // GET /meet/rooms/:id/knock
+  'MeetController.list': 'SELF', // GET /meet/rooms
   // ===== AUTH_ANY_OK (11) — أي حساب داخل: كتالوجات ومراجع للنماذج من غير بيانات حساسة =====
   'AssetsController.availableAssets': 'AUTH_ANY_OK', // GET /assets/available
   'AttendanceController.payrollMonth': 'AUTH_ANY_OK', // GET /attendance/payroll-month
@@ -236,6 +244,7 @@ const EXCEPTIONS = {
   'OrgController.teams': 'AUTH_ANY_OK', // GET /teams
   'RequestsController.activeLeaveTypes': 'AUTH_ANY_OK', // GET /requests/leave-types · GET /leaves/types
   'RequestsController.catalog': 'AUTH_ANY_OK', // GET /requests/types
+  'MeetController.directory': 'AUTH_ANY_OK', // GET /meet/directory — B-ADD.15: دليل الدعوة (الحسابات النشطة: الاسم والمسمى الوظيفي بس)
   // ===== SERVICE_CHECK (75) — الفحص جوه الخدمة: صلاحية أو دور أو موقع في الهيكل (مدير مباشر، معتمد الخطوة، صاحب الطلب) مايتعبّرش عنه بمفتاح واحد على المسار =====
   'AssetsController.pendingMyConfirm': 'SERVICE_CHECK', // GET /custody/pending-my-confirm
   'AttendanceController.monthly': 'SERVICE_CHECK', // GET /attendance/monthly
@@ -321,6 +330,16 @@ const EXCEPTIONS = {
   'TypedDeductionsController.reject': 'SERVICE_CHECK', // POST /deductions/:id/reject
   'TypedDeductionsController.respondObjection': 'SERVICE_CHECK', // POST /deductions/:id/objection-response
   'TypedDeductionsController.withdraw': 'SERVICE_CHECK', // POST /deductions/:id/withdraw
+  // B-ADD.15: الاجتماعات — الحق بالاجتماع نفسه (صاحبه، أو مدعو له، أو من غير غرفة انتظار)، والفحص في الخدمة
+  'MeetController.admit': 'SERVICE_CHECK', // POST /meet/rooms/:id/admit — صاحب الاجتماع
+  'MeetController.cancel': 'SERVICE_CHECK', // DELETE /meet/rooms/:id — صاحب الاجتماع
+  'MeetController.deny': 'SERVICE_CHECK', // POST /meet/rooms/:id/deny — صاحب الاجتماع
+  'MeetController.detail': 'SERVICE_CHECK', // GET /meet/rooms/:id — التفاصيل على قد دور الحساب في الاجتماع
+  'MeetController.end': 'SERVICE_CHECK', // POST /meet/rooms/:id/end — صاحب الاجتماع
+  'MeetController.mute': 'SERVICE_CHECK', // POST /meet/rooms/:id/mute — صاحب الاجتماع
+  'MeetController.remove': 'SERVICE_CHECK', // POST /meet/rooms/:id/remove — صاحب الاجتماع
+  'MeetController.token': 'SERVICE_CHECK', // POST /meet/rooms/:id/token — صاحبه والمدعوين، أو أي حساب لو من غير غرفة انتظار
+  'MeetController.update': 'SERVICE_CHECK', // PATCH /meet/rooms/:id — صاحب الاجتماع
 }
 
 module.exports = { EXCEPTIONS, REASONS }

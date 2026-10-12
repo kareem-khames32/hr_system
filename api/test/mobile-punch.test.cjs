@@ -92,7 +92,8 @@ test('MPU-04: الواجهة — «بصمتي» بتبعت الموقع ودقت
   assert.match(titles, /\['\/attendance\/punch-sites', 'بصمة الموبايل'\]/); assert.match(titles, /\['\/my\/punch', 'بصمتي'\]/)
   // رؤوس الحماية بتسمح بالموقع لصفحات النظام نفسه — من غيرها كل متصفح بيرفض «بصمتي» من غير ما يسأل (عيب أول تجربة للمالك، 12 أكتوبر 2026)
   const next = fs.readFileSync(path.join(apiRoot, '..', 'next.config.js'), 'utf8')
-  assert.match(next, /\{ key: 'Permissions-Policy', value: 'camera=\(\), microphone=\(\), geolocation=\(self\)' \}/)
+  // B-ADD.15: + الكاميرا والمايك ومشاركة الشاشة لصفحات النظام نفسه (الاجتماعات)
+  assert.match(next, /\{ key: 'Permissions-Policy', value: 'camera=\(self\), microphone=\(self\), geolocation=\(self\), display-capture=\(self\)' \}/)
   assert.doesNotMatch(next, /geolocation=\(\)'/, 'الموقع مش ممنوع على صفحات النظام')
   assert.match(next, /source: '\/:path\*', headers: SECURITY_HEADERS/, 'على كل الصفحات: السياسة بتتاخد من أول صفحة اتحمّلت')
   // والصفحة بتقول سبب فشل قراءة الموقع بالظبط

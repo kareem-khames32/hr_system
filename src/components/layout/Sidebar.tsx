@@ -54,6 +54,7 @@ import {
   ListChecks,
   Megaphone,
   ScrollText,
+  Video,
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -590,6 +591,8 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
       { id: 'cases', label: 'الشكاوى والتحقيقات', icon: <Scale size={20} />, href: '/cases' },
       // B3.13: استبيانات الموظف المدعو لها، وإدارتها لصاحب الصلاحية (بتظهر لما موديول الاستبيانات مفتوح)
       { id: 'surveys', label: 'الاستبيانات', icon: <ClipboardList size={20} />, href: '/surveys' },
+      // B-ADD.15: اجتماعات الصوت والصورة (بتظهر لما موديول الاجتماعات مفتوح)
+      { id: 'meet', label: 'الاجتماعات', icon: <Video size={20} />, href: '/meet' },
       { id: 'notifications', label: 'الإشعارات', icon: <Bell size={20} />, href: '/notifications' },
       { id: 'calendar', label: 'التقويم', icon: <Calendar size={20} />, href: '/calendar' },
     ]

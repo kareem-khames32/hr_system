@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 // B1.3: رؤوس حماية المتصفح لصفحات الواجهة (نفس روح رؤوس الـAPI): مايتفتحش جوه iframe، ومايخمّنش نوع الملف،
-// والرابط مابيتبعتش كامل لمواقع تانية، ومن غير كاميرا ولا مايك، والموقع لصفحات النظام نفسه بس. مفيش CSP كامل عشان سكريبتات Next الداخلية.
+// والرابط مابيتبعتش كامل لمواقع تانية، والكاميرا والمايك والموقع ومشاركة الشاشة لصفحات النظام نفسه بس. مفيش CSP كامل عشان سكريبتات Next الداخلية.
 const SECURITY_HEADERS = [
   { key: 'X-Frame-Options', value: 'DENY' },
   { key: 'Content-Security-Policy', value: "frame-ancestors 'none'" },
@@ -8,7 +8,9 @@ const SECURITY_HEADERS = [
   { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
   // الموقع مسموح لصفحات النظام نفسه بس (self): «بصمتي» (B5.6) محتاجاه، والسياسة بتتاخد من أول صفحة اتحمّلت فلازم تبقى على كل الصفحات —
   // كانت geolocation=() فكل متصفح كان بيرفض بصمة الموبايل من غير ما يسأل (ظهرت في أول تجربة للمالك، 12 أكتوبر 2026). جوه iframe أو لموقع تاني لسه ممنوع.
-  { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(self)' },
+  // B-ADD.15: الكاميرا والمايك ومشاركة الشاشة لصفحات النظام نفسه بس (self) — «الاجتماعات» محتاجاهم؛ كانوا camera=() وmicrophone=() فالمتصفح كان هيرفضهم
+  // من غير ما يسأل. والـCSP هنا frame-ancestors بس (مفيش connect-src)، فاتصال المتصفح بخادم الاجتماعات (wss) مش ممنوع ومفيش عنوان مكتوب هنا.
+  { key: 'Permissions-Policy', value: 'camera=(self), microphone=(self), geolocation=(self), display-capture=(self)' },
 ]
 
 const nextConfig = {

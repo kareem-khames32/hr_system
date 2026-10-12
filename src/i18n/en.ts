@@ -37,6 +37,8 @@ const SHELL: Record<string, string> = {
   'الإعدادات العامة': 'General settings',
   'الإعلانات': 'Announcements',
   'الاستبيانات': 'Surveys',
+  'الاجتماعات': 'Meetings',
+  'اجتماع': 'Meeting',
   'الاعتمادات والموافقات': 'Approvals',
   'البدلات': 'Allowances',
   'البنوك': 'Banks',
