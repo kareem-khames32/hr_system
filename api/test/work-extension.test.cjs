@@ -1,0 +1,53 @@
+// B-ADD.8 — «رقم التحويلة / رقم العمل»: قواعد القيمة، ومصدر الكود (العمود برّه الكيان، الحفظ جوه معاملة الملف تحت قفل الهويات)، والترحيل والواجهة.
+// حساب نقي بلا قاعدة بيانات.
+const { test } = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
+const apiRoot = path.resolve(__dirname, '..')
+require('../node_modules/ts-node').register({ project: path.join(apiRoot, 'tsconfig.json'), transpileOnly: true })
+require('../node_modules/reflect-metadata')
+const rules = require('../src/employees/employee-work-extension')
+const read = rel => fs.readFileSync(path.join(apiRoot, 'src', rel), 'utf8').replace(/\r\n/g, '\n')
+const web = rel => fs.readFileSync(path.join(apiRoot, '..', 'src', rel), 'utf8').replace(/\r\n/g, '\n')
+
+test('WXU-01: القيمة — أرقام بس لحد 10 خانات، العربي والفارسي بيتحوّلوا، الصفر في الأول محفوظ، والفاضي مسح', () => {
+  const ok = value => rules.normalizeWorkExtension(value)
+  assert.deepEqual([ok(undefined), ok(null), ok(''), ok('   '), ok('1001'), ok(' 0105 '), ok('٢٠٧'), ok('۳۰۸'), ok(42), ok('1234567890')],
+    [undefined, null, null, null, '1001', '0105', '207', '308', '42', '1234567890'])
+  for (const bad of ['12a', 'abc', '12-3', '+123', '1 2', '1.5', '12345678901', {}, [], true]) assert.throws(() => ok(bad), /رقم التحويلة/, String(bad))
+  assert.equal(rules.WORK_EXTENSION_MAX, 10)
+})
+
+test('WXU-02: مصدر الكود — العمود برّه الكيان بفهرس فريد على غير الفاضي، والحفظ جوه المعاملة بعد قفل الهويات، والتغيير في السجل', () => {
+  const entity = read('employees/employee.entity.ts')
+  assert.match(entity, /@Index\('UX_employees_workExtension', \['workExtension'\], \{ unique: true, where: '\[workExtension\] IS NOT NULL' \}\)\nexport class Employee/)
+  assert.match(entity, /@Column\(\{ type: 'nvarchar', length: 10, nullable: true, select: false, insert: false, update: false \}\)\n  workExtension: string \| null/)
+  const service = read('employees/employees.service.ts')
+  const update = service.slice(service.indexOf('  async update(id: number'))
+  assert.match(update, /\[dto\.fingerprintCode, dto\.email, dto\.nationalId, dto\.passportNo, workExtension\]\.some\(value => value !== undefined\)/, 'قفل الهويات لما التحويلة تتغير')
+  assert.ok(update.indexOf('await this.lockEmployeeIdentities(em)') < update.indexOf('await saveWorkExtension(em, id, workExtension'))
+  assert.match(update, /fieldName: 'workExtension', oldValue: extension\.before, newValue: workExtension/)
+  const create = service.slice(service.indexOf('  async create(dto: CreateEmployeeDto'), service.indexOf('  async update(id: number'))
+  assert.ok(create.indexOf('await this.lockEmployeeIdentities(em)') < create.indexOf('await saveWorkExtension(em, result.id, workExtension'))
+  assert.match(create, /delete \(dto as \{ workExtension\?: unknown \}\)\.workExtension/)
+  const helper = read('employees/employee-work-extension.ts')
+  assert.match(helper, /if \(number === 207\) throw new BadRequestException\('خانة «رقم التحويلة» محتاجة ترحيل 188 على السيرفر الأول'\)/)
+  assert.match(helper, /if \(number === 2601 \|\| number === 2627\) throw taken\(\)/)
+  const dto = read('employees/employees.dto.ts')
+  assert.equal((dto.match(/  workExtension\?: string \| null/g) ?? []).length, 2)
+})
+
+test('WXU-03: الترحيل 188 إضافي وآمن للتكرار، والواجهة — خانة أرقام في فورم الموظف وبند في ملفه', () => {
+  const migration = fs.readFileSync(path.join(apiRoot, '..', 'docs', 'migrations', 'payroll', '20261012_188_employee_work_extension.sql'), 'utf8')
+  assert.match(migration, /IF COL_LENGTH\(N'dbo\.employees', N'workExtension'\) IS NULL\s+ALTER TABLE dbo\.employees ADD \[workExtension\] nvarchar\(10\) NULL;/)
+  assert.match(migration, /CREATE UNIQUE INDEX \[UX_employees_workExtension\] ON dbo\.employees \(\[workExtension\]\) WHERE \[workExtension\] IS NOT NULL;/)
+  const statements = migration.split('\n').filter(line => !line.trim().startsWith('--')).join('\n')
+  assert.doesNotMatch(statements, /\b(DROP|DELETE|TRUNCATE|UPDATE)\b/i)
+  const form = web('components/EmployeeForm.tsx'), profile = web('app/employees/[id]/page.tsx'), edit = web('app/employees/[id]/edit/page.tsx')
+  assert.match(form, /<label className="label" htmlFor="workExtension">رقم التحويلة \/ رقم العمل<\/label>/)
+  assert.match(form, /inputMode="numeric"[^>]*maxLength=\{10\} value=\{form\.workExtension\}/)
+  assert.match(form, /else if \(mode === 'edit' && \(initial\?\.workExtension \?\? ''\) !== ''\) payload\.workExtension = null/)
+  assert.match(edit, /workExtension: emp\.workExtension \?\? '',/)
+  assert.match(profile, /data-work-extension>\s*<p className="text-sm text-gray-500">رقم التحويلة \/ رقم العمل<\/p>/)
+})

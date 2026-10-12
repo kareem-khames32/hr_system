@@ -145,6 +145,7 @@ interface EmployeeVM {
   noticePeriodDays: string
   employmentType: string
   fingerprintCode: string
+  workExtension: string
   actualStartDate: string
   probationEndDate: string
   recruitmentSource: string
@@ -629,6 +630,7 @@ export default function EmployeeProfilePage() {
           noticePeriodDays: val(e.noticePeriodDays),
           employmentType: labelOf(WORK_TYPE_AR, e.workType),
           fingerprintCode: val(e.fingerprintCode),
+          workExtension: val(e.workExtension),
           actualStartDate: e.actualStartDate ? fmtDate(e.actualStartDate) : '—',
           probationEndDate: e.probationEndDate ? fmtDate(e.probationEndDate) : '—',
           recruitmentSource: labelOf(RECRUITMENT_SOURCE_AR, e.recruitmentSource),
@@ -1369,8 +1371,12 @@ export default function EmployeeProfilePage() {
                 </div>
               </div>
 
-              {/* تفاصيل التعيين — بداية العمل الفعلي وفترة التجربة ومصدر التوظيف */}
-              <div className="grid grid-cols-3 gap-6">
+              {/* تفاصيل التعيين — بداية العمل الفعلي وفترة التجربة ومصدر التوظيف، ورقم التحويلة (B-ADD.8) */}
+              <div className="grid grid-cols-4 gap-6">
+                <div className="p-4 bg-gray-50 rounded-xl" data-work-extension>
+                  <p className="text-sm text-gray-500">رقم التحويلة / رقم العمل</p>
+                  <p className="font-bold text-gray-800 text-lg mt-1 font-mono" dir="ltr">{employee.workExtension}</p>
+                </div>
                 <div className="p-4 bg-gray-50 rounded-xl">
                   <p className="text-sm text-gray-500">بداية العمل الفعلي</p>
                   <p className="font-bold text-gray-800 text-lg mt-1">{employee.actualStartDate}</p>

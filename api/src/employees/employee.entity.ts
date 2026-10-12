@@ -10,6 +10,7 @@ import type { EmployeeStatus } from '../common/domain-status'
 export type { EmployeeStatus } from '../common/domain-status'
 
 @Entity('employees')
+@Index('UX_employees_workExtension', ['workExtension'], { unique: true, where: '[workExtension] IS NOT NULL' })
 export class Employee {
   @PrimaryGeneratedColumn()
   id: number
@@ -256,6 +257,11 @@ export class Employee {
   // برّه الكيان في القراءة والإنشاء والحفظ: بيتقرا ويتكتب بـSQL صريح بس (employee-gosi-registration.ts)، فالكود قبل الترحيل شغال
   @Column({ type: 'date', nullable: true, select: false, insert: false, update: false })
   gosiFirstRegisteredAt: string | null
+
+  // B-ADD.8 (ترحيل 188): «رقم التحويلة / رقم العمل» — أرقام بس ومابيتكررش، وهو اللي الاتصال الداخلي هيتعمل عليه بعدين.
+  // برّه الكيان في القراءة والإنشاء والحفظ زي اللي فوقه: SQL صريح بس (employee-work-extension.ts)، فالكود قبل الترحيل شغال
+  @Column({ type: 'nvarchar', length: 10, nullable: true, select: false, insert: false, update: false })
+  workExtension: string | null
 
   @Column({ default: true })
   isActive: boolean

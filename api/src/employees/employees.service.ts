@@ -34,6 +34,7 @@ import { Team } from '../org/entities/team.entity'
 import { EmployeeStatusHistory } from '../requests/entities/employment.entities'
 import { recordEmployeeChange } from './employee-change-log'
 import { normalizeGosiFirstRegistered, readGosiFirstRegistered, saveGosiFirstRegistered } from './employee-gosi-registration'
+import { normalizeWorkExtension, readWorkExtensions, saveWorkExtension } from './employee-work-extension'
 import { generateEmployeeCode } from './employee-code'
 import { employeePayMethodIssue } from '../payroll/pay-split'
 import { assertArchiveReason, identityKeySql, nextOpeningBalance } from './employee-input-rules'
@@ -248,6 +249,8 @@ export class EmployeesService {
     const history = await readEmployeeSuspensions(this.employees.manager, employee.id, undefined, { includeCancelled: true })
     // B1.5: «تاريخ أول تسجيل في التأمينات» برّه الكيان (ترحيل 080) — قبل الترحيل = فاضي
     employee.gosiFirstRegisteredAt = (await readGosiFirstRegistered(this.employees.manager, [employee.id])).get(employee.id) ?? null
+    // B-ADD.8: «رقم التحويلة» برّه الكيان (ترحيل 188) — قبل الترحيل = فاضي
+    employee.workExtension = (await readWorkExtensions(this.employees.manager, [employee.id])).get(employee.id) ?? null
     return this.withSuspension(this.withAttendanceRule(employee, resolved), history.filter(row => row.status !== 'CANCELLED'), history)
   }
 
@@ -472,6 +475,9 @@ export class EmployeesService {
     // B1.5: تاريخ أول تسجيل في التأمينات بيتكتب بـSQL صريح بعد الحفظ (العمود برّه الكيان)
     const gosiFirstRegisteredAt = normalizeGosiFirstRegistered(dto.gosiFirstRegisteredAt, localDateOf(new Date()))
     delete (dto as { gosiFirstRegisteredAt?: unknown }).gosiFirstRegisteredAt
+    // B-ADD.8: رقم التحويلة بنفس الطريقة — أرقام بس، وتفرّده بيتفحص جوه المعاملة تحت قفل الهويات
+    const workExtension = normalizeWorkExtension(dto.workExtension)
+    delete (dto as { workExtension?: unknown }).workExtension
     // الرصيد الافتتاحي حقلا حمولة فقط (ليسا عمودَي موظف) — يُطبَّقان على الرصيد
     // openingBalance* و contractFileRef و documentRefs حقول حمولة فقط (ليست أعمدة موظف)
     const {
@@ -522,6 +528,7 @@ export class EmployeesService {
       await this.saveDocuments(result.id, documentRefs, em)
       await recordEmployeePaymentChanges(em, { employeeId: result.id, before: null, after: result, actorUserId: actorId, source: 'CREATE' })
       if (gosiFirstRegisteredAt) await saveGosiFirstRegistered(em, result.id, gosiFirstRegisteredAt)
+      if (workExtension) await saveWorkExtension(em, result.id, workExtension, holder => employeeNameInScope(holder, branchScope))
       // الخطوة 13: أجر التعيين يُوثَّق «يسري من راتب شهر» في المعاملة نفسها؛ بدونه يُستبعد الموظف الجديد من أول مسير
       // (NO_SALARY_DEFINED) حتى توثيق منفصل. فشل التوثيق (عملة غير مدعومة، شهر خارج المدى) يرجّع الإنشاء كله.
       await documentInitialEmployeeSalary(em, { employeeId: result.id, actorUserId: actorId, hireDate: result.actualStartDate || result.joinDate || null,
@@ -811,7 +818,9 @@ export class EmployeesService {
       openingBalanceExpiry?: string | null
     }
     const prevCodes = emp.fingerprintCode ?? ''
-    const { flexOverrideMode, attendanceEffectiveFrom, attendanceChangeReason, salaryChange, calendarChange, gosiFirstRegisteredAt: gosiDateSent, ...employeeFields } = empDto
+    const { flexOverrideMode, attendanceEffectiveFrom, attendanceChangeReason, salaryChange, calendarChange, gosiFirstRegisteredAt: gosiDateSent, workExtension: extensionSent, ...employeeFields } = empDto
+    // B-ADD.8: undefined = ماتتغيرش؛ بيتكتب بـSQL صريح جوه المعاملة (العمود برّه الكيان) ولو اتغير بس
+    const workExtension = normalizeWorkExtension(extensionSent)
     // B1.5: undefined = ماتتغيرش؛ بيتكتب بـSQL صريح جوه المعاملة (العمود برّه الكيان) ولو اتغير بس
     const gosiFirstRegisteredAt = normalizeGosiFirstRegistered(gosiDateSent, localDateOf(new Date()))
     const legacySalaryKeys = [...SALARY_HISTORY_MONEY_KEYS, 'currency'] as const
@@ -827,7 +836,7 @@ export class EmployeesService {
       const fresh = await em.findOneBy(Employee, { id })
       if (!fresh || !inBranchScope(branchScope, fresh.branchId)) throw new NotFoundException('الموظف غير موجود')
       // التفرد جوه المعاملة تحت القفل لو التعديل بيلمس بصمة أو بريد أو هوية أو جواز (CR17-B01)؛ «ماتغيرش» على المحفوظ دلوقتي
-      if ([dto.fingerprintCode, dto.email, dto.nationalId, dto.passportNo].some(value => value !== undefined)) {
+      if ([dto.fingerprintCode, dto.email, dto.nationalId, dto.passportNo, workExtension].some(value => value !== undefined)) {
         await this.lockEmployeeIdentities(em)
         // «واحد منهم على الأقل» وشكل الرقم المتغير على المحفوظ دلوقتي تحت القفل (مراجعة Codex الجولة 18، CR18-B01): تعديلين
         // متزامنين واحد بيمسح الهوية والتاني الجواز كانوا بيعدّوا الاتنين لأن الفحص فوق كان على الملف قبل المعاملة. القراءة بعد
@@ -916,6 +925,11 @@ export class EmployeesService {
       if (gosiFirstRegisteredAt !== undefined) {
         const gosi = await saveGosiFirstRegistered(em, id, gosiFirstRegisteredAt)
         if (gosi.changed) await recordEmployeeChange(em, { employeeId: id, fieldName: 'gosiFirstRegisteredAt', oldValue: gosi.before, newValue: gosiFirstRegisteredAt,
+          changedByUserId: actorId, reason: audit?.reason ?? 'تعديل من ملف الموظف' })
+      }
+      if (workExtension !== undefined) {
+        const extension = await saveWorkExtension(em, id, workExtension, holder => employeeNameInScope(holder, branchScope))
+        if (extension.changed) await recordEmployeeChange(em, { employeeId: id, fieldName: 'workExtension', oldValue: extension.before, newValue: workExtension,
           changedByUserId: actorId, reason: audit?.reason ?? 'تعديل من ملف الموظف' })
       }
       const result = await em.findOneByOrFail(Employee, { id })

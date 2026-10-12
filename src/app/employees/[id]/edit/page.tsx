@@ -122,6 +122,7 @@ export default function EditEmployeePage() {
           emergencyPhone: emp.emergencyContactPhone ?? '',
           employeeCode: emp.employeeCode ?? '',
           fingerprintCode: emp.fingerprintCode ?? '',
+          workExtension: emp.workExtension ?? '',
           joinDate: emp.joinDate ? String(emp.joinDate).slice(0, 10) : '',
           salaryEntitlementStart: emp.salaryEntitlementStart ? String(emp.salaryEntitlementStart).slice(0, 10) : '',
           status: emp.status ?? 'probation',

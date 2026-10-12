@@ -536,6 +536,8 @@ export interface ApiEmployee {
   gosiNumber?: string; isGosiRegistered?: boolean; gosiBaseSalary?: number
   // B1.5: تاريخ أول تسجيل في التأمينات (السعودي من 3 يوليو 2024 = المسار الجديد)
   gosiFirstRegisteredAt?: string | null
+  // B-ADD.8: رقم التحويلة / رقم العمل (أرقام بس، مابيتكررش)
+  workExtension?: string | null
   // ===== إصلاحات ذهاب/عودة — أعمدة مستقلة =====
   fingerprintCode?: string; personalEmail?: string
   phoneAllowance?: number; workNatureAllowance?: number

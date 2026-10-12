@@ -93,6 +93,7 @@ export interface EmployeeFormState {
   emergencyPhone: string
   employeeCode: string
   fingerprintCode: string
+  workExtension: string
   joinDate: string
   // بداية استحقاق الراتب — فارغ = من تاريخ التعيين (أو بدء العمل الفعلي)
   salaryEntitlementStart: string
@@ -327,6 +328,7 @@ const makeInitialState = (initial?: Partial<EmployeeFormState>): EmployeeFormSta
   emergencyPhone: '',
   employeeCode: '',
   fingerprintCode: '',
+  workExtension: '',
   joinDate: '',
   salaryEntitlementStart: '',
   status: 'probation',
@@ -928,6 +930,9 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     if (form.gosiFirstRegisteredAt) payload.gosiFirstRegisteredAt = form.gosiFirstRegisteredAt
     // ===== إصلاحات ذهاب/عودة — حقول مستقلة (بجانب سلوك الـfallback الحالي) =====
     if (form.fingerprintCode.trim()) payload.fingerprintCode = form.fingerprintCode.trim()
+    // B-ADD.8: رقم التحويلة — في التعديل الخانة اللي اتفضّت = مسح فعلي
+    if (form.workExtension.trim()) payload.workExtension = form.workExtension.trim()
+    else if (mode === 'edit' && (initial?.workExtension ?? '') !== '') payload.workExtension = null
     // التعديل: الخانة اللي اتفضّت = مسح فعلي (زي بريد العمل)، مش تجاهل — وإلا القيمة القديمة تفضل محبوسة
     if (form.personalEmail.trim()) payload.personalEmail = form.personalEmail.trim()
     else if (mode === 'edit' && (initial?.personalEmail ?? '') !== '') payload.personalEmail = null
@@ -1424,6 +1429,12 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                   <label className="label">رقم البصمة *</label>
                   <input type="text" className="input" placeholder="001" dir="ltr" maxLength={20} value={form.fingerprintCode} onChange={(e) => setField('fingerprintCode', e.target.value)} />
                   <p className="text-xs text-gray-400 mt-1">كوده على جهاز البصمة — البصمات بتتربط بيه هو بس</p>
+                </div>
+                <div>
+                  <label className="label" htmlFor="workExtension">رقم التحويلة / رقم العمل</label>
+                  <input id="workExtension" type="text" inputMode="numeric" className="input" placeholder="1001" dir="ltr" maxLength={10} value={form.workExtension}
+                    onChange={(e) => setField('workExtension', e.target.value.replace(/[^0-9٠-٩۰-۹]/g, ''))} />
+                  <p className="text-xs text-gray-400 mt-1">أرقام بس ومابيتكررش — عليه الاتصال الداخلي</p>
                 </div>
                 <div>
                   <label className="label">تاريخ التعيين *</label>

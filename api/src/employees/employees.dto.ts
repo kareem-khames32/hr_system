@@ -464,6 +464,12 @@ export class CreateEmployeeDto {
   @Matches(/^(\d{4}-\d{2}-\d{2})?$/, { message: 'تاريخ أول تسجيل في التأمينات بصيغة YYYY-MM-DD' })
   gosiFirstRegisteredAt?: string | null
 
+  // B-ADD.8: «رقم التحويلة / رقم العمل» — أرقام بس ومابيتكررش (ترحيل 188). فاضي = مفيش
+  @IsOptional()
+  @IsString()
+  @MaxLength(10, { message: 'رقم التحويلة لحد 10 خانات' })
+  workExtension?: string | null
+
   // الرصيد الافتتاحي المُرحّل (لموظف قائم انتقل للنظام) — يُطبَّق على رصيد
   // السنوي عند التعيين كطبقة opening، ليس عموداً على الموظف
   @IsOptional()
@@ -855,6 +861,12 @@ export class UpdateEmployeeDto {
   @IsString()
   @Matches(/^(\d{4}-\d{2}-\d{2})?$/, { message: 'تاريخ أول تسجيل في التأمينات بصيغة YYYY-MM-DD' })
   gosiFirstRegisteredAt?: string | null
+
+  // B-ADD.8: «رقم التحويلة / رقم العمل» — أرقام بس ومابيتكررش (ترحيل 188). فاضي = مفيش
+  @IsOptional()
+  @IsString()
+  @MaxLength(10, { message: 'رقم التحويلة لحد 10 خانات' })
+  workExtension?: string | null
 
   // الرصيد الافتتاحي المُرحّل — يُطبَّق على رصيد السنوي (تعديل لموظف قائم)
   @IsOptional()
