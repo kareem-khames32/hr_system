@@ -168,13 +168,13 @@ test('MT-01: الموديول مقفول افتراضيًا = المسارات �
   }
   expectStatus(await request(users.admin, 'PUT', '/modules/meet', { enabled: true }), 200); modules.invalidate()
   assert.equal((await request(null, 'GET', M + '/inbox')).status, 401, 'من غير دخول')
-  assert.deepEqual(expectStatus(await request(users.host, 'GET', M + '/inbox'), 200), { ready: true, configured: true, invites: [], knocks: [], declines: [] })
+  assert.deepEqual(expectStatus(await request(users.host, 'GET', M + '/inbox'), 200), { ready: true, configured: true, invites: [], knocks: [], declines: [], calls: [] })
   // من غير مفتاح الخادم (أو عنوان مش ws): مش مضبوط — من غير أي نداء على خادم
   const kept = { key: process.env.LIVEKIT_API_KEY, url: process.env.LIVEKIT_URL }
   for (const broken of [{ LIVEKIT_API_KEY: '' }, { LIVEKIT_URL: '' }, { LIVEKIT_URL: 'meet.example.invalid' }]) {
     Object.assign(process.env, broken)
     try {
-      assert.deepEqual(expectStatus(await request(users.host, 'GET', M + '/inbox'), 200), { ready: true, configured: false, invites: [], knocks: [], declines: [] })
+      assert.deepEqual(expectStatus(await request(users.host, 'GET', M + '/inbox'), 200), { ready: true, configured: false, invites: [], knocks: [], declines: [], calls: [] })
       assert.deepEqual(expectStatus(await request(users.host, 'GET', R), 200), { ready: true, configured: false, meetings: [] })
       for (const [method, route, body] of [['POST', R, { title: 'اجتماع' }], ['GET', M + '/directory'], ['GET', room(id)], ['POST', room(id, '/token')], ['POST', room(id, '/end')]]) {
         assert.deepEqual(coded(await request(users.host, method, route, body)), [503, 'MEET_NOT_CONFIGURED', rules.MEET_NOT_CONFIGURED], `${method} ${route}`)
@@ -208,7 +208,7 @@ test('MT-02: ترحيل 191 — من غير الجداول القراءات فا
   assertDisposable()
   await pool.request().batch(TABLES.map(table => `DROP TABLE dbo.${table};`).join(' '))
   rules.resetMeetCache()
-  assert.deepEqual(expectStatus(await request(users.host, 'GET', M + '/inbox'), 200), { ready: false, configured: true, invites: [], knocks: [], declines: [] })
+  assert.deepEqual(expectStatus(await request(users.host, 'GET', M + '/inbox'), 200), { ready: false, configured: true, invites: [], knocks: [], declines: [], calls: [] })
   assert.deepEqual(expectStatus(await request(users.host, 'GET', R), 200), { ready: false, configured: true, meetings: [] })
   for (const [method, route, body] of [['POST', R, { title: 'اجتماع' }], ['GET', M + '/directory'], ['GET', room(crypto.randomUUID())], ['POST', room(crypto.randomUUID(), '/token')]]) {
     assert.deepEqual(coded(await request(users.host, method, route, body)), [409, 'MEET_MIGRATION_MISSING', rules.MEET_MIGRATION_MISSING], `${method} ${route}`)

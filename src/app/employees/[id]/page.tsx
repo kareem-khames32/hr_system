@@ -78,6 +78,7 @@ import EmployeeSuspensionDialog from '@/components/EmployeeSuspensionDialog'
 import EmployeeCustomFieldsCard from '@/components/EmployeeCustomFieldsCard'
 import EmployeeWhatsappCard from '@/components/EmployeeWhatsappCard'
 import DependentsCard from '@/components/DependentsCard'
+import CallButton from '@/components/meet/CallButton'
 import EmploymentPeriodsCard from '@/components/EmploymentPeriodsCard'
 import { EmployeePayrollRunsCard } from '@/components/payroll/PayrollRunMoveMemberModal'
 import { SUSPENSION_STATE_LABELS, fetchEmployeeDataExport, suspensionHistoryNote, suspensionPeriodText, type EmployeeSuspension } from '@/lib/employee-suspensions-api'
@@ -1376,6 +1377,8 @@ export default function EmployeeProfilePage() {
                 <div className="p-4 bg-gray-50 rounded-xl" data-work-extension>
                   <p className="text-sm text-gray-500">رقم التحويلة / رقم العمل</p>
                   <p className="font-bold text-gray-800 text-lg mt-1 font-mono" dir="ltr">{employee.workExtension}</p>
+                  {/* B-ADD.23: اتصال من جوه النظام على التحويلة دي (لما موديول الاجتماعات مفتوح، ومش على ملف صاحب الحساب نفسه) */}
+                  {getCurrentUser()?.employeeId !== employee.id && <CallButton extension={employee.workExtension} />}
                 </div>
                 <div className="p-4 bg-gray-50 rounded-xl">
                   <p className="text-sm text-gray-500">بداية العمل الفعلي</p>

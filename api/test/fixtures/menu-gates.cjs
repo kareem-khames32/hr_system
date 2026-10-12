@@ -127,6 +127,7 @@ const MENU_GATES = {
   '/surveys': '',
   '/mail': '',
   '/meet': '',
+  '/meet/calls': '',
   // خدمات الموظفين
   '/helpdesk': '',
   '/assistant': '',

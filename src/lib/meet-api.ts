@@ -30,8 +30,23 @@ export interface MeetingDetail {
 export interface MeetRing { id: string; title: string; startsAt: string | null; createdAt: string; host: MeetPerson; isHost: boolean }
 export interface MeetKnock { meetingId: string; title: string; user: MeetPerson; at: string }
 export interface MeetDecline { meetingId: string; title: string; user: MeetPerson; at: string }
-/** صندوق الاجتماعات: الواجهة بتسأله كل كام ثانية (النظام من غير اتصال لحظي) */
-export interface MeetInbox { ready: boolean; configured: boolean; invites: MeetRing[]; knocks: MeetKnock[]; declines: MeetDecline[] }
+/** صندوق الاجتماعات: الواجهة بتسأله كل كام ثانية (النظام من غير اتصال لحظي) — ومعاه المكالمات اللي بترن عند الحساب (B-ADD.23) */
+export interface MeetInbox { ready: boolean; configured: boolean; invites: MeetRing[]; knocks: MeetKnock[]; declines: MeetDecline[]; calls?: CallRing[] }
+
+// B-ADD.23: الاتصال من جوه النظام — مكالمة بين اتنين على نفس خادم الاجتماعات
+export const CALLS_PATH = `${MEET_BASE}/calls`
+/** الطرف التاني في المكالمة: الاسم والمسمى ورقم تحويلته بس */
+export interface CallPerson extends MeetPerson { extension: string | null }
+export type CallState = 'ringing' | 'active' | 'answered' | 'missed' | 'rejected'
+export interface CallRing { id: string; startedAt: string; from: CallPerson }
+export interface CallEntry {
+  id: string; direction: 'in' | 'out'; state: CallState; person: CallPerson
+  startedAt: string; answeredAt: string | null; endedAt: string | null; durationSeconds: number | null
+}
+export interface CallList { ready: boolean; configured: boolean; extensions: boolean; ringSeconds: number; calls: CallEntry[] }
+export type CallTarget = { extension: string } | { userId: number }
+export const CALL_NOT_READY_TEXT = 'الاتصال محتاج ترحيل 20261012_198 على قاعدة البيانات'
+export const CALL_PRIVACY_TEXT = 'مفيش أي مكالمة بتتسجّل: لا صوت ولا صورة — النظام بيحفظ مين اتصل بمين وإمتى ومدتها بس'
 export interface MeetingBody { title?: string; startsAt?: string | null; lobby?: boolean; inviteUserIds?: number[]; audience?: StoredAudience }
 /** B-ADD.22: رد الإنشاء — ومع الدعوة بالفلاتر: كام اتدعى، وكام موظف في الجمهور، وكام منهم من غير حساب نشط (مااتدعاش) */
 export interface MeetingCreated { id: string; invited?: number; audience?: { employees: number; withoutAccount: number } }
@@ -74,6 +89,18 @@ export const answerKnock = (id: string, userId: number, admit: boolean) => post<
 export const declineMeeting = (id: string) => post<{ ok: true }>(`${R}/${id}/decline`)
 export const muteParticipant = (id: string, userId: number, track: 'audio' | 'video') => post<{ ok: true; muted: number }>(`${R}/${id}/mute`, { userId, track })
 export const removeParticipant = (id: string, userId: number) => post<{ ok: true }>(`${R}/${id}/remove`, { userId })
+
+export const fetchCalls = () => apiFetch<CallList>(CALLS_PATH)
+/** اتصال برقم تحويلة أو بحساب بالاسم: بيرن عند الطرف التاني */
+export const dialCall = (target: CallTarget) => post<{ id: string; person: CallPerson; ringSeconds: number }>(CALLS_PATH, target)
+export const fetchCall = (id: string) => apiFetch<CallEntry>(`${CALLS_PATH}/${id}`)
+export const acceptCall = (id: string) => post<{ ok: true }>(`${CALLS_PATH}/${id}/accept`)
+export const rejectCall = (id: string) => post<{ ok: true }>(`${CALLS_PATH}/${id}/reject`)
+/** قفل المكالمة (أو إلغاؤها قبل الرد): بتنتهي للطرفين */
+export const hangupCall = (id: string) => post<{ ok: true }>(`${CALLS_PATH}/${id}/hangup`)
+export const fetchCallToken = (id: string) => post<{ token: string; url: string }>(`${CALLS_PATH}/${id}/token`)
+/** «تحويلة 1001»، أو المسمى الوظيفي للي مالوش تحويلة */
+export const callPersonLine = (person: CallPerson): string => (person.extension ? `تحويلة ${person.extension}` : person.jobTitle ?? '')
 
 export function initialsOf(name: string): string {
   const words = name.trim().split(/\s+/)

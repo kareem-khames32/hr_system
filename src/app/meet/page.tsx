@@ -3,13 +3,14 @@
 // B-ADD.15: «الاجتماعات» — اجتماعاتي (الشغال دلوقتي، والجاي، واللي فات)، واجتماع فوري أو بميعاد. الاجتماع نفسه في /meet/<الكود>.
 import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Calendar, Link2, Pencil, PhoneOff, Search, Trash2, Video, VideoOff } from 'lucide-react'
+import Link from 'next/link'
+import { Calendar, Link2, Pencil, Phone, PhoneOff, Search, Trash2, Video, VideoOff } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import EmptyState from '@/components/EmptyState'
 import { formatDateTime } from '@/lib/dates'
 import { normalizeSearchText } from '@/lib/employee-search'
 import {
-  cancelMeeting, endMeeting, fetchMeetings, MEET_INSECURE_TEXT, MEET_NOT_CONFIGURED_TEXT, MEET_NOT_READY_TEXT, MEET_PRIVACY_TEXT, meetErrorText, meetInvitedText, meetPath, type MeetingSummary, type MeetStatus,
+  CALLS_PATH, cancelMeeting, endMeeting, fetchMeetings, MEET_INSECURE_TEXT, MEET_NOT_CONFIGURED_TEXT, MEET_NOT_READY_TEXT, MEET_PRIVACY_TEXT, meetErrorText, meetInvitedText, meetPath, type MeetingSummary, type MeetStatus,
 } from '@/lib/meet-api'
 import MeetDialog, { type MeetDialogMode } from '@/components/meet/MeetDialog'
 import { MeetModal } from '@/components/meet/MeetBits'
@@ -153,6 +154,10 @@ export default function MeetPage() {
             <button type="button" className="btn-secondary inline-flex items-center gap-2 disabled:opacity-50" onClick={() => setDialog({ mode: 'schedule' })} disabled={!usable}>
               <Calendar size={18} /> اجتماع بميعاد
             </button>
+            {/* B-ADD.23: مكالمة بين اتنين برقم التحويلة أو بالاسم */}
+            <Link href={CALLS_PATH} className="btn-secondary inline-flex items-center gap-2" data-meet-calls-link>
+              <Phone size={18} /> الاتصال
+            </Link>
           </div>
         </div>
 
