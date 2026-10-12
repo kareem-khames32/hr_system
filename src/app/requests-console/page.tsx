@@ -3,6 +3,9 @@ import LetterDownloadButton from '@/components/LetterDownloadButton'
 import RequestPayload from '@/components/RequestPayload'
 // بطاقة صاحب الطلب أعلى التفاصيل (السرّي المحجوب يرجع بلا بيانات فمابتظهرش)
 import RequestEmployeeCard from '@/components/requests/RequestEmployeeCard'
+// B-ADD.17: «واقف عند» — اسم اللي الخطوة الحالية مستنياه
+import RequestWaitingAt from '@/components/requests/RequestWaitingAt'
+import { waitingNamesOfRole, type ApiRequestWaitingAt } from '@/lib/request-waiting'
 import CommentsThread from '@/components/comments/CommentsThread'
 import { downloadCsv, csvDateStamp } from '@/lib/csv'
 import { canCancelSalaryIncreaseExecution, cancelSalaryIncreaseExecution } from '@/lib/employee-salary-change-api'
@@ -113,6 +116,8 @@ interface CompanyRequestRow {
   submittedAt: string
   status: RequestStatus
   currentStep: string
+  // B-ADD.17: الطلب اللي قيد المراجعة واقف عند مين (من الخادم — مش مع السري المحجوب)
+  waitingAt?: ApiRequestWaitingAt
   destinationRecord: string | null // مرجع السجل الدائم بعد التنفيذ
   // B2.6: للمعتمد اللي لسه مااكتملش — أيام من اعتماده
   approvedDays: number | null
@@ -219,6 +224,7 @@ export default function RequestsConsolePage() {
               submittedAt: (r.submittedAt ?? r.createdAt).slice(0, 10),
               status: r.status as RequestStatus,
               currentStep: stepText(r, steps),
+              waitingAt: r.waitingAt,
               destinationRecord: r.destinationRef ?? null,
               approvedDays: ['APPROVED', 'IN_EXECUTION'].includes(r.status) ? approvedDays(r.approvedAt) : null,
               executionTaskOpen: !!r.executionTask && ['OPEN', 'IN_PROGRESS', 'WAITING'].includes(r.executionTask.status),
@@ -522,7 +528,8 @@ export default function RequestsConsolePage() {
                               </p>
                             )}
                           </td>
-                          <td className="table-cell text-sm text-gray-600">{req.currentStep}{req.approvedDays !== null && <span className="block text-xs text-gray-400">معتمد من {req.approvedDays} يوم</span>}</td>
+                          <td className="table-cell text-sm text-gray-600">{req.currentStep}{req.approvedDays !== null && <span className="block text-xs text-gray-400">معتمد من {req.approvedDays} يوم</span>}
+                            {req.status === 'UNDER_REVIEW' && <RequestWaitingAt waitingAt={req.waitingAt} roleLabels={roleLabels} compact />}</td>
                           <td className="table-cell">
                             {req.destinationRecord ? (
                               <div className="flex items-start gap-1.5">
@@ -643,6 +650,8 @@ export default function RequestsConsolePage() {
                     </span>
                   </div>
 
+                  <RequestWaitingAt waitingAt={detail.waitingAt} roleLabels={roleLabels} />
+
                   <RequestEmployeeCard requester={detail.requester} submittedBy={detail.submittedBy} resignationTerms={detail.resignationTerms} />
 
                   {/* بيانات الطلب — السرّي يحجبه السيرفر لغير المقدّم والمعتمد الفعلي */}
@@ -704,6 +713,7 @@ export default function RequestsConsolePage() {
                           >
                             <span>
                               {s.stepOrder}. {roleLabels[s.role] ?? s.role}
+                              {s.stepOrder === detail.currentStep && !s.actedAt && waitingNamesOfRole(detail.waitingAt, s.role) && `: ${waitingNamesOfRole(detail.waitingAt, s.role)}`}
                             </span>
                             <span dir="ltr">
                               {s.actedAt ? s.actedAt.slice(0, 10) : s.dueAt ? `⏳ ${s.dueAt.slice(0, 10)}` : ''}

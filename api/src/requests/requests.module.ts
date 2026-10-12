@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common'
 import { LettersModule } from '../letters/letters.module'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { AttendanceModule } from '../attendance/attendance.module'
+import { AuthModule } from '../auth/auth.module'
 import { Employee } from '../employees/employee.entity'
 import { EmployeesModule } from '../employees/employees.module'
 import { Branch } from '../org/entities/branch.entity'
@@ -36,6 +37,7 @@ import { RequestsConfig } from './entities/requests-config.entity'
 import { RequestsScheduler } from './requests-scheduler.service'
 import { RequestsController } from './requests.controller'
 import { RequestsService } from './requests.service'
+import { RequestHoldersService } from './request-holders.service'
 import { OvertimeDispatchSubscriber } from './overtime-dispatch.subscriber'
 
 @Module({
@@ -44,6 +46,8 @@ import { OvertimeDispatchSubscriber } from './overtime-dispatch.subscriber'
     AttendanceModule,
     // EmployeesService.findOne — فحص نطاق الفرع لأرصدة موظف (SEC-LEV-1)
     EmployeesModule,
+    // B-ADD.17: هوية الحسابات (الصلاحيات والنطاق) لحكم «الخطوة مستنية مين» — AuthModule مابيستوردش الموديول ده فمفيش حلقة
+    AuthModule,
     TypeOrmModule.forFeature([
       // المحرك
       RequestType,
@@ -84,12 +88,14 @@ import { OvertimeDispatchSubscriber } from './overtime-dispatch.subscriber'
     OvertimeDispatchSubscriber,
     ApproverResolver,
     ApprovalDelegationsService,
+    // B-ADD.17: «الطلب واقف عند مين» — وبريد «طلب بانتظار اعتمادك» بياخد مستلميه منه
+    RequestHoldersService,
     DestinationsService,
     LeaveBalancesService,
     RequestsScheduler,
     // مهلة مرفق الإجازة «بعد الرجوع»: تذكير يومي وتحويل الأيام بدون راتب بعد المهلة
     LeaveAttachmentDeadlineJob,
   ],
-  exports: [RequestsService, LeaveBalancesService, DestinationsService, ApproverResolver, LeaveAttachmentDeadlineJob],
+  exports: [RequestsService, LeaveBalancesService, DestinationsService, ApproverResolver, LeaveAttachmentDeadlineJob, RequestHoldersService],
 })
 export class RequestsModule {}
