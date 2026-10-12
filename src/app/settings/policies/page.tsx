@@ -150,7 +150,6 @@ const GROUPS: PolicyGroup[] = [
       { key: 'attendance.flex.prorate_window_on_partial_leave', label: 'تناسب نافذة المرونة مع الإجازة الجزئية', type: 'bool' },
       { key: 'attendance.flex.unpaid_break_minutes', label: 'استراحة غير مدفوعة', type: 'number', unit: 'دقيقة', min: 0, max: 1440, integer: true },
       { key: 'attendance.flex.max_session_minutes', label: 'أقصى مدة جلسة حضور', type: 'number', unit: 'دقيقة', min: 1, max: 1440, integer: true },
-      { key: 'attendance.flex.missing_checkout_policy', label: 'عند نسيان بصمة الانصراف', type: 'select', options: [{ value: 'MANUAL_ONLY', label: 'تصحيح يدوي فقط' }] },
     ],
   },
   {
@@ -161,8 +160,6 @@ const GROUPS: PolicyGroup[] = [
     iconColor: 'text-warning-500',
     note: 'الإضافي يحتاج اكتمال دورة الاعتماد دائمًا. إعدادات الاحتساب والسقوف تُدار من «أيام العمل والدوام»، وعتبة الوردية من «الورديات».',
     fields: [
-      { key: 'overtime.default_window', label: 'نافذة الإضافي الافتراضية', type: 'select', options: [{ value: 'AFTER_SHIFT_END', label: 'بعد نهاية الوردية' }], hint: 'الكشف القائم يستمر بعد نهاية الوردية.' },
-      { key: 'overtime.outside_window_policy', label: 'العمل خارج نوافذ الإضافي', type: 'select', options: [{ value: 'CLOSED', label: 'لا يُحتسب إضافيًا' }], hint: 'الحضور المبكر قبل الوردية يحكمه إعداد الإضافي المبكر في «أيام العمل والدوام».' },
     ],
   },
   {
@@ -237,8 +234,6 @@ const GROUPS: PolicyGroup[] = [
       // B1.6: حارس الفترة (مقفول افتراضيًا)
       { key: 'payroll.period_deduction_guard.enabled', label: 'حارس الفترة: الإجازة بدون راتب ماتعديش راتب الفترة', type: 'bool', hint: 'مفعّل: خصم الإجازة بدون راتب والإيقاف والمرضية في المسير ماينفعش يعدّي راتب الفترة، فشهر 31 يوم كله بدون راتب = صافي صفر مش سالب. مقفول = زي ما كان. بيسري على المسير لما «لقطة السياسة» بتاعته تتحدث.' },
       { key: 'payroll.daily_hours', label: 'ساعات العمل اليومية', type: 'number', unit: 'ساعة', min: 1, max: 24, hint: 'أساس سعر الساعة والدقيقة.' },
-      { key: 'payroll.hourly_rate_basis', label: 'أساس سعر الساعة', type: 'select', options: [{ value: 'DAILY_HOURS', label: 'سعر اليوم ÷ ساعات العمل اليومية' }], readOnly: true },
-      { key: 'payroll.day_rate_basis', label: 'أساس سعر اليوم للغياب ونهاية الخدمة', type: 'select', options: [{ value: 'MONTHLY_FIXED_COMPONENTS_30', label: 'الأجر الشهري للمكونات الستة ÷ 30' }], readOnly: true },
       // قرار المالك (16 سبتمبر): لا اختيار تقريب — الفلوس بمنزلتين بالقص (src/lib/money.ts وapi/src/payroll/payroll-money.ts)
     ],
   },
