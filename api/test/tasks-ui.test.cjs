@@ -202,6 +202,7 @@ test('TU-05: قواعد المالك في الشاشات — الأزرار من
   // والمسمّيات من الخادم نفسه (مفيش نسخة تانية في الواجهة)، ونص المالك بالحرف
   const extras = require('../src/tasks/task-extras')
   assert.deepEqual(Object.keys(extras.TASK_LOG_EVENTS), ['ASSIGNED', 'REASSIGNED', 'DUE_CHANGED', 'EDITED', 'STARTED', 'WAITING', 'DONE', 'CANCELLED', 'REOPENED', 'RETURNED', 'EXTENSION_REQUESTED',
-    'EXTENSION_APPROVED', 'EXTENSION_REJECTED', 'RATED'])
+    // B-ADD.19: +2 (مرفقات المهمة)
+    'EXTENSION_APPROVED', 'EXTENSION_REJECTED', 'RATED', 'ATTACHED', 'ATTACHMENT_REMOVED'])
   assert.deepEqual([extras.TASK_OUTSIDE_TEAM, extras.TASK_NOT_MINE_LABEL, extras.TASK_RATING_FEATURE], ['الموظف ده مش في فريقك. اعمل طلب، ولما يتعتمد هيتحوّل مهمة', 'مش بتاعتي', 'tasks.rating'])
 })

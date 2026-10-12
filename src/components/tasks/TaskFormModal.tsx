@@ -6,12 +6,19 @@
 // في الجمهور بياخد مهمته هو. للمهمة الجديدة بس، ولصاحب «إدارة المهام» أو «تكليف أي موظف».
 // B-ADD.18 (كلمة المالك 12 أكتوبر: «أسند مهمة بس لفريقي… لا أكتر ولا أقل»): التكليف لغيري للي تحته حد في الهيكل بس — اللي مالوش حد تحته
 // النموذج عنده «مهمة شخصية» من غير اختيار مسؤول؛ والمدير «مجموعة» عنده منتقي «على مين؟» محدود باللي تحته (شجرته من الخادم).
-import { useState } from 'react'
+// B-ADD.19 (كلمة المالك 12 أكتوبر): مرفقات مع المهمة الجديدة (شيت إكسل أو أي ملف من المسموح في إعدادات الملفات) — بتترفع وقت الحفظ وبتتربط
+// بالمهمة في نفس إنشائها؛ ومع «مجموعة» نفس الملفات لكل اللي هياخدوا المهمة. بعد كده الإرفاق والشيل من كارت المهمة.
+import { useRef, useState } from 'react'
+import { Paperclip } from 'lucide-react'
+import { uploadFile } from '../../lib/api'
 import { EmployeePicker } from '../EmployeePicker'
 import { OrgAudienceField } from '../OrgAudienceField'
 import type { StoredAudience } from '../../lib/org-audience'
 import { localToday } from '../../lib/dates'
-import { createGroupTask, createTask, updateTask, TASK_GROUP_TREE_SOURCE, TASK_PRIORITY_LABELS, type ApiTask, type ApiTaskAssignees, type TaskInput, type TaskPriority } from '../../lib/tasks-api'
+import {
+  createGroupTask, createTask, updateTask, TASK_ATTACHMENT_FILE_TYPE, TASK_ATTACHMENTS_MAX, TASK_GROUP_TREE_SOURCE, TASK_PRIORITY_LABELS,
+  type ApiTask, type ApiTaskAssignees, type TaskInput, type TaskPriority,
+} from '../../lib/tasks-api'
 
 interface Props {
   assignees: ApiTaskAssignees
@@ -48,6 +55,24 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved, onGro
   const options = assignees.employees.map(row => row.self ? { ...row, fullName: `${row.fullName} — نفسي (مهمة شخصية)` } : row)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // B-ADD.19: مرفقات المهمة الجديدة. اللي اترفع فعلًا مابيترفعش تاني لو الحفظ اترفض ومحاولة تانية بنفس الملف
+  const canAttach = !task && !!assignees.attachmentsAvailable
+  const [files, setFiles] = useState<File[]>([])
+  const uploaded = useRef(new Map<File, number>())
+  const fileInput = useRef<HTMLInputElement>(null)
+  const pickFiles = (list: FileList | null) => {
+    setFiles(previous => [...previous, ...Array.from(list ?? [])].slice(0, TASK_ATTACHMENTS_MAX))
+    if (fileInput.current) fileInput.current.value = ''
+  }
+  const uploadAttachments = async (): Promise<number[]> => {
+    const ids: number[] = []
+    for (const file of files) {
+      const id = uploaded.current.get(file) ?? (await uploadFile(file, { entityType: TASK_ATTACHMENT_FILE_TYPE })).id
+      uploaded.current.set(file, id)
+      ids.push(id)
+    }
+    return ids
+  }
 
   const save = async () => {
     setError('')
@@ -58,8 +83,9 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved, onGro
       if (!audienceComplete) { setError('كمّل اختيار «على مين؟» الأول'); return }
       setBusy(true)
       try {
+        const attachmentFileIds = await uploadAttachments()
         const result = await createGroupTask({ title: title.trim(), description: description.trim() || undefined, dueDate: dueDate || undefined, priority, requiresProof,
-          ...(assignees.ratingEnabled && needsRating ? { needsRating: true } : {}), audience })
+          ...(assignees.ratingEnabled && needsRating ? { needsRating: true } : {}), audience, ...(attachmentFileIds.length ? { attachmentFileIds } : {}) })
         setGroupDone({ created: result.created, skipped: result.skipped })
       } catch (err) {
         setError(err instanceof Error ? err.message : 'تعذر حفظ المهمة الجماعية')
@@ -77,7 +103,8 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved, onGro
     }
     setBusy(true)
     try {
-      onSaved(task ? await updateTask(task.id, input) : await createTask({ ...input, description: input.description ?? undefined }))
+      const attachmentFileIds = task ? [] : await uploadAttachments()
+      onSaved(task ? await updateTask(task.id, input) : await createTask({ ...input, description: input.description ?? undefined, ...(attachmentFileIds.length ? { attachmentFileIds } : {}) }))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذر حفظ المهمة')
     } finally { setBusy(false) }
@@ -162,6 +189,26 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved, onGro
             <input type="checkbox" checked={requiresProof} onChange={event => setRequiresProof(event.target.checked)} />
             لازم إثبات عند الإقفال (نص أو ملف)
           </label>
+          {canAttach && (
+            <div data-task-form-attachments>
+              <span className="label">مرفقات (اختياري)</span>
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <input ref={fileInput} type="file" multiple className="hidden" onChange={event => pickFiles(event.target.files)} />
+                <button type="button" className="btn-secondary text-xs" disabled={busy || files.length >= TASK_ATTACHMENTS_MAX} onClick={() => fileInput.current?.click()}>
+                  <Paperclip size={14} className="inline me-1" />أرفق ملف ({files.length} / {TASK_ATTACHMENTS_MAX})
+                </button>
+                {files.map((file, index) => (
+                  <span key={`${file.name}-${index}`} className="badge bg-gray-100 text-gray-700 flex items-center gap-1">
+                    <span className="break-all">{file.name}</span>
+                    <button type="button" className="text-gray-500 underline" disabled={busy} onClick={() => setFiles(previous => previous.filter((_, at) => at !== index))} aria-label={`شيل ${file.name}`}>شيل</button>
+                  </span>
+                ))}
+              </div>
+              <p className="text-xs text-gray-500 mt-1">
+                شيت إكسل أو أي ملف من الأنواع والحجم المسموحين في إعدادات الملفات. {target === 'group' ? 'الملف بيظهر لكل اللي هياخدوا المهمة.' : 'المسؤول عن المهمة بيشوفه، ويقدر يرفع شغله على نفس المهمة.'}
+              </p>
+            </div>
+          )}
           {canFlagRating && (
             <label className="flex items-center gap-2 text-sm text-gray-700" data-task-needs-rating>
               <input type="checkbox" checked={needsRating} onChange={event => setNeedsRating(event.target.checked)} />

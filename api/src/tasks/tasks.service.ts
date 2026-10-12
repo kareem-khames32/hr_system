@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
-import { Brackets, DataSource, In, Not, type EntityManager } from 'typeorm'
+import { Brackets, DataSource, In, IsNull, Not, type EntityManager } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchIdIn, branchScopeOf, inBranchScope, isEmptyBranchScope, userHasPerm } from '../auth/guards'
 import { User } from '../auth/user.entity'
@@ -20,13 +20,18 @@ import { isCurrentEmployee } from '../reports/metrics'
 import { ApproverResolver, FUNCTIONAL_APPROVER_ROLES } from '../requests/approver-resolver.service'
 import { completeExecution, executionOwnRequest, executionRequestOfTask, executionRequestsOfTasks, executionTaskLinked, EXECUTION_TASK_CANCEL_BLOCKED, EXECUTION_TASK_CLOSE_BLOCKED, EXECUTION_TASK_EDIT_BLOCKED, EXECUTION_TASK_OWN_BLOCKED, EXECUTION_TASK_REOPEN_BLOCKED } from '../requests/execution-tasks'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
+import { TaskAttachment } from './task-attachment.entity'
+import {
+  activeTaskAttachments, bindTaskAttachments, cleanAttachmentIds, taskAttachmentsOf, taskAttachmentsReady, TASK_ATTACHMENT_NOT_FOUND, TASK_ATTACHMENTS_MAX, TASK_ATTACHMENTS_MIGRATION_MISSING,
+  type TaskAttachmentRow,
+} from './task-attachments'
 import { Task, TASK_OPEN_STATUSES, type TaskPriority, type TaskStatus } from './task.entity'
 import {
   notPersonalTask, NO_TASK_EXTRAS, recordTaskLog, taskExtrasOf, taskExtrasOfOne, taskExtrasReady, taskLogOf, writeTaskExtras, TASK_ASSIGNEE_CANNOT_MANAGE, TASK_OUTSIDE_TEAM, TASK_RATING_CLOSED,
   TASK_RATING_FEATURE, TASK_RULES_MIGRATION_MISSING, type TaskExtras, type TaskLogEvent,
 } from './task-extras'
 import {
-  assertAudienceInsideTree, isTaskDate, isTaskRole, taskAccess, taskAddDays, taskAwaitsAccount, taskCompliance, taskComplianceLabel, taskDaysBetween, taskIdChunks, taskLocalDate, taskManagedBy, taskRolesHeldBy, tasksTableReady,
+  assertAudienceInsideTree, isTaskDate, isTaskRole, taskAccess, taskAddDays, taskAttachmentsVisibleTo, taskAwaitsAccount, taskCompliance, taskComplianceLabel, taskDaysBetween, taskIdChunks, taskLocalDate, taskManagedBy, taskRolesHeldBy, tasksTableReady,
   TASK_NOT_FOUND, TASK_ROLE_LABELS, TASKS_DAYS_MAX, TASKS_ESCALATION_DAYS_DEFAULT, TASKS_ESCALATION_DAYS_KEY, TASKS_MIGRATION_MISSING,
   TASKS_REMINDER_DAYS_DEFAULT, TASKS_REMINDER_DAYS_KEY,
   TASK_OFF_DUTY_STATUSES, TASK_STILL_OPENING,
@@ -59,6 +64,12 @@ export const TASK_GROUP_MAX = 300
 // B-ADD.18: وللمدير على اللي تحته في الهيكل بس
 export const TASK_GROUP_RULE = 'المهمة الجماعية للي تحته موظفين في الهيكل (على اللي تحته بس)، أو لصاحب صلاحية «إدارة المهام» أو «تكليف أي موظف» في نطاق فروعه'
 export const TASK_GROUP_NOBODY_UNDER = 'مفيش حد من اللي تحتك في الاختيار ده'
+// B-ADD.19: مرفقات المهمة
+export const TASK_ATTACH_RULE = 'إرفاق ملف بالمهمة للي كلّف بيها أو للمسؤول عنها'
+export const TASK_ATTACHMENT_REMOVE_RULE = 'شيل المرفق للي رفعه أو للي كلّف بالمهمة'
+export const TASK_ATTACHMENTS_LINKED = 'المهمة دي تبع طلب أو مستند — مرفقاتها على الطلب أو المستند نفسه'
+export const TASK_ATTACHMENTS_CLOSED = 'المهمة مقفولة — المرفقات بتتغيّر والمهمة مفتوحة بس'
+export const TASK_ATTACHMENTS_FULL = `${TASK_ATTACHMENTS_MAX} مرفق بالكتير على المهمة`
 
 export interface TaskInput {
   title?: string
@@ -71,6 +82,8 @@ export interface TaskInput {
   requiresProof?: boolean
   /** علامة «تحتاج تقييم» (الميزة الفرعية tasks.rating) */
   needsRating?: boolean
+  /** B-ADD.19: ملفات اترفعت بتصنيف task_attachment وبتتربط بالمهمة مع إنشائها */
+  attachmentFileIds?: unknown
 }
 export interface TaskStatusInput { status: string; note?: string; proofNote?: string; proofFileId?: number }
 export interface TaskListFilter { status?: string; overdue?: string; assigneeEmployeeId?: string; branchId?: string }
@@ -250,6 +263,8 @@ export class TasksService {
         self: self && row.id === user.employeeId })),
       // مهمة الدور (لكل حاملي الدور في الفرع المختار) لصاحب «إدارة المهام» بس
       roles: canManage ? FUNCTIONAL_APPROVER_ROLES.map(role => ({ key: role, label: TASK_ROLE_LABELS[role] })) : [],
+      // B-ADD.19: المرفقات متاحة (ترحيل 194 موجود)
+      attachmentsAvailable: await taskAttachmentsReady(this.ds.manager),
       branches: canManage ? branches.map(branch => ({ id: branch.id, name: branch.name })) : [],
       rulesAvailable: rulesReady, ratingEnabled: rulesReady && await this.modules.isFeatureEnabled(TASK_RATING_FEATURE),
     }
@@ -335,10 +350,12 @@ export class TasksService {
     const title = this.cleanTitle(input.title)
     const description = this.cleanText(input.description, 2000)
     const dueDate = this.cleanDueDate(input.dueDate)
+    const fileIds = cleanAttachmentIds(input.attachmentFileIds)
     const { personal, ...assignment } = await this.assignment(user, input)
     const needsRating = await this.ratingFlag(input.needsRating, { ...assignment, personal }, input.needsRating === true && await this.ratingOn())
     const now = new Date()
     const saved = await this.ds.transaction(async em => {
+      if (fileIds.length && !(await taskAttachmentsReady(em))) throw new BadRequestException(TASK_ATTACHMENTS_MIGRATION_MISSING)
       const repo = em.getRepository(Task)
       const row = await repo.save(repo.create({
         title, description, ...assignment, createdByUserId: user.sub, dueDate, priority: (input.priority ?? 'NORMAL') as TaskPriority, status: 'OPEN',
@@ -349,6 +366,8 @@ export class TasksService {
       // المهمة الشخصية تذكير صاحبها: من غير «مهمة جديدة عليك»
       if (!personal) await this.recordEvent(em, 'TASK_ASSIGNED', row)
       await recordTaskLog(em, user, row, 'ASSIGNED', personal ? 'سجّل مهمة شخصية' : 'كلّف بالمهمة')
+      // B-ADD.19: المرفقات بتتربط في نفس معاملة الإنشاء — مرفق مرفوض = ولا مهمة
+      await this.attachOnCreate(em, user, [row], fileIds)
       return row
     })
     return (await this.views(user, [saved]))[0]
@@ -370,10 +389,12 @@ export class TasksService {
     const description = this.cleanText(input.description, 2000)
     const dueDate = this.cleanDueDate(input.dueDate)
     const audience = orgAudienceJson(input.audience, 'جمهور المهمة')
+    const fileIds = cleanAttachmentIds(input.attachmentFileIds)
     const ratingOn = input.needsRating === true && await this.ratingOn()
     const now = new Date()
     const nobody = byScope ? 'مفيش موظفين في الجمهور ده جوه نطاقك' : TASK_GROUP_NOBODY_UNDER
     return this.ds.transaction(async em => {
+      if (fileIds.length && !(await taskAttachmentsReady(em))) throw new BadRequestException(TASK_ATTACHMENTS_MIGRATION_MISSING)
       // الشجرة على اتصال المعاملة. اختيار برّه الشجرة (وحدة أو فريق أو موظف بالاسم، موجود أو لأ) بنفس الرفض — قبل أي فحص وجود
       const inTree = async () => {
         const tree = await this.groupTree(user, em)
@@ -422,6 +443,8 @@ export class TasksService {
         created.push(row)
       }
       if (!created.length) throw new BadRequestException('ولا موظف في الجمهور ده ينفع يتكلّف دلوقتي')
+      // B-ADD.19: مرفقات المهمة الجماعية مشتركة — نفس الملف مربوط بكل مهمة من مهامها
+      await this.attachOnCreate(em, user, created, fileIds)
       return { created: created.length, taskIds: created.map(row => row.id), skipped }
     })
   }
@@ -870,6 +893,89 @@ export class TasksService {
     if (await em.getRepository(Task).count({ where: { proofFileId: fileId, id: Not(taskId) } })) throw new BadRequestException('ملف الإثبات مستعمل في مهمة تانية')
   }
 
+  // ===== B-ADD.19: مرفقات المهمة =====
+  // كلمة المالك 12 أكتوبر: «وأنا برفع مهمة لحد أقدر أرفق شيت إكسل أو فايل… عشان نستغني شوية عن الإيميلات». الملف بيترفع من مسار الملفات
+  // القايم بتصنيف task_attachment (حجمه ونوعه من إعدادات الملفات)، وبيتربط بالمهمة هنا: مع الإنشاء، أو بعده من اللي بيديرها (اللي كلّف
+  // بيها بحقه دلوقتي أو «إدارة المهام» في فرعها) أو من مسؤولها (بيرفع شغله على نفس المهمة). القراءة للي يشوف مرفقاتها
+  // (taskAttachmentsVisibleTo)، والشيل للي رفع المرفق أو للي بيديرها. مهمة تنفيذ طلب ومهمة إقرار مستند مرفقاتهم على الطلب أو المستند.
+
+  /** ربط مرفقات الإنشاء بمهامها (جوه معاملة الإنشاء) وسطر في سجل كل مهمة */
+  private async attachOnCreate(em: EntityManager, user: JwtPayload, tasks: Task[], fileIds: number[]) {
+    if (!fileIds.length) return
+    const names = await bindTaskAttachments(em, user, tasks.map(task => task.id), fileIds)
+    for (const task of tasks) await recordTaskLog(em, user, task, 'ATTACHED', `أرفق ${names.map(name => `«${name}»`).join('، ')}`)
+  }
+
+  /** المرفق زي ما بيتعرض: رقم الملف (للتحميل من ‎/files/:id) واسمه وحجمه ومين رفعه — ويتشال ولا لأ بحكم الخادم */
+  private attachmentView(user: JwtPayload, row: TaskAttachmentRow, removable: boolean, manage: boolean) {
+    const mine = row.uploadedByUserId === user.sub
+    return { id: row.fileId, name: row.name, size: row.size, uploadedByName: row.uploadedByName, uploadedAt: row.uploadedAt, mine, canRemove: removable && (mine || manage) }
+  }
+
+  /**
+   * مرفقات مهمة للي يشوف مرفقاتها — برّه كده «غير موجودة» (نفس رد المهمة الغايبة). اللي فوق مسؤولها بأكتر من مستوى بيقراها من هنا من غير
+   * ما المهمة نفسها تتفتح له.
+   */
+  async attachments(user: JwtPayload, id: number) {
+    const em = this.ds.manager
+    const task = (await this.ready(em)) ? await em.getRepository(Task).findOne({ where: { id } }) : null
+    const seen = task ? await taskAttachmentsVisibleTo(user, { ...task, isPersonal: (await taskExtrasOfOne(em, id)).isPersonal }, this.resolver) : null
+    if (!task || !seen?.visible) throw new NotFoundException(TASK_NOT_FOUND)
+    const available = await taskAttachmentsReady(em)
+    const linked = !!(await executionRequestOfTask(em, id)) || !!(await documentOfAckTask(em, id))
+    const changeable = available && !linked && TASK_OPEN_STATUSES.includes(task.status as TaskStatus) && seen.access.visible
+    return {
+      available, canAttach: changeable && (seen.access.manage || seen.access.work),
+      attachments: ((await taskAttachmentsOf(em, [id])).get(id) ?? []).map(row => this.attachmentView(user, row, changeable, seen.access.manage)),
+    }
+  }
+
+  /** المهمة العادية المفتوحة تحت قفل صفها، بحق الحساب عليها — لتغيير مرفقاتها (نفس ترتيب أقفال التعديل) */
+  private async attachable(em: EntityManager, user: JwtPayload, id: number) {
+    if (!(await taskAttachmentsReady(em))) throw new BadRequestException(TASK_ATTACHMENTS_MIGRATION_MISSING)
+    const execution = await executionRequestOfTask(em, id)
+    const acknowledgement = await documentOfAckTask(em, id)
+    const loaded = await this.load(user, id, em, !acknowledgement)
+    if (execution || acknowledgement) throw new BadRequestException(TASK_ATTACHMENTS_LINKED)
+    if (await this.linkedWhileWaiting(em, id, false)) throw new ConflictException(TASK_STILL_OPENING)
+    if (!TASK_OPEN_STATUSES.includes(loaded.task.status as TaskStatus)) throw new BadRequestException(TASK_ATTACHMENTS_CLOSED)
+    return loaded
+  }
+
+  /** إرفاق ملفات بمهمة قايمة: اللي بيديرها أو مسؤولها، والمهمة مفتوحة. الحكم كله بعد قفل صف المهمة */
+  async attach(user: JwtPayload, id: number, input: { fileIds?: unknown }) {
+    const fileIds = cleanAttachmentIds(input.fileIds)
+    if (!fileIds.length) throw new BadRequestException('اختار ملف واحد على الأقل')
+    await this.ds.transaction(async em => {
+      const { task, access } = await this.attachable(em, user, id)
+      if (!access.manage && !access.work) throw new ForbiddenException(TASK_ATTACH_RULE)
+      if (await activeTaskAttachments(em, task.id) + fileIds.length > TASK_ATTACHMENTS_MAX) throw new BadRequestException(TASK_ATTACHMENTS_FULL)
+      await this.attachOnCreate(em, user, [task], fileIds)
+      // العمود اللي اتغيّر بس (مش حفظ الصف كله)
+      await em.getRepository(Task).update({ id: task.id }, { updatedAt: new Date() })
+    })
+    return this.detail(user, id)
+  }
+
+  /**
+   * شيل مرفق من مهمة: اللي رفعه (ولسه شايف المهمة) أو اللي بيديرها، والمهمة مفتوحة. الصف بيتختم (مين وإمتى) ومابيتمسحش، والملف بيفضل على
+   * التخزين. مرفق المهمة الجماعية بيتشال من المهمة دي بس.
+   */
+  async removeAttachment(user: JwtPayload, id: number, fileId: number) {
+    await this.ds.transaction(async em => {
+      const { task, access } = await this.attachable(em, user, id)
+      const [link]: Array<{ id: number; uploadedByUserId: number }> = await em.query(
+        'SELECT [id], [uploadedByUserId] FROM [task_attachments] WITH (UPDLOCK, ROWLOCK) WHERE [taskId] = @0 AND [fileId] = @1 AND [removedAt] IS NULL', [task.id, fileId])
+      if (!link) throw new NotFoundException(TASK_ATTACHMENT_NOT_FOUND)
+      if (Number(link.uploadedByUserId) !== user.sub && !access.manage) throw new ForbiddenException(TASK_ATTACHMENT_REMOVE_RULE)
+      await em.getRepository(TaskAttachment).update({ id: Number(link.id), removedAt: IsNull() }, { removedAt: new Date(), removedByUserId: user.sub })
+      const file = await em.getRepository(StoredFile).findOne({ where: { id: fileId }, select: { id: true, originalName: true } })
+      await recordTaskLog(em, user, task, 'ATTACHMENT_REMOVED', `شال المرفق «${file?.originalName ?? ''}»`)
+      await em.getRepository(Task).update({ id: task.id }, { updatedAt: new Date() })
+    })
+    return this.detail(user, id)
+  }
+
   // ===== التذكير والتصعيد (مهمة مجدولة يومية) =====
   /**
    * تذكير المسؤول لما الموعد يقرب (tasks.reminder_days_before)، وتصعيد لمدير المسؤول بعد التأخير (tasks.escalation_days_after؛ صفر =
@@ -927,6 +1033,9 @@ export class TasksService {
     const extrasReady = await taskExtrasReady(this.ds.manager)
     const extrasOf = await taskExtrasOf(this.ds.manager, tasks.map(task => task.id))
     const ratingEnabled = extrasReady && await this.modules.isFeatureEnabled(TASK_RATING_FEATURE)
+    // B-ADD.19: مرفقات المهام (فاضية قبل ترحيل 194)
+    const attachmentsReady = await taskAttachmentsReady(this.ds.manager)
+    const attachmentsOf = await taskAttachmentsOf(this.ds.manager, tasks.map(task => task.id))
     const ids = <T>(values: Array<T | null | undefined>) => [...new Set(values.filter((value): value is T => value != null))]
     const employeeIds = ids(tasks.map(task => task.assigneeEmployeeId)), userIds = ids(tasks.flatMap(task => [task.createdByUserId, task.closedByUserId]))
     // «اللي كلّف بيها» بيديرها طول ما مسؤولها تحته في الشجرة (نفس حكم taskAccess): اللي تحته مرة واحدة للقايمة كلها
@@ -983,6 +1092,11 @@ export class TasksService {
         // B-ADD.18: مش للي المهمة عليه هو نفسه
         canRate: ratingEnabled && !link && task.status === 'DONE' && extra.needsRating && extra.rating == null && task.createdByUserId === user.sub && canManage
           && !(task.assigneeEmployeeId != null && task.assigneeEmployeeId === user.employeeId),
+        // B-ADD.19: مرفقات المهمة للي يشوفها، واللي الحساب يقدر يعمله فيها (إرفاق: اللي بيديرها أو مسؤولها؛ شيل: اللي رفع أو اللي بيديرها)
+        attachmentsAvailable: attachmentsReady,
+        // (مهمة تنفيذ طلب ومهمة إقرار مستند من غير مرفقات هنا: مرفقاتهم على الطلب أو المستند)
+        attachments: link || documentOf.has(task.id) ? [] : (attachmentsOf.get(task.id) ?? []).map(row => this.attachmentView(user, row, attachmentsReady && open, canManage)),
+        canAttach: attachmentsReady && open && !link && !documentOf.has(task.id) && (canManage || mine),
       }
       // B2.7-ب: مهمة إقرار مستند — من غير أزرار (بتتقفل مع الإقرار، وبتتلغي مع إلغاء الطلب)، ورقم المستند لصاحبها بس (يفتحه من «مستنداتي»)
       const document = documentOf.get(task.id)

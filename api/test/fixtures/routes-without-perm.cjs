@@ -97,6 +97,11 @@ const EXCEPTIONS = {
   // B-ADD.18: المهمة الجماعية للمدير على اللي تحته في الهيكل — شجرة منتقي «على مين؟» ومعاينته (اللي تحته حد بس، والحكم في الخدمة)
   'TasksController.groupContext': 'SERVICE_CHECK', // GET /tasks/group-context
   'TasksController.groupPreview': 'SERVICE_CHECK', // POST /tasks/group-preview
+  // B-ADD.19: مرفقات المهمة — القراءة للي يشوف مرفقاتها (اللي يشوف المهمة، واللي فوق مسؤولها في الهيكل)، والإرفاق للي بيديرها أو لمسؤولها،
+  // والشيل للي رفع أو للي بيديرها؛ برّه كده 404
+  'TasksController.attachments': 'SERVICE_CHECK', // GET /tasks/:id/attachments
+  'TasksController.attach': 'SERVICE_CHECK', // POST /tasks/:id/attachments
+  'TasksController.removeAttachment': 'SERVICE_CHECK', // DELETE /tasks/:id/attachments/:fileId
   'TasksController.detail': 'SERVICE_CHECK', // GET /tasks/:id
   'TasksController.update': 'SERVICE_CHECK', // PATCH /tasks/:id
   'TasksController.setStatus': 'SERVICE_CHECK', // POST /tasks/:id/status

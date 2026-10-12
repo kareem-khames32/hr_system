@@ -147,8 +147,9 @@ test('RG-03: قايمة الاستثناءات من غير بنود قديمة،
   // B-ADD.15: +7 SELF (صندوق الاجتماعات واجتماعاتي وإنشاء اجتماع والاعتذار وطلب الدخول) و+1 AUTH_ANY_OK (دليل الدعوة) و+9 SERVICE_CHECK (الحق بالاجتماع نفسه)
   // B-ADD.16: +16 SELF (البريد: صندوق صاحب الجلسة بس — الحالة و«افتح بريدك» والقفل والمجلدات والرسايل والمحادثات والمرفق والإرسال وغير المقروء وإكمال العناوين)
   // B-ADD.18: +2 SERVICE_CHECK (المهمة الجماعية للمدير على اللي تحته: شجرة المنتقي ومعاينته)
-  assert.deepEqual(counts, { PUBLIC_OK: 25, SELF: 122, AUTH_ANY_OK: 12, SERVICE_CHECK: 150 })
-  assert.equal(handlers.filter(handler => handler.perms.length === 0).length, 309)
+  // B-ADD.19: +3 SERVICE_CHECK (مرفقات المهمة: قراءة وإرفاق وشيل — الحق حق المهمة نفسها)
+  assert.deepEqual(counts, { PUBLIC_OK: 25, SELF: 122, AUTH_ANY_OK: 12, SERVICE_CHECK: 153 })
+  assert.equal(handlers.filter(handler => handler.perms.length === 0).length, 312)
   // من غير حارس دخول = العام بس
   const open = handlers.filter(handler => !guarded(handler, JwtAuthGuard)).map(handler => handler.id).sort()
   assert.deepEqual(open, Object.keys(EXCEPTIONS).filter(id => EXCEPTIONS[id] === 'PUBLIC_OK').sort())
@@ -203,8 +204,8 @@ test('RG-04: المسارات اللي بتخدم أكتر من موديول م�
     ['deliveries', ['settings.manage']], ['resetTemplate', ['settings.manage']], ['saveTemplate', ['settings.manage']], ['templates', ['settings.manage']]])
   // B2.5: مسارات المهام كلها تابعة لموديول المهام؛ وقايمة كل المهام بس اللي بصلاحية (الباقي حقه في الخدمة)
   const tasks = handlers.filter(handler => handler.controller === 'TasksController')
-  // B-ADD.1: +1 (المهمة الجماعية)؛ B-ADD.18: +2 (شجرة منتقي المدير ومعاينته)
-  assert.equal(tasks.length, 17)
+  // B-ADD.1: +1 (المهمة الجماعية)؛ B-ADD.18: +2 (شجرة منتقي المدير ومعاينته)؛ B-ADD.19: +3 (مرفقات المهمة)
+  assert.equal(tasks.length, 20)
   for (const handler of tasks) assert.deepEqual(handler.modules, ['tasks'], handler.id)
   assert.deepEqual(tasks.filter(handler => handler.perms.length).map(handler => [handler.name, handler.perms]), [['list', ['tasks.view_all']]])
   // لوحة التحكم: الأرقام العامة أساسية، وويدجتات الحضور (المنحنى وإحصائيات الأقسام) للحضور

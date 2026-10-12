@@ -1,10 +1,11 @@
-import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common'
-import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateIf } from 'class-validator'
+import { Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common'
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateIf } from 'class-validator'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { AllowPreboarding } from '../auth/preboarding'
 import { RequireModule } from '../modules-registry/module.guard'
 import { FUNCTIONAL_APPROVER_ROLES } from '../requests/approver-resolver.service'
+import { TASK_ATTACHMENTS_MAX } from './task-attachments'
 import { TASK_PRIORITIES, TASK_STATUSES } from './task.entity'
 import { TasksService } from './tasks.service'
 
@@ -26,6 +27,8 @@ class TaskDto {
   @IsOptional() @IsIn([...TASK_PRIORITIES]) priority?: string
   @IsOptional() @IsBoolean() requiresProof?: boolean
   @IsOptional() @IsBoolean() needsRating?: boolean
+  // B-ADD.19: ملفات اترفعت بتصنيف task_attachment (POST /files/upload) وبتتربط بالمهمة مع إنشائها
+  @IsOptional() @IsArray() @ArrayMaxSize(TASK_ATTACHMENTS_MAX) @IsInt({ each: true }) @Min(1, { each: true }) attachmentFileIds?: number[]
 }
 
 // B-ADD.1: المهمة الجماعية — خانات المهمة نفسها، و«على مين؟» بدل المسؤول (الجسم خام والحكم في الخدمة)
@@ -37,6 +40,8 @@ class TaskGroupDto {
   @IsOptional() @IsBoolean() requiresProof?: boolean
   @IsOptional() @IsBoolean() needsRating?: boolean
   @IsOptional() audience?: unknown
+  // B-ADD.19: مرفقات مشتركة لكل مهام المجموعة
+  @IsOptional() @IsArray() @ArrayMaxSize(TASK_ATTACHMENTS_MAX) @IsInt({ each: true }) @Min(1, { each: true }) attachmentFileIds?: number[]
 }
 
 // B-ADD.18: معاينة جمهور المهمة الجماعية للمدير (الجسم خام والحكم في الخدمة)
@@ -71,6 +76,11 @@ class TaskExtensionDecisionDto {
 class TaskRatingDto {
   @IsInt() @Min(1) @Max(5) rating: number
   @IsOptional() @IsString() @MaxLength(500) note?: string
+}
+
+// B-ADD.19: إرفاق ملفات بمهمة قايمة
+class TaskAttachDto {
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(TASK_ATTACHMENTS_MAX) @IsInt({ each: true }) @Min(1, { each: true }) fileIds: number[]
 }
 
 class TaskStatusDto {
@@ -177,6 +187,23 @@ export class TasksController {
   @Post(':id/extension/decision')
   decideExtension(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: TaskExtensionDecisionDto) {
     return this.tasks.decideExtension(user, id, dto)
+  }
+
+  // B-ADD.19: مرفقات المهمة — قراءتها للي يشوفها (ومعاهم اللي فوق مسؤولها في الهيكل)، والإرفاق للي بيديرها أو لمسؤولها، والشيل للي رفع أو
+  // للي بيديرها (الفحص في الخدمة؛ برّه كده 404). الملف نفسه بيترفع وبيتحمّل من مسار الملفات القايم
+  @Get(':id/attachments')
+  attachments(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number) {
+    return this.tasks.attachments(user, id)
+  }
+
+  @Post(':id/attachments')
+  attach(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: TaskAttachDto) {
+    return this.tasks.attach(user, id, dto)
+  }
+
+  @Delete(':id/attachments/:fileId')
+  removeAttachment(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Param('fileId', ParseIntPipe) fileId: number) {
+    return this.tasks.removeAttachment(user, id, fileId)
   }
 
   // تقييم اللي كلّف بالمهمة بعد ما تخلص (الميزة الفرعية tasks.rating، والفحص في الخدمة)

@@ -106,6 +106,8 @@ export const notPersonalTask = (alias: string): string =>
 export const TASK_LOG_EVENTS = {
   ASSIGNED: 'تكليف', REASSIGNED: 'تحويل', DUE_CHANGED: 'تغيير الموعد', EDITED: 'تعديل', STARTED: 'بدأت', WAITING: 'مستنية', DONE: 'خلصت', CANCELLED: 'إلغاء', REOPENED: 'إعادة فتح',
   RETURNED: 'رجوع للتعديل', EXTENSION_REQUESTED: 'طلب تمديد', EXTENSION_APPROVED: 'موافقة على التمديد', EXTENSION_REJECTED: 'رفض التمديد', RATED: 'تقييم',
+  // B-ADD.19: مرفقات المهمة
+  ATTACHED: 'مرفق', ATTACHMENT_REMOVED: 'شيل مرفق',
 } as const
 export type TaskLogEvent = keyof typeof TASK_LOG_EVENTS
 export const isTaskLogEvent = (value: unknown): value is TaskLogEvent => typeof value === 'string' && Object.prototype.hasOwnProperty.call(TASK_LOG_EVENTS, value)

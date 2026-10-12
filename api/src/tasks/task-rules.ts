@@ -190,6 +190,19 @@ export async function taskAccess(user: JwtPayload, task: TaskAssignment, structu
 }
 
 /**
+ * B-ADD.19 (كلمة المالك 12 أكتوبر): مين يشوف مرفقات المهمة — اللي يشوف المهمة نفسها (مسؤولها، واللي كلّف بيها بحقه دلوقتي، ومدير مسؤولها
+ * المباشر، وصاحب «إدارة المهام» أو «عرض كل المهام» في فرعها)، ومعاهم اللي فوق مسؤولها في الهيكل بأي عمق («اللي فوقهم» — اللي كلّف من
+ * شجرته مسؤولها تحته، فاللي فوقه فوق المسؤول كمان). المهمة الشخصية لصاحبها ومديره المباشر بس، والجلسة قبل المباشرة لمهمتها بس. برّه كده
+ * المرفقات «غير موجودة».
+ */
+export async function taskAttachmentsVisibleTo(user: JwtPayload, task: TaskAssignment, structure: TaskStructure): Promise<{ access: TaskAccess; visible: boolean }> {
+  const access = await taskAccess(user, task, structure)
+  if (access.visible) return { access, visible: true }
+  if (preboardingActive(user) || task.isPersonal || task.assigneeEmployeeId == null || !user.employeeId || user.employeeId === task.assigneeEmployeeId) return { access, visible: false }
+  return { access, visible: await structure.isUnder(task.assigneeEmployeeId, user.employeeId) }
+}
+
+/**
  * تحميل ملف إثبات المهمة (/files/:id) بحكم المهمة:
  *  - ملف مربوط بمهمة (إثباتها): لكل اللي يشوف المهمة دلوقتي — حتى رافعه (Codex CRP2Y-B01: حساب رافعه اتربط بموظف تاني مابقاش يشوف المهمة
  *    الشخصية، فمايحمّلش ملفها).

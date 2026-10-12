@@ -33,6 +33,7 @@ import { assertHrDocumentFileAccess } from '../hr-documents/hr-document-access'
 import { documentAckRequest, sendVerifiedFile, verifiedDocumentFile } from '../hr-documents/document-acknowledgements'
 import { assertLetterFileAccess } from '../letters/letter-access'
 import { assertTaskFileAccess } from '../tasks/task-rules'
+import { assertTaskAttachmentFileAccess, taskAttachmentName, taskAttachmentsReady, TASK_ATTACHMENT_FILE_TYPE, TASK_ATTACHMENTS_MIGRATION_MISSING } from '../tasks/task-attachments'
 import { assertCandidateCvAccess } from '../recruitment/candidate-applications'
 import { assertExecutionProofAccess } from '../requests/execution-tasks'
 import { CommentsService } from '../comments/comments.service'
@@ -87,7 +88,7 @@ export class FilesController {
     @Query('employeeId') employeeId?: string
   ) {
     if (!file) throw new BadRequestException('لم يصل ملف — أرسل الحقل file')
-    if (entityType && !['request', 'employee_photo', 'company_logo', 'document', 'contract', 'policy', 'comment', 'announcement', 'leave_attachment', 'task', 'case'].includes(entityType)) {
+    if (entityType && !['request', 'employee_photo', 'company_logo', 'document', 'contract', 'policy', 'comment', 'announcement', TASK_ATTACHMENT_FILE_TYPE, 'leave_attachment', 'task', 'case'].includes(entityType)) {
       throw new BadRequestException('تصنيف الملف غير صالح')
     }
     for (const value of [entityId, employeeId]) {
@@ -106,6 +107,12 @@ export class FilesController {
     if (entityType === 'case') {
       if (entityId !== undefined || employeeId !== undefined) throw new BadRequestException('مرفق القضية بيترفع من غير رقم كيان أو موظف')
       await this.cases.assertCanUpload(user)
+    }
+    // B-ADD.19: مرفق مهمة بيتربط بمهمته من مسار المهام (مع إنشائها أو بعده، تحت قفل صفها) — العميل مايحددش رقم كيان ولا موظف. الحجم والنوع
+    // من إعدادات الملفات القايمة زي أي ملف. قبل ترحيل 194 مفيش ربط، فالرفع مرفوض برسالته
+    if (entityType === TASK_ATTACHMENT_FILE_TYPE) {
+      if (entityId !== undefined || employeeId !== undefined) throw new BadRequestException('مرفق المهمة بيترفع من غير رقم كيان أو موظف')
+      if (!(await taskAttachmentsReady(this.ds.manager))) throw new BadRequestException(TASK_ATTACHMENTS_MIGRATION_MISSING)
     }
     const LOGO_RULE = 'رفع شعار الشركة يتطلب صلاحية الإعدادات وملف صورة'
     if (entityType === 'company_logo' && !userHasPerm(user, 'settings.manage')) throw new ForbiddenException(LOGO_RULE)
@@ -137,14 +144,16 @@ export class FilesController {
     try {
       const { saved, hashed } = await this.ds.transaction(async em => {
         const row = await em.save(StoredFile, em.create(StoredFile, {
-          originalName: file.originalname,
+          // B-ADD.19: اسم مرفق المهمة بيتعرض في كارتها — العربي بيترجع UTF-8 (باقي التصنيفات زي ما هي)
+          originalName: entityType === TASK_ATTACHMENT_FILE_TYPE ? taskAttachmentName(file.originalname) : file.originalname,
           storedName,
           mime: FILE_TYPE_MIME[verdict.type],
           size: file.size,
           entityType: entityType || undefined,
           entityId: entityId ? Number(entityId) : undefined,
-          // الافتراضي: الملف تبع موظف رافعه — إلا لو الإدارة حددت غيره. ملف السياسة ومرفق الإعلان مش تبع موظف
-          employeeId: entityType === 'policy' || entityType === 'announcement' || entityType === 'case' ? undefined : employeeId ? Number(employeeId) : (user.employeeId ?? undefined),
+          // الافتراضي: الملف تبع موظف رافعه — إلا لو الإدارة حددت غيره. ملف السياسة ومرفق الإعلان ومرفق المهمة مش تبع موظف
+          employeeId: entityType === 'policy' || entityType === 'announcement' || entityType === 'case' ? undefined : entityType === TASK_ATTACHMENT_FILE_TYPE ? undefined
+            : employeeId ? Number(employeeId) : (user.employeeId ?? undefined),
           uploadedBy: user.sub,
         }))
         return { saved: row, hashed: await recordStoredFileHash(em, row.id, sha256) }
@@ -188,6 +197,9 @@ export class FilesController {
       await assertTaskFileAccess(this.ds.manager, user, f)
       // B2.6: إثبات مهمة تنفيذ طلب تبع الطلب (ممكن يكون سري): لرافعه بس
       await assertExecutionProofAccess(this.ds.manager, user, f)
+    } else if (f.entityType === TASK_ATTACHMENT_FILE_TYPE) {
+      // B-ADD.19: مرفق مهمة — بحكم المهمة نفسها (اللي يشوف مرفقاتها)، مش بملكية الرفع العامة؛ وقبل الربط لرافعه بس
+      await assertTaskAttachmentFileAccess(this.ds.manager, user, f)
     } else if (f.entityType === 'comment') {
       // B2.8: مرفق تعليق — بحكم التعليق نفسه (حق الكيان، والداخلي مش لصاحب الطلب)، مش بملكية الرفع العامة
       await this.comments.assertFileAccess(user, f)
