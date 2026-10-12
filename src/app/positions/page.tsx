@@ -60,6 +60,16 @@ export default function PositionsPage() {
               {data.enforce ? 'التعيين مقفول من غير وظيفة معتمدة فيها شاغر.' : 'الوظيفة عند التعيين اختيارية، والتعيين على وظيفة مليانة بيظهر «زيادة».'}
             </p>
             {info && <div role="status" className="card text-sm text-green-800 bg-green-50 border border-green-200">{info} <Link href="/recruitment/jobs" className="underline">افتحها</Link></div>}
+            {hiring?.available && hiring.suggestions.length === 0 && (
+              <div className="card space-y-1" data-hiring-suggestions-empty>
+                <h2 className="font-semibold text-gray-800">اقتراحات التوظيف</h2>
+                <p className="text-sm text-gray-500">
+                  {data.positions.length === 0
+                    ? 'الاقتراح بيظهر هنا لما عدد الموظفين في وظيفة يقل عن العدد المعتمد ليها. لسه مفيش وظائف معتمدة: ابدأ بـ«توليد من الموجود» (بيعمل وظيفة لكل مسمى بعدد موظفينه الحاليين)، وبعدين عدّل «العدد المعتمد» للي عايز تزوّده.'
+                    : 'مفيش شاغر من غير وظيفة مفتوحة في التوظيف دلوقتي. أول ما موظف يخرج أو العدد المعتمد يزيد، الوظيفة بتظهر هنا ومعاها زرار «افتح وظيفة شاغرة».'}
+                </p>
+              </div>
+            )}
             {hiring?.available && hiring.suggestions.length > 0 && (
               <div className="card space-y-3 border border-amber-200" data-hiring-suggestions>
                 <h2 className="font-semibold text-gray-800">اقتراحات التوظيف ({hiring.suggestions.reduce((sum, row) => sum + row.uncovered, 0)} شاغر من غير وظيفة مفتوحة)</h2>

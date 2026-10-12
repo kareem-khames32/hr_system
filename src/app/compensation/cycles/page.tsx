@@ -152,6 +152,7 @@ export default function RaiseCyclesPage() {
 
         <div className="card space-y-3" data-raise-cycles>
           <h2 className="text-lg font-semibold text-gray-800">الدورات</h2>
+          <p className="text-sm text-gray-500" data-raise-percent-where>الزيادة بالنسبة (والاستثناءات) من جوه الدورة: اعمل دورة ← افتحها ← «فتح للاقتراحات» ← كارت «زيادة بالنسبة».</p>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-gray-600">
@@ -250,6 +251,11 @@ export default function RaiseCyclesPage() {
               </div>
             </div>
 
+            {detail.salaries && detail.cycle.status === 'DRAFT' && (
+              <div className="card text-sm text-gray-600" data-raise-percent-hint>
+                <span className="font-semibold text-gray-800">زيادة بالنسبة:</span> دوس «فتح للاقتراحات» فوق، وبعدها بيظهر هنا كارت تكتب فيه النسبة وتختار على مين، والنظام بيحسب مبلغ كل موظف.
+              </div>
+            )}
             <div className="card space-y-3" data-raise-budgets>
               <h2 className="text-lg font-semibold text-gray-800">الميزانيات</h2>
               <p className="text-xs text-gray-500">ميزانية الزيادة الشهرية للإدارة أو القسم (بتغطي اللي تحتها). لو المستخدم عدّاها بيظهر تحذير والسطور بتتحفظ عادي.</p>
