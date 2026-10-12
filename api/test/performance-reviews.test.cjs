@@ -82,7 +82,12 @@ test('RU-03: launching and submitting under the row lock with the judgment after
   assert.match(service, /return !!branches && branches\.length > 0 && branches\.every\(\(id\) => inBranchScope\(scope, id\)\)/, 'دورة «كل الشركة» مش لحساب الفروع')
   const controller = read('api/src/performance/reviews.controller.ts')
   assert.match(controller, /@RequireModule\('performance'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)\n@Controller\('performance\/reviews'\)/)
-  assert.equal(controller.split("@Perm('performance.manage')").length - 1, 9, 'النماذج والدورات (والاعتماد والإعلان) بالصلاحية')
+  assert.equal(controller.split("@Perm('performance.manage')").length - 1, 10, 'النماذج والدورات (والاعتماد والإعلان، وتغيير المقيِّم B-ADD.10) بالصلاحية')
+  assert.ok(controller.includes("@Perm('performance.manage')\n  @Post(':id/evaluator')"), 'تغيير المقيِّم بصلاحية إدارة الأداء')
+  const evaluator = service.slice(service.indexOf('async setEvaluator('), service.indexOf('// ===== B3.8-أ: المعايرة'))
+  const inOrder = (...parts) => parts.every((part, index) => evaluator.includes(part) && (index === 0 || evaluator.indexOf(parts[index - 1]) < evaluator.indexOf(part)))
+  assert.ok(inOrder('this.assertManager(user)', "lock: { mode: 'pessimistic_write' } })", "if (cycle.status !== 'ACTIVE')", 'if (assignment.managerSubmittedAt)', 'if (evaluatorId === assignment.employeeId)',
+    'if (!evaluator || !inBranchScope(scope, evaluator.branchId))', "action: 'REVIEW_EVALUATOR_CHANGED'"), 'تغيير المقيِّم: الحكم بعد قفل التكليف وبالترتيب')
   // B3.7-ب: الاعتماد والإعلان تحت قفل صف الدورة وبشرط الحالة؛ والإقرار لصاحب التكليف تحت قفل صفه
   const advance = service.slice(service.indexOf('async advance('), service.indexOf('async acknowledge('))
   const advanceOrder = ['await this.lockedCycle(em, user, id)', 'update({ id: In(mine), status: from }, { status: rawTo })', 'await recordAudit('].map(part => advance.indexOf(part))
