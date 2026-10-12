@@ -188,7 +188,7 @@ export function ModulesSection({ modules, skip }: { modules: Loaded<ModulesStrip
   const tiles = (modules.data?.modules ?? []).filter((tile) => !skip.includes(tile.key))
   if (!tiles.length) return null
   return (
-    <Section sectionKey="modules" title="باقي الموديولات" icon={<Briefcase size={18} />} takeaway="رقم أو اتنين من كل موديول مفعّل ليك — والضغط بيفتح شاشته.">
+    <Section sectionKey="modules" title="باقي أقسام النظام" icon={<Briefcase size={18} />} takeaway="أهم رقم في كل قسم — اضغط على أي بطاقة تفتح شاشته.">
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3" data-modules-strip>
         {tiles.map((tile) => (
           <div key={tile.key} className="min-w-0" data-module-tile={tile.key}>

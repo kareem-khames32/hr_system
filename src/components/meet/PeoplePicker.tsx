@@ -30,7 +30,7 @@ export default function PeoplePicker({ userIds, onChange }: { userIds: number[];
   const results = useMemo(() => {
     if (!people) return []
     const wanted = normalizeSearchText(query)
-    return people.filter((person) => !userIds.includes(person.id) && (!wanted || normalizeSearchText(`${person.displayName} ${person.jobTitle ?? ''}`).includes(wanted))).slice(0, wanted ? 40 : 20)
+    return people.filter((person) => !userIds.includes(person.id) && (!wanted || normalizeSearchText(`${person.displayName} ${person.alias ?? ''} ${person.jobTitle ?? ''}`).includes(wanted))).slice(0, wanted ? 40 : 20)
   }, [people, query, userIds])
 
   return (

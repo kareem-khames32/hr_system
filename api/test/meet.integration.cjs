@@ -242,7 +242,12 @@ test('MT-03: الدليل (الاسم والمسمى بس)، والإنشاء ب
   const directory = expectStatus(await request(users.host, 'GET', M + '/directory'), 200)
   assert.deepEqual(Object.keys(directory), ['users'])
   assert.deepEqual(directory.users.map(row => row.displayName), ['بسمة المدعوة', 'تامر المدعو', 'جمال من برّه', 'دينا المتأخرة', 'مدير النظام'])
-  assert.deepEqual(directory.users.find(row => row.id === users.guest.id), { id: users.guest.id, displayName: 'بسمة المدعوة', jobTitle: 'محاسبة' })
+  assert.deepEqual(directory.users.find(row => row.id === users.guest.id), { id: users.guest.id, displayName: 'بسمة المدعوة', jobTitle: 'محاسبة', alias: null })
+  // كلمة المالك 13 أكتوبر: الاسم المعروض اسم الموظف من ملفه (حسابات المجال اسمها غيره)، واسم الحساب والاسم بالإنجليزي بديل للبحث بس
+  await repo('Employee').update({ id: users.guest.employeeId }, { fullName: 'بسمة أحمد علي', fullNameEn: 'Basma Ahmed' })
+  assert.deepEqual(expectStatus(await request(users.host, 'GET', M + '/directory'), 200).users.find(row => row.id === users.guest.id),
+    { id: users.guest.id, displayName: 'بسمة أحمد علي', jobTitle: 'محاسبة', alias: 'بسمة المدعوة Basma Ahmed' })
+  await repo('Employee').update({ id: users.guest.employeeId }, { fullName: 'بسمة المدعوة', fullNameEn: null })
   assert.deepEqual([directory.users.find(row => row.id === users.outsider.id).jobTitle, JSON.stringify(directory).includes('SECRET-ID'), JSON.stringify(directory).includes('@meet.invalid')], [null, false, false])
 
   // القيم

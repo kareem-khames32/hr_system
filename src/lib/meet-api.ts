@@ -8,7 +8,7 @@ export const meetPath = (id: string) => `${MEET_BASE}/${id}`
 export type MeetStatus = 'scheduled' | 'live' | 'ended' | 'cancelled'
 
 /** اللي بيظهر من حساب: الاسم والمسمى الوظيفي بس */
-export interface MeetPerson { id: number; displayName: string; jobTitle: string | null }
+export interface MeetPerson { id: number; displayName: string; jobTitle: string | null; /** أسماء تانية للبحث بس (اسم الحساب، الاسم بالإنجليزي) */ alias?: string | null }
 
 export interface MeetingSummary {
   id: string; title: string; startsAt: string | null; createdAt: string; endedAt: string | null; cancelledAt: string | null; status: MeetStatus

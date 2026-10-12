@@ -174,7 +174,7 @@ test('MTU-03: a new closed module and its route, guarded routes, writes under th
   assert.match(service, /return role === 'host' \|\| \(!this\.isBlocked\(meeting\.code, userId\) && \(role === 'invited' \|\| !meeting\.lobby\)\)/)
   // الدليل: الاسم والمسمى بس، من الحسابات النشطة
   const directory = part('directory', 'list')
-  assert.match(directory, /SELECT TOP \(5000\) u\.\[id\], u\.\[displayName\], e\.\[jobTitle\] FROM \[users\] u LEFT JOIN \[employees\] e ON e\.\[id\] = u\.\[employeeId\]\n\s+WHERE u\.\[isActive\] = 1 AND u\.\[id\] <> @0/)
+  assert.match(directory, /SELECT TOP \(5000\) u\.\[id\], \$\{MEET_PERSON_NAME_SQL\} AS \[displayName\], e\.\[jobTitle\], u\.\[displayName\] AS \[accountName\], e\.\[fullNameEn\]\n\s+FROM \[users\] u LEFT JOIN \[employees\] e ON e\.\[id\] = u\.\[employeeId\]\n\s+WHERE u\.\[isActive\] = 1 AND u\.\[id\] <> @0/)
   assert.doesNotMatch(service, /\.save\(/, 'الكتابة بالخانات بس')
   assert.doesNotMatch(entities, /default:|CreateDateColumn/, 'من غير افتراضي (زي الترحيل)')
   assert.match(read('docs/migrations/payroll/20261012_191_meetings.sql'), /^-- 20261012_191: /)

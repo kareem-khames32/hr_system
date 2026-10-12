@@ -72,7 +72,7 @@ test('MCU-02: the server — routes behind the meetings module, a call without a
   assert.match(part('async list', 'async detail'), /\.where\('\(c\.callerUserId = :me OR c\.calleeUserId = :me\)', \{ me: user\.sub \}\)/)
   assert.match(part('async ringing', 'async list'), /where: \{ calleeUserId: user\.sub, startedAt: MoreThanOrEqual\(new Date\(now - this\.ringMs - 1000\)\), answeredAt: IsNull\(\), endedAt: IsNull\(\), rejected: false \}/)
   // اللي بيطلع من الطرف التاني: الاسم والمسمى والتحويلة بس
-  assert.match(part('private async people', 'private async accountOfExtension'), /SELECT u\.\[id\], u\.\[displayName\], u\.\[employeeId\], e\.\[jobTitle\] FROM \[users\] u LEFT JOIN \[employees\] e ON e\.\[id\] = u\.\[employeeId\] WHERE u\.\[id\] IN /)
+  assert.match(part('private async people', 'private async accountOfExtension'), /SELECT u\.\[id\], \$\{MEET_PERSON_NAME_SQL\} AS \[displayName\], u\.\[employeeId\], e\.\[jobTitle\] FROM \[users\] u LEFT JOIN \[employees\] e ON e\.\[id\] = u\.\[employeeId\] WHERE u\.\[id\] IN /)
   assert.match(service, /export interface CallPerson \{ id: number; displayName: string; jobTitle: string \| null; extension: string \| null \}/)
   // التحويلة ← الموظف ← حسابه النشط؛ وقبل ترحيل 188 رسالته
   ordered(part('private async accountOfExtension', 'private async openCalls'), ['await extensionsReady(em)', "code: 'CALL_EXTENSION_MIGRATION'",

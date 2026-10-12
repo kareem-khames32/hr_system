@@ -709,7 +709,7 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
       </div>
 
       {/* Navigation */}
-      <nav ref={navRef} onClick={closeOnLink} className="flex-1 overflow-y-auto p-4 space-y-1">
+      <nav ref={navRef} onClick={closeOnLink} className="flex-1 overflow-y-auto px-3 py-3 space-y-0.5">
         {inboxError && <div role="alert" className="text-xs text-amber-700 p-2">{t('تعذر تحديث صندوق الموافقات. ')}<button type="button" className="underline" onClick={() => setInboxRevision(value => value + 1)}>{t('إعادة المحاولة')}</button></div>}
         {menuItems.map((item) => (
           <div key={item.id}>
@@ -720,11 +720,11 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
                 className={clsx('sidebar-item', isActive(item.href) && 'active')}
               >
                 {item.icon}
-                <span className="font-medium">{t(item.label)}</span>
+                <span className="min-w-0 truncate font-medium">{t(item.label)}</span>
                 {(item.badge ?? 0) > 0 && (
                   <span
                     className={clsx(
-                      'ms-auto text-xs font-bold px-2 py-0.5 rounded-full',
+                      'ms-auto text-[11px] font-bold px-1.5 py-0.5 rounded-full',
                       isActive(item.href)
                         ? 'bg-white/20 text-white'
                         : 'bg-primary-500 text-white'
@@ -742,44 +742,44 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
                   onClick={() => toggleExpanded(item.id)}
                   className={clsx(
                     'sidebar-item w-full justify-between',
-                    isChildActive(item.children) && 'bg-primary-50 text-primary-600'
+                    isChildActive(item.children) && 'text-primary-700 [&_svg]:text-primary-600'
                   )}
                 >
-                  <div className="flex items-center gap-3">
+                  <div className="flex min-w-0 items-center gap-2.5">
                     {item.icon}
-                    <span className="font-medium">{t(item.label)}</span>
+                    <span title={t(item.label)} className="min-w-0 truncate font-medium">{t(item.label)}</span>
                     {(item.badge ?? 0) > 0 && (
-                      <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-primary-500 text-white">{item.badge}</span>
+                      <span className="text-[11px] font-bold px-1.5 py-0.5 rounded-full bg-primary-500 text-white">{item.badge}</span>
                     )}
                   </div>
                   <ChevronDown
                     size={18}
                     className={clsx(
-                      'transition-transform duration-200',
+                      '!h-3.5 !w-3.5 transition-transform duration-200',
                       isExpanded(item.id) && 'rotate-180'
                     )}
                   />
                 </button>
                 {isExpanded(item.id) && item.children && (
-                  <div className="ms-8 mt-1 space-y-1">
+                  <div className="ms-[1.35rem] mt-0.5 mb-1 space-y-0.5 border-s border-gray-200 ps-2.5">
                     {item.children.map((child) => (
                       <Link
                         key={child.href}
                         href={child.href}
                         aria-current={isActive(child.href) ? 'page' : undefined}
                         className={clsx(
-                          'flex items-center px-4 py-2.5 rounded-xl text-sm transition-all',
+                          'flex items-center px-3 py-1.5 rounded-lg text-[13px] leading-5 transition-colors',
                           isActive(child.href)
-                            ? 'bg-primary-500 text-white shadow-lg shadow-primary-500/30'
-                            : 'text-gray-500 hover:text-primary-600 hover:bg-primary-50'
+                            ? 'bg-primary-50 text-primary-700 font-semibold'
+                            : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'
                         )}
                       >
                         {t(child.label)}
                         {(child.badge ?? 0) > 0 && (
                           <span
                             className={clsx(
-                              'ms-auto text-xs font-bold px-2 py-0.5 rounded-full',
-                              isActive(child.href) ? 'bg-white/20 text-white' : 'bg-primary-500 text-white'
+                              'ms-auto text-[11px] font-bold px-1.5 py-0.5 rounded-full',
+                              'bg-primary-500 text-white'
                             )}
                           >
                             {child.badge}

@@ -32,7 +32,8 @@ test('I18N-02: الواجهة — العربي هو الأصل (من غير تر
   // تخزين المتصفح تفضيل بس: القراءة والكتابة جوه try، ومن غيره الصفحة عربي
   assert.equal((lib.match(/try \{ [^\n]*localStorage/g) || []).length, 2)
   assert.match(layout, /useEffect\(\(\) => \{ initLang\(\) \}, \[\]\)/)
-  assert.equal((sidebar.match(/\{t\(item\.label\)\}/g) || []).length, 2)
+  // 3: اسم البند المباشر، واسم المجموعة، وتلميح اسم المجموعة (title) لما الاسم يتقص في سطر واحد
+  assert.equal((sidebar.match(/\{t\(item\.label\)\}/g) || []).length, 3)
   assert.match(sidebar, /\{t\(child\.label\)\}/)
   assert.doesNotMatch(sidebar, /\{item\.label\}|\{child\.label\}/)
   assert.match(header, /\{t\(pageTitle\)\}<\/h2>/)

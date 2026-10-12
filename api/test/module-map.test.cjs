@@ -169,7 +169,7 @@ function render(user, enabled) {
   sessionStorage.setItem('hr_enabled_modules', JSON.stringify({ session: `${user.id}:${markOf(user)}`, enabled }))
   const html = renderToStaticMarkup(React.createElement(Sidebar, { open: false }))
   // البنود العليا بترتيبها: رابط مباشر (a) أو مجموعة (button aria-expanded)
-  const top = [...html.slice(html.indexOf('<nav'), html.indexOf('</nav>')).matchAll(/<a[^>]*href="([^"]+)"[^>]*class="sidebar-item[^"]*"[^>]*>.*?<span class="font-medium">([^<]+)<\/span>|<button type="button" aria-expanded="(?:true|false)"[^>]*>.*?<span class="font-medium">([^<]+)<\/span>/g)]
+  const top = [...html.slice(html.indexOf('<nav'), html.indexOf('</nav>')).matchAll(/<a[^>]*href="([^"]+)"[^>]*class="sidebar-item[^"]*"[^>]*>.*?<span[^>]*class="[^"]*font-medium"[^>]*>([^<]+)<\/span>|<button type="button" aria-expanded="(?:true|false)"[^>]*>.*?<span[^>]*class="[^"]*font-medium"[^>]*>([^<]+)<\/span>/g)]
     .map(match => match[1] ? { href: match[1], label: match[2] } : { group: match[3] })
   return { html, top, links: [...html.matchAll(/<a[^>]*href="([^"]+)"/g)].map(match => match[1]) }
 }

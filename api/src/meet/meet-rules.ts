@@ -113,3 +113,8 @@ export async function meetReady(em: EntityManager): Promise<boolean> {
 }
 /** للاختبارات: نسيان حالة الترحيل */
 export function resetMeetCache() { ready = null }
+
+// كلمة المالك 13 أكتوبر 2026: «مش بينفع أبحث باسم الموظف الفعلي» — الحسابات المربوطة بالمجال اسمها غير اسم الموظف في ملفه. الاسم
+// المعروض في الاجتماعات والاتصال هو اسم الموظف من ملفه (والحساب اللي من غير ملف باسم حسابه)، واسم الحساب بديل للبحث بس.
+// التعبير بيتحط في استعلام فيه [users] u و[employees] e (LEFT JOIN على u.[employeeId]).
+export const MEET_PERSON_NAME_SQL = `COALESCE(NULLIF(LTRIM(RTRIM(e.[fullName])), N''), u.[displayName])`

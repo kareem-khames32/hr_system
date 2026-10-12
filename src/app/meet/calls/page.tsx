@@ -79,7 +79,7 @@ export default function CallsPage() {
   const matches = useMemo(() => {
     const wanted = normalizeSearchText(query)
     if (!people || !wanted) return []
-    return people.filter((person) => normalizeSearchText(`${person.displayName} ${person.jobTitle ?? ''}`).includes(wanted)).slice(0, 30)
+    return people.filter((person) => normalizeSearchText(`${person.displayName} ${person.alias ?? ''} ${person.jobTitle ?? ''}`).includes(wanted)).slice(0, 30)
   }, [people, query])
 
   const blocked = busy || !!session.call

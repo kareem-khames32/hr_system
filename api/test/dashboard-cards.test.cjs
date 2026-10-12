@@ -282,7 +282,7 @@ test('DB-06: the frame pieces render — the level path with a branch step, a se
   const section = render(frame.Section, { sectionKey: 'requests', title: 'الطلبات والاعتمادات', takeaway: '3 طلب معلّق', icon: null, href: '/requests-console', linkLabel: 'كونسول الطلبات' }, 'رسوم')
   assert.ok(section.includes('id="dashboard-section-requests"') && section.includes('data-dashboard-section="requests"') && section.includes('data-section-takeaway') && section.includes('3 طلب معلّق'))
   assert.ok(section.includes('href="/requests-console"') && section.includes('كونسول الطلبات') && section.includes('رسوم'))
-  assert.equal(render(frame.Section, { sectionKey: 'modules', title: 'باقي الموديولات', icon: null }, 'x').includes('<a '), false)
+  assert.equal(render(frame.Section, { sectionKey: 'modules', title: 'باقي أقسام النظام', icon: null }, 'x').includes('<a '), false)
   // الرسمة: خطؤها وإعادة محاولتها لوحدها، وهيكل تحميل بدل الدايرة
   const failed = render(frame.Panel, { title: 'عمر الطلبات', loading: false, error: 'تعذر تحميل الأرقام', onRetry: () => {}, panelKey: 'requests-age' }, null)
   assert.ok(failed.includes('data-dashboard-panel="requests-age"') && failed.includes('role="alert"') && failed.includes('إعادة المحاولة'))

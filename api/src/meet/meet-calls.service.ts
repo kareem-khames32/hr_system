@@ -10,7 +10,7 @@ import {
   CALL_RING_MS, CALL_SELF_BUSY, CALL_USER, CALL_YOURSELF, callDurationSeconds, callStateOf, callsReady, cleanCallTarget, extensionsReady, type CallState,
 } from './call-rules'
 import { livekitConfig, livekitDeleteRoom, livekitRoomCounts, participantToken, type LivekitConfig } from './livekit'
-import { MEET_NOT_CONFIGURED } from './meet-rules'
+import { MEET_NOT_CONFIGURED, MEET_PERSON_NAME_SQL } from './meet-rules'
 
 /** اللي بيظهر من الطرف التاني في المكالمة: الاسم والمسمى الوظيفي ورقم تحويلته — ولا أي بيان تاني عن الموظف */
 export interface CallPerson { id: number; displayName: string; jobTitle: string | null; extension: string | null }
@@ -51,7 +51,7 @@ export class MeetCallsService {
     const unique = [...new Set(ids)]
     if (!unique.length) return out
     const rows: Array<{ id: number; displayName: string; employeeId: number | null; jobTitle: string | null }> = await em.query(
-      `SELECT u.[id], u.[displayName], u.[employeeId], e.[jobTitle] FROM [users] u LEFT JOIN [employees] e ON e.[id] = u.[employeeId] WHERE u.[id] IN (${unique.map((_, index) => `@${index}`).join(', ')})`, unique)
+      `SELECT u.[id], ${MEET_PERSON_NAME_SQL} AS [displayName], u.[employeeId], e.[jobTitle] FROM [users] u LEFT JOIN [employees] e ON e.[id] = u.[employeeId] WHERE u.[id] IN (${unique.map((_, index) => `@${index}`).join(', ')})`, unique)
     const extensions = await readWorkExtensions(em, rows.flatMap((row) => (row.employeeId == null ? [] : [Number(row.employeeId)])))
     for (const row of rows) {
       out.set(Number(row.id), { id: Number(row.id), displayName: row.displayName, jobTitle: row.jobTitle || null, extension: row.employeeId == null ? null : extensions.get(Number(row.employeeId)) ?? null })

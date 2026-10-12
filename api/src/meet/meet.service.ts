@@ -13,12 +13,13 @@ import {
   MEET_AUDIENCE_LABEL, MEET_AUDIENCE_NOBODY, MEET_AUDIENCE_NO_ACCOUNTS, MEET_AUDIENCE_ON_CREATE, MEET_AUDIENCE_PERM,
   MEET_CANCELLED, MEET_ENDED, MEET_EXPIRE_MS, MEET_HOST_ONLY, MEET_KNOCK_FRESH_MS, MEET_KNOCK_REQUIRED, MEET_LIST_DAYS, MEET_MAX_INVITES, MEET_MIGRATION_MISSING, MEET_NOT_CONFIGURED, MEET_NOT_FOUND, MEET_NOT_IN_ROOM,
   MEET_NOT_YOURSELF, MEET_REJOIN_MS, MEET_RING_MS, MEET_TRACK, MEET_UNAVAILABLE, MEET_USER,
-  cleanMeetAudience, cleanMeetInvites, cleanMeetLobby, cleanMeetStart, cleanMeetTitle, cleanMeetUserId, meetReady, meetStartOf, meetStatusOf, meetTooManyInvites,
+  cleanMeetAudience, cleanMeetInvites, cleanMeetLobby, cleanMeetStart, cleanMeetTitle, cleanMeetUserId, meetReady, meetStartOf, meetStatusOf, meetTooManyInvites, MEET_PERSON_NAME_SQL,
 } from './meet-rules'
 import { Meeting, MeetingAttendance, MeetingInvite } from './meet.entities'
 
 /** اللي بيظهر من حساب في الاجتماعات: الاسم والمسمى الوظيفي بس */
-export interface MeetPerson { id: number; displayName: string; jobTitle: string | null }
+export interface MeetPerson { id: number; displayName: string; jobTitle: string | null; /** أسماء تانية للبحث بس (اسم الحساب، الاسم بالإنجليزي) — في الدليل بس */ alias?: string | null }
+
 type Role = 'host' | 'invited' | 'none'
 interface Knock { user: MeetPerson; at: number; seenAt: number; hostUserId: number; title: string }
 interface Decline { meetingId: string; title: string; user: MeetPerson; at: number }
@@ -91,7 +92,7 @@ export class MeetService {
     for (let offset = 0; offset < unique.length; offset += 1000) {
       const part = unique.slice(offset, offset + 1000)
       const rows: Array<{ id: number; displayName: string; jobTitle: string | null }> = await em.query(
-        `SELECT u.[id], u.[displayName], e.[jobTitle] FROM [users] u LEFT JOIN [employees] e ON e.[id] = u.[employeeId] WHERE u.[id] IN (${part.map((_, index) => `@${index}`).join(', ')})`, part)
+        `SELECT u.[id], ${MEET_PERSON_NAME_SQL} AS [displayName], e.[jobTitle] FROM [users] u LEFT JOIN [employees] e ON e.[id] = u.[employeeId] WHERE u.[id] IN (${part.map((_, index) => `@${index}`).join(', ')})`, part)
       for (const row of rows) out.set(Number(row.id), person(row))
     }
     return out
@@ -222,10 +223,12 @@ export class MeetService {
   async directory(user: JwtPayload) {
     const em = this.ds.manager
     await this.guard(em)
-    const rows: Array<{ id: number; displayName: string; jobTitle: string | null }> = await em.query(
-      `SELECT TOP (5000) u.[id], u.[displayName], e.[jobTitle] FROM [users] u LEFT JOIN [employees] e ON e.[id] = u.[employeeId]
-        WHERE u.[isActive] = 1 AND u.[id] <> @0 ORDER BY u.[displayName], u.[id]`, [user.sub])
-    return { users: rows.map(person) }
+    const rows: Array<{ id: number; displayName: string; jobTitle: string | null; accountName: string | null; fullNameEn: string | null }> = await em.query(
+      `SELECT TOP (5000) u.[id], ${MEET_PERSON_NAME_SQL} AS [displayName], e.[jobTitle], u.[displayName] AS [accountName], e.[fullNameEn]
+        FROM [users] u LEFT JOIN [employees] e ON e.[id] = u.[employeeId]
+        WHERE u.[isActive] = 1 AND u.[id] <> @0 ORDER BY 2, u.[id]`, [user.sub])
+    // alias: اسم الحساب والاسم بالإنجليزي — للبحث بس (اللي يعرفه باسم دخوله يلاقيه برضه)
+    return { users: rows.map(row => ({ ...person(row), alias: [row.accountName, row.fullNameEn].map(text => String(text ?? '').trim()).filter(text => text && text !== row.displayName).join(' ') || null })) }
   }
 
   /** «اجتماعاتي»: اللي أنا صاحبها أو مدعو لها — الجاي وآخر 60 يوم. قبل الترحيل أو قبل ضبط الخادم: فاضية بالسبب */
