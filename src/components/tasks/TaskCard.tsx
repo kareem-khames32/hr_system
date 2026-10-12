@@ -4,6 +4,8 @@
 // الخادم هو اللي بيحكم (canWork / canManage).
 // إضافة المالك 6 أكتوبر: المسؤول مايرفضش ولا يحوّل — له «مش بتاعتي» (تعليق بيبلّغ اللي كلّف) و«اطلب تمديد» (واللي بيدير المهمة يوافق أو
 // يرفض)؛ واللي بيديرها يرجّع اللي خلصت للتعديل بسبب؛ والالتزام بالميعاد ومرات الرجوع ظاهرين؛ والتقييم لو ميزته مفتوحة والمهمة معلّمة.
+// B-ADD.19 (كلمة المالك 12 أكتوبر): مرفقات المهمة — اللي كلّف بيها والمسؤول عنها (بيرفع شغله) بيرفقوا ملفات على نفس المهمة، واللي يشوفها
+// بيفتحها؛ والشيل للي رفع المرفق أو للي بيدير المهمة (canAttach / canRemove من الخادم).
 import { Fragment, useRef, useState } from 'react'
 import { AlertTriangle, CalendarClock, CheckCircle2, Clock, Hand, History, Paperclip, Pencil, RotateCcw, Star, XCircle } from 'lucide-react'
 import { fetchFileObjectUrl, uploadFile } from '../../lib/api'
@@ -12,7 +14,10 @@ import CommentsThread from '../comments/CommentsThread'
 import TaskLog from './TaskLog'
 import { addComment } from '../../lib/comments-api'
 import { localToday } from '../../lib/dates'
-import { decideTaskExtension, rateTask, requestTaskExtension, setTaskStatus, TASK_PRIORITY_LABELS, TASK_STATUS_LABELS, type ApiTask, type TaskStatus } from '../../lib/tasks-api'
+import {
+  attachTaskFiles, decideTaskExtension, rateTask, removeTaskAttachment, requestTaskExtension, setTaskStatus, TASK_ATTACHMENT_FILE_TYPE, TASK_PRIORITY_LABELS, TASK_STATUS_LABELS,
+  type ApiTask, type TaskStatus,
+} from '../../lib/tasks-api'
 
 const STATUS_TONE: Record<TaskStatus, string> = {
   OPEN: 'bg-gray-100 text-gray-700',
@@ -48,6 +53,9 @@ export default function TaskCard({ task, onChanged, onEdit, highlighted }: Props
   // سجل المهمة: مقفول لحد ما يتفتح، وبيتحمّل تاني بعد أي تغيير على المهمة
   const [history, setHistory] = useState(false)
   const logKey = [task.status, task.dueDate, task.assigneeEmployeeId, task.assigneeRole, task.returnCount, task.rating, task.extension?.dueDate, task.statusNote].join('|')
+  // B-ADD.19: خانة اختيار ملفات المرفقات، ومفتاح مرفقات المهمة (سجلها بيتحمّل تاني لما مرفق يتضاف أو يتشال)
+  const attachmentsKey = (task.attachments ?? []).map(row => row.id).join(',')
+  const attachInput = useRef<HTMLInputElement>(null)
   const [said, setSaid] = useState(0)
 
   // إجراء من إجراءات قواعد الإسناد (تمديد، قرار، تقييم، «مش بتاعتي»): نفس شكل تغيير الحالة
@@ -113,19 +121,39 @@ export default function TaskCard({ task, onChanged, onEdit, highlighted }: Props
     return change('DONE', { ...(text ? { proofNote: text } : {}), ...(proofFileId ? { proofFileId } : {}) })
   }
 
-  const openProof = async () => {
-    if (!task.proofFileId) return
+  const openFile = async (fileId: number, failure: string) => {
     const preview = window.open('', '_blank')
     if (preview) preview.opener = null
     try {
-      const url = await fetchFileObjectUrl(task.proofFileId)
-      if (!url) throw new Error('تعذر فتح ملف الإثبات')
+      const url = await fetchFileObjectUrl(fileId)
+      if (!url) throw new Error(failure)
       if (preview) preview.location.href = url
       setTimeout(() => URL.revokeObjectURL(url), 60_000)
     } catch (err) {
       preview?.close()
-      setError(err instanceof Error ? err.message : 'تعذر فتح ملف الإثبات')
+      setError(err instanceof Error ? err.message : failure)
     }
+  }
+  const openProof = async () => { if (task.proofFileId) await openFile(task.proofFileId, 'تعذر فتح ملف الإثبات') }
+
+  // B-ADD.19: إرفاق ملفات بالمهمة (بتترفع الأول وبعدين بتتربط كلها مرة واحدة)، وشيل مرفق بعد تأكيد
+  const attach = async (list: FileList | null) => {
+    const picked = Array.from(list ?? [])
+    if (attachInput.current) attachInput.current.value = ''
+    if (!picked.length) return
+    setBusy(true)
+    setError('')
+    try {
+      const ids: number[] = []
+      for (const item of picked) ids.push((await uploadFile(item, { entityType: TASK_ATTACHMENT_FILE_TYPE })).id)
+      onChanged(await attachTaskFiles(task.id, ids))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر إرفاق الملف')
+    } finally { setBusy(false) }
+  }
+  const removeAttachment = (fileId: number, name: string) => {
+    if (!window.confirm(`تشيل المرفق «${name}» من المهمة؟`)) return
+    void act(() => removeTaskAttachment(task.id, fileId), 'تعذر شيل المرفق')
   }
 
   return (
@@ -171,6 +199,27 @@ export default function TaskCard({ task, onChanged, onEdit, highlighted }: Props
           {task.proofFileId && <button type="button" className="underline flex items-center gap-1" onClick={openProof}><Paperclip size={14} />ملف الإثبات</button>}
         </div>
       )}
+      {/* B-ADD.19: مرفقات المهمة — مهمة تنفيذ طلب ومهمة إقرار مستند مرفقاتهم على الطلب أو المستند */}
+      {((task.attachments?.length ?? 0) > 0 || task.canAttach) && (
+        <div className="mt-2 text-sm space-y-1" data-task-attachments>
+          {(task.attachments ?? []).map(row => (
+            <div key={row.id} className="flex flex-wrap items-center gap-2 bg-gray-50 rounded-lg px-2 py-1" data-task-attachment={row.id}>
+              <Paperclip size={14} className="text-gray-500 shrink-0" />
+              <button type="button" className="underline text-primary-700 break-all text-start" onClick={() => void openFile(row.id, 'تعذر فتح المرفق')}>{row.name}</button>
+              <span className="text-xs text-gray-500">{row.mine ? 'رفعته أنت' : row.uploadedByName ? `رفعه: ${row.uploadedByName}` : ''}</span>
+              {row.canRemove && <button type="button" className="text-xs text-red-700 underline ms-auto" disabled={busy} onClick={() => removeAttachment(row.id, row.name)}>شيل</button>}
+            </div>
+          ))}
+          {task.canAttach && (
+            <>
+              <input ref={attachInput} type="file" multiple className="hidden" onChange={event => void attach(event.target.files)} />
+              <button type="button" className="text-xs text-primary-700 underline flex items-center gap-1" disabled={busy} onClick={() => attachInput.current?.click()} data-task-attach>
+                <Paperclip size={14} />{task.canWork && !task.canManage ? 'ارفع ملف على المهمة' : 'أرفق ملف'}
+              </button>
+            </>
+          )}
+        </div>
+      )}
       {task.rating != null && (
         <div className="mt-2 text-sm bg-primary-50 text-primary-700 rounded-lg p-2 flex flex-wrap items-center gap-2" data-task-rating>
           <Star size={16} /><span>تقييم التنفيذ: {task.rating} من 5</span>
@@ -207,7 +256,9 @@ export default function TaskCard({ task, onChanged, onEdit, highlighted }: Props
           <button type="button" className="text-xs text-primary-700 underline flex items-center gap-1" onClick={() => setHistory(value => !value)} aria-expanded={history}>
             <History size={14} />{history ? 'إخفاء سجل المهمة' : 'سجل المهمة'}
           </button>
+          <Fragment key={attachmentsKey}>
           {history && <div className="mt-2"><TaskLog key={logKey} id={task.id} /></div>}
+          </Fragment>
         </div>
       )}
       {error && <div role="alert" className="mt-2 bg-red-50 text-red-700 rounded-lg p-2 text-sm">{error}</div>}

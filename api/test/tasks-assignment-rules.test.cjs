@@ -223,7 +223,8 @@ test('TQ-06: سجل المهمة — سطر مع كل تغيير، والتغي�
     const long = await extras.taskLogOf(em, { sub: 10 }, 77)
     assert.deepEqual([long.truncated, long.lines.length, long.lines[0].body, long.lines[199].body], [true, 200, '5', '204'])
     assert.deepEqual(Object.keys(extras.TASK_LOG_EVENTS), ['ASSIGNED', 'REASSIGNED', 'DUE_CHANGED', 'EDITED', 'STARTED', 'WAITING', 'DONE', 'CANCELLED', 'REOPENED', 'RETURNED', 'EXTENSION_REQUESTED',
-      'EXTENSION_APPROVED', 'EXTENSION_REJECTED', 'RATED'])
+      // B-ADD.19: +2 (مرفقات المهمة)
+      'EXTENSION_APPROVED', 'EXTENSION_REJECTED', 'RATED', 'ATTACHED', 'ATTACHMENT_REMOVED'])
     // قبل ترحيل 096: لا سطر ولا تعليق ولا قراءة
     reset()
     const before = { query: async () => [{ ready: 0 }], getRepository: () => { throw new Error('الجدول مايتلمسش قبل الترحيل') } }

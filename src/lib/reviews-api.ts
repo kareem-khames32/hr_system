@@ -24,7 +24,8 @@ export interface ApiReviewCycle {
   counts: { total: number; self: number; manager: number; noManager: number }
 }
 export interface CycleBody {
-  name: string; kind: ReviewCycleKind; templateId: number; periodStart: string; periodEnd: string; selfDueDate: string; managerDueDate: string
+  /** selfDueDate: والتقييم الذاتي مقفول (B-ADD.18) مابيتبعتش — الخادم بيسجّله بميعاد المدير */
+  name: string; kind: ReviewCycleKind; templateId: number; periodStart: string; periodEnd: string; selfDueDate?: string; managerDueDate: string
   audienceMode: ReviewAudienceMode; audienceIds?: number[]; audience?: unknown
 }
 export type ReviewStatus = 'OPEN' | 'COMPLETED' | 'APPROVED' | 'ANNOUNCED' | 'ACKNOWLEDGED'
@@ -59,6 +60,8 @@ export interface ApiReviewForm extends ApiReviewRow {
   self: ReviewResponseView | null; manager: ReviewResponseView | null
   acknowledgement: { comment: string | null; at: string } | null
   canSubmit: boolean; canAcknowledge: boolean
+  /** B-ADD.18: خطوة التقييم الذاتي مفتوحة؟ (مقفولة افتراضيًا: محدش بيقيّم نفسه) */
+  selfReview?: boolean
   /** B3.8: اعتراض الموظف على نتيجته المعلنة (طلب في سلسلته) ومهلته */
   objection: ReviewObjection | null; objectionUntil: string | null; canObject: boolean
 }
@@ -90,7 +93,7 @@ const R = '/performance/reviews'
 export const fetchReviewTemplates = () => apiFetch<{ available: boolean; message?: string; templates: ApiReviewTemplate[] }>(`${R}/templates`)
 export const createReviewTemplate = (body: TemplateBody) => apiFetch<ApiReviewTemplate>(`${R}/templates`, json('POST', body))
 export const updateReviewTemplate = (id: number, body: Partial<TemplateBody> & { isActive?: boolean }) => apiFetch<ApiReviewTemplate>(`${R}/templates/${id}`, json('PATCH', body))
-export const fetchReviewCycles = () => apiFetch<{ available: boolean; message?: string; canCompany: boolean; cycles: ApiReviewCycle[] }>(`${R}/cycles`)
+export const fetchReviewCycles = () => apiFetch<{ available: boolean; message?: string; canCompany: boolean; selfReview?: boolean; cycles: ApiReviewCycle[] }>(`${R}/cycles`)
 export const createReviewCycle = (body: CycleBody) => apiFetch<ApiReviewCycle>(`${R}/cycles`, json('POST', body))
 export const launchReviewCycle = (id: number) => apiFetch<ApiReviewCycle>(`${R}/cycles/${id}/launch`, json('POST', {}))
 export const closeReviewCycle = (id: number) => apiFetch<ApiReviewCycle>(`${R}/cycles/${id}/close`, json('POST', {}))
@@ -98,9 +101,10 @@ export const advanceReviewCycle = (id: number, to: 'APPROVED' | 'ANNOUNCED') =>
   apiFetch<{ moved: number; cycle: ApiReviewCycle; assignments: ApiCycleAssignment[] }>(`${R}/cycles/${id}/advance`, json('POST', { to }))
 export const setReviewEvaluator = (assignmentId: number, evaluatorEmployeeId: number) =>
   apiFetch<{ changed: boolean; evaluatorName: string }>(`${R}/${assignmentId}/evaluator`, json('POST', { evaluatorEmployeeId }))
-export const fetchCycleAssignments = (id: number) => apiFetch<{ cycle: ApiReviewCycle; assignments: ApiCycleAssignment[] }>(`${R}/cycles/${id}/assignments`)
-export const fetchMyReviews = () => apiFetch<{ available: boolean; reviews: ApiReviewRow[] }>(`${R}/mine`)
-export const fetchTeamReviews = () => apiFetch<{ available: boolean; reviews: ApiReviewRow[] }>(`${R}/team`)
+export const fetchCycleAssignments = (id: number) => apiFetch<{ cycle: ApiReviewCycle; selfReview?: boolean; assignments: ApiCycleAssignment[] }>(`${R}/cycles/${id}/assignments`)
+// B-ADD.18: selfReview = خطوة التقييم الذاتي مفتوحة؛ manager = الحساب تحته حد في الهيكل أو له تكليف هو مقيِّمه («تقييم فريقي» بيظهر له بس)
+export const fetchMyReviews = () => apiFetch<{ available: boolean; selfReview?: boolean; reviews: ApiReviewRow[] }>(`${R}/mine`)
+export const fetchTeamReviews = () => apiFetch<{ available: boolean; manager?: boolean; reviews: ApiReviewRow[] }>(`${R}/team`)
 export const fetchReviewForm = (id: number) => apiFetch<ApiReviewForm>(`${R}/${id}`)
 export const submitReview = (id: number, answers: ReviewAnswers, comment?: string) => apiFetch<ApiReviewForm>(`${R}/${id}/submit`, json('POST', { answers, ...(comment ? { comment } : {}) }))
 export const acknowledgeReview = (id: number, comment?: string) => apiFetch<ApiReviewForm>(`${R}/${id}/acknowledge`, json('POST', comment ? { comment } : {}))

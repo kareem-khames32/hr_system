@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
-import { Brackets, DataSource, In, Not, type EntityManager } from 'typeorm'
+import { Brackets, DataSource, In, IsNull, Not, type EntityManager } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchIdIn, branchScopeOf, inBranchScope, isEmptyBranchScope, userHasPerm } from '../auth/guards'
 import { User } from '../auth/user.entity'
@@ -13,23 +13,29 @@ import { OnboardingService } from '../onboarding/onboarding.service'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
-import { audienceMembersNow } from '../org/audience-preview'
+import { audienceMembersNow, AUDIENCE_PREVIEW_NAMES } from '../org/audience-preview'
 import { assertAudienceTargets, orgAudienceJson } from '../org/org-audience'
 import { recordOutboxEvent } from '../queue/outbox'
+import { isCurrentEmployee } from '../reports/metrics'
 import { ApproverResolver, FUNCTIONAL_APPROVER_ROLES } from '../requests/approver-resolver.service'
 import { completeExecution, executionOwnRequest, executionRequestOfTask, executionRequestsOfTasks, executionTaskLinked, EXECUTION_TASK_CANCEL_BLOCKED, EXECUTION_TASK_CLOSE_BLOCKED, EXECUTION_TASK_EDIT_BLOCKED, EXECUTION_TASK_OWN_BLOCKED, EXECUTION_TASK_REOPEN_BLOCKED } from '../requests/execution-tasks'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
+import { TaskAttachment } from './task-attachment.entity'
+import {
+  activeTaskAttachments, bindTaskAttachments, cleanAttachmentIds, taskAttachmentsOf, taskAttachmentsReady, TASK_ATTACHMENT_NOT_FOUND, TASK_ATTACHMENTS_MAX, TASK_ATTACHMENTS_MIGRATION_MISSING,
+  type TaskAttachmentRow,
+} from './task-attachments'
 import { Task, TASK_OPEN_STATUSES, type TaskPriority, type TaskStatus } from './task.entity'
 import {
   notPersonalTask, NO_TASK_EXTRAS, recordTaskLog, taskExtrasOf, taskExtrasOfOne, taskExtrasReady, taskLogOf, writeTaskExtras, TASK_ASSIGNEE_CANNOT_MANAGE, TASK_OUTSIDE_TEAM, TASK_RATING_CLOSED,
   TASK_RATING_FEATURE, TASK_RULES_MIGRATION_MISSING, type TaskExtras, type TaskLogEvent,
 } from './task-extras'
 import {
-  isTaskDate, isTaskRole, taskAccess, taskAddDays, taskAwaitsAccount, taskCompliance, taskComplianceLabel, taskDaysBetween, taskIdChunks, taskLocalDate, taskManagedBy, taskRolesHeldBy, tasksTableReady,
+  assertAudienceInsideTree, isTaskDate, isTaskRole, taskAccess, taskAddDays, taskAttachmentsVisibleTo, taskAwaitsAccount, taskCompliance, taskComplianceLabel, taskDaysBetween, taskIdChunks, taskLocalDate, taskManagedBy, taskRolesHeldBy, tasksTableReady,
   TASK_NOT_FOUND, TASK_ROLE_LABELS, TASKS_DAYS_MAX, TASKS_ESCALATION_DAYS_DEFAULT, TASKS_ESCALATION_DAYS_KEY, TASKS_MIGRATION_MISSING,
   TASKS_REMINDER_DAYS_DEFAULT, TASKS_REMINDER_DAYS_KEY,
   TASK_OFF_DUTY_STATUSES, TASK_STILL_OPENING,
-  TASK_COMMENTS_LINKED,
+  TASK_COMMENTS_LINKED, TASK_SELF_RATING, type TaskGroupTree,
 } from './task-rules'
 
 // B2.5: محرك المهام.
@@ -55,7 +61,15 @@ const TEAM_CLOSED_DAYS = 14
 const REPORT_DEFAULT_DAYS = 90, REPORT_MAX_DAYS = 366, REPORT_TASKS_MAX = 5000
 // B-ADD.1: المهمة الجماعية
 export const TASK_GROUP_MAX = 300
-export const TASK_GROUP_RULE = 'المهمة الجماعية لصاحب صلاحية «إدارة المهام» أو «تكليف أي موظف» — في نطاق فروعه'
+// B-ADD.18: وللمدير على اللي تحته في الهيكل بس
+export const TASK_GROUP_RULE = 'المهمة الجماعية للي تحته موظفين في الهيكل (على اللي تحته بس)، أو لصاحب صلاحية «إدارة المهام» أو «تكليف أي موظف» في نطاق فروعه'
+export const TASK_GROUP_NOBODY_UNDER = 'مفيش حد من اللي تحتك في الاختيار ده'
+// B-ADD.19: مرفقات المهمة
+export const TASK_ATTACH_RULE = 'إرفاق ملف بالمهمة للي كلّف بيها أو للمسؤول عنها'
+export const TASK_ATTACHMENT_REMOVE_RULE = 'شيل المرفق للي رفعه أو للي كلّف بالمهمة'
+export const TASK_ATTACHMENTS_LINKED = 'المهمة دي تبع طلب أو مستند — مرفقاتها على الطلب أو المستند نفسه'
+export const TASK_ATTACHMENTS_CLOSED = 'المهمة مقفولة — المرفقات بتتغيّر والمهمة مفتوحة بس'
+export const TASK_ATTACHMENTS_FULL = `${TASK_ATTACHMENTS_MAX} مرفق بالكتير على المهمة`
 
 export interface TaskInput {
   title?: string
@@ -68,6 +82,8 @@ export interface TaskInput {
   requiresProof?: boolean
   /** علامة «تحتاج تقييم» (الميزة الفرعية tasks.rating) */
   needsRating?: boolean
+  /** B-ADD.19: ملفات اترفعت بتصنيف task_attachment وبتتربط بالمهمة مع إنشائها */
+  attachmentFileIds?: unknown
 }
 export interface TaskStatusInput { status: string; note?: string; proofNote?: string; proofFileId?: number }
 export interface TaskListFilter { status?: string; overdue?: string; assigneeEmployeeId?: string; branchId?: string }
@@ -234,15 +250,21 @@ export class TasksService {
     const all = [...rows, ...extra].sort((a, b) => a.fullName.localeCompare(b.fullName, 'ar') || a.id - b.id)
     const branches = await this.ds.getRepository(Branch).find({ where: canManage && scope !== null ? { id: branchIdIn(scope) } : {}, select: { id: true, name: true }, order: { name: 'ASC' } })
     const branchName = new Map(branches.map(branch => [branch.id, branch.name]))
+    // B-ADD.18 (كلمة المالك 12 أكتوبر): التكليف لغيري للي تحته حد بس (أو لصاحب الصلاحيتين القايمتين في نطاقه). اللي مالوش حد تحته
+    // بيفضل له مهمته الشخصية بس، من غير زرار تكليف ولا قايمة موظفين
+    const others = scoped || all.some(row => row.id !== user.employeeId)
     return {
-      available: await this.ready(), canManage, canAssign: scoped || all.length > 0,
-      // B-ADD.1: المهمة الجماعية (بالاستهداف الموحد) لصاحب صلاحية بنطاق
-      canAssignGroup: scoped,
+      available: await this.ready(), canManage, canAssign: scoped || all.length > 0, canAssignOthers: others,
+      // B-ADD.1: المهمة الجماعية (بالاستهداف الموحد) لصاحب صلاحية بنطاق. B-ADD.18: وللمدير على اللي تحته في الهيكل بس (groupWithin = tree:
+      // المنتقي بياخد شجرته من GET /tasks/group-context مش شجرة نطاق الفروع)
+      canAssignGroup: scoped || (others && (await this.groupTree(user, this.ds.manager, under)).employeeIds.size > 0), groupWithin: scoped ? 'scope' as const : 'tree' as const,
       employees: all.map(row => ({ id: row.id, fullName: row.fullName, employeeCode: row.employeeCode, jobTitle: row.jobTitle ?? null, branchName: branchName.get(row.branchId) ?? null,
         // نفسي: مهمة شخصية (تذكير) بيشوفها صاحبها ومديره المباشر بس
         self: self && row.id === user.employeeId })),
       // مهمة الدور (لكل حاملي الدور في الفرع المختار) لصاحب «إدارة المهام» بس
       roles: canManage ? FUNCTIONAL_APPROVER_ROLES.map(role => ({ key: role, label: TASK_ROLE_LABELS[role] })) : [],
+      // B-ADD.19: المرفقات متاحة (ترحيل 194 موجود)
+      attachmentsAvailable: await taskAttachmentsReady(this.ds.manager),
       branches: canManage ? branches.map(branch => ({ id: branch.id, name: branch.name })) : [],
       rulesAvailable: rulesReady, ratingEnabled: rulesReady && await this.modules.isFeatureEnabled(TASK_RATING_FEATURE),
     }
@@ -277,7 +299,8 @@ export class TasksService {
    *  - الدور: «إدارة المهام» وفرع من نطاق الحساب.
    * برّه ده: 403 برسالة بتوجّه للطلب؛ ولصاحب صلاحية بنطاق: نفس رد الموظف اللي مش موجود (مايعرفش موجود ولا لأ).
    */
-  private async assignment(user: JwtPayload, input: Pick<TaskInput, 'assigneeEmployeeId' | 'assigneeRole' | 'branchId'>, em: EntityManager = this.ds.manager) {
+  private async assignment(user: JwtPayload, input: Pick<TaskInput, 'assigneeEmployeeId' | 'assigneeRole' | 'branchId'>, em: EntityManager = this.ds.manager,
+    knownUnder?: ReadonlySet<number>) {
     const canManage = userHasPerm(user, 'tasks.manage'), byScope = canManage || userHasPerm(user, 'tasks.assign_any'), scope = branchScopeOf(user)
     const byEmployee = input.assigneeEmployeeId != null, byRole = input.assigneeRole != null && input.assigneeRole !== ''
     if (byEmployee === byRole) throw new BadRequestException('اختار مسؤول واحد للمهمة: موظف أو دور')
@@ -292,7 +315,9 @@ export class TasksService {
     // لنفسي = مهمة شخصية (العلامة في جدول ترحيل 096؛ قبل الترحيل التكليف القديم زي ما هو)
     const personal = !!employee && !!user.employeeId && employee.id === user.employeeId && await taskExtrasReady(em)
     const inScope = !personal && byScope && !!employee && inBranchScope(scope, employee.branchId)
-    const under = !personal && !inScope && !!employee && !!user.employeeId && employee.id !== user.employeeId && await this.resolverOn(em).isUnder(employee.id, user.employeeId)
+    // knownUnder (B-ADD.18، المهمة الجماعية للمدير): «اللي تحتي» محسوبة مرة واحدة على اتصال المعاملة نفسها بنفس قاعدة isUnder بالحرف
+    const under = !personal && !inScope && !!employee && !!user.employeeId && employee.id !== user.employeeId
+      && (knownUnder ? knownUnder.has(employee.id) : await this.resolverOn(em).isUnder(employee.id, user.employeeId))
     if (!personal && !inScope && !under) {
       // نفسي قبل ترحيل 096: المهمة الشخصية لسه مقفولة
       if (!!employee && employee.id === user.employeeId) throw new BadRequestException(TASK_RULES_MIGRATION_MISSING)
@@ -325,10 +350,12 @@ export class TasksService {
     const title = this.cleanTitle(input.title)
     const description = this.cleanText(input.description, 2000)
     const dueDate = this.cleanDueDate(input.dueDate)
+    const fileIds = cleanAttachmentIds(input.attachmentFileIds)
     const { personal, ...assignment } = await this.assignment(user, input)
     const needsRating = await this.ratingFlag(input.needsRating, { ...assignment, personal }, input.needsRating === true && await this.ratingOn())
     const now = new Date()
     const saved = await this.ds.transaction(async em => {
+      if (fileIds.length && !(await taskAttachmentsReady(em))) throw new BadRequestException(TASK_ATTACHMENTS_MIGRATION_MISSING)
       const repo = em.getRepository(Task)
       const row = await repo.save(repo.create({
         title, description, ...assignment, createdByUserId: user.sub, dueDate, priority: (input.priority ?? 'NORMAL') as TaskPriority, status: 'OPEN',
@@ -339,6 +366,8 @@ export class TasksService {
       // المهمة الشخصية تذكير صاحبها: من غير «مهمة جديدة عليك»
       if (!personal) await this.recordEvent(em, 'TASK_ASSIGNED', row)
       await recordTaskLog(em, user, row, 'ASSIGNED', personal ? 'سجّل مهمة شخصية' : 'كلّف بالمهمة')
+      // B-ADD.19: المرفقات بتتربط في نفس معاملة الإنشاء — مرفق مرفوض = ولا مهمة
+      await this.attachOnCreate(em, user, [row], fileIds)
       return row
     })
     return (await this.views(user, [saved]))[0]
@@ -346,24 +375,42 @@ export class TasksService {
 
   // ===== B-ADD.1: المهمة الجماعية — نفس المهمة لكل موظف في جمهور بالاستهداف الموحد =====
   /**
-   * لصاحب «إدارة المهام» أو «تكليف أي موظف» بس، وجوه نطاق فروعه: الجمهور (الشركة ← فرع ← إدارة ← قسم ← فريق ← موظفين بالاسم، ومعاه
+   * لصاحب «إدارة المهام» أو «تكليف أي موظف» جوه نطاق فروعه — وB-ADD.18: للمدير على اللي تحته في الهيكل بس: الجمهور (الشركة ← فرع ← إدارة ← قسم ← فريق ← موظفين بالاسم، ومعاه
    * «الكل ماعدا…») بيتفك لموظفينه الحاليين دلوقتي، وكل واحد بياخد مهمته هو (مهمة عادية بكل قواعدها: إشعار، سجل، إثبات، تقييم) بحكم
    * التكليف الفردي نفسه (assignment). اللي بيكلّف مش من المكلَّفين (مهمته لنفسه شخصية ومن شاشتها)، واللي مش على رأس العمل بيتخطّى
    * وبيرجع في «اتخطّوا». كله في معاملة واحدة: يا الكل يا ولا مهمة.
    */
   async createForGroup(user: JwtPayload, input: TaskInput & { audience?: unknown }) {
     if (!(await this.ready())) throw new BadRequestException(TASKS_MIGRATION_MISSING)
-    if (!userHasPerm(user, 'tasks.manage') && !userHasPerm(user, 'tasks.assign_any')) throw new ForbiddenException(TASK_GROUP_RULE)
+    // B-ADD.18 (كلمة المالك 12 أكتوبر: «أسند مهمة بس لفريقي… لا أكتر ولا أقل»): من غير الصلاحيتين القايمتين المهمة الجماعية للمدير على
+    // اللي تحته في الهيكل بس — نفس الجمهور، متحكوم عليه جوه شجرته (groupTree) بدل نطاق الفروع
+    const byScope = userHasPerm(user, 'tasks.manage') || userHasPerm(user, 'tasks.assign_any')
     const title = this.cleanTitle(input.title)
     const description = this.cleanText(input.description, 2000)
     const dueDate = this.cleanDueDate(input.dueDate)
     const audience = orgAudienceJson(input.audience, 'جمهور المهمة')
+    const fileIds = cleanAttachmentIds(input.attachmentFileIds)
     const ratingOn = input.needsRating === true && await this.ratingOn()
     const now = new Date()
+    const nobody = byScope ? 'مفيش موظفين في الجمهور ده جوه نطاقك' : TASK_GROUP_NOBODY_UNDER
     return this.ds.transaction(async em => {
+      if (fileIds.length && !(await taskAttachmentsReady(em))) throw new BadRequestException(TASK_ATTACHMENTS_MIGRATION_MISSING)
+      // الشجرة على اتصال المعاملة. اختيار برّه الشجرة (وحدة أو فريق أو موظف بالاسم، موجود أو لأ) بنفس الرفض — قبل أي فحص وجود
+      const inTree = async () => {
+        const tree = await this.groupTree(user, em)
+        if (!tree.employeeIds.size) throw new ForbiddenException(TASK_GROUP_RULE)
+        assertAudienceInsideTree(audience, tree)
+        return tree
+      }
+      let tree: TaskGroupTree | null = byScope ? null : await inTree()
+      // حكم «جوه شجرتي» على قراءة جديدة للشجرة (أو الكل لصاحب الصلاحية)
+      const insideTreeNow = async () => {
+        if (!byScope) tree = await inTree()
+        return (member: { id: number }) => !tree || tree.employeeIds.has(member.id)
+      }
       await assertAudienceTargets(em, audience, 'جمهور المهمة')
-      const seen = (await audienceMembersNow(em, audience, branchScopeOf(user))).filter(member => member.id !== user.employeeId)
-      if (!seen.length) throw new BadRequestException('مفيش موظفين في الجمهور ده جوه نطاقك')
+      const seen = (await audienceMembersNow(em, audience, branchScopeOf(user))).filter(member => member.id !== user.employeeId).filter(await insideTreeNow())
+      if (!seen.length) throw new BadRequestException(nobody)
       if (seen.length > TASK_GROUP_MAX) throw new BadRequestException(`المهمة الجماعية لـ${TASK_GROUP_MAX} موظف بالكتير — قسّم الجمهور`)
       // Codex P7A-B03: صفوف الموظفين بتتقفل (بترتيب أرقامهم) قبل أي حكم بيتكتب عليه: نقل موظف لفرع تاني أو تغيير حالته بيستنى لحد ما
       // المعاملة تخلص. وبعد القفل الجمهور بيتحكم تاني (مكان الموظف ونطاق الحساب)، وحكم التكليف (assignment) بيقرا الصف المقفول.
@@ -371,12 +418,14 @@ export class TasksService {
       await em.query(`SELECT [id] FROM [employees] WITH (UPDLOCK, ROWLOCK) WHERE [id] IN (${lockIds.map((_, index) => `@${index}`).join(', ')}) ORDER BY [id]`, lockIds)
       const locked = new Set(lockIds)
       const members = (await audienceMembersNow(em, audience, branchScopeOf(user))).filter(member => locked.has(member.id))
-      if (!members.length) throw new BadRequestException('مفيش موظفين في الجمهور ده جوه نطاقك')
+        // B-ADD.18: وشجرة المدير بتتقري تاني بعد القفل (موظف اتنقل من تحته وإحنا مستنيين القفل مابقاش من الجمهور)
+        .filter(await insideTreeNow())
+      if (!members.length) throw new BadRequestException(nobody)
       const repo = em.getRepository(Task)
       const created: Task[] = [], skipped: Array<{ employeeId: number; fullName: string; reason: string }> = []
       for (const member of members) {
         let assignment: Awaited<ReturnType<TasksService['assignment']>>
-        try { assignment = await this.assignment(user, { assigneeEmployeeId: member.id }, em) } catch (error) {
+        try { assignment = await this.assignment(user, { assigneeEmployeeId: member.id }, em, tree?.under) } catch (error) {
           if (!(error instanceof BadRequestException) && !(error instanceof NotFoundException) && !(error instanceof ForbiddenException)) throw error
           skipped.push({ employeeId: member.id, fullName: member.fullName, reason: [].concat((error.getResponse() as { message?: unknown })?.message as never ?? error.message).join('، ') })
           continue
@@ -394,8 +443,79 @@ export class TasksService {
         created.push(row)
       }
       if (!created.length) throw new BadRequestException('ولا موظف في الجمهور ده ينفع يتكلّف دلوقتي')
+      // B-ADD.19: مرفقات المهمة الجماعية مشتركة — نفس الملف مربوط بكل مهمة من مهامها
+      await this.attachOnCreate(em, user, created, fileIds)
       return { created: created.length, taskIds: created.map(row => row.id), skipped }
     })
+  }
+
+  // ===== B-ADD.18: شجرة المدير للمهمة الجماعية — «اللي تحتي» ووحداتهم وفرقهم =====
+  /**
+   * اللي تحت الحساب في الهيكل دلوقتي (subordinatesOf — نفس قاعدة التكليف الفردي بالحرف)، الحاليين منهم بس وجوه نطاق فروع الحساب؛ والوحدات
+   * والفرق اللي هو أو حد تحته بيديرها أو بيقودها (unitsUnder). فرع أو وحدة أو فريق برّه نطاق فروع الحساب مابيرجعش (لا اسمه ولا رقمه):
+   * مرؤوس في فرع برّه النطاق بيتكلّف بالتكليف الفردي زي الأول. containers = أقسام فرق بيقودها من غير ما يدير القسم نفسه: بتتعرض للمنتقي
+   * عشان فريقه يظهر تحتها، ومش من اختياراته (listed = false).
+   */
+  private async groupTree(user: JwtPayload, em: EntityManager = this.ds.manager, knownUnder?: number[]): Promise<TaskGroupTree & { employees: Employee[]; units: Department[]; containers: Department[]; teams: Team[] }> {
+    const none = { under: new Set<number>(), employeeIds: new Set<number>(), unitIds: new Set<number>(), teamIds: new Set<number>(), branchIds: new Set<number>(),
+      employees: [], units: [], containers: [], teams: [] }
+    const scope = branchScopeOf(user)
+    if (!user.employeeId || isEmptyBranchScope(scope)) return none
+    const resolver = this.resolverOn(em)
+    const under = knownUnder ?? await resolver.subordinatesOf(user.employeeId)
+    if (!under.length) return none
+    const found: Employee[] = []
+    for (const part of taskIdChunks(under)) {
+      found.push(...await em.getRepository(Employee).find({ where: { id: In(part), isActive: true, ...(scope !== null ? { branchId: branchIdIn(scope) } : {}) },
+        select: { id: true, fullName: true, employeeCode: true, branchId: true, departmentId: true, teamId: true, status: true, isActive: true } }))
+    }
+    const employees = found.filter(row => isCurrentEmployee(row) && row.branchId != null && row.id !== user.employeeId)
+    if (!employees.length) return none
+    const branchIds = new Set(employees.map(row => row.branchId))
+    const owned = await resolver.unitsUnder(user.employeeId, under)
+    const select = { id: true, name: true, branchId: true, parentId: true, unitType: true, isExecutive: true } as const
+    const departments = em.getRepository(Department)
+    const units = owned.unitIds.length ? (await departments.find({ where: { id: In(owned.unitIds), isActive: true }, select, order: { id: 'ASC' } })).filter(row => branchIds.has(row.branchId)) : []
+    const unitIds = new Set(units.map(row => row.id))
+    const led = owned.teamIds.length ? await em.getRepository(Team).find({ where: { id: In(owned.teamIds), isActive: true }, select: { id: true, name: true, departmentId: true }, order: { id: 'ASC' } }) : []
+    const outside = [...new Set(led.map(row => row.departmentId).filter(id => !unitIds.has(id)))]
+    const containers = outside.length ? (await departments.find({ where: { id: In(outside), isActive: true }, select, order: { id: 'ASC' } })).filter(row => branchIds.has(row.branchId)) : []
+    const shown = new Set([...unitIds, ...containers.map(row => row.id)])
+    const teams = led.filter(row => shown.has(row.departmentId))
+    return { under: new Set(under), employeeIds: new Set(employees.map(row => row.id)), unitIds, teamIds: new Set(teams.map(row => row.id)), branchIds, employees, units, containers, teams }
+  }
+
+  /** B-ADD.18: شجرة المنتقي «على مين؟» للمدير — بنفس شكل GET /org/audience-context، بس اللي تحته في الهيكل بدل نطاق الفروع */
+  async groupContext(user: JwtPayload) {
+    const tree = await this.groupTree(user)
+    if (!tree.employeeIds.size) throw new ForbiddenException(TASK_GROUP_RULE)
+    const branches = await this.ds.getRepository(Branch).find({ where: { id: In([...tree.branchIds]) }, select: { id: true, name: true }, order: { id: 'ASC' } })
+    const branchOf = new Map([...tree.units, ...tree.containers].map(row => [row.id, row.branchId]))
+    const teamIds = tree.teamIds
+    return {
+      branches: branches.map(row => ({ id: row.id, name: row.name })),
+      // الأب اللي برّه الشجرة مابيرجعش رقمه
+      units: [...tree.units.map(row => ({ row, listed: true })), ...tree.containers.map(row => ({ row, listed: false }))].map(({ row, listed }) => ({
+        id: row.id, name: row.name, branchId: row.branchId, parentId: listed && row.parentId != null && tree.unitIds.has(row.parentId) ? row.parentId : null,
+        unitType: row.unitType, isExecutive: row.isExecutive === true, listed })),
+      teams: tree.teams.map(row => ({ id: row.id, name: row.name, departmentId: row.departmentId, branchId: branchOf.get(row.departmentId)! })),
+      employees: [...tree.employees].sort((a, b) => a.id - b.id).map(row => ({
+        id: row.id, branchId: row.branchId, departmentId: row.departmentId != null && branchOf.has(row.departmentId) ? row.departmentId : null,
+        teamId: row.teamId != null && teamIds.has(row.teamId) ? row.teamId : null, fullName: row.fullName, employeeCode: row.employeeCode ?? null })),
+    }
+  }
+
+  /** B-ADD.18: معاينة جمهور المهمة الجماعية للمدير قبل الحفظ — نفس حكم الحفظ: الجمهور جوه شجرته، ومن غيره هو */
+  async groupPreview(user: JwtPayload, rawAudience: unknown) {
+    const tree = await this.groupTree(user)
+    if (!tree.employeeIds.size) throw new ForbiddenException(TASK_GROUP_RULE)
+    const audience = orgAudienceJson(rawAudience, 'جمهور المهمة')
+    assertAudienceInsideTree(audience, tree)
+    await assertAudienceTargets(this.ds.manager, audience, 'جمهور المهمة')
+    const members = (await audienceMembersNow(this.ds.manager, audience, branchScopeOf(user))).filter(member => tree.employeeIds.has(member.id))
+    // الأسماء بس: وحدة مرؤوس مش من وحدات الشجرة مابيرجعش رقمها
+    return { count: members.length, truncated: members.length > AUDIENCE_PREVIEW_NAMES,
+      employees: members.slice(0, AUDIENCE_PREVIEW_NAMES).map(row => ({ id: row.id, employeeCode: row.employeeCode, fullName: row.fullName, branchId: row.branchId, departmentId: null, teamId: null })) }
   }
 
   // حدث المهمة في نفس معاملة تغييرها — مراجع بس (زي أحداث الطلبات). حدثي التذكير والتأخير بيشيلوا كمان رقم ختم المهمة اللي اتسجّل معاهم
@@ -670,6 +790,9 @@ export class TasksService {
     const saved = await this.ds.transaction(async em => {
       const { task, access, extras } = await this.plainLocked(em, user, id)
       if (task.createdByUserId !== user.sub || !access.manage || extras.isPersonal) throw new ForbiddenException('تقييم المهمة للي كلّف بيها')
+      // B-ADD.18 (كلمة المالك 12 أكتوبر: «مفيش موظف بيقيّم نفسه»): اللي كلّف بيها والمهمة على موظف حسابه هو (حسابه اتربط بموظف المسؤول
+      // بعد التكليف، أو صاحب صلاحية كلّف نفسه قبل ترحيل 096) مابيقيّمهاش
+      if (task.assigneeEmployeeId != null && !!user.employeeId && task.assigneeEmployeeId === user.employeeId) throw new ForbiddenException(TASK_SELF_RATING)
       if (task.status !== 'DONE') throw new BadRequestException('التقييم بعد ما المهمة تخلص')
       if (!extras.needsRating) throw new BadRequestException('المهمة دي مش معلّمة «تحتاج تقييم»')
       if (extras.rating != null) throw new ConflictException('المهمة اتقيّمت قبل كده')
@@ -770,6 +893,89 @@ export class TasksService {
     if (await em.getRepository(Task).count({ where: { proofFileId: fileId, id: Not(taskId) } })) throw new BadRequestException('ملف الإثبات مستعمل في مهمة تانية')
   }
 
+  // ===== B-ADD.19: مرفقات المهمة =====
+  // كلمة المالك 12 أكتوبر: «وأنا برفع مهمة لحد أقدر أرفق شيت إكسل أو فايل… عشان نستغني شوية عن الإيميلات». الملف بيترفع من مسار الملفات
+  // القايم بتصنيف task_attachment (حجمه ونوعه من إعدادات الملفات)، وبيتربط بالمهمة هنا: مع الإنشاء، أو بعده من اللي بيديرها (اللي كلّف
+  // بيها بحقه دلوقتي أو «إدارة المهام» في فرعها) أو من مسؤولها (بيرفع شغله على نفس المهمة). القراءة للي يشوف مرفقاتها
+  // (taskAttachmentsVisibleTo)، والشيل للي رفع المرفق أو للي بيديرها. مهمة تنفيذ طلب ومهمة إقرار مستند مرفقاتهم على الطلب أو المستند.
+
+  /** ربط مرفقات الإنشاء بمهامها (جوه معاملة الإنشاء) وسطر في سجل كل مهمة */
+  private async attachOnCreate(em: EntityManager, user: JwtPayload, tasks: Task[], fileIds: number[]) {
+    if (!fileIds.length) return
+    const names = await bindTaskAttachments(em, user, tasks.map(task => task.id), fileIds)
+    for (const task of tasks) await recordTaskLog(em, user, task, 'ATTACHED', `أرفق ${names.map(name => `«${name}»`).join('، ')}`)
+  }
+
+  /** المرفق زي ما بيتعرض: رقم الملف (للتحميل من ‎/files/:id) واسمه وحجمه ومين رفعه — ويتشال ولا لأ بحكم الخادم */
+  private attachmentView(user: JwtPayload, row: TaskAttachmentRow, removable: boolean, manage: boolean) {
+    const mine = row.uploadedByUserId === user.sub
+    return { id: row.fileId, name: row.name, size: row.size, uploadedByName: row.uploadedByName, uploadedAt: row.uploadedAt, mine, canRemove: removable && (mine || manage) }
+  }
+
+  /**
+   * مرفقات مهمة للي يشوف مرفقاتها — برّه كده «غير موجودة» (نفس رد المهمة الغايبة). اللي فوق مسؤولها بأكتر من مستوى بيقراها من هنا من غير
+   * ما المهمة نفسها تتفتح له.
+   */
+  async attachments(user: JwtPayload, id: number) {
+    const em = this.ds.manager
+    const task = (await this.ready(em)) ? await em.getRepository(Task).findOne({ where: { id } }) : null
+    const seen = task ? await taskAttachmentsVisibleTo(user, { ...task, isPersonal: (await taskExtrasOfOne(em, id)).isPersonal }, this.resolver) : null
+    if (!task || !seen?.visible) throw new NotFoundException(TASK_NOT_FOUND)
+    const available = await taskAttachmentsReady(em)
+    const linked = !!(await executionRequestOfTask(em, id)) || !!(await documentOfAckTask(em, id))
+    const changeable = available && !linked && TASK_OPEN_STATUSES.includes(task.status as TaskStatus) && seen.access.visible
+    return {
+      available, canAttach: changeable && (seen.access.manage || seen.access.work),
+      attachments: ((await taskAttachmentsOf(em, [id])).get(id) ?? []).map(row => this.attachmentView(user, row, changeable, seen.access.manage)),
+    }
+  }
+
+  /** المهمة العادية المفتوحة تحت قفل صفها، بحق الحساب عليها — لتغيير مرفقاتها (نفس ترتيب أقفال التعديل) */
+  private async attachable(em: EntityManager, user: JwtPayload, id: number) {
+    if (!(await taskAttachmentsReady(em))) throw new BadRequestException(TASK_ATTACHMENTS_MIGRATION_MISSING)
+    const execution = await executionRequestOfTask(em, id)
+    const acknowledgement = await documentOfAckTask(em, id)
+    const loaded = await this.load(user, id, em, !acknowledgement)
+    if (execution || acknowledgement) throw new BadRequestException(TASK_ATTACHMENTS_LINKED)
+    if (await this.linkedWhileWaiting(em, id, false)) throw new ConflictException(TASK_STILL_OPENING)
+    if (!TASK_OPEN_STATUSES.includes(loaded.task.status as TaskStatus)) throw new BadRequestException(TASK_ATTACHMENTS_CLOSED)
+    return loaded
+  }
+
+  /** إرفاق ملفات بمهمة قايمة: اللي بيديرها أو مسؤولها، والمهمة مفتوحة. الحكم كله بعد قفل صف المهمة */
+  async attach(user: JwtPayload, id: number, input: { fileIds?: unknown }) {
+    const fileIds = cleanAttachmentIds(input.fileIds)
+    if (!fileIds.length) throw new BadRequestException('اختار ملف واحد على الأقل')
+    await this.ds.transaction(async em => {
+      const { task, access } = await this.attachable(em, user, id)
+      if (!access.manage && !access.work) throw new ForbiddenException(TASK_ATTACH_RULE)
+      if (await activeTaskAttachments(em, task.id) + fileIds.length > TASK_ATTACHMENTS_MAX) throw new BadRequestException(TASK_ATTACHMENTS_FULL)
+      await this.attachOnCreate(em, user, [task], fileIds)
+      // العمود اللي اتغيّر بس (مش حفظ الصف كله)
+      await em.getRepository(Task).update({ id: task.id }, { updatedAt: new Date() })
+    })
+    return this.detail(user, id)
+  }
+
+  /**
+   * شيل مرفق من مهمة: اللي رفعه (ولسه شايف المهمة) أو اللي بيديرها، والمهمة مفتوحة. الصف بيتختم (مين وإمتى) ومابيتمسحش، والملف بيفضل على
+   * التخزين. مرفق المهمة الجماعية بيتشال من المهمة دي بس.
+   */
+  async removeAttachment(user: JwtPayload, id: number, fileId: number) {
+    await this.ds.transaction(async em => {
+      const { task, access } = await this.attachable(em, user, id)
+      const [link]: Array<{ id: number; uploadedByUserId: number }> = await em.query(
+        'SELECT [id], [uploadedByUserId] FROM [task_attachments] WITH (UPDLOCK, ROWLOCK) WHERE [taskId] = @0 AND [fileId] = @1 AND [removedAt] IS NULL', [task.id, fileId])
+      if (!link) throw new NotFoundException(TASK_ATTACHMENT_NOT_FOUND)
+      if (Number(link.uploadedByUserId) !== user.sub && !access.manage) throw new ForbiddenException(TASK_ATTACHMENT_REMOVE_RULE)
+      await em.getRepository(TaskAttachment).update({ id: Number(link.id), removedAt: IsNull() }, { removedAt: new Date(), removedByUserId: user.sub })
+      const file = await em.getRepository(StoredFile).findOne({ where: { id: fileId }, select: { id: true, originalName: true } })
+      await recordTaskLog(em, user, task, 'ATTACHMENT_REMOVED', `شال المرفق «${file?.originalName ?? ''}»`)
+      await em.getRepository(Task).update({ id: task.id }, { updatedAt: new Date() })
+    })
+    return this.detail(user, id)
+  }
+
   // ===== التذكير والتصعيد (مهمة مجدولة يومية) =====
   /**
    * تذكير المسؤول لما الموعد يقرب (tasks.reminder_days_before)، وتصعيد لمدير المسؤول بعد التأخير (tasks.escalation_days_after؛ صفر =
@@ -827,6 +1033,9 @@ export class TasksService {
     const extrasReady = await taskExtrasReady(this.ds.manager)
     const extrasOf = await taskExtrasOf(this.ds.manager, tasks.map(task => task.id))
     const ratingEnabled = extrasReady && await this.modules.isFeatureEnabled(TASK_RATING_FEATURE)
+    // B-ADD.19: مرفقات المهام (فاضية قبل ترحيل 194)
+    const attachmentsReady = await taskAttachmentsReady(this.ds.manager)
+    const attachmentsOf = await taskAttachmentsOf(this.ds.manager, tasks.map(task => task.id))
     const ids = <T>(values: Array<T | null | undefined>) => [...new Set(values.filter((value): value is T => value != null))]
     const employeeIds = ids(tasks.map(task => task.assigneeEmployeeId)), userIds = ids(tasks.flatMap(task => [task.createdByUserId, task.closedByUserId]))
     // «اللي كلّف بيها» بيديرها طول ما مسؤولها تحته في الشجرة (نفس حكم taskAccess): اللي تحته مرة واحدة للقايمة كلها
@@ -880,7 +1089,14 @@ export class TasksService {
         canDecideExtension: canManage && !link && !!extra.extensionDueDate,
         canNotMine: extrasReady && open && works && !link && !extra.isPersonal && task.createdByUserId !== user.sub,
         ratingEnabled, needsRating: ratingEnabled && extra.needsRating, rating: ratingEnabled ? extra.rating : null, ratingNote: ratingEnabled ? extra.ratingNote : null,
-        canRate: ratingEnabled && !link && task.status === 'DONE' && extra.needsRating && extra.rating == null && task.createdByUserId === user.sub && canManage,
+        // B-ADD.18: مش للي المهمة عليه هو نفسه
+        canRate: ratingEnabled && !link && task.status === 'DONE' && extra.needsRating && extra.rating == null && task.createdByUserId === user.sub && canManage
+          && !(task.assigneeEmployeeId != null && task.assigneeEmployeeId === user.employeeId),
+        // B-ADD.19: مرفقات المهمة للي يشوفها، واللي الحساب يقدر يعمله فيها (إرفاق: اللي بيديرها أو مسؤولها؛ شيل: اللي رفع أو اللي بيديرها)
+        attachmentsAvailable: attachmentsReady,
+        // (مهمة تنفيذ طلب ومهمة إقرار مستند من غير مرفقات هنا: مرفقاتهم على الطلب أو المستند)
+        attachments: link || documentOf.has(task.id) ? [] : (attachmentsOf.get(task.id) ?? []).map(row => this.attachmentView(user, row, attachmentsReady && open, canManage)),
+        canAttach: attachmentsReady && open && !link && !documentOf.has(task.id) && (canManage || mine),
       }
       // B2.7-ب: مهمة إقرار مستند — من غير أزرار (بتتقفل مع الإقرار، وبتتلغي مع إلغاء الطلب)، ورقم المستند لصاحبها بس (يفتحه من «مستنداتي»)
       const document = documentOf.get(task.id)

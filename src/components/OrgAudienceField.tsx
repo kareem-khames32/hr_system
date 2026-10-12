@@ -12,7 +12,7 @@ import { branchScopeOfUser } from '../lib/branch-scope'
 import { employeeSearchMatcher } from '../lib/employee-search'
 import {
   audienceOfBranches, audienceOfOrgTarget, describeAudience, fetchOrgAudienceContext, pickerDepartments, pickerEmployees, pickerTeams, previewOrgAudience,
-  shapeOfAudience, type AudiencePreview, type AudienceWho, type OrgAudienceContext, type StoredAudience,
+  shapeOfAudience, type AudiencePreview, type AudienceWho, type OrgAudienceContext, type OrgAudienceSource, type StoredAudience,
 } from '../lib/org-audience'
 import { ORG_AUDIENCE_LEVELS, OrgTargetPicker, initialOrgTarget, resolveOrgTarget, type OrgTarget, type OrgTargetLevel } from './OrgTargetPicker'
 
@@ -25,6 +25,7 @@ export function OrgAudienceField({
   disabled = false,
   exclusion = true,
   multiBranch = true,
+  source,
 }: {
   value: StoredAudience | null
   /** الجمهور الجديد (null = الشركة كلها)، وهل الاختيار مكتمل يتحفظ */
@@ -35,10 +36,13 @@ export function OrgAudienceField({
   exclusion?: boolean
   /** «أكتر من فرع كامل» متاح؟ (العطلة الرسمية وفترة الإضافي جمهورهم جوه فرع واحد) */
   multiBranch?: boolean
+  /** B-ADD.18: الشجرة والمعاينة من مصدر تاني (اللي تحت المدير في الهيكل) بدل شجرة نطاق الفروع — المنتقي بيعرض فروع المصدر بس */
+  source?: OrgAudienceSource
 }) {
   const [context, setContext] = useState<OrgAudienceContext | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
-  const scope = useMemo(() => branchScopeOfUser(getCurrentUser()), [])
+  // مع مصدر تاني: النطاق = فروع الشجرة اللي رجعت (من غير «الشركة كلها»)، مش نطاق فروع الحساب
+  const scope = useMemo(() => (source ? (context ? context.branches.map((b) => b.id) : []) : branchScopeOfUser(getCurrentUser())), [source, context])
   const lockedBranchId = Array.isArray(scope) && scope.length === 1 ? scope[0] : null
   const whoActive = !!who && who.mode !== 'all'
   const levels: OrgTargetLevel[] = whoActive ? ORG_AUDIENCE_LEVELS.filter((level) => level !== 'employees') : ORG_AUDIENCE_LEVELS
@@ -55,7 +59,7 @@ export function OrgAudienceField({
 
   useEffect(() => {
     let alive = true
-    fetchOrgAudienceContext().then((data) => { if (alive) setContext(data) }).catch((error) => { if (alive) setFailed(error instanceof Error ? error.message : 'تعذر تحميل الهيكل') })
+    ;(source ? source.context() : fetchOrgAudienceContext()).then((data) => { if (alive) setContext(data) }).catch((error) => { if (alive) setFailed(error instanceof Error ? error.message : 'تعذر تحميل الهيكل') })
     return () => { alive = false }
   }, [])
 
@@ -113,7 +117,7 @@ export function OrgAudienceField({
     if (!context || current === undefined) { setPreview(null); return }
     let alive = true
     const timer = setTimeout(() => {
-      previewOrgAudience(current).then((data) => { if (alive) setPreview(data) }).catch(() => { if (alive) setPreview(null) })
+      ;(source ? source.preview(current) : previewOrgAudience(current)).then((data) => { if (alive) setPreview(data) }).catch(() => { if (alive) setPreview(null) })
     }, 350)
     return () => { alive = false; clearTimeout(timer) }
     // eslint-disable-next-line react-hooks/exhaustive-deps

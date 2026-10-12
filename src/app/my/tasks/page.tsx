@@ -72,7 +72,10 @@ export default function MyTasksPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-xl font-bold text-gray-800 flex items-center gap-2"><ListChecks size={22} className="text-primary-600" />مهامي</h1>
           {assignees?.canAssign && assignees.available && (
-            <button type="button" className="btn-primary" onClick={() => setForm({ task: null })} data-new-task><Plus size={16} className="inline me-1" />مهمة جديدة</button>
+            // B-ADD.18: اللي مالوش حد تحته (ولا صلاحية تكليف) زراره «مهمة شخصية» — مفيش تكليف لغيره
+            <button type="button" className="btn-primary" onClick={() => setForm({ task: null })} data-new-task={assignees.canAssignOthers === false ? 'personal' : 'assign'}>
+              <Plus size={16} className="inline me-1" />{assignees.canAssignOthers === false ? 'مهمة شخصية' : 'مهمة جديدة'}
+            </button>
           )}
         </div>
         {error && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 text-sm">{error}</div>}
@@ -163,7 +166,7 @@ export default function MyTasksPage() {
       </div>
       {form && assignees && (
         <TaskFormModal assignees={assignees} task={form.task} onClose={() => setForm(null)}
-          onSaved={task => { setForm(null); changed(task) }} />
+          onSaved={task => { setForm(null); changed(task) }} onGroupSaved={() => { setForm(null); notifyTasksChanged(); void load() }} />
       )}
     </MainLayout>
   )

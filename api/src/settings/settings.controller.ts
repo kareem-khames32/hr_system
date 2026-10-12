@@ -782,6 +782,8 @@ export class SettingsController {
     'payroll.live_accrual_all': ['true', 'false'],
     // B2.4: بريد الإشعارات — 'true' بس هي اللي تفتحه (القارئ بيقارن حرفيًا)
     'notifications.email.enabled': ['true', 'false'],
+    // B-ADD.18: خطوة التقييم الذاتي في دورات التقييم — 'true' بس هي اللي تفتحها (القارئ بيقارن حرفيًا)
+    'performance.self_review': ['true', 'false'],
     'payroll.shortfall_mode': ['MINUTES', 'MULTIPLIER', 'FRACTION'],
     'payroll.attendance_overlap_policy': ['CUMULATIVE', 'MAX_OF_BOTH', 'NET_OF_LATENESS'],
     'payroll.late_deduction_enabled': ['true', 'false'],

@@ -4,12 +4,21 @@
 // من نفس حكمه (GET /tasks/assignees). حد برّه القايمة مايتكلّفش مباشرة: طلب، ولما يتعتمد بيتحوّل مهمة (قواعد المالك 6 أكتوبر).
 // B-ADD.1: «مجموعة» = مهمة جماعية بالاستهداف الموحد (الشركة ← فرع ← إدارة ← قسم ← فريق ← موظفين + «الكل ماعدا…» ومعاينة) — كل موظف
 // في الجمهور بياخد مهمته هو. للمهمة الجديدة بس، ولصاحب «إدارة المهام» أو «تكليف أي موظف».
-import { useState } from 'react'
+// B-ADD.18 (كلمة المالك 12 أكتوبر: «أسند مهمة بس لفريقي… لا أكتر ولا أقل»): التكليف لغيري للي تحته حد في الهيكل بس — اللي مالوش حد تحته
+// النموذج عنده «مهمة شخصية» من غير اختيار مسؤول؛ والمدير «مجموعة» عنده منتقي «على مين؟» محدود باللي تحته (شجرته من الخادم).
+// B-ADD.19 (كلمة المالك 12 أكتوبر): مرفقات مع المهمة الجديدة (شيت إكسل أو أي ملف من المسموح في إعدادات الملفات) — بتترفع وقت الحفظ وبتتربط
+// بالمهمة في نفس إنشائها؛ ومع «مجموعة» نفس الملفات لكل اللي هياخدوا المهمة. بعد كده الإرفاق والشيل من كارت المهمة.
+import { useRef, useState } from 'react'
+import { Paperclip } from 'lucide-react'
+import { uploadFile } from '../../lib/api'
 import { EmployeePicker } from '../EmployeePicker'
 import { OrgAudienceField } from '../OrgAudienceField'
 import type { StoredAudience } from '../../lib/org-audience'
 import { localToday } from '../../lib/dates'
-import { createGroupTask, createTask, updateTask, TASK_PRIORITY_LABELS, type ApiTask, type ApiTaskAssignees, type TaskInput, type TaskPriority } from '../../lib/tasks-api'
+import {
+  createGroupTask, createTask, updateTask, TASK_ATTACHMENT_FILE_TYPE, TASK_ATTACHMENTS_MAX, TASK_GROUP_TREE_SOURCE, TASK_PRIORITY_LABELS,
+  type ApiTask, type ApiTaskAssignees, type TaskInput, type TaskPriority,
+} from '../../lib/tasks-api'
 
 interface Props {
   assignees: ApiTaskAssignees
@@ -26,10 +35,14 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved, onGro
   const [description, setDescription] = useState(task?.description ?? '')
   const [target, setTarget] = useState<'employee' | 'role' | 'group'>(task?.assigneeRole ? 'role' : 'employee')
   const canGroup = !task && !!assignees.canAssignGroup
+  // B-ADD.18: مالوش حد يكلّفه غير نفسه — المهمة الجديدة شخصية من غير منتقي (canAssignOthers غايبة = خادم قديم: السلوك القديم)
+  const selfOnly = !task && assignees.canAssignOthers === false
+  const me = assignees.employees.find(row => row.self)
+  const inTree = assignees.groupWithin === 'tree'
   const [audience, setAudience] = useState<StoredAudience | null>(null)
   const [audienceComplete, setAudienceComplete] = useState(true)
   const [groupDone, setGroupDone] = useState<{ created: number; skipped: Array<{ employeeId: number; fullName: string; reason: string }> } | null>(null)
-  const [employeeId, setEmployeeId] = useState(task?.assigneeEmployeeId ? String(task.assigneeEmployeeId) : '')
+  const [employeeId, setEmployeeId] = useState(task?.assigneeEmployeeId ? String(task.assigneeEmployeeId) : selfOnly && me ? String(me.id) : '')
   const [role, setRole] = useState(task?.assigneeRole ?? '')
   const [branchId, setBranchId] = useState(task?.assigneeRole ? String(task.branchId) : assignees.branches.length === 1 ? String(assignees.branches[0].id) : '')
   const [dueDate, setDueDate] = useState(task?.dueDate ?? '')
@@ -42,6 +55,24 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved, onGro
   const options = assignees.employees.map(row => row.self ? { ...row, fullName: `${row.fullName} — نفسي (مهمة شخصية)` } : row)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // B-ADD.19: مرفقات المهمة الجديدة. اللي اترفع فعلًا مابيترفعش تاني لو الحفظ اترفض ومحاولة تانية بنفس الملف
+  const canAttach = !task && !!assignees.attachmentsAvailable
+  const [files, setFiles] = useState<File[]>([])
+  const uploaded = useRef(new Map<File, number>())
+  const fileInput = useRef<HTMLInputElement>(null)
+  const pickFiles = (list: FileList | null) => {
+    setFiles(previous => [...previous, ...Array.from(list ?? [])].slice(0, TASK_ATTACHMENTS_MAX))
+    if (fileInput.current) fileInput.current.value = ''
+  }
+  const uploadAttachments = async (): Promise<number[]> => {
+    const ids: number[] = []
+    for (const file of files) {
+      const id = uploaded.current.get(file) ?? (await uploadFile(file, { entityType: TASK_ATTACHMENT_FILE_TYPE })).id
+      uploaded.current.set(file, id)
+      ids.push(id)
+    }
+    return ids
+  }
 
   const save = async () => {
     setError('')
@@ -52,8 +83,9 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved, onGro
       if (!audienceComplete) { setError('كمّل اختيار «على مين؟» الأول'); return }
       setBusy(true)
       try {
+        const attachmentFileIds = await uploadAttachments()
         const result = await createGroupTask({ title: title.trim(), description: description.trim() || undefined, dueDate: dueDate || undefined, priority, requiresProof,
-          ...(assignees.ratingEnabled && needsRating ? { needsRating: true } : {}), audience })
+          ...(assignees.ratingEnabled && needsRating ? { needsRating: true } : {}), audience, ...(attachmentFileIds.length ? { attachmentFileIds } : {}) })
         setGroupDone({ created: result.created, skipped: result.skipped })
       } catch (err) {
         setError(err instanceof Error ? err.message : 'تعذر حفظ المهمة الجماعية')
@@ -71,7 +103,8 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved, onGro
     }
     setBusy(true)
     try {
-      onSaved(task ? await updateTask(task.id, input) : await createTask({ ...input, description: input.description ?? undefined }))
+      const attachmentFileIds = task ? [] : await uploadAttachments()
+      onSaved(task ? await updateTask(task.id, input) : await createTask({ ...input, description: input.description ?? undefined, ...(attachmentFileIds.length ? { attachmentFileIds } : {}) }))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذر حفظ المهمة')
     } finally { setBusy(false) }
@@ -81,7 +114,7 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved, onGro
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => !busy && onClose()}>
       <div className="bg-white rounded-2xl w-full max-w-lg p-6 shadow-xl max-h-[90vh] overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="task-form-title"
         onClick={event => event.stopPropagation()} data-task-form>
-        <h2 id="task-form-title" className="text-lg font-semibold text-gray-800 mb-4">{task ? 'تعديل المهمة' : 'مهمة جديدة'}</h2>
+        <h2 id="task-form-title" className="text-lg font-semibold text-gray-800 mb-4">{task ? 'تعديل المهمة' : selfOnly ? 'مهمة شخصية' : 'مهمة جديدة'}</h2>
         {error && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 text-sm mb-3">{error}</div>}
         <div className="space-y-3">
           <div>
@@ -101,9 +134,15 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved, onGro
           )}
           {target === 'group' ? (
             <div data-task-group-audience>
-              <OrgAudienceField value={audience} disabled={busy} onChange={(next, complete) => { setAudience(next); setAudienceComplete(complete) }} />
+              <OrgAudienceField value={audience} disabled={busy} onChange={(next, complete) => { setAudience(next); setAudienceComplete(complete) }}
+                source={inTree ? TASK_GROUP_TREE_SOURCE : undefined} />
               <p className="text-xs text-gray-500 mt-1">كل موظف في الاختيار بياخد المهمة دي باسمه ويتابعها لوحده. إنت نفسك مش من المكلَّفين.</p>
+              {inTree && <p className="text-xs text-gray-500 mt-1" data-task-group-tree-hint>الاختيار من اللي تحتك في الهيكل بس: «الفرع كله» هنا معناها كل اللي تحتك في الفرع ده.</p>}
             </div>
+          ) : selfOnly ? (
+            <p className="text-sm text-gray-600 bg-gray-50 rounded-xl p-3" data-task-self-only>
+              مهمة شخصية ليك إنت: بتظهر لك ولمديرك المباشر بس. تكليف حد تاني للي تحته موظفين في الهيكل — محتاج حاجة من زميل؟ <a href="/requests" className="text-primary-600 underline">اعمل طلب</a>، ولما يتعتمد هيتحوّل مهمة.
+            </p>
           ) : target === 'employee' ? (
             <div>
               <label className="label" htmlFor="task-assignee">الموظف المسؤول *</label>
@@ -150,6 +189,26 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved, onGro
             <input type="checkbox" checked={requiresProof} onChange={event => setRequiresProof(event.target.checked)} />
             لازم إثبات عند الإقفال (نص أو ملف)
           </label>
+          {canAttach && (
+            <div data-task-form-attachments>
+              <span className="label">مرفقات (اختياري)</span>
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <input ref={fileInput} type="file" multiple className="hidden" onChange={event => pickFiles(event.target.files)} />
+                <button type="button" className="btn-secondary text-xs" disabled={busy || files.length >= TASK_ATTACHMENTS_MAX} onClick={() => fileInput.current?.click()}>
+                  <Paperclip size={14} className="inline me-1" />أرفق ملف ({files.length} / {TASK_ATTACHMENTS_MAX})
+                </button>
+                {files.map((file, index) => (
+                  <span key={`${file.name}-${index}`} className="badge bg-gray-100 text-gray-700 flex items-center gap-1">
+                    <span className="break-all">{file.name}</span>
+                    <button type="button" className="text-gray-500 underline" disabled={busy} onClick={() => setFiles(previous => previous.filter((_, at) => at !== index))} aria-label={`شيل ${file.name}`}>شيل</button>
+                  </span>
+                ))}
+              </div>
+              <p className="text-xs text-gray-500 mt-1">
+                شيت إكسل أو أي ملف من الأنواع والحجم المسموحين في إعدادات الملفات. {target === 'group' ? 'الملف بيظهر لكل اللي هياخدوا المهمة.' : 'المسؤول عن المهمة بيشوفه، ويقدر يرفع شغله على نفس المهمة.'}
+              </p>
+            </div>
+          )}
           {canFlagRating && (
             <label className="flex items-center gap-2 text-sm text-gray-700" data-task-needs-rating>
               <input type="checkbox" checked={needsRating} onChange={event => setNeedsRating(event.target.checked)} />
@@ -173,7 +232,7 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved, onGro
           ) : (
             <>
               <button type="button" className="btn-secondary" disabled={busy} onClick={onClose}>إلغاء</button>
-              <button type="button" className="btn-primary" disabled={busy} onClick={save}>{busy ? 'جاري الحفظ…' : task ? 'حفظ' : 'تكليف'}</button>
+              <button type="button" className="btn-primary" disabled={busy} onClick={save}>{busy ? 'جاري الحفظ…' : task || selfOnly ? 'حفظ' : 'تكليف'}</button>
             </>
           )}
         </div>

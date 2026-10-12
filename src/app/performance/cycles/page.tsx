@@ -22,6 +22,8 @@ const statusStyle: Record<ReviewCycleStatus, string> = { DRAFT: 'bg-gray-100 tex
 export default function ReviewCyclesPage() {
   const [cycles, setCycles] = useState<ApiReviewCycle[] | null>(null)
   const [canCompany, setCanCompany] = useState(false)
+  // B-ADD.18: خطوة التقييم الذاتي مفتوحة؟ (إعداد «التقييم الذاتي» في سياسات النظام — مقفول افتراضيًا). مقفولة: ميعاده وعدّاده وعموده مش ظاهرين
+  const [selfReview, setSelfReview] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
@@ -58,7 +60,7 @@ export default function ReviewCyclesPage() {
   const load = useCallback(() => {
     setError('')
     fetchReviewCycles()
-      .then((data) => { setCycles(data.cycles); setCanCompany(data.canCompany); setNotice(data.available ? '' : data.message ?? '') })
+      .then((data) => { setCycles(data.cycles); setCanCompany(data.canCompany); setSelfReview(data.selfReview === true); setNotice(data.available ? '' : data.message ?? '') })
       .catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل الدورات'))
   }, [])
   useEffect(load, [load])
@@ -133,7 +135,7 @@ export default function ReviewCyclesPage() {
                   <div>
                     <h2 className="text-lg font-bold text-gray-800">{cycle.name}</h2>
                     <p className="text-xs text-gray-500 mt-1">
-                      {cycle.kindLabel} · {cycle.templateName ?? '—'} · {formatDate(cycle.periodStart)} – {formatDate(cycle.periodEnd)} · الذاتي قبل {formatDate(cycle.selfDueDate)} · المدير قبل{' '}
+                      {cycle.kindLabel} · {cycle.templateName ?? '—'} · {formatDate(cycle.periodStart)} – {formatDate(cycle.periodEnd)}{selfReview ? ` · الذاتي قبل ${formatDate(cycle.selfDueDate)}` : ''} · المدير قبل{' '}
                       {formatDate(cycle.managerDueDate)}
                     </p>
                   </div>
@@ -141,7 +143,7 @@ export default function ReviewCyclesPage() {
                 </div>
                 {cycle.status !== 'DRAFT' && (
                   <p className="text-sm text-gray-600 tabular-nums">
-                    {cycle.counts.total} موظف · سلّموا الذاتي {cycle.counts.self} · المديرين سلّموا {cycle.counts.manager}
+                    {cycle.counts.total} موظف{selfReview ? ` · سلّموا الذاتي ${cycle.counts.self}` : ''} · المديرين سلّموا {cycle.counts.manager}
                     {cycle.counts.noManager > 0 ? ` · من غير مقيِّم ${cycle.counts.noManager}` : ''}
                   </p>
                 )}
@@ -179,7 +181,7 @@ export default function ReviewCyclesPage() {
         )}
       </div>
       {rewards && <RewardsPanel cycleId={rewards.id} cycleName={rewards.name} onClose={() => setRewards(null)} />}
-      {adding && <CycleModal canCompany={canCompany} onClose={() => setAdding(false)} onDone={() => { setAdding(false); load() }} />}
+      {adding && <CycleModal canCompany={canCompany} selfReview={selfReview} onClose={() => setAdding(false)} onDone={() => { setAdding(false); load() }} />}
       {open && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-label="تكليفات الدورة">
           <div className="bg-white rounded-2xl w-full max-w-3xl mx-4 max-h-[90vh] overflow-auto">
@@ -195,7 +197,7 @@ export default function ReviewCyclesPage() {
                   <tr>
                     <th className="px-3 py-2 text-start font-medium text-gray-600">الموظف</th>
                     <th className="px-3 py-2 text-start font-medium text-gray-600">المقيِّم</th>
-                    <th className="px-3 py-2 text-start font-medium text-gray-600">الذاتي</th>
+                    {selfReview && <th className="px-3 py-2 text-start font-medium text-gray-600">الذاتي</th>}
                     <th className="px-3 py-2 text-start font-medium text-gray-600">المدير</th>
                     <th className="px-3 py-2 text-start font-medium text-gray-600">الحالة</th>
                     <th className="px-3 py-2" />
@@ -213,7 +215,7 @@ export default function ReviewCyclesPage() {
                           </button>
                         )}
                       </td>
-                      <td className="px-3 py-2 tabular-nums">{row.selfScore ?? (row.selfSubmitted ? 'سلّم' : '—')}</td>
+                      {selfReview && <td className="px-3 py-2 tabular-nums">{row.selfScore ?? (row.selfSubmitted ? 'سلّم' : '—')}</td>}
                       <td className="px-3 py-2 tabular-nums">{row.managerScore ?? (row.managerSubmitted ? 'سلّم' : '—')}</td>
                       <td className="px-3 py-2 text-gray-600">{row.statusLabel}</td>
                       <td className="px-3 py-2 text-end">
@@ -245,7 +247,7 @@ export default function ReviewCyclesPage() {
   )
 }
 
-function CycleModal({ canCompany, onClose, onDone }: { canCompany: boolean; onClose: () => void; onDone: () => void }) {
+function CycleModal({ canCompany, selfReview, onClose, onDone }: { canCompany: boolean; selfReview: boolean; onClose: () => void; onDone: () => void }) {
   const [templates, setTemplates] = useState<ApiReviewTemplate[]>([])
   const [name, setName] = useState('')
   const [kind, setKind] = useState<ReviewCycleKind>('ANNUAL')
@@ -264,14 +266,15 @@ function CycleModal({ canCompany, onClose, onDone }: { canCompany: boolean; onCl
     fetchReviewTemplates().then((data) => setTemplates(data.templates.filter((row) => row.isActive))).catch(() => setTemplates([]))
   }, [])
 
-  const datesOk = periodStart !== '' && periodEnd !== '' && periodEnd >= periodStart && selfDueDate !== '' && managerDueDate !== '' && managerDueDate >= selfDueDate
+  // B-ADD.18: والتقييم الذاتي مقفول مفيش ميعاد له (الخادم بيسجّله بميعاد المدير)
+  const datesOk = periodStart !== '' && periodEnd !== '' && periodEnd >= periodStart && managerDueDate !== '' && (!selfReview || (selfDueDate !== '' && managerDueDate >= selfDueDate))
   const valid = name.trim().length >= 3 && templateId !== '' && datesOk && audienceComplete
 
   const submit = async () => {
     setSaving(true)
     setError('')
     try {
-      await createReviewCycle({ name: name.trim(), kind, templateId: Number(templateId), periodStart, periodEnd, selfDueDate, managerDueDate, audienceMode: 'AUDIENCE', audience })
+      await createReviewCycle({ name: name.trim(), kind, templateId: Number(templateId), periodStart, periodEnd, ...(selfReview ? { selfDueDate } : {}), managerDueDate, audienceMode: 'AUDIENCE', audience })
       onDone()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'تعذر حفظ الدورة')
@@ -334,13 +337,15 @@ function CycleModal({ canCompany, onClose, onDone }: { canCompany: boolean; onCl
               إلى
               <input type="date" className="input w-full mt-1" min={periodStart} value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} />
             </label>
-            <label className="block text-sm text-gray-700">
-              آخر يوم للذاتي
-              <input type="date" className="input w-full mt-1" value={selfDueDate} onChange={(e) => setSelfDueDate(e.target.value)} />
-            </label>
+            {selfReview && (
+              <label className="block text-sm text-gray-700">
+                آخر يوم للذاتي
+                <input type="date" className="input w-full mt-1" value={selfDueDate} onChange={(e) => setSelfDueDate(e.target.value)} />
+              </label>
+            )}
             <label className="block text-sm text-gray-700">
               آخر يوم للمدير
-              <input type="date" className="input w-full mt-1" min={selfDueDate} value={managerDueDate} onChange={(e) => setManagerDueDate(e.target.value)} />
+              <input type="date" className="input w-full mt-1" min={selfReview ? selfDueDate : undefined} value={managerDueDate} onChange={(e) => setManagerDueDate(e.target.value)} />
             </label>
           </div>
           <div data-review-cycle-audience>
