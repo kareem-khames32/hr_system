@@ -73,7 +73,9 @@ test('PG-03: the web app sends a pre-boarding account to its documents, lists th
   assert.match(shell, /if \(preboardingUntil\(\) && !preboardingPathAllowed\(pathname\)\) \{\n\s+window\.location\.href = PREBOARDING_HOME\n\s+return/)
   assert.match(shell, /\{startsOn && \(/)
   const sidebar = read('src/components/layout/Sidebar.tsx')
-  assert.match(sidebar, /if \(preboardingUntil\(currentUser\)\) return portalItems\.filter\(\(item\) => !!item\.href && preboardingPathAllowed\(item\.href\) && available\(item\.href\)\)/)
+  // B-ADD.21: القايمة بقت مجموعات — حساب التهيئة بياخد بنود البوابة المسموحة روابط مباشرة (المجموعات متفلترة بالموديول قبلها)، ومن غير أي بند بصلاحية
+  assert.match(sidebar, /if \(preboardingUntil\(currentUser\)\) \{\n\s+return groups\.flatMap\(\(group\) => group\.children\.filter\(\(c\) => !c\.perm && preboardingPathAllowed\(c\.href\)\)\.map\(\(c\) => linkOf\(group, c\)\)\)\n\s+\}/)
+  assert.match(sidebar, /group\.children\.filter\(\(c\) => permitted\(c\.perm\) && \(!c\.when \|\| flags\[c\.when\]\) && available\(c\.href\)\)/)
   assert.match(read('src/lib/api.ts'), /preboardingUntil\?: string/)
 })
 

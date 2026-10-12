@@ -192,7 +192,7 @@ test('MTU-03: a new closed module and its route, guarded routes, writes under th
   assert.doesNotMatch(MEET_FILES.map(read).join('\n'), /wss?:\/\/[a-z0-9]/i, 'عنوان الخادم بييجي من الخادم مع التذكرة')
 
   // الواجهة: القايمة والعنوان والقاموس
-  assert.match(read('src/components/layout/Sidebar.tsx'), /\{ id: 'meet', label: 'الاجتماعات', icon: <Video size=\{20\} \/>, href: '\/meet' \},/)
+  assert.match(read('src/components/layout/Sidebar.tsx'), /\{ label: 'الاجتماعات', href: '\/meet' \},/)
   const titles = read('src/components/layout/pageTitles.ts')
   assert.ok(titles.indexOf("[/^\\/meet\\/[^/]+/, 'اجتماع']") > 0 && titles.indexOf("[/^\\/meet\\/[^/]+/, 'اجتماع']") < titles.indexOf("['/meet', 'الاجتماعات']"))
   assert.match(read('src/i18n/en.ts'), /^  'الاجتماعات': 'Meetings',$/m)

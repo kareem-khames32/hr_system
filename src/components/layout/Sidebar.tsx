@@ -33,136 +33,131 @@ import {
   Target,
   GraduationCap,
   LifeBuoy,
-  Mail,
-  Scale,
   FileText,
   Settings,
   ChevronDown,
   X,
   KeyRound,
   ShieldCheck,
-  Sparkles,
   LogOut,
-  Bell,
   ClipboardList,
   Package,
   FolderOpen,
   UserCircle,
-  Inbox,
-  UserMinus,
-  Briefcase,
   Gift,
   ListChecks,
   Megaphone,
-  ScrollText,
-  Video,
+  Building2,
 } from 'lucide-react'
 import clsx from 'clsx'
 
-interface ChildItem {
+// شرط ظهور محسوب في القايمة نفسها (مش صلاحية): المعتمد، اللي عليه مسير، اللي تحته حد في الهيكل…
+type MenuFlag = 'inbox' | 'payrollApprovals' | 'team' | 'raises' | 'probation'
+// عدّاد جنب البند
+type MenuBadge = 'inbox' | 'payrollApprovals' | 'tasks'
+
+export interface ChildItem {
   label: string
   href: string
-  // الصلاحية المطلوبة لظهور العنصر — بدونها العنصر مفتوح
-  perm?: string
+  // الصلاحية المطلوبة لظهور العنصر — بدونها العنصر مفتوح لكل حساب (بنود بوابة الموظف). مصفوفة = كلها لازمة
+  perm?: string | string[]
+  when?: MenuFlag
+  badge?: MenuBadge
 }
 
+export interface MenuGroup {
+  id: string
+  label: string
+  icon: React.ReactNode
+  children: ChildItem[]
+}
+
+// بند معروض: رابط مباشر، أو مجموعة بتتفتح
 interface MenuItem {
   id: string
   label: string
   icon: React.ReactNode
   href?: string
-  perm?: string
-  children?: ChildItem[]
+  children?: Array<{ label: string; href: string; badge?: number }>
   badge?: number
 }
 
-// ===== الشاشات الإدارية — كل عنصر مربوط بصلاحيته من سجل الصلاحيات =====
-const adminMenuDefs: MenuItem[] = [
+// ===== القايمة كلها في ترتيب واحد ثابت (B-ADD.21، كلمة المالك 12 أكتوبر: «كل نقطة في النظام في المكان بتاعها، في الموديول بتاعها») =====
+// كل مجموعة = موديول أو موديولات قريبة من بعض: بنود الموظف نفسه الأول (من غير صلاحية)، وبعدها شاشات الإدارة كل واحدة بصلاحيتها.
+// كل شاشة في مكان واحد بس، والمسارات زي ما هي. البند بيظهر لو صلاحيته مع الحساب وموديول مساره مفعّل (سجل الموديولات)،
+// والمجموعة اللي فاضل فيها بند واحد بتتعرض رابط مباشر باسم البند (الموظف العادي مايفتحش مجموعة عشان بند واحد).
+export const MENU: MenuGroup[] = [
   {
-    id: 'requests-console',
-    label: 'لوحة الطلبات',
+    id: 'dashboard',
+    label: 'الرئيسية',
+    icon: <LayoutDashboard size={20} />,
+    children: [
+      // الاسم المعروض «لوحة التحكم» للي معاه شاشة إدارية و«لوحتي» لغيره
+      { label: 'لوحة التحكم', href: '/' },
+    ],
+  },
+  {
+    id: 'account',
+    label: 'حسابي',
+    icon: <UserCircle size={20} />,
+    children: [
+      { label: 'ملفي الشخصي', href: '/profile' },
+      { label: 'التقويم', href: '/calendar' },
+      { label: 'الإشعارات', href: '/notifications' },
+    ],
+  },
+  {
+    id: 'requests',
+    label: 'الطلبات',
     icon: <ClipboardList size={20} />,
-    href: '/requests-console',
-    perm: 'requests.view_all',
+    children: [
+      { label: 'طلباتي', href: '/requests' },
+      // «بانتظار موافقتي» تظهر لغير الموظف دائماً، وللموظف عندما يكون معتمِداً فعلياً أو طرف تفويض
+      { label: 'بانتظار موافقتي', href: '/approvals-inbox', when: 'inbox', badge: 'inbox' },
+      { label: 'لوحة الطلبات', href: '/requests-console', perm: 'requests.view_all' },
+    ],
+  },
+  {
+    // B2.5: «مهامي» لكل حساب (مهام عامة + تهيئة + إخلاء)، وقايمة كل المهام العامة في نطاق الحساب بصلاحيتها
+    id: 'tasks',
+    label: 'المهام',
+    icon: <ListChecks size={20} />,
+    children: [
+      { label: 'مهامي', href: '/my/tasks', badge: 'tasks' },
+      { label: 'المهام', href: '/tasks', perm: 'tasks.view_all' },
+    ],
   },
   {
     id: 'employees',
-    label: 'إدارة الموظفين',
+    label: 'الموظفين',
     icon: <Users size={20} />,
     children: [
+      // B2.14: «فريقي» للي تحته حد في الهيكل بس (والموديول مفعّل)
+      { label: 'فريقي', href: '/my/team', when: 'team' },
       { label: 'قائمة الموظفين', href: '/employees', perm: 'employees.view' },
       { label: 'إضافة موظف', href: '/employees/add', perm: 'employees.create' },
       { label: 'تهيئة الموظفين الجدد', href: '/employees/onboarding', perm: 'employees.view' },
+      // B3.1-ج: قرار فترة التجربة — للمدير (مرؤوسيه) وللموارد البشرية (عرض الموظفين)
+      { label: 'فترات التجربة', href: '/my/probation', when: 'probation' },
       { label: 'الهيكل التنظيمي', href: '/employees/org-chart', perm: 'employees.view' },
       { label: 'إدارة العقود', href: '/employees/contracts', perm: 'employees.view' },
-      { label: 'تحديث جماعي من Excel', href: '/employees/bulk-update', perm: 'employees.edit' },
-      { label: 'مستندات الموظفين', href: '/employees/documents', perm: 'documents.manage' },
-      { label: 'نواقص مسوغات التعيين', href: '/employees/hiring-documents', perm: 'documents.manage' },
-      { label: 'إصدار مستند', href: '/employees/documents/create', perm: 'documents.manage' },
-      { label: 'سجل العهد', href: '/employees/custody', perm: 'custody.assign' },
-      // B5.2: وثائق التأمين الطبي وفئاتها (بتظهر لما موديول المزايا مفتوح)
-      { label: 'المزايا والتأمين الطبي', href: '/benefits', perm: 'benefits.manage' },
-      // B5.3: فئات المصروف وتقارير الموظفين (بتظهر لما ميزة «تقارير المصروفات» مفتوحة)
-      { label: 'المصروفات', href: '/expenses', perm: 'expenses.manage' },
       { label: 'سجل النقل', href: '/employees/transfers', perm: 'transfers.view' },
-      // B3.12: لائحة الجزاءات وتوقيعها (بتظهر لما موديول الشكاوى والتحقيقات مفتوح)
-      { label: 'لائحة الجزاءات', href: '/cases/penalties', perm: 'cases.penalties' },
+      { label: 'تحديث جماعي من Excel', href: '/employees/bulk-update', perm: 'employees.edit' },
+      { label: 'إنهاء الخدمة', href: '/offboarding', perm: 'offboarding.manage' },
       { label: 'المؤرشفون ومنتهو الخدمة', href: '/employees/archived', perm: 'employees.view' },
     ],
   },
   {
-    id: 'offboarding',
-    label: 'إنهاء الخدمة',
-    icon: <UserMinus size={20} />,
-    href: '/offboarding',
-    perm: 'offboarding.manage',
-  },
-  // B5.4: المهارات والإحلال (الموديول مقفول افتراضيًا: البند بيظهر لما يتفعّل)
-  {
-    id: 'skills',
-    label: 'المهارات والإحلال',
-    icon: <GraduationCap size={20} />,
-    href: '/skills',
-    perm: 'skills.manage',
-  },
-  // B5.4 (ب): خطط الإحلال — سرّية (بصلاحيتها بس)
-  {
-    id: 'succession',
-    label: 'خطط الإحلال',
-    icon: <Users size={20} />,
-    href: '/skills/succession',
-    perm: 'succession.manage',
-  },
-  // B5.7: سجل حوادث السلامة (الموديول مقفول افتراضيًا: البند بيظهر لما يتفعّل)
-  {
-    id: 'safety',
-    label: 'السلامة وإصابات العمل',
-    icon: <ShieldCheck size={20} />,
-    href: '/safety',
-    perm: 'safety.manage',
-  },
-  // B5.8: مشاريع ساعات العمل وتقريرها (الموديول مقفول افتراضيًا: البند بيظهر لما يتفعّل)
-  {
-    id: 'timesheets',
-    label: 'ساعات المشاريع',
-    icon: <Hourglass size={20} />,
-    href: '/timesheets',
-    perm: 'timesheets.manage',
-  },
-  // B2.5: قايمة كل المهام العامة في نطاق الحساب («مهامي» لكل حساب في بنود البوابة)
-  {
-    id: 'tasks',
-    label: 'المهام',
-    icon: <ListChecks size={20} />,
-    href: '/tasks',
-    perm: 'tasks.view_all',
-  },
-  // B2.7: مكتبة السياسات لمديرها، وتقرير الإقرارات لصاحب صلاحيته («سياساتي» لكل حساب في بنود البوابة)
-  {
-    id: 'policies',
-    label: 'السياسات',
-    icon: <ScrollText size={20} />,
+    // B2.7: «سياساتي» لكل حساب، ومكتبة السياسات لمديرها، وتقرير الإقرارات لصاحب صلاحيته
+    id: 'documents',
+    label: 'المستندات والسياسات',
+    icon: <FolderOpen size={20} />,
     children: [
+      { label: 'مستنداتي', href: '/my/documents' },
+      { label: 'سياساتي', href: '/my/policies' },
+      { label: 'مستندات الموظفين', href: '/employees/documents', perm: 'documents.manage' },
+      { label: 'نواقص مسوغات التعيين', href: '/employees/hiring-documents', perm: 'documents.manage' },
+      { label: 'إصدار مستند', href: '/employees/documents/create', perm: 'documents.manage' },
       { label: 'مكتبة السياسات', href: '/policies', perm: 'policies.manage' },
       { label: 'تقرير الإقرارات', href: '/policies/reports', perm: 'policies.report' },
     ],
@@ -173,76 +168,148 @@ const adminMenuDefs: MenuItem[] = [
     icon: <Clock size={20} />,
     // الصلاحية لكل عنصر (مطابقة لحارس المسارات): الورديات كتالوج إعدادات والأجهزة للمزامنة
     children: [
+      { label: 'حضوري', href: '/my/attendance' },
+      // B5.6: تسجيل البصمة من الموبايل (بتظهر لما ميزة «بصمة الموبايل» مفتوحة)
+      { label: 'بصمتي', href: '/my/punch' },
+      // B5.5 (ج): طلبات تبديل الوردية اللي الموظف طرف تاني فيها (بتظهر لما ميزة «تبديل الوردية بموافقة الطرف التاني» مفتوحة)
+      { label: 'تبديل ورديتي', href: '/my/shift-swaps' },
       { label: 'سجل الحضور', href: '/attendance', perm: 'attendance.view_all' },
+      { label: 'الإدخال اليدوي', href: '/attendance/manual-entry', perm: 'attendance.view_all' },
+      { label: 'الكشف الشهري', href: '/attendance/monthly-sheet', perm: 'attendance.view_all' },
+      { label: 'استثناء الحضور', href: '/attendance/exemptions', perm: 'attendance_exemption.view' },
       { label: 'الجدول الأسبوعي', href: '/attendance/weekly-schedule', perm: 'attendance.view_all' },
       // B5.5: نسخ أسبوع وأنماط تدوير ونشر الجدول (بتظهر لما ميزة «الجدولة المتقدمة» مفتوحة)
       { label: 'أدوات الجدولة', href: '/attendance/schedule-tools', perm: 'attendance.manage' },
-      // B5.6: مواقع بصمة الموبايل ومحاولاتها (بتظهر لما ميزة «بصمة الموبايل» مفتوحة)
-      { label: 'بصمة الموبايل', href: '/attendance/punch-sites', perm: 'attendance.view_all' },
       { label: 'الورديات', href: '/attendance/shifts', perm: 'settings.manage' },
-      { label: 'الأذونات', href: '/attendance/permissions', perm: 'attendance.view_all' },
-      { label: 'استثناء الحضور', href: '/attendance/exemptions', perm: 'attendance_exemption.view' },
       { label: 'العمل الإضافي', href: '/attendance/overtime', perm: 'attendance.view_all' },
       { label: 'دوام أيام العطلات', href: '/attendance/holiday-work', perm: 'attendance.view_all' },
-      { label: 'الإدخال اليدوي', href: '/attendance/manual-entry', perm: 'attendance.view_all' },
       { label: 'أجهزة البصمة', href: '/attendance/devices', perm: 'attendance.sync' },
-      { label: 'الكشف الشهري', href: '/attendance/monthly-sheet', perm: 'attendance.view_all' },
+      // B5.6: مواقع بصمة الموبايل ومحاولاتها (بتظهر لما ميزة «بصمة الموبايل» مفتوحة)
+      { label: 'بصمة الموبايل', href: '/attendance/punch-sites', perm: 'attendance.view_all' },
       { label: 'تقارير الحضور', href: '/attendance/reports', perm: 'attendance.view_all' },
     ],
   },
   {
-    id: 'leaves',
-    label: 'الإجازات',
-    icon: <Calendar size={20} />,
-    // العطلات وأنواع الإجازات كتالوجات إعدادات (كتابتها وقراءة الأنواع settings.manage)
+    // B5.8: تسجيل ساعاتي على المشاريع واعتماد ساعات فريقي، ومشاريع ساعات العمل وتقريرها (الموديول مقفول افتراضيًا)
+    id: 'timesheets',
+    label: 'ساعات المشاريع',
+    icon: <Hourglass size={20} />,
     children: [
+      { label: 'ساعاتي', href: '/my/timesheets' },
+      { label: 'ساعات المشاريع', href: '/timesheets', perm: 'timesheets.manage' },
+    ],
+  },
+  {
+    id: 'leaves',
+    label: 'الإجازات والأذونات',
+    icon: <Calendar size={20} />,
+    // أنواع الإجازات والأذونات كتالوجات إعدادات (كتابتها وقراءة الأنواع settings.manage) — مكانها مع موديولها
+    children: [
+      { label: 'إجازاتي وأرصدتي', href: '/my/leaves' },
       { label: 'سجل الإجازات المعتمدة', href: '/leaves', perm: 'leaves.view_all' },
       { label: 'طلب إجازة', href: '/leaves/request', perm: 'leaves.view_all' },
       { label: 'رصيد الإجازات', href: '/leaves/balance', perm: 'leaves.view_all' },
-      { label: 'إقفال سنة الإجازات', href: '/leaves/year-end', perm: 'leave_balances.manage' },
       { label: 'تقويم الإجازات', href: '/leaves/calendar', perm: 'leaves.view_all' },
-      { label: 'العطلات الرسمية', href: '/leaves/holidays', perm: 'settings.manage' },
+      { label: 'الأذونات', href: '/attendance/permissions', perm: 'attendance.view_all' },
+      { label: 'إقفال سنة الإجازات', href: '/leaves/year-end', perm: 'leave_balances.manage' },
       { label: 'أنواع الإجازات', href: '/leaves/types', perm: 'settings.manage' },
+      { label: 'أنواع الأذونات', href: '/settings/permission-types', perm: 'settings.manage' },
     ],
   },
   {
     id: 'payroll',
     label: 'الرواتب',
     icon: <Wallet size={20} />,
-    perm: 'payroll.view',
     // تبسيط الرواتب (2026-09-15): الإعفاءات المالية وقسائم الراتب والبدلات أُخفيت (والتأمينات رجعت 16 سبتمبر بإعدادات وتقرير) وروابطها تتحول لـ«مسير الرواتب»؛
-    // و«القيم العامة للخصومات» (/payroll/formulas) أُوقفت وصارت داخل «معادلات الرواتب» نفسها — رابطها القديم يحوّل إليها
+    // و«القيم العامة للخصومات» (/payroll/formulas) أُوقفت وصارت داخل «معادلات الرواتب» نفسها — رابطها القديم يحوّل إليها.
+    // «إعفاءاتي» أُخفيت كمان: الرابط يتحول لـ«قسائم راتبي» والخصم الملغى يظهر سطرًا في القسيمة
     children: [
-      { label: 'مسير الرواتب', href: '/payroll' },
-      { label: 'معادلات الرواتب', href: '/payroll/policies' },
-      { label: 'المكافآت', href: '/payroll/bonuses' },
-      { label: 'الخصومات', href: '/payroll/deductions' },
-      { label: 'السلف والقروض', href: '/payroll/loans' },
-      { label: 'التأمينات', href: '/payroll/gosi' },
+      { label: 'قسائم راتبي', href: '/my/payslips' },
+      // «مسيرات بانتظار اعتمادي» تظهر بس لما فيه مسير منتظره فعلًا (التسمية في السلسلة هي المنحة، فممكن يكون بلا أي صلاحية رواتب)
+      { label: 'مسيرات بانتظار اعتمادي', href: '/payroll/my-approvals', when: 'payrollApprovals', badge: 'payrollApprovals' },
+      // B5.1-ب: «زيادات فريقي» للمدير اللي ليه مرؤوسين وفيه دورة زيادات مفتوحة
+      { label: 'زيادات فريقي', href: '/my/raises', when: 'raises' },
+      { label: 'مسير الرواتب', href: '/payroll', perm: 'payroll.view' },
+      // صرف المسير موظف بموظف: بصلاحيته هو لأن موظف المالية حامل payroll.disburse مابيحملش payroll.view
+      { label: 'صرف الرواتب', href: '/payroll/disbursement', perm: 'payroll.disburse' },
+      { label: 'معادلات الرواتب', href: '/payroll/policies', perm: 'payroll.view' },
+      // B4.3: وصف بنود القسيمة وترتيبها (شاشة إعدادات تبع الرواتب)
+      { label: 'بنود الراتب', href: '/settings/salary-items', perm: 'settings.manage' },
+      { label: 'التأمينات', href: '/payroll/gosi', perm: 'payroll.view' },
       // B5.1: سلّم الرواتب ودورة الزيادات (بتظهر لما موديول تخطيط الزيادات مفتوح)
-      { label: 'سلّم الرواتب والزيادات', href: '/compensation' },
-      { label: 'دورات الزيادات', href: '/compensation/cycles', perm: 'compensation.manage' },
-      { label: 'تقرير الرواتب', href: '/payroll/reports' },
-      { label: 'كشف البنوك', href: '/payroll/bank-sheet' },
+      { label: 'سلّم الرواتب والزيادات', href: '/compensation', perm: 'payroll.view' },
+      { label: 'دورات الزيادات', href: '/compensation/cycles', perm: ['payroll.view', 'compensation.manage'] },
+      { label: 'تقرير الرواتب', href: '/payroll/reports', perm: 'payroll.view' },
+      { label: 'كشف البنوك', href: '/payroll/bank-sheet', perm: 'payroll.view' },
+      // B4.6 (ب): جدول البنوك بأكوادها (شاشة إعدادات تبع الرواتب)
+      { label: 'البنوك', href: '/settings/banks', perm: 'settings.manage' },
       // قرار المالك (22 سبتمبر): المالك بيرتب سلسلة اعتماد المسير بنفسه (سلسلة الشركة + سلسلة خاصة بمسير دائم)
-      { label: 'سلسلة اعتماد المسير', href: '/payroll/approval-chain', perm: 'payroll.chain_manage' },
+      { label: 'سلسلة اعتماد المسير', href: '/payroll/approval-chain', perm: ['payroll.view', 'payroll.chain_manage'] },
     ],
   },
-  // صرف المسير موظف بموظف: عنصر مستقل لأن موظف المالية حامل payroll.disburse مابيحملش payroll.view فمابيشوفش مجموعة «الرواتب»
   {
-    id: 'payroll-disbursement',
-    label: 'صرف الرواتب',
-    icon: <Wallet size={20} />,
-    href: '/payroll/disbursement',
-    perm: 'payroll.disburse',
+    id: 'money',
+    label: 'السلف والمكافآت والخصومات',
+    icon: <Gift size={20} />,
+    children: [
+      { label: 'سلفي', href: '/my/loans' },
+      // الخطوة 27: المكافآت المقترحة لي بحالتها، ومساحة المدير لاقتراح مكافآت مرؤوسيه
+      { label: 'مكافآتي', href: '/my/bonuses' },
+      // الخطوة 25: الخصومات المصنفة عليّ، ومساحة المدير لإنشاء خصومات فريقه ومتابعة اعتمادها
+      { label: 'خصوماتي', href: '/my/deductions' },
+      // B5.3: تقارير مصروفات الموظف (بتظهر لما ميزة «تقارير المصروفات» مفتوحة)
+      { label: 'مصروفاتي', href: '/my/expenses' },
+      { label: 'السلف والقروض', href: '/payroll/loans', perm: 'payroll.view' },
+      { label: 'المكافآت', href: '/payroll/bonuses', perm: 'payroll.view' },
+      { label: 'الخصومات', href: '/payroll/deductions', perm: 'payroll.view' },
+      // B5.3: فئات المصروف وتقارير الموظفين (بتظهر لما ميزة «تقارير المصروفات» مفتوحة)
+      { label: 'المصروفات', href: '/expenses', perm: 'expenses.manage' },
+    ],
+  },
+  {
+    id: 'custody',
+    label: 'العهد والأصول',
+    icon: <Package size={20} />,
+    children: [
+      { label: 'عهدي', href: '/my/custody' },
+      { label: 'سجل العهد', href: '/employees/custody', perm: 'custody.assign' },
+      { label: 'سجل الأصول', href: '/settings/asset-types', perm: 'custody.assign' },
+    ],
+  },
+  {
+    id: 'performance',
+    label: 'الأداء والمهارات',
+    icon: <Target size={20} />,
+    children: [
+      // B3.6 وB3.7: أهداف الموظف وفريقه وتقييماته — نفس الشاشة للموظف ولإدارة الأداء (الخادم بيرجّع لكل حساب اللي له)
+      { label: 'الأهداف', href: '/performance/goals' },
+      { label: 'التقييمات', href: '/performance' },
+      // B5.10: 360 واجتماعات 1:1 والتقدير (كل بند بيظهر لما ميزته مفتوحة)
+      { label: 'تقييم 360', href: '/my/feedback360' },
+      { label: 'اجتماعات 1:1', href: '/my/one-on-ones' },
+      { label: 'التقدير', href: '/my/recognition' },
+      // B5.4: فجوة مهارات الموظف ومصفوفة فريقه (بتظهر لما موديول المهارات مفتوح)
+      { label: 'مهاراتي', href: '/my/skills' },
+      // B3.7: الدورات والنماذج لإدارة الأداء
+      { label: 'دورات التقييم', href: '/performance/cycles', perm: ['employees.view', 'performance.manage'] },
+      { label: 'نماذج التقييم', href: '/performance/templates', perm: ['employees.view', 'performance.manage'] },
+      // B3.8: المعايرة بصلاحيتها
+      { label: 'المعايرة', href: '/performance/calibration', perm: ['employees.view', 'performance.calibrate'] },
+      // B5.4: المهارات والإحلال، وخطط الإحلال السرّية بصلاحيتها (الموديول مقفول افتراضيًا)
+      { label: 'المهارات والإحلال', href: '/skills', perm: 'skills.manage' },
+      { label: 'خطط الإحلال', href: '/skills/succession', perm: 'succession.manage' },
+    ],
   },
   {
     id: 'recruitment',
     label: 'التوظيف',
     icon: <UserPlus size={20} />,
-    // كلمة المالك 12 أكتوبر: «الوظائف المعتمدة» جوه التوظيف (B2.11؛ الموديول مقفول افتراضيًا: البند بيظهر لما يتفعّل). الصلاحية بقت على كل
-    // بند بدل المجموعة، فصاحب «عرض الوظائف المعتمدة» من غير «إدارة التوظيف» بيشوف بنده بس
+    // كلمة المالك 12 أكتوبر: «الوظائف المعتمدة» جوه التوظيف (B2.11؛ الموديول مقفول افتراضيًا: البند بيظهر لما يتفعّل). الصلاحية على كل
+    // بند، فصاحب «عرض الوظائف المعتمدة» من غير «إدارة التوظيف» بيشوف بنده بس
     children: [
+      // B3.3-أ: الوظائف المنشورة داخليًا في فرع الموظف. B3.4-ب: المقابلات اللي الموظف محاور فيها وبطاقته
+      { label: 'وظائف داخلية', href: '/my/jobs' },
+      { label: 'مقابلاتي', href: '/my/interviews' },
       { label: 'الوظائف المعتمدة', href: '/positions', perm: 'positions.view' },
       { label: 'الوظائف الشاغرة', href: '/recruitment', perm: 'candidates.manage' },
       { label: 'إدارة الوظائف', href: '/recruitment/jobs', perm: 'candidates.manage' },
@@ -253,45 +320,80 @@ const adminMenuDefs: MenuItem[] = [
     ],
   },
   {
-    id: 'performance',
-    label: 'إدارة الأداء',
-    icon: <Target size={20} />,
-    perm: 'employees.view',
-    children: [
-      { label: 'التقييمات', href: '/performance' },
-      { label: 'الأهداف', href: '/performance/goals' },
-      // B3.7: الدورات والنماذج لإدارة الأداء
-      { label: 'دورات التقييم', href: '/performance/cycles', perm: 'performance.manage' },
-      { label: 'نماذج التقييم', href: '/performance/templates', perm: 'performance.manage' },
-      // B3.8: المعايرة بصلاحيتها
-      { label: 'المعايرة', href: '/performance/calibration', perm: 'performance.calibrate' },
-    ],
-  },
-  {
     id: 'training',
     label: 'التدريب والتطوير',
     icon: <GraduationCap size={20} />,
-    perm: 'employees.view',
     children: [
-      // B3.9: شاشات إدارة التدريب بصلاحيتها؛ و«دوراتي» لكل موظف (وفي البوابة كمان)
-      { label: 'الدورات التدريبية', href: '/training', perm: 'training.manage' },
+      // B3.9: «دوراتي» لكل موظف، وشاشات إدارة التدريب بصلاحيتها
       { label: 'دوراتي', href: '/training/my-courses' },
-      { label: 'إضافة دورة', href: '/training/add', perm: 'training.manage' },
-      { label: 'الشهادات', href: '/training/certificates', perm: 'training.manage' },
+      { label: 'الدورات التدريبية', href: '/training', perm: ['employees.view', 'training.manage'] },
+      { label: 'إضافة دورة', href: '/training/add', perm: ['employees.view', 'training.manage'] },
+      { label: 'الشهادات', href: '/training/certificates', perm: ['employees.view', 'training.manage'] },
       // B3.9-ج: ميزانية الأقسام والتدريب الإلزامي
-      { label: 'خطة التدريب', href: '/training/plan', perm: 'training.manage' },
+      { label: 'خطة التدريب', href: '/training/plan', perm: ['employees.view', 'training.manage'] },
+    ],
+  },
+  {
+    // كل بند بيظهر لما موديوله مفتوح: الإعلانات (B2.16)، الاستبيانات (B3.13)، بريد الشركة (B-ADD.16)، اجتماعات الصوت والصورة (B-ADD.15)
+    id: 'communication',
+    label: 'التواصل',
+    icon: <Megaphone size={20} />,
+    children: [
+      { label: 'الإعلانات', href: '/announcements' },
+      { label: 'الاستبيانات', href: '/surveys' },
+      { label: 'البريد', href: '/mail' },
+      { label: 'الاجتماعات', href: '/meet' },
+    ],
+  },
+  {
+    id: 'services',
+    label: 'خدمات الموظفين',
+    icon: <LifeBuoy size={20} />,
+    children: [
+      // B3.10: استفسارات الموظف للموارد البشرية (بتظهر لما موديول مركز الخدمات مفتوح)
+      { label: 'مركز الخدمات', href: '/helpdesk' },
+      // B6.6: مساعد القراءة (بيظهر لما موديول الذكاء الاصطناعي وميزة المساعد مفتوحين)
+      { label: 'المساعد', href: '/assistant' },
+      // B3.11: قضايا الحساب (المطّلع عليها) وقضايا الموظف الطرف. B3.12: لائحة الجزاءات وتوقيعها بصلاحيتها
+      { label: 'الشكاوى والتحقيقات', href: '/cases' },
+      { label: 'لائحة الجزاءات', href: '/cases/penalties', perm: 'cases.penalties' },
+      // B5.7: بلاغ حادث ومتابعة بلاغاتي، وسجل حوادث السلامة بصلاحيته
+      { label: 'بلاغات السلامة', href: '/my/safety' },
+      { label: 'السلامة وإصابات العمل', href: '/safety', perm: 'safety.manage' },
+      // B5.2: وثائق التأمين الطبي وفئاتها (بتظهر لما موديول المزايا مفتوح)
+      { label: 'المزايا والتأمين الطبي', href: '/benefits', perm: 'benefits.manage' },
     ],
   },
   {
     id: 'reports',
     label: 'التقارير',
     icon: <FileText size={20} />,
-    perm: 'reports.view',
     children: [
-      { label: 'لوحة التقارير', href: '/reports' },
+      { label: 'لوحة التقارير', href: '/reports', perm: 'reports.view' },
       // B5.9: بانِي التقارير (بيظهر لما ميزة «بانِي التقارير» مفتوحة)
-      { label: 'بانِي التقارير', href: '/reports/builder' },
-      { label: 'تقرير مراكز التكلفة', href: '/reports/cost-centers', perm: 'payroll.view' },
+      { label: 'بانِي التقارير', href: '/reports/builder', perm: 'reports.view' },
+      { label: 'تقرير مراكز التكلفة', href: '/reports/cost-centers', perm: ['reports.view', 'payroll.view'] },
+    ],
+  },
+  {
+    // بيانات الشركة وهيكلها والبيانات المرجعية لملفات الموظفين، وتقويم الشركة (أيام العمل والعطلات الرسمية أساسي: مايتقفلش مع موديول)
+    id: 'company',
+    label: 'الشركة والهيكل',
+    icon: <Building2 size={20} />,
+    children: [
+      { label: 'بيانات الشركة', href: '/settings/company', perm: 'settings.manage' },
+      // B4.1: كيان لكل دولة بأرقام تسجيله. B4.2: القيم القانونية المؤرخة لكل دولة
+      { label: 'الكيانات القانونية', href: '/settings/legal-entities', perm: 'settings.manage' },
+      { label: 'حزمة الدولة', href: '/settings/statutory', perm: 'settings.manage' },
+      { label: 'الفروع', href: '/settings/branches', perm: 'org.manage' },
+      { label: 'الإدارات والأقسام', href: '/settings/departments', perm: 'org.manage' },
+      { label: 'الفرق', href: '/settings/teams', perm: 'org.manage' },
+      { label: 'مراكز التكلفة', href: '/settings/cost-centers', perm: 'settings.manage' },
+      { label: 'المسميات الوظيفية', href: '/settings/job-titles', perm: 'settings.manage' },
+      { label: 'الدرجات الوظيفية', href: '/settings/grades', perm: 'settings.manage' },
+      { label: 'حقول ملف الموظف', href: '/settings/employee-fields', perm: 'settings.manage' },
+      { label: 'أيام العمل', href: '/settings/work-days', perm: 'settings.manage' },
+      { label: 'العطلات الرسمية', href: '/leaves/holidays', perm: 'settings.manage' },
     ],
   },
   {
@@ -301,33 +403,32 @@ const adminMenuDefs: MenuItem[] = [
     children: [
       { label: 'الإعدادات العامة', href: '/settings', perm: 'settings.manage' },
       { label: 'الموديولات', href: '/settings/modules', perm: 'settings.modules' },
-      { label: 'الفروع', href: '/settings/branches', perm: 'org.manage' },
-      { label: 'الإدارات والأقسام', href: '/settings/departments', perm: 'org.manage' },
-      { label: 'الفرق', href: '/settings/teams', perm: 'org.manage' },
-      { label: 'المسميات الوظيفية', href: '/settings/job-titles', perm: 'settings.manage' },
-      { label: 'الدرجات الوظيفية', href: '/settings/grades', perm: 'settings.manage' },
-      { label: 'حقول ملف الموظف', href: '/settings/employee-fields', perm: 'settings.manage' },
-      { label: 'مراكز التكلفة', href: '/settings/cost-centers', perm: 'settings.manage' },
-      { label: 'أيام العمل', href: '/settings/work-days', perm: 'settings.manage' },
-      { label: 'أنواع الأذونات', href: '/settings/permission-types', perm: 'settings.manage' },
       { label: 'سياسات النظام', href: '/settings/policies', perm: 'settings.manage' },
-      { label: 'المهام المجدولة', href: '/settings/scheduled-jobs', perm: 'settings.manage' },
-      // B-ADD.5: البريد والواتساب وقنوات كل حدث وسجل الإرسال (الإعداد لمدير النظام بس — الخادم اللي بيحكم)
-      { label: 'قنوات الإشعارات', href: '/settings/notification-channels', perm: 'settings.manage' },
-      { label: 'الاعتمادات والموافقات', href: '/settings/approvals', perm: 'approval_chains.manage' },
       { label: 'بانِي الطلبات', href: '/settings/request-types', perm: 'request_types.manage' },
-      { label: 'سجل الأصول', href: '/settings/asset-types', perm: 'custody.assign' },
+      { label: 'الاعتمادات والموافقات', href: '/settings/approvals', perm: 'approval_chains.manage' },
       { label: 'أنواع المستندات', href: '/settings/documents', perm: 'settings.manage' },
       { label: 'قوالب المستندات', href: '/settings/document-templates', perm: 'settings.manage' },
       { label: 'قوالب الخطابات', href: '/settings/letter-templates', perm: 'settings.manage' },
-      // B6.1 (ب): استيراد الهيكل والموظفين من Excel عند تجهيز عميل (لحساب بكل الفروع — الخادم اللي بيحكم)
-      { label: 'استيراد بيانات التجهيز', href: '/settings/import', perm: 'settings.manage' },
+      // B-ADD.5: البريد والواتساب وقنوات كل حدث وسجل الإرسال (الإعداد لمدير النظام بس — الخادم اللي بيحكم)
+      { label: 'قنوات الإشعارات', href: '/settings/notification-channels', perm: 'settings.manage' },
+      { label: 'المهام المجدولة', href: '/settings/scheduled-jobs', perm: 'settings.manage' },
       // B6.3: مفاتيح الـAPI العام والـwebhooks (الموديول مقفول افتراضيًا: البند بيظهر لما يتفعّل)
       { label: 'التكاملات', href: '/settings/integrations', perm: 'integrations.manage' },
+      // B6.1 (ب): استيراد الهيكل والموظفين من Excel عند تجهيز عميل (لحساب بكل الفروع — الخادم اللي بيحكم)
+      { label: 'استيراد بيانات التجهيز', href: '/settings/import', perm: 'settings.manage' },
+      // B4.8 (ب): مدد الاحتفاظ بالبيانات وسجل حوادث التسريب
+      { label: 'حماية البيانات', href: '/settings/data-protection', perm: 'settings.manage' },
+    ],
+  },
+  {
+    id: 'access',
+    label: 'المستخدمين والصلاحيات',
+    icon: <ShieldCheck size={20} />,
+    children: [
       { label: 'المستخدمين', href: '/settings/users', perm: 'users.manage' },
+      { label: 'الأدوار والصلاحيات', href: '/settings/roles', perm: 'roles.manage' },
       { label: 'سجل الدخول', href: '/settings/login-log', perm: 'users.manage' },
       { label: 'سجل التدقيق', href: '/settings/audit', perm: 'audit.view' },
-      { label: 'الأدوار والصلاحيات', href: '/settings/roles', perm: 'roles.manage' },
     ],
   },
 ]
@@ -361,7 +462,7 @@ const saveOpenGroup = (id: string | null) => {
 
 // الرابط النشط = أطول رابط في القائمة يطابق المسار أو يسبقه بمقطع كامل
 // (/employees/12/edit ← «قائمة الموظفين»، /payroll/payslip/5 ← «مسير الرواتب»)؛ الرئيسية بالتطابق فقط
-const activeHrefFor = (pathname: string, items: MenuItem[]): string | null => {
+const activeHrefFor = (pathname: string, items: Array<{ href?: string; children?: Array<{ href: string }> }>): string | null => {
   let best: string | null = null
   const consider = (href?: string) => {
     if (!href) return
@@ -375,7 +476,7 @@ const activeHrefFor = (pathname: string, items: MenuItem[]): string | null => {
   if (best) return best
   // شاشات تُفتح من بوابة الموظف بلا عنصر خاص بها (طلب إجازة، قسيمة راتب): يُميَّز العنصر الذي فُتحت منه
   const alias = PATH_ALIASES.find(([prefix]) => pathname === prefix || pathname.startsWith(`${prefix}/`))?.[1]
-  return alias && items.some((item) => item.href === alias) ? alias : null
+  return alias && items.some((item) => item.href === alias || item.children?.some((child) => child.href === alias)) ? alias : null
 }
 const PATH_ALIASES: Array<[prefix: string, href: string]> = [
   ['/leaves/request', '/my/leaves'],
@@ -396,8 +497,9 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
   // القائمة تُركَّب بعد التحقق من الجلسة على العميل — قراءة التخزين المحلي هنا آمنة وتمنع وميض قائمة فارغة
   // المفتوحة = مجموعة الشاشة الحالية من أول رسم (بلا وميض مجموعة مغلقة)، وإلا آخر مجموعة فتحها المستخدم
   const [openGroup, setOpenGroup] = useState<string | null>(() => {
-    const href = activeHrefFor(pathname, adminMenuDefs)
-    return adminMenuDefs.find((item) => item.children?.some((child) => child.href === href))?.id ?? readOpenGroup()
+    const href = activeHrefFor(pathname, MENU)
+    // (المجموعة أم بند واحد — «الرئيسية» — بتتعرض رابط مباشر، فمش هي اللي بتتفتح)
+    return MENU.find((item) => item.children.length > 1 && item.children.some((child) => child.href === href))?.id ?? readOpenGroup()
   })
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(() => getCurrentUser())
   // الموديولات المفعّلة للمستخدم (الإعدادات ← الموديولات): بند الموديول المقفول مابيظهرش — ولحد ما تتقري، افتراضي السجل
@@ -478,125 +580,44 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
     // البند يظهر لو موديول مساره مفعّل (والميزة لو المسار ورا ميزة) — من سجل الموديولات
     const available = (href?: string) => !href || routeAvailable(href, enabledModules)
 
-    // العناصر الإدارية المسموحة: المجموعة تظهر إذا بقي فيها عنصر واحد على الأقل
-    const adminItems: MenuItem[] = []
-    for (const item of adminMenuDefs) {
-      if (item.perm && !can(item.perm)) continue
-      if (item.children) {
-        const visibleChildren = item.children.filter((c) => (!c.perm || can(c.perm)) && available(c.href))
-        if (visibleChildren.length === 0) continue
-        adminItems.push({ ...item, children: visibleChildren })
-      } else if (available(item.href)) {
-        adminItems.push(item)
-      }
-    }
-
-    const isPrivileged = adminItems.length > 0
     const showInbox = currentUser.role !== 'employee' || inboxCount > 0 || inboxError || delegationEntry
+    // شروط الظهور المحسوبة وعدّادات البنود (القايمة نفسها في MENU فوق)
+    const flags: Record<MenuFlag, boolean> = {
+      inbox: showInbox,
+      // «مسيرات بانتظار اعتمادي» تظهر بس لما فيه مسير منتظره فعلًا
+      payrollApprovals: payrollApprovals > 0,
+      team: teamManager,
+      raises: raisesOpen,
+      probation: teamManager || can('employees.view'),
+    }
+    const badges: Record<MenuBadge, number> = { inbox: inboxCount, payrollApprovals, tasks: tasksCount }
+    const permitted = (perm?: string | string[]) => !perm || (Array.isArray(perm) ? perm : [perm]).every((key) => can(key))
 
-    // بورتال الموظف — يظهر للجميع (كل مستخدم موظف أيضاً)
-    const portalItems: MenuItem[] = [
-      {
-        id: 'dashboard',
-        label: isPrivileged ? 'لوحة التحكم' : 'لوحتي',
-        icon: <LayoutDashboard size={20} />,
-        href: '/',
-      },
-      {
-        id: 'my-requests',
-        label: 'طلباتي',
-        icon: <FileText size={20} />,
-        href: '/requests',
-      },
-      ...(showInbox
-        ? [
-            {
-              id: 'approvals-inbox',
-              label: 'بانتظار موافقتي',
-              icon: <Inbox size={20} />,
-              href: '/approvals-inbox',
-              badge: inboxCount,
-            } satisfies MenuItem,
-          ]
-        : []),
-      ...(payrollApprovals > 0
-        ? [
-            {
-              id: 'payroll-my-approvals',
-              label: 'مسيرات بانتظار اعتمادي',
-              icon: <Wallet size={20} />,
-              href: '/payroll/my-approvals',
-              badge: payrollApprovals,
-            } satisfies MenuItem,
-          ]
-        : []),
-      { id: 'my-tasks', label: 'مهامي', icon: <ListChecks size={20} />, href: '/my/tasks', badge: tasksCount },
-      ...(teamManager ? [{ id: 'my-team', label: 'فريقي', icon: <Users size={20} />, href: '/my/team' } satisfies MenuItem] : []),
-      ...(raisesOpen ? [{ id: 'my-raises', label: 'زيادات فريقي', icon: <Wallet size={20} />, href: '/my/raises' } satisfies MenuItem] : []),
-      // B3.1-ج: قرار فترة التجربة — للمدير (مرؤوسيه) وللموارد البشرية (عرض الموظفين)
-      ...(teamManager || can('employees.view')
-        ? [{ id: 'my-probation', label: 'فترات التجربة', icon: <Hourglass size={20} />, href: '/my/probation' } satisfies MenuItem]
-        : []),
-      // B5.3: تقارير مصروفات الموظف (بتظهر لما ميزة «تقارير المصروفات» مفتوحة)
-      { id: 'my-expenses', label: 'مصروفاتي', icon: <Wallet size={20} />, href: '/my/expenses' },
-      // B3.3-أ: الوظائف المنشورة داخليًا في فرع الموظف (بتظهر لما موديول التوظيف مفتوح)
-      { id: 'my-jobs', label: 'وظائف داخلية', icon: <Briefcase size={20} />, href: '/my/jobs' },
-      // B3.4-ب: المقابلات اللي الموظف محاور فيها وبطاقته
-      { id: 'my-interviews', label: 'مقابلاتي', icon: <ClipboardList size={20} />, href: '/my/interviews' },
-      // B3.6: أهداف الموظف وفريقه (بتظهر لما موديول الأداء مفتوح) — نفس شاشة «الأهداف»
-      { id: 'my-goals', label: 'الأهداف', icon: <Target size={20} />, href: '/performance/goals' },
-      // B3.7: تقييمات الموظف وتقييم فريقه — نفس شاشة «التقييمات»
-      { id: 'my-reviews', label: 'التقييمات', icon: <ClipboardList size={20} />, href: '/performance' },
-      // B3.9: دورات الموظف التدريبية وشهاداته (بتظهر لما موديول التدريب مفتوح)
-      { id: 'my-training', label: 'دوراتي', icon: <GraduationCap size={20} />, href: '/training/my-courses' },
-      // B5.5 (ج): طلبات تبديل الوردية اللي الموظف طرف تاني فيها (بتظهر لما ميزة «تبديل الوردية بموافقة الطرف التاني» مفتوحة)
-      { id: 'my-shift-swaps', label: 'تبديل ورديتي', icon: <Clock size={20} />, href: '/my/shift-swaps' },
-      // B5.4: فجوة مهارات الموظف ومصفوفة فريقه (بتظهر لما موديول المهارات مفتوح)
-      { id: 'my-skills', label: 'مهاراتي', icon: <GraduationCap size={20} />, href: '/my/skills' },
-      // B5.10: 360 واجتماعات 1:1 والتقدير (كل بند بيظهر لما ميزته مفتوحة)
-      { id: 'my-feedback360', label: 'تقييم 360', icon: <Target size={20} />, href: '/my/feedback360' },
-      { id: 'my-one-on-ones', label: 'اجتماعات 1:1', icon: <Users size={20} />, href: '/my/one-on-ones' },
-      { id: 'my-recognition', label: 'التقدير', icon: <Gift size={20} />, href: '/my/recognition' },
-      { id: 'my-attendance', label: 'حضوري', icon: <Clock size={20} />, href: '/my/attendance' },
-      // B5.8: تسجيل ساعاتي على المشاريع واعتماد ساعات فريقي (بتظهر لما موديول ساعات المشاريع مفتوح)
-      { id: 'my-timesheets', label: 'ساعاتي', icon: <Hourglass size={20} />, href: '/my/timesheets' },
-      // B5.6: تسجيل البصمة من الموبايل (بتظهر لما ميزة «بصمة الموبايل» مفتوحة)
-      { id: 'my-punch', label: 'بصمتي', icon: <Clock size={20} />, href: '/my/punch' },
-      { id: 'my-leaves', label: 'إجازاتي وأرصدتي', icon: <Calendar size={20} />, href: '/my/leaves' },
-      // B5.7: بلاغ حادث ومتابعة بلاغاتي (بتظهر لما موديول السلامة مفتوح)
-      { id: 'my-safety', label: 'بلاغات السلامة', icon: <ShieldCheck size={20} />, href: '/my/safety' },
-      { id: 'my-payslips', label: 'قسائم راتبي', icon: <Wallet size={20} />, href: '/my/payslips' },
-      // B6.6: مساعد القراءة (بيظهر لما موديول الذكاء الاصطناعي وميزة المساعد مفتوحين)
-      { id: 'my-assistant', label: 'المساعد', icon: <Sparkles size={20} />, href: '/assistant' },
-      { id: 'my-loans', label: 'سلفي', icon: <Wallet size={20} />, href: '/my/loans' },
-      // الخطوة 25: الخصومات المصنفة عليّ، ومساحة المدير لإنشاء خصومات فريقه ومتابعة اعتمادها
-      { id: 'my-deductions', label: 'خصوماتي', icon: <ClipboardList size={20} />, href: '/my/deductions' },
-      // الخطوة 27: المكافآت المقترحة لي بحالتها، ومساحة المدير لاقتراح مكافآت مرؤوسيه
-      { id: 'my-bonuses', label: 'مكافآتي', icon: <Gift size={20} />, href: '/my/bonuses' },
-      // «إعفاءاتي» أُخفيت (تبسيط الرواتب 2026-09-15): الرابط يتحول لـ«قسائم راتبي» والخصم الملغى يظهر سطرًا في القسيمة
-      { id: 'my-custody', label: 'عهدي', icon: <Package size={20} />, href: '/my/custody' },
-      { id: 'my-documents', label: 'مستنداتي', icon: <FolderOpen size={20} />, href: '/my/documents' },
-      // B2.7: سياسات الشركة اللي عليّ وإقراري بيها
-      { id: 'my-policies', label: 'سياساتي', icon: <ScrollText size={20} />, href: '/my/policies' },
-      { id: 'profile', label: 'ملفي الشخصي', icon: <UserCircle size={20} />, href: '/profile' },
-      { id: 'announcements', label: 'الإعلانات', icon: <Megaphone size={20} />, href: '/announcements' },
-      // B3.10: استفسارات الموظف للموارد البشرية (بتظهر لما موديول مركز الخدمات مفتوح)
-      { id: 'helpdesk', label: 'مركز الخدمات', icon: <LifeBuoy size={20} />, href: '/helpdesk' },
-      // B-ADD.16: بريد الشركة (Exchange) جوه النظام — صندوق الموظف نفسه (بيظهر لما موديول البريد مفتوح)
-      { id: 'mail', label: 'البريد', icon: <Mail size={20} />, href: '/mail' },
-      // B3.11: قضايا الحساب (المطّلع عليها) وقضايا الموظف الطرف (بتظهر لما موديول الشكاوى والتحقيقات مفتوح)
-      { id: 'cases', label: 'الشكاوى والتحقيقات', icon: <Scale size={20} />, href: '/cases' },
-      // B3.13: استبيانات الموظف المدعو لها، وإدارتها لصاحب الصلاحية (بتظهر لما موديول الاستبيانات مفتوح)
-      { id: 'surveys', label: 'الاستبيانات', icon: <ClipboardList size={20} />, href: '/surveys' },
-      // B-ADD.15: اجتماعات الصوت والصورة (بتظهر لما موديول الاجتماعات مفتوح)
-      { id: 'meet', label: 'الاجتماعات', icon: <Video size={20} />, href: '/meet' },
-      { id: 'notifications', label: 'الإشعارات', icon: <Bell size={20} />, href: '/notifications' },
-      { id: 'calendar', label: 'التقويم', icon: <Calendar size={20} />, href: '/calendar' },
-    ]
+    // البند يظهر بصلاحيته وشرطه وموديول مساره؛ والمجموعة تظهر إذا بقي فيها عنصر واحد على الأقل
+    const groups = MENU
+      .map((group) => ({ ...group, children: group.children.filter((c) => permitted(c.perm) && (!c.when || flags[c.when]) && available(c.href)) }))
+      .filter((group) => group.children.length > 0)
 
-    // B3.1-ب: حساب في بوابة التهيئة: شاشات التهيئة بس (مهامي، مستنداتي، سياساتي، الإشعارات)
-    if (preboardingUntil(currentUser)) return portalItems.filter((item) => !!item.href && preboardingPathAllowed(item.href) && available(item.href))
-    return [...portalItems.filter((item) => available(item.href)), ...adminItems]
+    // حساب معاه شاشة إدارية واحدة على الأقل (بند بصلاحية): لوحته «لوحة التحكم»، وغيره «لوحتي»
+    const isPrivileged = groups.some((group) => group.children.some((c) => !!c.perm))
+    const labelOf = (c: ChildItem) => (c.href === '/' ? (isPrivileged ? 'لوحة التحكم' : 'لوحتي') : c.label)
+    const badgeOf = (c: ChildItem) => (c.badge ? badges[c.badge] : undefined)
+    const linkOf = (group: MenuGroup, c: ChildItem): MenuItem => ({ id: `${group.id}:${c.href}`, label: labelOf(c), icon: group.icon, href: c.href, badge: badgeOf(c) })
+
+    // B3.1-ب: حساب في بوابة التهيئة: شاشات التهيئة بس (مهامي، مستنداتي، سياساتي، الإشعارات) — روابط مباشرة من غير مجموعات
+    if (preboardingUntil(currentUser)) {
+      return groups.flatMap((group) => group.children.filter((c) => !c.perm && preboardingPathAllowed(c.href)).map((c) => linkOf(group, c)))
+    }
+    // مجموعة فاضل فيها بند واحد = رابط مباشر باسم البند؛ وعدّاد المجموعة مجموع عدّادات بنودها
+    return groups.map((group): MenuItem => (group.children.length === 1
+      ? { ...linkOf(group, group.children[0]), id: group.id }
+      : {
+          id: group.id,
+          label: group.label,
+          icon: group.icon,
+          children: group.children.map((c) => ({ label: labelOf(c), href: c.href, badge: badgeOf(c) })),
+          badge: group.children.reduce((sum, c) => sum + (badgeOf(c) ?? 0), 0),
+        }))
   }, [currentUser, inboxCount, inboxError, delegationEntry, payrollApprovals, tasksCount, teamManager, raisesOpen, enabledModules])
 
   const activeHref = activeHrefFor(pathname, menuItems)
@@ -725,6 +746,9 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
                   <div className="flex items-center gap-3">
                     {item.icon}
                     <span className="font-medium">{t(item.label)}</span>
+                    {(item.badge ?? 0) > 0 && (
+                      <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-primary-500 text-white">{item.badge}</span>
+                    )}
                   </div>
                   <ChevronDown
                     size={18}
@@ -742,13 +766,23 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
                         href={child.href}
                         aria-current={isActive(child.href) ? 'page' : undefined}
                         className={clsx(
-                          'block px-4 py-2.5 rounded-xl text-sm transition-all',
+                          'flex items-center px-4 py-2.5 rounded-xl text-sm transition-all',
                           isActive(child.href)
                             ? 'bg-primary-500 text-white shadow-lg shadow-primary-500/30'
                             : 'text-gray-500 hover:text-primary-600 hover:bg-primary-50'
                         )}
                       >
                         {t(child.label)}
+                        {(child.badge ?? 0) > 0 && (
+                          <span
+                            className={clsx(
+                              'ms-auto text-xs font-bold px-2 py-0.5 rounded-full',
+                              isActive(child.href) ? 'bg-white/20 text-white' : 'bg-primary-500 text-white'
+                            )}
+                          >
+                            {child.badge}
+                          </span>
+                        )}
                       </Link>
                     ))}
                   </div>

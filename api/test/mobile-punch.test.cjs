@@ -88,7 +88,7 @@ test('MPU-04: الواجهة — «بصمتي» بتبعت الموقع ودقت
   assert.match(admin, /\{manage && data\?\.ready && \(/)
   const sidebar = web('components/layout/Sidebar.tsx'), titles = web('components/layout/pageTitles.ts')
   assert.match(sidebar, /\{ label: 'بصمة الموبايل', href: '\/attendance\/punch-sites', perm: 'attendance\.view_all' \}/)
-  assert.match(sidebar, /\{ id: 'my-punch', label: 'بصمتي', icon: <Clock size=\{20\} \/>, href: '\/my\/punch' \}/)
+  assert.match(sidebar, /\{ label: 'بصمتي', href: '\/my\/punch' \},/)
   assert.match(titles, /\['\/attendance\/punch-sites', 'بصمة الموبايل'\]/); assert.match(titles, /\['\/my\/punch', 'بصمتي'\]/)
   // رؤوس الحماية بتسمح بالموقع لصفحات النظام نفسه — من غيرها كل متصفح بيرفض «بصمتي» من غير ما يسأل (عيب أول تجربة للمالك، 12 أكتوبر 2026)
   const next = fs.readFileSync(path.join(apiRoot, '..', 'next.config.js'), 'utf8')

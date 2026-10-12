@@ -120,7 +120,7 @@ test('SU-03: a new closed module, a one-transaction answer with no link from the
   assert.ok(controller.indexOf("@Get('mine')") < controller.indexOf("@Get(':id')"), '«استبياناتي» قبل المسار بالرقم')
 
   // الواجهة: القايمة والعنوان والصفحتين
-  assert.match(read('src/components/layout/Sidebar.tsx'), /\{ id: 'surveys', label: 'الاستبيانات', icon: <ClipboardList size=\{20\} \/>, href: '\/surveys' \}/)
+  assert.match(read('src/components/layout/Sidebar.tsx'), /\{ label: 'الاستبيانات', href: '\/surveys' \},/)
   assert.match(read('src/components/layout/pageTitles.ts'), /\['\/surveys', 'الاستبيانات'\]/)
   const page = read('src/app/surveys/page.tsx'), form = read('src/app/surveys/[id]/page.tsx')
   assert.match(page, /const manage = can\('surveys\.manage'\)/)

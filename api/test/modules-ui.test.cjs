@@ -99,16 +99,27 @@ test('MU-01: كل شاشة لها صاحب (موديول)، وكل مسار في
 })
 
 test('MU-02: القايمة الجانبية من السجل — الوهمي ورا ميزته، وبنود الموديول المقفول مختفية', () => {
+  // B-ADD.21: القايمة بقت مجموعات مرتّبة (بنود المجموعة بتترسم وهي مفتوحة بس): العناوين من رسمة والمجموعات مقفولة، والروابط من رسمة لكل مجموعة وهي مفتوحة
+  const { MENU } = require('../../src/components/layout/Sidebar')
+  const hrefsOf = html => [...html.matchAll(/<a[^>]*href="([^"]+)"/g)].map(match => match[1])
   const menu = (user, enabled) => {
     signIn(user, enabled)
     const html = renderToStaticMarkup(React.createElement(Sidebar, { open: false }))
-    return { html, links: [...html.matchAll(/<a[^>]*href="([^"]+)"/g)].map(match => match[1]), has: label => html.includes(`>${label}<`) }
+    const links = new Set(hrefsOf(html))
+    for (const group of MENU) {
+      localStorage.setItem('hr_sidebar_open_group', group.id)
+      for (const href of hrefsOf(renderToStaticMarkup(React.createElement(Sidebar, { open: false })))) links.add(href)
+    }
+    localStorage.removeItem('hr_sidebar_open_group')
+    return { html, links: [...links], has: label => html.includes(`>${label}<`) }
   }
   // مدير النظام بافتراضي السجل (شاشات العرض مقفولة): كل الحقيقي ظاهر، والوهمي مختفي — المجموعات مقفولة فبنشوف عناوينها
   let view = menu(admin, state())
-  for (const label of ['إدارة الموظفين', 'الحضور والانصراف', 'الإجازات', 'الرواتب', 'التوظيف', 'التقارير', 'الإعدادات', 'إنهاء الخدمة', 'صرف الرواتب']) assert.ok(view.has(label), label)
-  for (const label of ['إدارة الأداء', 'التدريب والتطوير']) assert.ok(!view.has(label), `${label}: موديولها مقفول افتراضيًا`)
-  for (const href of ['/', '/requests', '/my/attendance', '/my/leaves', '/my/payslips', '/my/loans', '/my/custody', '/my/documents', '/profile', '/notifications', '/calendar', '/offboarding']) {
+  for (const label of ['الموظفين', 'الحضور والانصراف', 'الإجازات والأذونات', 'الرواتب', 'التوظيف', 'التقارير', 'الإعدادات']) assert.ok(view.has(label), label)
+  for (const label of ['الأداء والمهارات', 'التدريب والتطوير']) assert.ok(!view.has(label), `${label}: موديولها مقفول افتراضيًا`)
+  // «إنهاء الخدمة» و«صرف الرواتب» بقوا بنود جوه مجموعتي «الموظفين» و«الرواتب»
+  for (const href of ['/', '/requests', '/my/attendance', '/my/leaves', '/my/payslips', '/my/loans', '/my/custody', '/my/documents', '/profile', '/notifications', '/calendar', '/offboarding',
+    '/payroll/disbursement']) {
     assert.ok(view.links.includes(href), href)
   }
   // شاشات العرض مفتوحة: مجموعتا الأداء والتدريب بيرجعوا
@@ -121,10 +132,10 @@ test('MU-02: القايمة الجانبية من السجل — الوهمي و
   assert.ok(menu(admin, state({ training: true })).has('التدريب والتطوير'), 'التدريب مفتوح')
   modules.invalidateModules(); localStorage.clear(); sessionStorage.clear()
   view = menu(admin, state({}, DEMO_ON))
-  // B3.7: مجموعة «إدارة الأداء» بقت شاشات حقيقية: بتظهر بموديولها (المقفول افتراضيًا)، مش بميزة شاشات العرض
-  assert.ok(!view.has('إدارة الأداء'), 'الأداء مقفول: ميزة العرض مابتفتحهوش')
+  // B3.7: مجموعة الأداء («الأداء والمهارات» من B-ADD.21) بقت شاشات حقيقية: بتظهر بموديولها (المقفول افتراضيًا)، مش بميزة شاشات العرض
+  assert.ok(!view.has('الأداء والمهارات'), 'الأداء مقفول: ميزة العرض مابتفتحهوش')
   modules.invalidateModules(); localStorage.clear(); sessionStorage.clear()
-  assert.ok(menu(admin, state({ performance: true })).has('إدارة الأداء'), 'الأداء مفتوح')
+  assert.ok(menu(admin, state({ performance: true })).has('الأداء والمهارات'), 'الأداء مفتوح')
   modules.invalidateModules(); localStorage.clear(); sessionStorage.clear()
 
   // موظف عادي والرواتب (ومعاها السلف) والعهد مقفولين: بنودهم مختفية من بوابته، والباقي زي ما هو
@@ -140,19 +151,21 @@ test('MU-02: القايمة الجانبية من السجل — الوهمي و
   // مدير النظام والرواتب والتوظيف وإنهاء الخدمة مقفولين: مجموعاتهم وبنودهم المنفردة مختفية
   modules.invalidateModules(); localStorage.clear(); sessionStorage.clear()
   view = menu(admin, state({ payroll: false, recruitment: false, offboarding: false }, DEMO_ON))
-  for (const label of ['الرواتب', 'التوظيف', 'إنهاء الخدمة', 'صرف الرواتب']) assert.ok(!view.has(label), `${label} مقفول`)
-  for (const label of ['إدارة الموظفين', 'الحضور والانصراف', 'الإجازات', 'التقارير', 'الإعدادات']) assert.ok(view.has(label), label)
+  for (const label of ['الرواتب', 'السلف والمكافآت والخصومات', 'التوظيف']) assert.ok(!view.has(label), `${label} مقفول`)
+  for (const href of ['/offboarding', '/payroll/disbursement', '/payroll', '/recruitment', '/settings/salary-items', '/settings/banks']) assert.ok(!view.links.includes(href), `${href} مقفول`)
+  for (const label of ['الموظفين', 'الحضور والانصراف', 'الإجازات والأذونات', 'التقارير', 'الإعدادات']) assert.ok(view.has(label), label)
 
   // من غير حالة مقروءة (أول رسم): افتراضي السجل — القايمة ماتفضاش
   modules.invalidateModules(); localStorage.clear(); sessionStorage.clear()
   view = menu(admin, null)
-  assert.ok(view.has('الرواتب') && view.has('الحضور والانصراف') && !view.has('إدارة الأداء'))
+  assert.ok(view.has('الرواتب') && view.has('الحضور والانصراف') && !view.has('الأداء والمهارات'))
 
   // بنود المجموعة نفسها من السجل (المصدر): الفلترة بمسار البند، والبوابة كمان
   const source = read('src/components/layout/Sidebar.tsx')
   assert.match(source, /const available = \(href\?: string\) => !href \|\| routeAvailable\(href, enabledModules\)/)
-  assert.match(source, /item\.children\.filter\(\(c\) => \(!c\.perm \|\| can\(c\.perm\)\) && available\(c\.href\)\)/)
-  assert.match(source, /portalItems\.filter\(\(item\) => available\(item\.href\)\)/)
+  // B-ADD.21: قايمة واحدة (بنود الموظف وبنود الإدارة في مجموعاتها): كل بند بصلاحيته وشرطه وموديول مساره، والمجموعة اللي مافضلش فيها بند بتختفي
+  assert.match(source, /group\.children\.filter\(\(c\) => permitted\(c\.perm\) && \(!c\.when \|\| flags\[c\.when\]\) && available\(c\.href\)\)/)
+  assert.match(source, /\.filter\(\(group\) => group\.children\.length > 0\)/)
   assert.match(source, /const enabledModules = useModules\(\) \?\? DEFAULT_MODULES/)
   // بنود مجموعة التوظيف والتقارير: كلها بموديولها، وبند الميزة («بانِي التقارير») بميزته
   const visible = (enabled, hrefs) => hrefs.filter(href => registry.routeAvailable(href, enabled))

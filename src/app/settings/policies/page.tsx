@@ -52,6 +52,8 @@ interface PolicyField {
   wide?: boolean // حقل نصي عريض بأكواد لاتينية (جداول «مفتاح:قيمة»)
   perm?: string // صلاحية إضافية لتغيير الحقل فوق settings.manage (الخادم يرفض بدونها)
   readOnly?: boolean // قيمة ثابتة في المحرك: تُعرض للقراءة فقط
+  // B-ADD.21: الخانة دي إعداد موديول اختياري جوه مجموعة مشتركة: بتختفي لو موديولها مقفول (قيمتها بتفضل محفوظة زي ما هي)
+  module?: ModuleKey
 }
 interface PolicyGroup {
   title: string
@@ -121,11 +123,11 @@ const GROUPS: PolicyGroup[] = [
     fields: [
       // من يوم التغيير وما بعده فقط: الحفظ يضيف نسخة مؤرخة لكل تعريف دوام بتاريخ اليوم،
       // والأيام الأقدم تفضل على نسختها القديمة. سماحية الوردية (graceMinutes) تعلو على العامة.
-      { key: GRACE_KEY, label: 'سماحية التأخير العامة', type: 'number', unit: 'دقيقة', min: 0, max: 1440, integer: true, hint: 'تسري من يوم التغيير وما بعده — الأيام السابقة لا يُعاد حسابها ولا تتغير خصوماتها. سماحية الوردية الخاصة تعلو عليها.' },
+      { key: GRACE_KEY, label: 'سماحية التأخير العامة', type: 'number', unit: 'دقيقة', min: 0, max: 1440, integer: true, hint: 'تسري من يوم التغيير وما بعده — الأيام السابقة لا يُعاد حسابها ولا تتغير خصوماتها. سماحية الوردية الخاصة تعلو عليها.', module: 'attendance' },
       { key: 'attendance.weekend_days', label: 'أيام نهاية الأسبوع', type: 'text', hint: 'اختر يوم الإجازة الأسبوعية أو أكثر (لا تُختار كل الأيام). يتجاوزها الفرع من شاشة «الفروع»' },
-      { key: 'attendance.absence_catchup_max_days', label: 'حد استدراك تسجيل الغياب', type: 'number', unit: 'يوم', min: 1, max: 366, integer: true, hint: 'أقصى عدد أيام تُراجع بعد توقف الخادم، من 1 إلى 366 يوماً.' },
-      { key: DEVICE_KEY, label: 'مفتاح استقبال البصمات', type: 'secret', hint: 'يُستخدم في إعداد الجهاز أو الوسيط. اتركه فارغاً لإيقاف استقبال البصمات.' },
-      { key: 'payroll.late_deduction_enabled', label: 'خصم التأخير من الراتب', type: 'bool' },
+      { key: 'attendance.absence_catchup_max_days', label: 'حد استدراك تسجيل الغياب', type: 'number', unit: 'يوم', min: 1, max: 366, integer: true, hint: 'أقصى عدد أيام تُراجع بعد توقف الخادم، من 1 إلى 366 يوماً.', module: 'attendance' },
+      { key: DEVICE_KEY, label: 'مفتاح استقبال البصمات', type: 'secret', hint: 'يُستخدم في إعداد الجهاز أو الوسيط. اتركه فارغاً لإيقاف استقبال البصمات.', module: 'attendance' },
+      { key: 'payroll.late_deduction_enabled', label: 'خصم التأخير من الراتب', type: 'bool', module: 'payroll' },
     ],
   },
   {
@@ -136,21 +138,21 @@ const GROUPS: PolicyGroup[] = [
     iconColor: 'text-blue-500',
     note: 'تعديل مفاتيح المرونة يُثبت قيمها السابقة في تاريخ تعريف الدوام قبل الحفظ، فلا تتغير أيام سابقة. إذا كان خصم التأخير مقفولًا لا تُطرح دقائقه من النقص.',
     fields: [
-      { key: 'payroll.early_leave_deduction_enabled', label: 'خصم الخروج المبكر على الوردية الثابتة', type: 'bool', hint: 'يُخصم بسعر الدقيقة بعد طرح التأخير والسماحية. الوردية المرنة يحكمها «خصم نقص ساعات العمل».' },
-      { key: 'payroll.shortfall_enabled', label: 'خصم نقص ساعات العمل', type: 'bool', hint: 'الساعات المطلوبة ناقص ساعات العمل الفعلية بعد السماحية.' },
+      { key: 'payroll.early_leave_deduction_enabled', label: 'خصم الخروج المبكر على الوردية الثابتة', type: 'bool', hint: 'يُخصم بسعر الدقيقة بعد طرح التأخير والسماحية. الوردية المرنة يحكمها «خصم نقص ساعات العمل».', module: 'payroll' },
+      { key: 'payroll.shortfall_enabled', label: 'خصم نقص ساعات العمل', type: 'bool', hint: 'الساعات المطلوبة ناقص ساعات العمل الفعلية بعد السماحية.', module: 'payroll' },
       { key: 'payroll.shortfall_mode', label: 'طريقة خصم النقص', type: 'select', options: [
         { value: 'MINUTES', label: 'بسعر الدقيقة' },
         { value: 'MULTIPLIER', label: 'بسعر الدقيقة × معامل' },
         { value: 'FRACTION', label: 'كسر يوم ثابت' },
-      ] },
-      { key: 'payroll.shortfall_value', label: 'قيمة طريقة النقص', type: 'number', min: 0, max: 1000, hint: 'بسعر الدقيقة = 1. في المعامل: المضاعف، وفي كسر اليوم: جزء اليوم (مثل 0.25).' },
-      { key: 'attendance.flex.shortfall_grace_minutes', label: 'سماحية نقص الساعات', type: 'number', unit: 'دقيقة', min: 0, max: 1440, integer: true },
+      ], module: 'payroll' },
+      { key: 'payroll.shortfall_value', label: 'قيمة طريقة النقص', type: 'number', min: 0, max: 1000, hint: 'بسعر الدقيقة = 1. في المعامل: المضاعف، وفي كسر اليوم: جزء اليوم (مثل 0.25).', module: 'payroll' },
+      { key: 'attendance.flex.shortfall_grace_minutes', label: 'سماحية نقص الساعات', type: 'number', unit: 'دقيقة', min: 0, max: 1440, integer: true, module: 'attendance' },
       // القرار أ4 (نيابة عن خط الحساب): لا سقف يومي للخصم ولا ترتيب تداخل — كل خصم يُخصم كما هو
-      { key: 'attendance.flex.window_supersedes_grace', label: 'نافذة المرونة تغني عن سماحية التأخير', type: 'bool' },
-      { key: 'attendance.flex.count_early_work_toward_required', label: 'احتساب الحضور قبل بداية الدوام من الساعات المطلوبة', type: 'bool' },
-      { key: 'attendance.flex.prorate_window_on_partial_leave', label: 'تناسب نافذة المرونة مع الإجازة الجزئية', type: 'bool' },
-      { key: 'attendance.flex.unpaid_break_minutes', label: 'استراحة غير مدفوعة', type: 'number', unit: 'دقيقة', min: 0, max: 1440, integer: true },
-      { key: 'attendance.flex.max_session_minutes', label: 'أقصى مدة جلسة حضور', type: 'number', unit: 'دقيقة', min: 1, max: 1440, integer: true },
+      { key: 'attendance.flex.window_supersedes_grace', label: 'نافذة المرونة تغني عن سماحية التأخير', type: 'bool', module: 'attendance' },
+      { key: 'attendance.flex.count_early_work_toward_required', label: 'احتساب الحضور قبل بداية الدوام من الساعات المطلوبة', type: 'bool', module: 'attendance' },
+      { key: 'attendance.flex.prorate_window_on_partial_leave', label: 'تناسب نافذة المرونة مع الإجازة الجزئية', type: 'bool', module: 'attendance' },
+      { key: 'attendance.flex.unpaid_break_minutes', label: 'استراحة غير مدفوعة', type: 'number', unit: 'دقيقة', min: 0, max: 1440, integer: true, module: 'attendance' },
+      { key: 'attendance.flex.max_session_minutes', label: 'أقصى مدة جلسة حضور', type: 'number', unit: 'دقيقة', min: 1, max: 1440, integer: true, module: 'attendance' },
     ],
   },
   {
@@ -174,19 +176,19 @@ const GROUPS: PolicyGroup[] = [
       { key: 'loan.insufficient_net_behavior', label: 'عندما لا يكفي المتاح للقسط', type: 'select', options: [
         { value: 'PARTIAL_THEN_CARRY', label: 'خصم المتاح وترحيل الباقي للشهر التالي' },
         { value: 'SKIP_AND_EXTEND', label: 'تأجيل القسط بالكامل ومد الجدول' },
-      ] },
+      ], module: 'loans' },
       // أيام طلب السلفة من الشهر؛ لو يوم البداية بعد يوم النهاية تمتد الفترة فوق نهاية الشهر
-      { key: 'loan.request_from_day', label: 'طلب السلفة من يوم', type: 'number', unit: 'من الشهر', min: 1, max: 31, integer: true },
-      { key: 'loan.request_to_day', label: 'إلى يوم', type: 'number', unit: 'من الشهر', min: 1, max: 31, integer: true, hint: 'لو يوم البداية بعد يوم النهاية (مثل 25 إلى 5) تمتد الفترة لأول الشهر التالي.' },
+      { key: 'loan.request_from_day', label: 'طلب السلفة من يوم', type: 'number', unit: 'من الشهر', min: 1, max: 31, integer: true, module: 'loans' },
+      { key: 'loan.request_to_day', label: 'إلى يوم', type: 'number', unit: 'من الشهر', min: 1, max: 31, integer: true, hint: 'لو يوم البداية بعد يوم النهاية (مثل 25 إلى 5) تمتد الفترة لأول الشهر التالي.', module: 'loans' },
       // القرار ب2: مفتاح واحد يعلو الأيام — يقفل طلب السلفة الآن ويفتحه فورًا
-      { key: 'loan.request_open', label: 'طلب السلفة مفتوح للموظفين', type: 'bool', hint: 'اقفله ليتوقف استقبال طلبات السلفة فورًا مهما كانت الأيام، وافتحه ليعمل بالأيام أعلاه.' },
+      { key: 'loan.request_open', label: 'طلب السلفة مفتوح للموظفين', type: 'bool', hint: 'اقفله ليتوقف استقبال طلبات السلفة فورًا مهما كانت الأيام، وافتحه ليعمل بالأيام أعلاه.', module: 'loans' },
       // B1.8 (D10، R09): الاتنين مقفولين = الأقساط زي النهارده
-      { key: 'loan.first_installment_after_approval_period', label: 'أول قسط في فترة المسير اللي بعد فترة الاعتماد', type: 'bool', hint: 'مقفول: أول قسط أول الشهر الميلادي اللي بعد التقديم (السلفة اللي اتقدمت من يوم بداية الدورة لآخر الشهر بتتخصم في نفس فترة مسيرها). مفتوح: فترة المسير اللي بعد فترة الاعتماد. الشهر اللي بتختاره الموارد البشرية والسلفة الاستثنائية زي ما هم.' },
-      { key: 'loans.require_disbursement_before_deduction', label: 'السلفة الجديدة لازم صرفها يتسجل قبل ما أقساطها تنزل المسير', type: 'bool', hint: 'مفتوح: السلف اللي هتتعمل من دلوقتي أقساطها مابتتخصمش لحد ما «تم صرف السلفة» يتسجل من شاشة السلف (وبتفضل مستحقة). السلف القديمة زي ما هي.' },
+      { key: 'loan.first_installment_after_approval_period', label: 'أول قسط في فترة المسير اللي بعد فترة الاعتماد', type: 'bool', hint: 'مقفول: أول قسط أول الشهر الميلادي اللي بعد التقديم (السلفة اللي اتقدمت من يوم بداية الدورة لآخر الشهر بتتخصم في نفس فترة مسيرها). مفتوح: فترة المسير اللي بعد فترة الاعتماد. الشهر اللي بتختاره الموارد البشرية والسلفة الاستثنائية زي ما هم.', module: 'loans' },
+      { key: 'loans.require_disbursement_before_deduction', label: 'السلفة الجديدة لازم صرفها يتسجل قبل ما أقساطها تنزل المسير', type: 'bool', hint: 'مفتوح: السلف اللي هتتعمل من دلوقتي أقساطها مابتتخصمش لحد ما «تم صرف السلفة» يتسجل من شاشة السلف (وبتفضل مستحقة). السلف القديمة زي ما هي.', module: 'loans' },
       { key: 'payroll.policy.min_net_guarantee', label: 'الحد الأدنى للصافي', type: 'number', min: 0, nullable: true, hint: 'اتركه فارغًا إذا لم تحدد حدًا ثابتًا. لا يضيف النظام مبلغًا للراتب إذا كانت الخصومات السابقة تجاوزت الحد.' },
       { key: 'payroll.policy.net_floor_pct', label: 'الحد الأدنى كنسبة من الأجر الثابت المستحق', type: 'number', min: 0, max: 100, nullable: true, unit: '%', hint: 'إذا حددت مبلغًا ثابتًا أيضًا يُستخدم الأكبر منهما. فارغ = لا حد نسبي.' },
       { key: 'payroll.policy.max_deduction_pct_of_gross', label: 'سقف الخصومات من الأجر الثابت المستحق', type: 'number', min: 0, max: 100, nullable: true, unit: '%', hint: 'يحسب النظام ما استهلكته الخصومات السابقة قبل تحديد المتاح للسلف. فارغ = بلا سقف نسبي.' },
-      { key: 'payroll.loan_catchup_max_overdue', label: 'أقصى أقساط متأخرة تُخصم في المسير', type: 'number', unit: 'قسط', min: 0, max: 120, integer: true, hint: 'إضافة إلى أقساط الشهر الحالي؛ الأقدم أولًا، والباقي يبقى مستحقًا للمسيرات التالية. صفر = أقساط الشهر الحالي فقط.' },
+      { key: 'payroll.loan_catchup_max_overdue', label: 'أقصى أقساط متأخرة تُخصم في المسير', type: 'number', unit: 'قسط', min: 0, max: 120, integer: true, hint: 'إضافة إلى أقساط الشهر الحالي؛ الأقدم أولًا، والباقي يبقى مستحقًا للمسيرات التالية. صفر = أقساط الشهر الحالي فقط.', module: 'loans' },
     ],
   },
   {
@@ -199,41 +201,41 @@ const GROUPS: PolicyGroup[] = [
       { key: 'system.currency', label: 'عملة النظام', type: 'select', options: [{ value: 'SAR', label: 'ريال سعودي (ر.س)' }, { value: 'EGP', label: 'جنيه مصري (ج.م)' }] },
       { key: 'system.country', label: 'دولة النظام', type: 'select', hint: 'العطلة الرسمية الجديدة بلا دولة صريحة تأخذ هذا الرمز.', options: [{ value: '', label: 'كل الدول' }, { value: 'SA', label: 'السعودية (SA)' }, { value: 'EG', label: 'مصر (EG)' }] },
       // صمام أمان التراكم اليومي: كان يُقرأ بقيمة احتياطية في الكود بلا مفتاح مبذور، فمكانش ينفع يتغير
-      { key: 'payroll.daily_accrual_enabled', label: 'تراكم المسير اليومي', type: 'bool', hint: 'مفعّل: الجار الليلي يحسب أيام المسير المفتوح مقدمًا فالاعتماد يأخذ دقائق. اقفله ليُحسب كل يوم-موظف من الأول عند الاحتساب (نفس النتيجة، وقت أطول).' },
-      { key: 'payroll.daily_accrual_hour', label: 'ساعة تشغيل التراكم اليومي', type: 'number', unit: 'الساعة', min: 0, max: 23, integer: true, hint: 'بعد تجسيد الغياب ومزامنة الأجهزة — الافتراضي الساعة 2 فجرًا.' },
+      { key: 'payroll.daily_accrual_enabled', label: 'تراكم المسير اليومي', type: 'bool', hint: 'مفعّل: الجار الليلي يحسب أيام المسير المفتوح مقدمًا فالاعتماد يأخذ دقائق. اقفله ليُحسب كل يوم-موظف من الأول عند الاحتساب (نفس النتيجة، وقت أطول).', module: 'payroll' },
+      { key: 'payroll.daily_accrual_hour', label: 'ساعة تشغيل التراكم اليومي', type: 'number', unit: 'الساعة', min: 0, max: 23, integer: true, hint: 'بعد تجسيد الغياب ومزامنة الأجهزة — الافتراضي الساعة 2 فجرًا.', module: 'payroll' },
       // B1.14 (الراتب الحي)
-      { key: 'payroll.live_accrual_all', label: 'الحساب اليومي لكل الموظفين (الراتب الحي)', type: 'bool', hint: 'مفعّل: مهمة الليل بتحسب يوم كل موظف نشط حتى لو لسه مالوش مسير للفترة، فتاب «لحد امبارح» في الرواتب يعرض الفترة من غير ما تعمل مسير. اقفله ليتحسب لموظفي المسيرات المفتوحة بس (زي الأول). مابيغيّرش أي مبلغ في أي مسير.' },
-      { key: 'payroll.approval.net_change_alert_percent', label: 'تنبيه تغيّر الصافي قبل الاعتماد', type: 'number', unit: '%', min: 0, max: 1000, integer: true, hint: 'الموظف اللي صافيه اتغيّر بالنسبة دي أو أكتر عن آخر مسير بيظهر في تنبيهات «اتغيّر إيه من آخر مسير» بالبنود اللي فرقت. 0 = التنبيه مقفول. تنبيه بس: مابيمنعش الاعتماد.' },
-      { key: 'eos.months_per_year', label: 'مكافأة نهاية الخدمة', type: 'number', unit: 'شهر/سنة', min: 0 },
+      { key: 'payroll.live_accrual_all', label: 'الحساب اليومي لكل الموظفين (الراتب الحي)', type: 'bool', hint: 'مفعّل: مهمة الليل بتحسب يوم كل موظف نشط حتى لو لسه مالوش مسير للفترة، فتاب «لحد امبارح» في الرواتب يعرض الفترة من غير ما تعمل مسير. اقفله ليتحسب لموظفي المسيرات المفتوحة بس (زي الأول). مابيغيّرش أي مبلغ في أي مسير.', module: 'payroll' },
+      { key: 'payroll.approval.net_change_alert_percent', label: 'تنبيه تغيّر الصافي قبل الاعتماد', type: 'number', unit: '%', min: 0, max: 1000, integer: true, hint: 'الموظف اللي صافيه اتغيّر بالنسبة دي أو أكتر عن آخر مسير بيظهر في تنبيهات «اتغيّر إيه من آخر مسير» بالبنود اللي فرقت. 0 = التنبيه مقفول. تنبيه بس: مابيمنعش الاعتماد.', module: 'payroll' },
+      { key: 'eos.months_per_year', label: 'مكافأة نهاية الخدمة', type: 'number', unit: 'شهر/سنة', min: 0, module: 'offboarding' },
       // B4.5 (أ): باقي شرائح المكافأة (كانت مفاتيح من غير خانة)، والمكافأة مطبّقة لكل دولة (الافتراضي مطبّقة)
-      { key: 'eos.tier1_years', label: 'مكافأة نهاية الخدمة: سنين الشريحة الأولى', type: 'number', unit: 'سنة', min: 0, hint: 'السنين اللي بتتحسب بالمعدل اللي فوق؛ اللي بعدها بمعدل «بعد الشريحة الأولى».' },
-      { key: 'eos.months_per_year_after', label: 'مكافأة نهاية الخدمة: بعد الشريحة الأولى', type: 'number', unit: 'شهر/سنة', min: 0 },
-      { key: 'eos.resignation_factors', label: 'مكافأة نهاية الخدمة: معامل الاستقالة', type: 'text', hint: 'بصيغة «سنين:معامل» مفصولة بفاصلة — زي 2:1/3,5:2/3,10:1 (أقل من أول حد من غير مكافأة).' },
-      { key: 'eos.reason_factors', label: 'مكافأة نهاية الخدمة: معامل كل سبب', type: 'text', hint: 'بصيغة «سبب:معامل» — زي termination:1,dismissal:0 (المعامل من 0 لـ1).' },
+      { key: 'eos.tier1_years', label: 'مكافأة نهاية الخدمة: سنين الشريحة الأولى', type: 'number', unit: 'سنة', min: 0, hint: 'السنين اللي بتتحسب بالمعدل اللي فوق؛ اللي بعدها بمعدل «بعد الشريحة الأولى».', module: 'offboarding' },
+      { key: 'eos.months_per_year_after', label: 'مكافأة نهاية الخدمة: بعد الشريحة الأولى', type: 'number', unit: 'شهر/سنة', min: 0, module: 'offboarding' },
+      { key: 'eos.resignation_factors', label: 'مكافأة نهاية الخدمة: معامل الاستقالة', type: 'text', hint: 'بصيغة «سنين:معامل» مفصولة بفاصلة — زي 2:1/3,5:2/3,10:1 (أقل من أول حد من غير مكافأة).', module: 'offboarding' },
+      { key: 'eos.reason_factors', label: 'مكافأة نهاية الخدمة: معامل كل سبب', type: 'text', hint: 'بصيغة «سبب:معامل» — زي termination:1,dismissal:0 (المعامل من 0 لـ1).', module: 'offboarding' },
       // B5.1 (أ): أساس نسبة المقارنة في «سلّم الرواتب» (موديول تخطيط الزيادات)
       { key: 'compensation.band_basis', label: 'سلّم الرواتب: أساس نسبة المقارنة', type: 'select', options: [{ value: 'BASIC', label: 'الراتب الأساسي' }, { value: 'GROSS', label: 'إجمالي المكونات الثابتة' }],
-        hint: 'نسبة المقارنة = راتب الموظف ÷ منتصف نطاق درجته. بيحدد أنهي راتب بيتقارن بنطاق الدرجة.' },
+        hint: 'نسبة المقارنة = راتب الموظف ÷ منتصف نطاق درجته. بيحدد أنهي راتب بيتقارن بنطاق الدرجة.', module: 'compensation' },
       { key: 'privacy.partial_masking.enabled', label: 'الإخفاء الجزئي للهوية والآيبان', type: 'bool', hint: 'مفتوح: رقم الهوية والجواز كاملين لصاحب الملف وللي معاه «تعديل الموظفين» بس، وغيرهم بيشوف آخر 4 خانات؛ وغير المصرّح له بالبيانات المالية بيشوف الآيبان مخفي. مقفول: زي الأول.' },
       { key: 'suspension.paid_precautionary.enabled', label: 'الإيقاف الاحتياطي بأجر متاح', type: 'bool', hint: 'مفتوح: نافذة «إيقاف مؤقت» فيها اختيار «بأجر» — الإيقاف ده أيامه ماتتخصمش من الراتب. مقفول: كل إيقاف بيتخصم.' },
-      { key: 'eos.applies.sa', label: 'مكافأة نهاية الخدمة مطبّقة على فروع السعودية', type: 'bool', hint: 'مقفول: تصفية موظف فرعه في السعودية من غير بند مكافأة تلقائي.' },
-      { key: 'eos.applies.eg', label: 'مكافأة نهاية الخدمة مطبّقة على فروع مصر', type: 'bool', hint: 'المعادلة دي نظام العمل السعودي، وقانون العمل المصري مافيهوش مكافأة عامة. مقفول: تصفية موظف فرعه في مصر من غير بند مكافأة تلقائي — راجع المستشار القانوني قبل القفل.' },
+      { key: 'eos.applies.sa', label: 'مكافأة نهاية الخدمة مطبّقة على فروع السعودية', type: 'bool', hint: 'مقفول: تصفية موظف فرعه في السعودية من غير بند مكافأة تلقائي.', module: 'offboarding' },
+      { key: 'eos.applies.eg', label: 'مكافأة نهاية الخدمة مطبّقة على فروع مصر', type: 'bool', hint: 'المعادلة دي نظام العمل السعودي، وقانون العمل المصري مافيهوش مكافأة عامة. مقفول: تصفية موظف فرعه في مصر من غير بند مكافأة تلقائي — راجع المستشار القانوني قبل القفل.', module: 'offboarding' },
       // B4.5 (أ): معاملات الإضافي (كانت مفاتيح من غير خانة)
-      { key: 'overtime.multiplier_weekday', label: 'معامل الإضافي: يوم عادي', type: 'number', unit: '×', min: 0.01, max: 99.99, hint: 'سعر ساعة الإضافي = سعر الساعة × المعامل.' },
-      { key: 'overtime.multiplier_weekend', label: 'معامل الإضافي: يوم الراحة', type: 'number', unit: '×', min: 0.01, max: 99.99 },
-      { key: 'overtime.multiplier_holiday', label: 'معامل الإضافي: العطلة الرسمية', type: 'number', unit: '×', min: 0.01, max: 99.99 },
+      { key: 'overtime.multiplier_weekday', label: 'معامل الإضافي: يوم عادي', type: 'number', unit: '×', min: 0.01, max: 99.99, hint: 'سعر ساعة الإضافي = سعر الساعة × المعامل.', module: 'overtime' },
+      { key: 'overtime.multiplier_weekend', label: 'معامل الإضافي: يوم الراحة', type: 'number', unit: '×', min: 0.01, max: 99.99, module: 'overtime' },
+      { key: 'overtime.multiplier_holiday', label: 'معامل الإضافي: العطلة الرسمية', type: 'number', unit: '×', min: 0.01, max: 99.99, module: 'overtime' },
       // B1.8b: مقفول = التصفية زي ما كانت
-      { key: 'settlement.collect_pending_obligations', label: 'التصفية تلم قيود الدفتر المعلّقة', type: 'bool', hint: 'مفتوح: الخصومات والإضافات اللي في دفتر المديونيات وشهرها بعد آخر يوم عمل (قسط خصم لشهر جاي، باقي مترحّل، مكافأة لشهر لاحق) بتدخل التصفية في بندين، وبتتعلّم مستهلكة عند اعتمادها. مقفول: بتفضل معلّقة في الدفتر زي ما كانت.' },
+      { key: 'settlement.collect_pending_obligations', label: 'التصفية تلم قيود الدفتر المعلّقة', type: 'bool', hint: 'مفتوح: الخصومات والإضافات اللي في دفتر المديونيات وشهرها بعد آخر يوم عمل (قسط خصم لشهر جاي، باقي مترحّل، مكافأة لشهر لاحق) بتدخل التصفية في بندين، وبتتعلّم مستهلكة عند اعتمادها. مقفول: بتفضل معلّقة في الدفتر زي ما كانت.', module: 'offboarding' },
       // قرار المالك (16 سبتمبر): فترة المسير «من يوم … إلى يوم …»؛ «إلى» مشتقة (اليوم السابق للبداية) وتُعرض للقراءة. العرض في PayrollPeriodSetting
       { key: CYCLE_KEY, label: 'فترة المسير', type: 'number', min: 1, max: 31, integer: true, hint: 'مسير سبتمبر من 23 = من 23 أغسطس إلى 22 سبتمبر.' },
       // الخطوة 22 / SRS PR-11 (B5): رخصة الشركة الصغيرة لفصل المهام
-      { key: 'payroll.approval_self_approval_allowed', label: 'رخصة الشركة الصغيرة: يعتمد المسير من احتسبه', type: 'bool', perm: 'payroll.self_approval_licence', hint: 'الأصل مقفل: من احتسب نسخة المسير لا يعتمدها. فعّلها فقط لو لا يوجد مستخدم ثانٍ يحمل صلاحية الاعتماد. تغييرها يتطلب صلاحية «رخصة الشركة الصغيرة» التي يمنحها مدير النظام فقط (صلاحية الإعدادات وحدها لا تكفي)، وكل اعتماد بها يُسجل في سجل المسير.' },
+      { key: 'payroll.approval_self_approval_allowed', label: 'رخصة الشركة الصغيرة: يعتمد المسير من احتسبه', type: 'bool', perm: 'payroll.self_approval_licence', hint: 'الأصل مقفل: من احتسب نسخة المسير لا يعتمدها. فعّلها فقط لو لا يوجد مستخدم ثانٍ يحمل صلاحية الاعتماد. تغييرها يتطلب صلاحية «رخصة الشركة الصغيرة» التي يمنحها مدير النظام فقط (صلاحية الإعدادات وحدها لا تكفي)، وكل اعتماد بها يُسجل في سجل المسير.', module: 'payroll' },
       { key: 'payroll.salary_evidence_mode', label: 'مصدر راتب شهر المسير', type: 'select', options: [
         { value: 'MONTHLY_HISTORY', label: 'السجل الشهري فقط — بلا راتب موثق للشهر يُستبعد الموظف بسبب ظاهر' },
         { value: 'MONTHLY_HISTORY_OR_CURRENT_FILE', label: 'انتقالي — من لا يملك سجلًا شهريًا يُحسب براتب الملف الحالي ويُوسم «غير موثق»' },
-      ] },
+      ], module: 'payroll' },
       { key: 'payroll.monthly_days', label: 'أيام الشهر للمسير', type: 'number', unit: 'يوم', min: 30, max: 30, readOnly: true, hint: 'ثابتة على 30 يومًا.' },
       // B1.6: حارس الفترة (مقفول افتراضيًا)
-      { key: 'payroll.period_deduction_guard.enabled', label: 'حارس الفترة: الإجازة بدون راتب ماتعديش راتب الفترة', type: 'bool', hint: 'مفعّل: خصم الإجازة بدون راتب والإيقاف والمرضية في المسير ماينفعش يعدّي راتب الفترة، فشهر 31 يوم كله بدون راتب = صافي صفر مش سالب. مقفول = زي ما كان. بيسري على المسير لما «لقطة السياسة» بتاعته تتحدث.' },
+      { key: 'payroll.period_deduction_guard.enabled', label: 'حارس الفترة: الإجازة بدون راتب ماتعديش راتب الفترة', type: 'bool', hint: 'مفعّل: خصم الإجازة بدون راتب والإيقاف والمرضية في المسير ماينفعش يعدّي راتب الفترة، فشهر 31 يوم كله بدون راتب = صافي صفر مش سالب. مقفول = زي ما كان. بيسري على المسير لما «لقطة السياسة» بتاعته تتحدث.', module: 'payroll' },
       { key: 'payroll.daily_hours', label: 'ساعات العمل اليومية', type: 'number', unit: 'ساعة', min: 1, max: 24, hint: 'أساس سعر الساعة والدقيقة.' },
       // قرار المالك (16 سبتمبر): لا اختيار تقريب — الفلوس بمنزلتين بالقص (src/lib/money.ts وapi/src/payroll/payroll-money.ts)
     ],
@@ -246,9 +248,9 @@ const GROUPS: PolicyGroup[] = [
     iconColor: 'text-warning-500',
     note: 'كلها مقفولة افتراضيًا: الشغل زي ما هو. افتحها لو عايز تمنع إن شخص واحد يغيّر بيانات صرف ويعتمد الفلوس لوحده. تاب «اتغيّر إيه من آخر مسير» في شاشة المسير شغال دايمًا.',
     fields: [
-      { key: 'payroll.approval.block_recent_changers', label: 'اللي غيّر راتب أو حساب بنكي مايعتمدش المسير لوحده', type: 'bool', hint: 'مفتوح: اللي غيّر راتب أو حساب بنكي أو طريقة صرف لموظف في المسير (من بعد آخر مسير ليه) مايعتمدهوش بخطوة واحدة؛ في سلسلة الاعتماد لازم حد تاني يكون اعتمد. مدير النظام يقدر يعدّي بسبب مكتوب.' },
+      { key: 'payroll.approval.block_recent_changers', label: 'اللي غيّر راتب أو حساب بنكي مايعتمدش المسير لوحده', type: 'bool', hint: 'مفتوح: اللي غيّر راتب أو حساب بنكي أو طريقة صرف لموظف في المسير (من بعد آخر مسير ليه) مايعتمدهوش بخطوة واحدة؛ في سلسلة الاعتماد لازم حد تاني يكون اعتمد. مدير النظام يقدر يعدّي بسبب مكتوب.', module: 'payroll' },
       { key: 'payroll.bank_change.secure_path_always', label: 'تغيير الحساب البنكي بطلب بس (الموارد البشرية ثم المالية)', type: 'bool', hint: 'مفتوح: الآيبان والبنك مايتغيّروش من تعديل الملف ولا Excel، وطلب «تغيير حساب بنكي» نيابةً مابيتعتمدش على طول، ونفس الشخص مايعتمدش خطوتين فيه.' },
-      { key: 'overtime.auto_approve.exclude_manual', label: 'الإضافي التلقائي لبصمة الجهاز بس', type: 'bool', hint: 'مفتوح: اليوم اللي فيه بصمة يدوية أو تصحيح بصمة بيروح لسلسلة الإضافي العادية، ومفيش فترة «اعتماد تلقائي» تتفتح من غير سقف إضافي شهري أكبر من صفر.' },
+      { key: 'overtime.auto_approve.exclude_manual', label: 'الإضافي التلقائي لبصمة الجهاز بس', type: 'bool', hint: 'مفتوح: اليوم اللي فيه بصمة يدوية أو تصحيح بصمة بيروح لسلسلة الإضافي العادية، ومفيش فترة «اعتماد تلقائي» تتفتح من غير سقف إضافي شهري أكبر من صفر.', module: 'overtime' },
       { key: 'employees.transfer_checks.enabled', label: 'فحوص النقل بين الفروع من التعديل وExcel', type: 'bool', hint: 'مفتوح: النقل لفرع تاني من تعديل الملف أو Excel بيترفض لو على الموظف عهدة مفتوحة أو مديره المباشر في فرع تاني (زي طلب النقل).' },
     ],
   },
@@ -304,6 +306,7 @@ const GROUPS: PolicyGroup[] = [
   {
     // B-ADD.18 (كلمة المالك 12 أكتوبر: «مفيش موظف بيقيّم نفسه»): خطوة التقييم الذاتي في دورات التقييم — مقفولة افتراضيًا
     title: 'تقييم الأداء',
+    module: 'performance',
     icon: ClipboardCheck,
     iconBg: 'bg-primary-50',
     iconColor: 'text-primary-500',
@@ -1098,7 +1101,7 @@ export default function PoliciesPage() {
           <div className="space-y-6">
             {GROUPS.map((g) => {
               if (g.module && !moduleOn(g.module)) return null
-              const fields = g.fields.filter((f) => known.has(f.key))
+              const fields = g.fields.filter((f) => known.has(f.key) && (!f.module || moduleOn(f.module)))
               if (fields.length === 0) return null
               const GroupIcon = g.icon
               return (

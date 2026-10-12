@@ -122,7 +122,7 @@ test('EXU-07: الواجهة — «مصروفاتي» بتقدّم الطلب ب
   for (const route of ['/expenses/my', '/expenses/overview', '/expenses/categories']) assert.ok(api.includes(route), route)
   const sidebar = web('components/layout/Sidebar.tsx'), titles = web('components/layout/pageTitles.ts')
   assert.match(sidebar, /\{ label: 'المصروفات', href: '\/expenses', perm: 'expenses\.manage' \}/)
-  assert.match(sidebar, /\{ id: 'my-expenses', label: 'مصروفاتي', icon: <Wallet size=\{20\} \/>, href: '\/my\/expenses' \}/)
+  assert.match(sidebar, /\{ label: 'مصروفاتي', href: '\/my\/expenses' \},/)
   assert.match(titles, /\['\/my\/expenses', 'مصروفاتي'\]/); assert.match(titles, /\['\/expenses', 'المصروفات'\]/)
   const labels = web('lib/request-payload.ts')
   for (const key of ['reportId', 'reportTitle', 'tripFrom', 'tripTo', 'lines', 'category', 'receipt', 'warning']) assert.match(labels, new RegExp(`\\n  ${key}: '`), key)

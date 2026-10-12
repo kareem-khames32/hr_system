@@ -85,8 +85,8 @@ test('TSU-05: مصدر الكود — كتابات ساعات الموظف تح�
 
 test('TSU-06: الواجهة — الشاشتين بعنوانهم في القايمة، والساعات بتتبعت دقايق، والتكلفة من رد الخادم', () => {
   const mine = web('app/my/timesheets/page.tsx'), admin = web('app/timesheets/page.tsx'), sidebar = web('components/layout/Sidebar.tsx'), titles = web('components/layout/pageTitles.ts')
-  assert.match(sidebar, /label: 'ساعات المشاريع',\n\s+icon: <Hourglass size=\{20\} \/>,\n\s+href: '\/timesheets',\n\s+perm: 'timesheets\.manage'/)
-  assert.match(sidebar, /\{ id: 'my-timesheets', label: 'ساعاتي', icon: <Hourglass size=\{20\} \/>, href: '\/my\/timesheets' \}/)
+  assert.match(sidebar, /\{ label: 'ساعات المشاريع', href: '\/timesheets', perm: 'timesheets\.manage' \},/)
+  assert.match(sidebar, /\{ label: 'ساعاتي', href: '\/my\/timesheets' \},/)
   assert.match(titles, /\['\/timesheets', 'ساعات المشاريع'\]/); assert.match(titles, /\['\/my\/timesheets', 'ساعاتي'\]/)
   assert.match(mine, />\s*ساعاتي\s*<\/h1>/); assert.match(admin, />\s*ساعات المشاريع\s*<\/h1>/)
   assert.match(mine, /minutes: Math\.round\(hours \* 60\)/)

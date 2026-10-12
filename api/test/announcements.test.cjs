@@ -155,7 +155,7 @@ test('AU-03: the announcements screen — the board for everyone, management for
   }
   assert.match(lib, /ANNOUNCEMENT_STATUS_LABELS: Record<AnnouncementStatus, string> = \{ DRAFT: 'مسودة', PUBLISHED: 'منشور', WITHDRAWN: 'مسحوب' \}/)
   const sidebar = read('src/components/layout/Sidebar.tsx')
-  assert.match(sidebar, /\{ id: 'announcements', label: 'الإعلانات', icon: <Megaphone size=\{20\} \/>, href: '\/announcements' \}/)
+  assert.match(sidebar, /\{ label: 'الإعلانات', href: '\/announcements' \},/)
   assert.match(read('src/components/layout/pageTitles.ts'), /\['\/announcements', 'الإعلانات'\]/)
   // فئة «الإعلانات» باسمها في شاشة الإشعارات
   assert.match(read('src/app/notifications/page.tsx'), /announcement: \{ label: 'الإعلانات', icon: Megaphone \}/)

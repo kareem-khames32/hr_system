@@ -3,6 +3,20 @@
 
 // بنود القايمة الجانبية وعناوين الشاشات
 const SHELL: Record<string, string> = {
+  // B-ADD.21: أسماء مجموعات القايمة بعد الترتيب
+  'الرئيسية': 'Home',
+  'حسابي': 'My account',
+  'الطلبات': 'Requests',
+  'الموظفين': 'Employees',
+  'المستندات والسياسات': 'Documents & policies',
+  'الإجازات والأذونات': 'Leaves & permissions',
+  'السلف والمكافآت والخصومات': 'Loans, bonuses & deductions',
+  'العهد والأصول': 'Custody & assets',
+  'الأداء والمهارات': 'Performance & skills',
+  'التواصل': 'Communication',
+  'خدمات الموظفين': 'Employee services',
+  'الشركة والهيكل': 'Company & structure',
+  'المستخدمين والصلاحيات': 'Users & permissions',
   'أجهزة البصمة': 'Attendance devices',
   'أدوات الجدولة': 'Scheduling tools',
   'أرقام التوظيف': 'Hiring metrics',

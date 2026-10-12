@@ -189,8 +189,8 @@ test('NAV-01: الشاشات التلاتة ليها اسم واحد في الق
   assert.equal(pageTitleFor('/payroll/disbursement'), 'صرف الرواتب')
   assert.equal(pageTitleFor('/payroll'), 'مسير الرواتب')
   const sidebar = read('src/components/layout/Sidebar.tsx')
-  for (const text of ["{ label: 'سلسلة اعتماد المسير', href: '/payroll/approval-chain', perm: 'payroll.chain_manage' }", "href: '/payroll/disbursement',\n    perm: 'payroll.disburse',",
-    "label: 'مسيرات بانتظار اعتمادي',", "href: '/payroll/my-approvals',", 'payrollApprovals > 0', 'fetchMyPayrollApprovalsCount()', "{ label: 'كشف البنوك', href: '/payroll/bank-sheet' }"]) assert.ok(sidebar.includes(text), text)
+  for (const text of ["{ label: 'سلسلة اعتماد المسير', href: '/payroll/approval-chain', perm: ['payroll.view', 'payroll.chain_manage'] }", "{ label: 'صرف الرواتب', href: '/payroll/disbursement', perm: 'payroll.disburse' },",
+    "label: 'مسيرات بانتظار اعتمادي',", "href: '/payroll/my-approvals',", 'payrollApprovals > 0', 'fetchMyPayrollApprovalsCount()', "{ label: 'كشف البنوك', href: '/payroll/bank-sheet', perm: 'payroll.view' }"]) assert.ok(sidebar.includes(text), text)
   const layout = read('src/components/layout/MainLayout.tsx')
   for (const text of ["['/payroll/my-approvals', null],", "['/payroll/disbursement', null],", "['/payroll/approval-chain', 'payroll.chain_manage'],"]) assert.ok(layout.includes(text), text)
   assert.ok(layout.indexOf("['/payroll/my-approvals', null]") < layout.indexOf("['/payroll', 'payroll.view']"), 'الأكثر تحديدًا قبل /payroll')
