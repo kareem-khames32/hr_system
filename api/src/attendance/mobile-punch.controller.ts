@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, UseGuards } from '@nestjs/common'
+import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Put, UseGuards } from '@nestjs/common'
 import { IsOptional } from 'class-validator'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
@@ -18,6 +18,9 @@ class SiteDto {
   @IsOptional() longitude?: unknown
   @IsOptional() radiusMeters?: unknown
   @IsOptional() isActive?: unknown
+}
+class AudienceDto {
+  @IsOptional() audience?: unknown
 }
 
 // B5.6: بصمة الموبايل — ميزة فرعية `attendance.mobile_punch` (مقفولة افتراضيًا) جوه موديول الحضور
@@ -44,6 +47,19 @@ export class MobilePunchController {
   @Get('attempts')
   attempts(@CurrentUser() user: JwtPayload) {
     return this.service.attempts(user)
+  }
+
+  // B-ADD.9: «مين يبصم من الموبايل» — جمهور واحد للشركة بالاستهداف الموحد
+  @Perm('attendance.manage')
+  @Get('audience')
+  audience(@CurrentUser() user: JwtPayload) {
+    return this.service.audience(user)
+  }
+
+  @Perm('attendance.manage')
+  @Put('audience')
+  saveAudience(@CurrentUser() user: JwtPayload, @Body() dto: AudienceDto) {
+    return this.service.saveAudience(user, dto)
   }
 
   // مواقع البصمة بنطاق الفرع

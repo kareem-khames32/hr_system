@@ -4,6 +4,8 @@ import { DataSource, type EntityManager } from 'typeorm'
 import { recordAudit } from '../audit/audit'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, inBranchScope, userHasPerm } from '../auth/guards'
+import { assertAudienceTargets, orgAudienceJson, orgPlaceOf, orgPlacesFor } from '../org/org-audience'
+import { requestAudienceAllows } from '../requests/request-audience'
 import { AttendanceService } from './attendance.service'
 import {
   judgePosition, MIN_GAP_SECONDS, MOBILE_DEVICE_PREFIX, MOBILE_PUNCH_MIGRATION_MISSING, MobilePunchAttempt, mobilePunchReady, OUTCOME_LABELS, OUTCOME_MESSAGES, positionFields, PunchSite, SITE_NOT_FOUND, siteFields,
@@ -20,6 +22,17 @@ const TOO_SOON = 'لسه مسجّل بصمة من أقل من دقيقة'
 const BRANCH_NOT_FOUND = 'الفرع مش موجود'
 const FAILED_LABEL = 'تعذّر تسجيلها'
 const ACTIVE_STATUSES = ['active', 'probation', 'notice_period']
+// B-ADD.9 (كلمة المالك 12 أكتوبر 2026): «مين يبصم من الموبايل» بالاستهداف الموحد — جمهور واحد للشركة في صف إعداد (من غير ترحيل).
+// من غير صف = كل الموظفين (زي قبل الدفعة بالحرف). نص اتغيّر برّه الكاتب ده = مش لحد (التالف مايفتحش).
+export const MOBILE_PUNCH_AUDIENCE_KEY = 'attendance.mobile_punch.audience'
+const AUDIENCE_LABEL = 'جمهور بصمة الموبايل'
+const AUDIENCE_MAX = 4000
+const NOT_IN_AUDIENCE = 'بصمة الموبايل مش مفعّلة لك — راجع الموارد البشرية'
+const AUDIENCE_NEEDS_ALL_BRANCHES = 'جمهور بصمة الموبايل بيتحدد من حساب على كل الفروع'
+const audienceIntact = (text: string): boolean => {
+  try { return orgAudienceJson(JSON.parse(text), AUDIENCE_LABEL) === text } catch { return false }
+}
+interface PunchPerson { id: number; branchId: number | null; departmentId: number | null; teamId: number | null }
 const flag = (value: unknown) => value === true || value === 1
 const idOf = (value: unknown) => (value == null ? null : Number(value))
 const labelOf = (outcome: string) => OUTCOME_LABELS[outcome as Outcome] ?? FAILED_LABEL
@@ -41,6 +54,50 @@ export class MobilePunchService {
     return new Map((await em.getRepository(PunchSite).find()).map(row => [row.id, row.name]))
   }
 
+  // ===== الجمهور (B-ADD.9) =====
+
+  /** نص الجمهور المحفوظ (null = كل الموظفين). hold: جوه معاملة البصمة القراءة بتمسك الصف لحد آخر المعاملة، فتغيير الجمهور بيستنى البصمة تخلص */
+  private async audienceText(em: EntityManager, hold = false): Promise<string | null> {
+    const [row]: Array<{ value: string | null }> = await em.query(`SELECT [value] FROM dbo.requests_config${hold ? ' WITH (HOLDLOCK)' : ''} WHERE [key] = @0`, [MOBILE_PUNCH_AUDIENCE_KEY])
+    const text = row?.value == null ? '' : String(row.value).trim()
+    return text || null
+  }
+
+  /** الموظف ده من جمهور بصمة الموبايل دلوقتي؟ بمكانه الحالي (فرعه وقسمه وفريقه) وبنفس مقيّم الاستهداف الموحد */
+  private async inAudience(em: EntityManager, person: PunchPerson, hold = false): Promise<boolean> {
+    const audience = await this.audienceText(em, hold)
+    if (audience === null) return true
+    if (!audienceIntact(audience)) return false
+    const places = await orgPlacesFor(em, [audience])
+    return requestAudienceAllows(audience, { role: null, permissions: [], employeeId: person.id, departmentId: idOf(person.departmentId), teamId: idOf(person.teamId),
+      branchId: idOf(person.branchId), positions: {}, ...orgPlaceOf(places, { departmentId: idOf(person.departmentId), teamId: idOf(person.teamId) }) }, 'submit')
+  }
+
+  /** الجمهور المحفوظ لشاشة الإدارة. canEdit: الجمهور واحد للشركة كلها، فبيتغيّر من حساب على كل الفروع بس */
+  async audience(user: JwtPayload) {
+    const text = await this.audienceText(this.ds.manager)
+    const intact = text === null || audienceIntact(text)
+    return { audience: text !== null && intact ? JSON.parse(text) : null, damaged: !intact, canEdit: branchScopeOf(user) === null }
+  }
+
+  /** حفظ الجمهور (null = كل الموظفين) — تحت قفل صف الإعداد، بفحص إن المختارين موجودين ومكانهم صح، وبسطر تدقيق */
+  async saveAudience(user: JwtPayload, body: unknown) {
+    if (branchScopeOf(user) !== null) throw new ForbiddenException(AUDIENCE_NEEDS_ALL_BRANCHES)
+    const text = orgAudienceJson((body as { audience?: unknown } | null)?.audience, AUDIENCE_LABEL)
+    if (text !== null && text.length > AUDIENCE_MAX) throw new BadRequestException(`${AUDIENCE_LABEL} أكبر من الحد`)
+    return this.ds.transaction(async em => {
+      const [row]: Array<{ value: string | null }> = await em.query('SELECT [value] FROM dbo.requests_config WITH (UPDLOCK, HOLDLOCK) WHERE [key] = @0', [MOBILE_PUNCH_AUDIENCE_KEY])
+      const before = row?.value ? String(row.value) : null
+      await assertAudienceTargets(em, text, AUDIENCE_LABEL, before !== null && audienceIntact(before) ? before : null)
+      if (text === null) await em.query('DELETE FROM dbo.requests_config WHERE [key] = @0', [MOBILE_PUNCH_AUDIENCE_KEY])
+      else if (row) await em.query('UPDATE dbo.requests_config SET [value] = @1 WHERE [key] = @0', [MOBILE_PUNCH_AUDIENCE_KEY, text])
+      else await em.query('INSERT INTO dbo.requests_config ([key], [value]) VALUES (@0, @1)', [MOBILE_PUNCH_AUDIENCE_KEY, text])
+      if (before !== text) await recordAudit(em, { category: 'SETTINGS', action: 'MOBILE_PUNCH_AUDIENCE_CHANGED', entityType: 'requests_config', entityId: MOBILE_PUNCH_AUDIENCE_KEY, actorUserId: user.sub,
+        summary: text === null ? 'بصمة الموبايل بقت لكل الموظفين' : 'تغيير «مين يبصم من الموبايل»', before: { audience: before }, after: { audience: text } })
+      return { audience: text === null ? null : JSON.parse(text) }
+    })
+  }
+
   // ===== الموظف =====
 
   /** «بصمتي»: مواقع فرع صاحب الحساب (أسماء ونصف قطر بس)، وهل له رقم بصمة، وآخر محاولاته */
@@ -48,11 +105,13 @@ export class MobilePunchService {
     if (!user.employeeId) throw new ForbiddenException(NOT_EMPLOYEE)
     const em = this.ds.manager, me = Number(user.employeeId)
     if (!(await mobilePunchReady(em))) return { ready: false, hasFingerprint: false, sites: [], attempts: [] }
-    const [person]: Array<{ branchId: number | null; fingerprintCode: string | null }> = await em.query('SELECT [branchId], [fingerprintCode] FROM dbo.employees WHERE [id] = @0', [me])
+    const [person]: Array<PunchPerson & { fingerprintCode: string | null }> = await em.query('SELECT [id], [branchId], [departmentId], [teamId], [fingerprintCode] FROM dbo.employees WHERE [id] = @0', [me])
+    // B-ADD.9: برّه الجمهور = من غير مواقع ولا زرار (والخادم بيرفض البصمة برضه)
+    if (person && !(await this.inAudience(em, { ...person, id: me }))) return { ready: true, allowed: false, hasFingerprint: !!person.fingerprintCode, sites: [], attempts: [] }
     const sites = person?.branchId == null ? [] : await em.getRepository(PunchSite).find({ where: { branchId: Number(person.branchId), isActive: true }, order: { name: 'ASC', id: 'ASC' } })
     const attempts = await em.getRepository(MobilePunchAttempt).find({ where: { employeeId: me }, order: { id: 'DESC' }, take: 20 })
     const names = await this.siteNames(em)
-    return { ready: true, hasFingerprint: !!person?.fingerprintCode, sites: sites.map(row => ({ id: row.id, name: row.name, radiusMeters: row.radiusMeters })), attempts: attempts.map(row => this.attemptView(row, names)) }
+    return { ready: true, allowed: true, hasFingerprint: !!person?.fingerprintCode, sites: sites.map(row => ({ id: row.id, name: row.name, radiusMeters: row.radiusMeters })), attempts: attempts.map(row => this.attemptView(row, names)) }
   }
 
   /**
@@ -66,9 +125,11 @@ export class MobilePunchService {
     const me = Number(user.employeeId)
     const judged = await this.ds.transaction(async em => {
       if (!(await mobilePunchReady(em))) throw new BadRequestException(MOBILE_PUNCH_MIGRATION_MISSING)
-      const [person]: Array<{ id: number; branchId: number | null; fingerprintCode: string | null; isActive: boolean | number; status: string | null }> = await em.query(
-        'SELECT [id], [branchId], [fingerprintCode], [isActive], [status] FROM dbo.employees WITH (UPDLOCK, ROWLOCK) WHERE [id] = @0', [me])
+      const [person]: Array<PunchPerson & { fingerprintCode: string | null; isActive: boolean | number; status: string | null }> = await em.query(
+        'SELECT [id], [branchId], [departmentId], [teamId], [fingerprintCode], [isActive], [status] FROM dbo.employees WITH (UPDLOCK, ROWLOCK) WHERE [id] = @0', [me])
       if (!person || !flag(person.isActive) || !ACTIVE_STATUSES.includes(String(person.status))) throw new ForbiddenException(NOT_ACTIVE)
+      // B-ADD.9: الجمهور بيتحكم تحت قفل صف الموظف (مكانه مايتغيرش) وصف الإعداد ممسوك لآخر المعاملة (الجمهور مايتغيرش قبل ما المحاولة تتسجّل)
+      if (!(await this.inAudience(em, { ...person, id: me }, true))) throw new ForbiddenException(NOT_IN_AUDIENCE)
       if (!person.fingerprintCode) throw new BadRequestException(NO_FINGERPRINT)
       const attempts = em.getRepository(MobilePunchAttempt)
       const last = await attempts.findOne({ where: { employeeId: me, outcome: 'ACCEPTED' }, order: { id: 'DESC' } })

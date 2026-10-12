@@ -8,7 +8,7 @@ import { MainLayout } from '@/components/layout'
 import { apiFetch } from '@/lib/api'
 
 interface Attempt { id: number; siteName: string | null; accuracyMeters: number; distanceMeters: number | null; outcome: string; outcomeLabel: string; at: string }
-interface MyPunch { ready: boolean; hasFingerprint: boolean; sites: Array<{ id: number; name: string; radiusMeters: number }>; attempts: Attempt[] }
+interface MyPunch { ready: boolean; allowed?: boolean; hasFingerprint: boolean; sites: Array<{ id: number; name: string; radiusMeters: number }>; attempts: Attempt[] }
 const fetchMine = () => apiFetch<MyPunch>('/attendance/mobile-punch')
 const sendPunch = (position: { latitude: number; longitude: number; accuracy: number }) =>
   apiFetch<{ accepted: boolean; at: string; siteName: string | null; distanceMeters: number | null }>('/attendance/mobile-punch', { method: 'POST', body: JSON.stringify(position) })
@@ -42,7 +42,9 @@ export default function MyPunchPage() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'تعذر تسجيل البصمة') } finally { setBusy(false); load() }
   }
 
-  const usable = !!data?.ready && data.hasFingerprint && data.sites.length > 0
+  // B-ADD.9: برّه «مين يبصم من الموبايل» = من غير زرار، برسالة واحدة واضحة
+  const allowed = data?.allowed !== false
+  const usable = !!data?.ready && allowed && data.hasFingerprint && data.sites.length > 0
   return (
     <MainLayout>
       <div className="space-y-6">
@@ -57,8 +59,9 @@ export default function MyPunchPage() {
         {error && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
         {info && <div role="status" className="bg-green-50 text-green-700 rounded-xl p-4">{info}</div>}
         {data && !data.ready && <div className="card text-amber-800 bg-amber-50">جداول بصمة الموبايل لسه ماتطبّقتش على قاعدة البيانات (ترحيلي 167 و168).</div>}
-        {data?.ready && !data.hasFingerprint && <div className="card text-amber-800 bg-amber-50">ملفك مالوش رقم بصمة — راجع الموارد البشرية.</div>}
-        {data?.ready && data.hasFingerprint && data.sites.length === 0 && <div className="card text-amber-800 bg-amber-50">مفيش موقع بصمة متعرّف لفرعك.</div>}
+        {data?.ready && !allowed && <div className="card text-amber-800 bg-amber-50" data-punch-not-allowed>بصمة الموبايل مش مفعّلة لك — راجع الموارد البشرية.</div>}
+        {data?.ready && allowed && !data.hasFingerprint && <div className="card text-amber-800 bg-amber-50">ملفك مالوش رقم بصمة — راجع الموارد البشرية.</div>}
+        {data?.ready && allowed && data.hasFingerprint && data.sites.length === 0 && <div className="card text-amber-800 bg-amber-50">مفيش موقع بصمة متعرّف لفرعك.</div>}
 
         {usable && (
           <div className="card space-y-3 text-center" data-mobile-punch>

@@ -112,7 +112,7 @@ test('MP-01: الميزة الفرعية مقفولة افتراضيًا = مف�
   refused(await saveSite(U.mgr, { name: 'المصنع', branchId: B.riyadh.id, ...SITE, radiusMeters: 150 }), 400, rules.MOBILE_PUNCH_MIGRATION_MISSING)
   assert.equal((await punchesOf(E.one)).length, 0)
   await runMigrations(); await runMigrations()
-  assert.deepEqual(ok(await request(U.one, 'GET', P)), { ready: true, hasFingerprint: true, sites: [], attempts: [] })
+  assert.deepEqual(ok(await request(U.one, 'GET', P)), { ready: true, allowed: true, hasFingerprint: true, sites: [], attempts: [] })
 })
 
 test('MP-02: مواقع البصمة — بنطاق الفرع (فرع تاني «مش موجود»)، بإحداثيات ونصف قطر متحكم فيهم، وبسطر تدقيق', async () => {

@@ -51,6 +51,10 @@ function disposableApp(tag, extraEnv = {}) {
     await t.master.request().query(`CREATE DATABASE [${database}]`); created = true
     Object.assign(process.env, env, { DB_DATABASE: database, DB_SYNCHRONIZE: 'true', NODE_ENV: 'test', JWT_SECRET: secret, UPLOADS_ROOT: uploads, ...extraEnv })
     t.app = await require('../../node_modules/@nestjs/core').NestFactory.create(require('../../src/app.module').AppModule, { logger: ['error'], abortOnError: false })
+    // مفيش رسالة بريد حقيقية بتطلع من الاختبار
+    const mail = t.app.get(require('../../src/auth/mail.service').MailService)
+    mail.isConfigured = () => false
+    mail.send = async () => { throw new Error('no mail in tests') }
     t.app.setGlobalPrefix('api')
     t.app.useGlobalPipes(new (require('../../node_modules/@nestjs/common').ValidationPipe)({ whitelist: true, transform: true }))
     await t.app.listen(0, '127.0.0.1')

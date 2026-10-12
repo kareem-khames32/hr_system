@@ -6,6 +6,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { MapPin } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import { apiFetch } from '@/lib/api'
+import { OrgAudienceField } from '@/components/OrgAudienceField'
+import type { StoredAudience } from '@/lib/org-audience'
 
 interface Site { id: number; name: string; branchId: number; latitude: number; longitude: number; radiusMeters: number; isActive: boolean }
 interface Sites { ready: boolean; branches: Array<{ id: number; name: string }>; sites: Site[] }
@@ -23,10 +25,15 @@ export default function PunchSitesPage() {
   const [info, setInfo] = useState('')
   const [busy, setBusy] = useState(false)
   const [form, setForm] = useState(emptySite())
+  // B-ADD.9: «مين يبصم من الموبايل» — جمهور واحد للشركة بالاستهداف الموحد (null = كل الموظفين)
+  const [audience, setAudience] = useState<{ value: StoredAudience | null; complete: boolean; canEdit: boolean; damaged: boolean; loaded: boolean }>({ value: null, complete: true, canEdit: false, damaged: false, loaded: false })
 
   const load = useCallback(() => {
     apiFetch<{ ready: boolean; canManage: boolean; rows: AttemptRow[] }>(`${B}/attempts`).then((result) => {
       setAttempts(result.rows); setManage(result.canManage)
+      if (result.canManage) apiFetch<{ audience: StoredAudience | null; damaged: boolean; canEdit: boolean }>(`${B}/audience`)
+        .then((saved) => setAudience({ value: saved.audience, complete: true, canEdit: saved.canEdit, damaged: saved.damaged, loaded: true }))
+        .catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل «مين يبصم من الموبايل»'))
       if (result.canManage) apiFetch<Sites>(`${B}/sites`).then(setData).catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل مواقع البصمة'))
     }).catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل محاولات البصمة'))
   }, [])
@@ -42,6 +49,14 @@ export default function PunchSitesPage() {
     try {
       await apiFetch(form.id === null ? `${B}/sites` : `${B}/sites/${form.id}`, json(form.id === null ? 'POST' : 'PATCH', body))
       setForm(emptySite()); setInfo('اتحفظ الموقع'); load()
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'تعذر الحفظ') } finally { setBusy(false) }
+  }
+  async function saveAudience() {
+    if (!audience.complete) return setError('كمّل اختيار «مين يبصم من الموبايل» الأول')
+    setBusy(true); setError(''); setInfo('')
+    try {
+      await apiFetch(`${B}/audience`, json('PUT', { audience: audience.value }))
+      setInfo(audience.value === null ? 'بصمة الموبايل بقت لكل الموظفين' : 'اتحفظ «مين يبصم من الموبايل»'); load()
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'تعذر الحفظ') } finally { setBusy(false) }
   }
   const branchName = (id: number) => data?.branches.find((row) => row.id === id)?.name ?? `فرع #${id}`
@@ -60,6 +75,22 @@ export default function PunchSitesPage() {
         {error && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
         {info && <div role="status" className="bg-green-50 text-green-700 rounded-xl p-4">{info}</div>}
         {data && !data.ready && <div className="card text-amber-800 bg-amber-50">جداول بصمة الموبايل لسه ماتطبّقتش على قاعدة البيانات (ترحيلي 167 و168).</div>}
+
+        {manage && audience.loaded && (
+          <div className="card space-y-3" data-punch-audience>
+            <h2 className="text-lg font-semibold text-gray-800">مين يبصم من الموبايل؟</h2>
+            <p className="text-sm text-gray-500">اللي برّه الاختيار ده مابيظهرلوش زرار البصمة، والخادم بيرفض بصمته. «الشركة كلها» = كل الموظفين.</p>
+            {audience.damaged && <div className="bg-red-50 text-red-700 rounded-xl p-3 text-sm">الاختيار المحفوظ تالف، فبصمة الموبايل مقفولة للكل لحد ما تختار وتحفظ من جديد.</div>}
+            {audience.canEdit ? (
+              <>
+                <OrgAudienceField value={audience.value} disabled={busy} onChange={(value, complete) => setAudience((current) => ({ ...current, value, complete }))} />
+                <button type="button" className="btn-primary disabled:opacity-50" disabled={busy || !audience.complete} onClick={saveAudience}>حفظ</button>
+              </>
+            ) : (
+              <p className="text-sm text-gray-600">{audience.value === null && !audience.damaged ? 'دلوقتي: كل الموظفين.' : 'دلوقتي: مجموعة محددة.'} الاختيار ده بيتغيّر من حساب على كل الفروع.</p>
+            )}
+          </div>
+        )}
 
         {manage && data?.ready && (
           <div className="card space-y-3" data-punch-sites>
