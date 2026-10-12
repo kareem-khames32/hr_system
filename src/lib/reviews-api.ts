@@ -30,6 +30,8 @@ export interface CycleBody {
 export type ReviewStatus = 'OPEN' | 'COMPLETED' | 'APPROVED' | 'ANNOUNCED' | 'ACKNOWLEDGED'
 export interface ApiCycleAssignment {
   id: number; employeeId: number; employeeName: string; managerName: string | null; hasManager: boolean; status: ReviewStatus; statusLabel: string
+  /** B-ADD.10: المقيِّم يتغيّر (الدورة شغالة وتقييمه لسه ماتسلّمش) */
+  canChangeEvaluator?: boolean
   selfSubmitted: boolean; managerSubmitted: boolean; selfScore: number | null; managerScore: number | null; finalScore: number | null
 }
 
@@ -94,6 +96,8 @@ export const launchReviewCycle = (id: number) => apiFetch<ApiReviewCycle>(`${R}/
 export const closeReviewCycle = (id: number) => apiFetch<ApiReviewCycle>(`${R}/cycles/${id}/close`, json('POST', {}))
 export const advanceReviewCycle = (id: number, to: 'APPROVED' | 'ANNOUNCED') =>
   apiFetch<{ moved: number; cycle: ApiReviewCycle; assignments: ApiCycleAssignment[] }>(`${R}/cycles/${id}/advance`, json('POST', { to }))
+export const setReviewEvaluator = (assignmentId: number, evaluatorEmployeeId: number) =>
+  apiFetch<{ changed: boolean; evaluatorName: string }>(`${R}/${assignmentId}/evaluator`, json('POST', { evaluatorEmployeeId }))
 export const fetchCycleAssignments = (id: number) => apiFetch<{ cycle: ApiReviewCycle; assignments: ApiCycleAssignment[] }>(`${R}/cycles/${id}/assignments`)
 export const fetchMyReviews = () => apiFetch<{ available: boolean; reviews: ApiReviewRow[] }>(`${R}/mine`)
 export const fetchTeamReviews = () => apiFetch<{ available: boolean; reviews: ApiReviewRow[] }>(`${R}/team`)

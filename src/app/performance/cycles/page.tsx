@@ -8,10 +8,11 @@ import { Plus, RefreshCcw, X } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import EmptyState from '@/components/EmptyState'
 import { OrgAudienceField } from '@/components/OrgAudienceField'
-import type { StoredAudience } from '@/lib/org-audience'
+import { EmployeePicker } from '@/components/EmployeePicker'
+import { fetchOrgAudienceContext, type OrgAudienceContext, type StoredAudience } from '@/lib/org-audience'
 import { formatDate } from '@/lib/dates'
 import {
-  REVIEW_CYCLE_KIND_LABELS, advanceReviewCycle, closeReviewCycle, createReviewCycle, fetchCycleAssignments, fetchReviewCycles, fetchReviewTemplates, launchReviewCycle,
+  REVIEW_CYCLE_KIND_LABELS, advanceReviewCycle, closeReviewCycle, createReviewCycle, fetchCycleAssignments, fetchReviewCycles, fetchReviewTemplates, launchReviewCycle, setReviewEvaluator,
   type ApiCycleAssignment, type ApiReviewCycle, type ApiReviewTemplate, type ReviewCycleKind, type ReviewCycleStatus,
 } from '@/lib/reviews-api'
 import RewardsPanel from './RewardsPanel'
@@ -28,6 +29,31 @@ export default function ReviewCyclesPage() {
   const [busy, setBusy] = useState(0)
   const [open, setOpen] = useState<{ cycle: ApiReviewCycle; assignments: ApiCycleAssignment[] } | null>(null)
   const [rewards, setRewards] = useState<ApiReviewCycle | null>(null)
+  // B-ADD.10: تغيير مقيِّم تكليف — موظفين نطاق الحساب بيتحمّلوا أول مرة النافذة تتفتح
+  const [evaluator, setEvaluator] = useState<{ row: ApiCycleAssignment; value: string } | null>(null)
+  const [people, setPeople] = useState<OrgAudienceContext['employees'] | null>(null)
+  const [saving, setSaving] = useState(false)
+  const pickEvaluator = (row: ApiCycleAssignment) => {
+    setError('')
+    setEvaluator({ row, value: '' })
+    if (!people) fetchOrgAudienceContext().then((context) => setPeople(context.employees)).catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل الموظفين'))
+  }
+  const saveEvaluator = async () => {
+    if (!evaluator || !evaluator.value || !open) return
+    setSaving(true)
+    setError('')
+    try {
+      const result = await setReviewEvaluator(evaluator.row.id, Number(evaluator.value))
+      setInfo(`المقيِّم بقى «${result.evaluatorName}»`)
+      setEvaluator(null)
+      setOpen(await fetchCycleAssignments(open.cycle.id))
+      load()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'تعذر تغيير المقيِّم')
+    } finally {
+      setSaving(false)
+    }
+  }
 
   const load = useCallback(() => {
     setError('')
@@ -179,7 +205,14 @@ export default function ReviewCyclesPage() {
                   {open.assignments.map((row) => (
                     <tr key={row.id}>
                       <td className="px-3 py-2 text-gray-800">{row.employeeName}</td>
-                      <td className="px-3 py-2 text-gray-600">{row.hasManager ? row.managerName ?? 'مدير' : <span className="text-amber-700">من غير مقيِّم</span>}</td>
+                      <td className="px-3 py-2 text-gray-600">
+                        {row.hasManager ? row.managerName ?? 'مدير' : <span className="text-amber-700">من غير مقيِّم</span>}
+                        {row.canChangeEvaluator && (
+                          <button type="button" className="ms-2 text-primary-600 hover:underline" data-change-evaluator onClick={() => pickEvaluator(row)}>
+                            {row.hasManager ? 'غيّره' : 'حدّد مقيِّم'}
+                          </button>
+                        )}
+                      </td>
                       <td className="px-3 py-2 tabular-nums">{row.selfScore ?? (row.selfSubmitted ? 'سلّم' : '—')}</td>
                       <td className="px-3 py-2 tabular-nums">{row.managerScore ?? (row.managerSubmitted ? 'سلّم' : '—')}</td>
                       <td className="px-3 py-2 text-gray-600">{row.statusLabel}</td>
@@ -192,6 +225,18 @@ export default function ReviewCyclesPage() {
                   ))}
                 </tbody>
               </table>
+              {evaluator && (
+                <div className="mt-4 p-4 bg-gray-50 rounded-xl space-y-3" data-evaluator-form>
+                  <p className="text-sm text-gray-700">مين يقيّم «{evaluator.row.employeeName}»؟ المقيِّم الحالي بيخرج من التكليف، والجديد بيلاقيه في «تقييم فريقي».</p>
+                  <EmployeePicker employees={(people ?? []).filter((person) => person.id !== evaluator.row.employeeId)} value={evaluator.value} clearable={false}
+                    placeholder={people ? 'اكتب اسم المقيِّم أو كوده' : 'بيتحمّل…'} disabled={!people || saving} aria-label="المقيِّم"
+                    onChange={(id) => setEvaluator((current) => (current ? { ...current, value: id } : current))} />
+                  <div className="flex gap-2">
+                    <button type="button" className="btn-primary disabled:opacity-50" disabled={!evaluator.value || saving} onClick={saveEvaluator}>حفظ</button>
+                    <button type="button" className="btn-secondary" disabled={saving} onClick={() => setEvaluator(null)}>إلغاء</button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

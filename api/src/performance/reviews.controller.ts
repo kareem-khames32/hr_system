@@ -36,6 +36,9 @@ class CalibrateDto {
   @IsOptional() score?: unknown
   @IsOptional() reason?: unknown
 }
+class EvaluatorDto {
+  @IsOptional() evaluatorEmployeeId?: unknown
+}
 class SubmitDto {
   @IsOptional() answers?: unknown
   @IsOptional() comment?: unknown
@@ -140,6 +143,14 @@ export class ReviewsController {
   @HttpCode(200)
   acknowledge(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: AcknowledgeDto) {
     return this.reviews.acknowledge(user, id, dto.comment)
+  }
+
+  // B-ADD.10: تغيير مقيِّم تكليف (موظف من غير مدير، أو مدير اتغيّر) — لإدارة الأداء في نطاقها
+  @Perm('performance.manage')
+  @Post(':id/evaluator')
+  @HttpCode(200)
+  setEvaluator(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: EvaluatorDto) {
+    return this.reviews.setEvaluator(user, id, dto)
   }
 
   // B3.8-أ: تعديل معايرة على درجة تقييم (بسبب إجباري)

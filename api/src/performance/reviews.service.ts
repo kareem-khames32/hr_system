@@ -310,9 +310,44 @@ export class ReviewsService {
       return { id: row.id, employeeId: row.employeeId, employeeName: people.get(row.employeeId)?.fullName ?? '—',
         // اسم المدير بفرعه الحالي في نطاق القارئ
         managerName: manager && inBranchScope(scope, manager.branchId) ? manager.fullName : null, hasManager: row.managerEmployeeId != null,
+        // B-ADD.10: المقيِّم يتغيّر طول ما الدورة شغالة وتقييمه لسه ماتسلّمش
+        canChangeEvaluator: cycle.status === 'ACTIVE' && !row.managerSubmittedAt,
         status: row.status, statusLabel: REVIEW_STATUS_LABELS[row.status] ?? row.status, selfSubmitted: !!row.selfSubmittedAt, managerSubmitted: !!row.managerSubmittedAt,
         selfScore: score(row.selfScore), managerScore: score(row.managerScore), finalScore: score(row.finalScore) }
     }) }
+  }
+
+  /**
+   * B-ADD.10 (كلمة المالك 12 أكتوبر 2026): تغيير المقيِّم — إدارة الأداء بتحط مقيِّم لتكليف (موظف من غير مدير مباشر، أو مدير اتغيّر بعد
+   * الإطلاق). تحت قفل التكليف: الدورة شغالة، وتقييم المدير لسه ماتسلّمش، والمقيِّم الجديد موظف على رأس العمل في نطاق الحساب ومش صاحب
+   * التكليف نفسه. المقيِّم القديم بيخرج من التكليف (حقه من التكليف نفسه)، وبسطر تدقيق.
+   */
+  async setEvaluator(user: JwtPayload, assignmentId: number, input: { evaluatorEmployeeId?: unknown }) {
+    this.assertManager(user)
+    const evaluatorId = typeof input.evaluatorEmployeeId === 'number' ? input.evaluatorEmployeeId : NaN
+    if (!Number.isSafeInteger(evaluatorId) || evaluatorId <= 0) throw new BadRequestException('اختار المقيِّم')
+    const scope = branchScopeOf(user)
+    return this.ds.transaction(async (em) => {
+      await this.assertReady(em)
+      const assignment = await em.getRepository(ReviewAssignment).findOne({ where: { id: assignmentId }, lock: { mode: 'pessimistic_write' } })
+      const cycle = assignment ? await em.getRepository(ReviewCycle).findOne({ where: { id: assignment.cycleId } }) : null
+      const employee = assignment ? await em.getRepository(Employee).findOne({ where: { id: assignment.employeeId }, select: { id: true, fullName: true, branchId: true } }) : null
+      // تكليف برّه نطاق الحساب (دورته أو فرع موظفه الحالي) زي اللي مش موجود
+      if (!assignment || !cycle || !this.cycleInScope(user, cycle) || !employee || !inBranchScope(scope, employee.branchId)) throw new NotFoundException(REVIEW_NOT_FOUND)
+      if (cycle.status !== 'ACTIVE') throw new BadRequestException('الدورة مش شغالة — المقيِّم مابيتغيرش')
+      if (assignment.managerSubmittedAt) throw new ConflictException('تقييم المدير اتسلّم — المقيِّم مابيتغيرش')
+      if (evaluatorId === assignment.employeeId) throw new BadRequestException('الموظف مايقيّمش نفسه')
+      const evaluator = await em.getRepository(Employee).findOne({ where: { id: evaluatorId }, select: { id: true, fullName: true, branchId: true, isActive: true, status: true }, lock: { mode: 'pessimistic_write' } })
+      if (!evaluator || !inBranchScope(scope, evaluator.branchId)) throw new NotFoundException('الموظف غير موجود')
+      if (evaluator.isActive !== true || ENDED.includes(evaluator.status)) throw new BadRequestException('المقيِّم لازم يكون موظف على رأس العمل')
+      const before = assignment.managerEmployeeId
+      if (before !== evaluator.id) {
+        await em.getRepository(ReviewAssignment).update({ id: assignment.id }, { managerEmployeeId: evaluator.id })
+        await recordAudit(em, { category: 'SETTINGS', action: 'REVIEW_EVALUATOR_CHANGED', entityType: 'review_assignment', entityId: assignment.id, actorUserId: user.sub, branchId: assignment.branchId,
+          summary: `تغيير مقيِّم «${employee.fullName}» في دورة «${cycle.name}» إلى «${evaluator.fullName}»`, before: { managerEmployeeId: before }, after: { managerEmployeeId: evaluator.id } })
+      }
+      return { changed: before !== evaluator.id, evaluatorName: evaluator.fullName }
+    })
   }
 
   // ===== B3.8-أ: المعايرة =====
