@@ -145,8 +145,9 @@ test('RG-03: قايمة الاستثناءات من غير بنود قديمة،
   // B4.6 (ج): +1 SELF (إعداد عرض الحساب نفسه: الهجري جنب الميلادي)
   // B-ADD.1: +1 SERVICE_CHECK (المهمة الجماعية)؛ B-ADD.6: +1 PUBLIC_OK (فيد الوظائف العام)
   // B-ADD.15: +7 SELF (صندوق الاجتماعات واجتماعاتي وإنشاء اجتماع والاعتذار وطلب الدخول) و+1 AUTH_ANY_OK (دليل الدعوة) و+9 SERVICE_CHECK (الحق بالاجتماع نفسه)
-  assert.deepEqual(counts, { PUBLIC_OK: 25, SELF: 106, AUTH_ANY_OK: 12, SERVICE_CHECK: 148 })
-  assert.equal(handlers.filter(handler => handler.perms.length === 0).length, 291)
+  // B-ADD.16: +16 SELF (البريد: صندوق صاحب الجلسة بس — الحالة و«افتح بريدك» والقفل والمجلدات والرسايل والمحادثات والمرفق والإرسال وغير المقروء وإكمال العناوين)
+  assert.deepEqual(counts, { PUBLIC_OK: 25, SELF: 122, AUTH_ANY_OK: 12, SERVICE_CHECK: 148 })
+  assert.equal(handlers.filter(handler => handler.perms.length === 0).length, 307)
   // من غير حارس دخول = العام بس
   const open = handlers.filter(handler => !guarded(handler, JwtAuthGuard)).map(handler => handler.id).sort()
   assert.deepEqual(open, Object.keys(EXCEPTIONS).filter(id => EXCEPTIONS[id] === 'PUBLIC_OK').sort())

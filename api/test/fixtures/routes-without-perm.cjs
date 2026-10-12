@@ -206,6 +206,24 @@ const EXCEPTIONS = {
   'HelpdeskController.articles': 'SERVICE_CHECK', // GET /helpdesk/articles — B3.10-ب: بحث قاعدة المعرفة (المنشور اللي في جمهور موظف الحساب)
   'HelpdeskController.mine': 'SELF', // GET /helpdesk/mine — B3.10: استفسارات الموظف نفسه بحالة خدمتها
   'HelpdeskController.rate': 'SELF', // POST /helpdesk/:id/rate — B3.10: تقييم الموظف لخدمة استفساره (صاحبه بس)
+  // B-ADD.16: البريد — صندوق صاحب الجلسة بس: الحساب من التوكن، وكلمة السر من مخزن الجلسة بمفتاح المتصفح، واسم الدخول من المسجّل للحساب.
+  // مفيش معامل بيختار صندوق حد تاني؛ والصندوق المشترك (‎?mbx=‎) للمضاف عليه بس (الفحص في MailboxService.identity)، وخادم البريد بيتحقق تاني
+  'MailboxController.attachment': 'SELF', // GET /mail/attachment — تنزيل مرفق من رسالة في صندوقه
+  'MailboxController.contacts': 'SELF', // GET /mail/contacts — إكمال العناوين من دليل خادم البريد بدخوله هو
+  'MailboxController.conversation': 'SELF', // GET /mail/conversation
+  'MailboxController.conversations': 'SELF', // GET /mail/conversations
+  'MailboxController.folders': 'SELF', // GET /mail/folders
+  'MailboxController.list': 'SELF', // GET /mail/messages
+  'MailboxController.lock': 'SELF', // POST /mail/lock — قفل بريده للجلسة دي
+  'MailboxController.message': 'SELF', // GET /mail/message
+  'MailboxController.remove': 'SELF', // DELETE /mail/message — نقل لـ«المحذوف» في صندوقه
+  'MailboxController.removeConversation': 'SELF', // DELETE /mail/conversation
+  'MailboxController.send': 'SELF', // POST /mail/send — إرسال باسمه هو
+  'MailboxController.status': 'SELF', // GET /mail/status — حالة بريده للجلسة
+  'MailboxController.unlock': 'SELF', // POST /mail/unlock — «افتح بريدك»: كلمة مرور بريده مرة للجلسة (بتتجرّب على خادم البريد باسم دخوله)
+  'MailboxController.unread': 'SELF', // GET /mail/unread
+  'MailboxController.update': 'SELF', // PATCH /mail/message
+  'MailboxController.updateConversation': 'SELF', // PATCH /mail/conversation
   'TrainingController.mine': 'SELF', // GET /training/mine — B3.9: تسجيلات الموظف نفسه في التدريب
   'TrainingController.rate': 'SELF', // POST /training/enrollments/:id/rate — B3.9: تقييم الموظف لتدريبه (صاحب التسجيل بس)
   'ReviewsController.acknowledge': 'SELF', // POST /performance/reviews/:id/acknowledge — B3.7-ب: إقرار الموظف نفسه بنتيجته المعلنة

@@ -33,6 +33,7 @@ import {
   Target,
   GraduationCap,
   LifeBuoy,
+  Mail,
   Scale,
   FileText,
   Settings,
@@ -587,6 +588,8 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
       { id: 'announcements', label: 'الإعلانات', icon: <Megaphone size={20} />, href: '/announcements' },
       // B3.10: استفسارات الموظف للموارد البشرية (بتظهر لما موديول مركز الخدمات مفتوح)
       { id: 'helpdesk', label: 'مركز الخدمات', icon: <LifeBuoy size={20} />, href: '/helpdesk' },
+      // B-ADD.16: بريد الشركة (Exchange) جوه النظام — صندوق الموظف نفسه (بيظهر لما موديول البريد مفتوح)
+      { id: 'mail', label: 'البريد', icon: <Mail size={20} />, href: '/mail' },
       // B3.11: قضايا الحساب (المطّلع عليها) وقضايا الموظف الطرف (بتظهر لما موديول الشكاوى والتحقيقات مفتوح)
       { id: 'cases', label: 'الشكاوى والتحقيقات', icon: <Scale size={20} />, href: '/cases' },
       // B3.13: استبيانات الموظف المدعو لها، وإدارتها لصاحب الصلاحية (بتظهر لما موديول الاستبيانات مفتوح)

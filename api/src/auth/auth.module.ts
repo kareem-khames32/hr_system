@@ -28,6 +28,8 @@ import { UserTotp } from './user-totp.entity'
 import { TotpService } from './totp.service'
 import { UsersController } from './users.controller'
 import { jwtLifetimeSeconds } from './jwt-secret'
+import { MailSessionService } from '../mailbox/mail-session.service'
+import { MailVaultService } from '../mailbox/mail-vault.service'
 
 @Module({
   imports: [
@@ -68,9 +70,11 @@ import { jwtLifetimeSeconds } from './jwt-secret'
     // B6.4: الدخول المؤسسي (OIDC) — بيكلّم المزوّد ويرجّع هوية؛ المطابقة والجلسة في AuthService
     SsoService,
     // المزامنة الجماعية: نفس DomainLoginService للإنشاء والربط، فمفيش روتين إنشاء تاني
-    DomainSyncService],
+    DomainSyncService,
+    // B-ADD.16: مخزن كلمة سر البريد للجلسة (نص مشفّر في الذاكرة، ومفتاحه مع المتصفح بس)، ونقط ربطه بالدخول والخروج
+    MailVaultService, MailSessionService],
   // DomainSyncService مصدَّرة عشان إضافة الموظف (EmployeesModule) تزوّده بحساب دخول في لحظته
   // من **نفس** الخدمة — مفيش روتين إنشاء تاني في النظام
-  exports: [AuthService, DirectoryService, MailService, TwoFactorService, DomainSyncService, LoginSecurityService, TotpService],
+  exports: [AuthService, DirectoryService, MailService, TwoFactorService, DomainSyncService, LoginSecurityService, TotpService, MailVaultService, MailSessionService],
 })
 export class AuthModule {}
