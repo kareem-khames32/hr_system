@@ -6,10 +6,12 @@ import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { AlertTriangle, TrendingUp } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
+import { OrgAudienceField } from '@/components/OrgAudienceField'
+import type { StoredAudience } from '@/lib/org-audience'
 import { currencyLabel } from '@/lib/currency'
 import { formatDate } from '@/lib/dates'
 import { formatMoney } from '@/lib/money'
-import { adjustRaiseLine, applyRaiseCycle, approveRaiseCycle, createRaiseCycle, fetchRaiseCycle, fetchRaiseCycles, moveRaiseCycle, setRaiseBudget, unapproveRaiseCycle,
+import { adjustRaiseLine, applyRaiseCycle, applyRaisePercent, approveRaiseCycle, createRaiseCycle, fetchRaiseCycle, fetchRaiseCycles, moveRaiseCycle, setRaiseBudget, unapproveRaiseCycle,
   type ApiRaiseApplyResult, type ApiRaiseCycle, type ApiRaiseCycleDetail, type CycleStep } from '@/lib/compensation-api'
 
 const STEP_LABELS: Record<CycleStep, string> = { open: 'فتح للاقتراحات', review: 'قفل الاقتراحات وبدء المراجعة', reopen: 'رجوع للاقتراحات', cancel: 'إلغاء الدورة' }
@@ -38,6 +40,8 @@ export default function RaiseCyclesPage() {
   const [confirmStep, setConfirmStep] = useState<CycleStep | null>(null)
   const [confirmDecision, setConfirmDecision] = useState<Decision | null>(null)
   const [refused, setRefused] = useState<ApiRaiseApplyResult['refused']>([])
+  // B-ADD.11: زيادة بالنسبة — نسبة و«على مين؟»، والتطبيق التاني على مجموعة أصغر هو الاستثناء
+  const [percent, setPercent] = useState<{ value: string; basis: 'BASIC' | 'TOTAL'; audience: StoredAudience | null; complete: boolean; note: string }>({ value: '', basis: 'BASIC', audience: null, complete: true, note: '' })
 
   const loadList = useCallback(() => {
     fetchRaiseCycles().then((data) => { setCycles(data.cycles); setReady(data.ready) }).catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل دورات الزيادات'))
@@ -59,6 +63,20 @@ export default function RaiseCyclesPage() {
     }
   }
   const open = (id: number) => { setRefused([]); return run(() => fetchRaiseCycle(id), '') }
+  async function applyPercent() {
+    if (!detail) return
+    const text = percent.value.trim(), value = /^\d{1,3}(\.\d{1,2})?$/.test(text) ? Number(text) : NaN
+    if (!(value >= 0 && value <= 100)) return setError('اكتب النسبة: رقم من صفر لحد 100')
+    if (!percent.complete) return setError('كمّل اختيار «على مين؟» الأول')
+    const id = detail.cycle.id
+    let summary = ''
+    const ok = await run(async () => {
+      const result = await applyRaisePercent(id, { percent: value, basis: percent.basis, audience: percent.audience, ...(percent.note.trim() ? { note: percent.note.trim() } : {}) })
+      summary = `اتطبّقت ${value}% على ${result.percentApplied.applied} موظف${result.percentApplied.noSalary ? ` — ${result.percentApplied.noSalary} من غير أساسي مسجّل اتسابوا` : ''}`
+      return result
+    }, '')
+    if (ok) { setInfo(summary); setPercent((current) => ({ ...current, value: '', note: '' })) }
+  }
   async function decide(decision: Decision) {
     if (!detail) return
     setConfirmDecision(null); setRefused([])
@@ -275,6 +293,34 @@ export default function RaiseCyclesPage() {
                 {detail.budgets.length === 0 && <p className="text-gray-500 text-sm p-2">مفيش إدارات أو أقسام في نطاقك.</p>}
               </div>
             </div>
+
+            {detail.canAdjust && detail.salaries && (
+              <div className="card space-y-3" data-raise-percent>
+                <h2 className="text-lg font-semibold text-gray-800">زيادة بالنسبة</h2>
+                <p className="text-sm text-gray-500">اكتب النسبة واختار على مين، والنظام بيحسب مبلغ كل موظف ويكتبه في سطره. للاستثناء: طبّق نسبة تانية (أو صفر) على إدارة أو قسم أو موظفين بالاسم — آخر تطبيق هو اللي بيسري على السطر.</p>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div>
+                    <label className="label" htmlFor="raisePercent">النسبة %</label>
+                    <input id="raisePercent" type="text" inputMode="decimal" className="input" dir="ltr" placeholder="5" value={percent.value} disabled={busy}
+                      onChange={(e) => setPercent((current) => ({ ...current, value: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label className="label" htmlFor="raiseBasis">النسبة من</label>
+                    <select id="raiseBasis" className="input" value={percent.basis} disabled={busy} onChange={(e) => setPercent((current) => ({ ...current, basis: e.target.value === 'TOTAL' ? 'TOTAL' : 'BASIC' }))}>
+                      <option value="BASIC">الأساسي</option>
+                      <option value="TOTAL">إجمالي الراتب (الأساسي + البدلات الثابتة)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label" htmlFor="raisePercentNote">ملاحظة (اختياري)</label>
+                    <input id="raisePercentNote" type="text" className="input" maxLength={300} value={percent.note} disabled={busy} onChange={(e) => setPercent((current) => ({ ...current, note: e.target.value }))} />
+                  </div>
+                </div>
+                <OrgAudienceField value={percent.audience} disabled={busy} onChange={(audience, complete) => setPercent((current) => ({ ...current, audience, complete }))} />
+                <p className="text-xs text-gray-500">الزيادة بتتضاف على الأساسي في الحالتين. الراتب مابيتغيّرش غير بعد اعتماد الدورة وتطبيقها.</p>
+                <button type="button" className="btn-primary disabled:opacity-50" disabled={busy || !percent.value.trim() || !percent.complete} onClick={applyPercent}>طبّق النسبة</button>
+              </div>
+            )}
 
             <div className="card space-y-3" data-raise-lines>
               <h2 className="text-lg font-semibold text-gray-800">السطور ({detail.lines.length})</h2>

@@ -45,7 +45,7 @@ test('CCU-04: مصدر الكود — مفيش راتب بيتكتب، والك�
   assert.equal((service.match(/applyEmployeeSalaryChange\(/g) ?? []).length, 1)
   const applyLine = service.slice(service.indexOf('  private async applyLine('), service.indexOf('  // ===== ورقة المدير ====='))
   assert.ok(applyLine.includes('await applyEmployeeSalaryChange(em, {'), 'الكتابة الوحيدة في applyLine')
-  assert.equal((service.match(/const cycle = await this\.lockCycle\(em, id\)/g) ?? []).length, 7, 'الخطوة والميزانية والتعديل والاقتراح والاعتماد والرجوع وقفل التطبيق تحت قفل صف الدورة')
+  assert.equal((service.match(/const cycle = await this\.lockCycle\(em, id\)/g) ?? []).length, 8, 'الخطوة والميزانية والتعديل والاقتراح والاعتماد والرجوع وقفل التطبيق (والزيادة بالنسبة B-ADD.11) تحت قفل صف الدورة')
   assert.match(service, /findOne\(\{ where: \{ id \}, lock: \{ mode: 'pessimistic_write' \} \}\)/)
   assert.match(service, /FROM \[employees\] e WITH \(UPDLOCK, ROWLOCK\) WHERE e\.\[id\] = @0/)
   for (const method of ['adjustLine', 'propose']) {
@@ -59,7 +59,7 @@ test('CCU-04: مصدر الكود — مفيش راتب بيتكتب، والك�
   assert.match(service, /currentBasic: salaries \? basic : null, newBasic: salaries \? round2\(basic \+ final\) : null/)
   const controller = read('compensation/compensation.controller.ts')
   assert.deepEqual([(controller.match(/@Perm\('compensation\.manage'\)/g) ?? []).length, (controller.match(/@Perm\('payroll\.view'\)/g) ?? []).length,
-    (controller.match(/@(Get|Post|Put|Patch|Delete)\(/g) ?? []).length, /@Delete\(/.test(controller)], [6, 1, 12, false])
+    (controller.match(/@(Get|Post|Put|Patch|Delete)\(/g) ?? []).length, /@Delete\(/.test(controller)], [7, 1, 13, false])
   assert.equal((controller.match(/@Perm\('payroll\.approve'\)/g) ?? []).length, 3, 'الاعتماد والرجوع والتطبيق بصلاحية اعتماد المسير')
   assert.match(controller, /@RequireModule\('compensation'\)\n@UseGuards\(JwtAuthGuard, RolesGuard\)/)
   assert.match(read('modules-registry/registry.ts'), /routes: \['\/compensation', '\/compensation\/\*', '\/my\/raises'\]/)
@@ -81,4 +81,24 @@ test('CCU-05: الاعتماد من حد ماقترحش، والأساسي ال�
   assert.deepEqual([...order].sort((a, b) => applyLine.indexOf(a) - applyLine.indexOf(b)), order, 'الدورة ثم السطر ثم الموظف ثم الحكم ثم الكتابة ثم علامة التطبيق')
   assert.match(service, /if \(!userHasPerm\(user, 'employees\.edit'\)\) throw new ForbiddenException\(APPLY_NEEDS_EDIT\)/)
   assert.equal((service.match(/assertCompanyWideWrite\(user\)/g) ?? []).length, 5, 'الإنشاء والتحريك والاعتماد والرجوع والتطبيق لحساب بكل الفروع')
+})
+
+test('CCU-07: B-ADD.11 الزيادة بالنسبة — النسبة من 0 لحد 100 بمنزلتين، المبلغ بالقرش، والوعاء أساسي أو إجمالي؛ والتطبيق بعرض الرواتب وتحت القفل والعضوية بتتعاد بعده', () => {
+  assert.deepEqual([0, 5, 2.5, 100, 12.34].map(rules.raisePercent), [0, 5, 2.5, 100, 12.34])
+  assert.deepEqual([-1, 100.01, 5.123, '5', null, undefined, NaN, Infinity].map(rules.raisePercent), [null, null, null, null, null, null, null, null])
+  assert.deepEqual([rules.percentAmount(6000, 5), rules.percentAmount(3333.33, 5), rules.percentAmount('8000.00', 2.5), rules.percentAmount(1000, 0), rules.percentAmount(0.1, 5), rules.percentAmount(4000.3, 12.34)],
+    [300, 166.67, 200, 0, 0.01, 493.64])
+  assert.deepEqual([undefined, null, 'BASIC', 'TOTAL', 'GROSS', 5].map(rules.raisePercentBasis), ['BASIC', 'BASIC', 'BASIC', 'TOTAL', null, null])
+  assert.deepEqual([rules.percentNote(5, 'BASIC', null), rules.percentNote(2.5, 'TOTAL', 'استثناء')], ['نسبة 5% من الأساسي', 'نسبة 2.5% من إجمالي الراتب (الأساسي + البدلات الثابتة) — استثناء'])
+  const service = read('compensation/compensation-cycles.service.ts')
+  const body = service.slice(service.indexOf('  async applyPercent('), service.indexOf('  // ===== (ج) الاعتماد والتطبيق'))
+  const inOrder = (...parts) => parts.every((part, index) => body.includes(part) && (index === 0 || body.indexOf(parts[index - 1]) < body.indexOf(part)))
+  assert.ok(inOrder("if (!userHasPerm(user, 'payroll.view')) throw new ForbiddenException(PERCENT_NEEDS_SALARIES)", 'const cycle = await this.lockCycle(em, id)', 'if (!ADJUST_STATUSES.includes(cycle.status))',
+    'await assertAudienceTargets(em, audience, PERCENT_AUDIENCE)', 'WITH (UPDLOCK, ROWLOCK)', 'const members = (await audienceMembersNow(em, audience, scope))', 'await recordCycleWriter(em, cycle.id, user.sub)',
+    "action: 'RAISE_PERCENT_APPLIED'"), 'الحكم بعد قفل الدورة ثم صفوف الموظفين')
+  assert.ok(!body.includes('applyEmployeeSalaryChange('), 'النسبة مابتكتبش راتب')
+  const myTeam = service.slice(service.indexOf('  async myTeam('), service.indexOf('  /** اقتراح المدير'))
+  assert.ok(myTeam.includes('amount: line && line.proposedByUserId === user.sub ? Number(line.proposedAmount) : null'), 'ورقة المدير: اقتراحه هو بس')
+  const controller = read('compensation/compensation.controller.ts')
+  assert.ok(controller.includes("@Perm('compensation.manage')\n  @Post('cycles/:id/percent')"))
 })

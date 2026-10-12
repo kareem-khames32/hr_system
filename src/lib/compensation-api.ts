@@ -70,6 +70,9 @@ export const fetchRaiseCycle = (id: number) => apiFetch<ApiRaiseCycleDetail>(`${
 export const moveRaiseCycle = (id: number, step: CycleStep) => apiFetch<ApiRaiseCycleDetail>(`${C}/cycles/${id}/steps/${step}`, json('POST', {}))
 export const setRaiseBudget = (id: number, departmentId: number, amount: number | null) => apiFetch<ApiRaiseCycleDetail>(`${C}/cycles/${id}/budgets/${departmentId}`, json('PUT', { amount }))
 export const adjustRaiseLine = (id: number, employeeId: number, amount: number, note: string) => apiFetch<ApiRaiseCycleDetail>(`${C}/cycles/${id}/lines/${employeeId}`, json('PUT', { amount, note }))
+// B-ADD.11: زيادة بالنسبة على «على مين؟» — basis: من الأساسي (الافتراضي) أو من إجمالي الراتب الثابت
+export const applyRaisePercent = (id: number, body: { percent: number; basis: 'BASIC' | 'TOTAL'; audience: unknown; note?: string }) =>
+  apiFetch<ApiRaiseCycleDetail & { percentApplied: { applied: number; noSalary: number } }>(`${C}/cycles/${id}/percent`, json('POST', body))
 export const approveRaiseCycle = (id: number) => apiFetch<ApiRaiseCycleDetail>(`${C}/cycles/${id}/approve`, json('POST', {}))
 export const unapproveRaiseCycle = (id: number) => apiFetch<ApiRaiseCycleDetail>(`${C}/cycles/${id}/unapprove`, json('POST', {}))
 export const applyRaiseCycle = (id: number) => apiFetch<ApiRaiseApplyResult>(`${C}/cycles/${id}/apply`, json('POST', {}))

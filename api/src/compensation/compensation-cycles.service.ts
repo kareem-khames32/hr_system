@@ -6,11 +6,14 @@ import type { JwtPayload } from '../auth/auth.service'
 import { assertCompanyWideWrite, branchScopeOf, inBranchScope, userHasPerm, type BranchScope } from '../auth/guards'
 import { ModulesService } from '../modules-registry/modules.service'
 import { readBranchCurrencyOf } from '../org/branch-currency-db'
+import { audienceMembersNow } from '../org/audience-preview'
+import { assertAudienceTargets, orgAudienceJson } from '../org/org-audience'
 import { applyEmployeeSalaryChange, type EmployeeSalaryValue } from '../payroll/payroll-salary-change'
 import { readSalaryHistory, readSalaryHistoryCurrent } from '../payroll/payroll-salary-history'
 import { REVIEW_BANDS, reviewBand, reviewsReady } from '../performance/review-rules'
 import { ADJUST_STATUSES, approverIssue, cycleWriterIds, recordCycleWriter, BUDGET_STATUSES, budgetUsage, CompensationBudget, CompensationCycle, CompensationProposal, compensationCyclesReady, coveringUnits, CYCLE_STATUS_LABELS,
-  CYCLE_STEPS, cycleEvidenceReference, cycleFields, cycleStepOf, PROPOSE_STATUSES, RAISE_AMOUNT_ERROR, raiseAmount, raisedBasic, raiseNote, sameBasic } from './compensation-cycles'
+  CYCLE_STEPS, cycleEvidenceReference, cycleFields, cycleStepOf, percentAmount, percentNote, PROPOSE_STATUSES, RAISE_AMOUNT_ERROR, RAISE_AMOUNT_MAX, RAISE_PERCENT_BASIS_LABELS, RAISE_PERCENT_ERROR, RAISE_PERCENT_MAX_EMPLOYEES,
+  raiseAmount, raisedBasic, raiseNote, raisePercent, raisePercentBasis, sameBasic } from './compensation-cycles'
 
 // B5.1 (ب، ج): دورة الزيادات — الدورة وميزانياتها وسطور الاقتراح، واعتمادها وتطبيقها. الراتب بيتكتب في مكان واحد بس: `apply`، ومن خدمة تاريخ
 // الراتب القايمة (`applyEmployeeSalaryChange`) بعد اعتماد من حد ماقترحش — مفيش كتابة راتب تانية في الملف ده.
@@ -28,6 +31,10 @@ const APPLY_NOT_ACTIVE = 'الموظف مش على رأس العمل — زيا�
 export const APPLY_BASIC_CHANGED = 'أساسي الموظف اتغيّر بعد آخر مراجعة لسطره — رجّع الدورة للمراجعة وراجع السطر'
 const APPLY_NEEDS_EDIT = 'تطبيق الزيادات على الرواتب محتاج «تعديل الموظفين» مع «اعتماد المسير»'
 const APPROVED_ONLY = 'الخطوة دي للدورة المعتمدة بس'
+// B-ADD.11
+const PERCENT_NEEDS_SALARIES = 'الزيادة بالنسبة محتاجة «عرض الرواتب» — المبلغ والنسبة مع بعض بيكشفوا الراتب'
+const PERCENT_AUDIENCE = 'المستهدفين بالنسبة'
+const PERCENT_NOBODY = 'مفيش موظفين على رأس العمل في الاختيار ده'
 const ACTIVE = `e.[isActive] = 1 AND e.[status] IN (N'active', N'probation', N'notice_period')`
 const round2 = (value: number) => Math.round(value * 100) / 100
 
@@ -249,6 +256,71 @@ export class CompensationCyclesService {
     return this.detail(user, id)
   }
 
+  /**
+   * B-ADD.11 (كلمة المالك 12 أكتوبر 2026): «زيادة بالنسبة» — المراجعة بتكتب نسبة و«على مين؟» (الاستهداف الموحد)، والنظام بيحسب مبلغ
+   * كل موظف من أساسيه (أو إجمالي راتبه الثابت) ويكتبه «النهائي» في سطره. النسبة العامة أول تطبيق، والاستثناء (نسبة تانية أو صفر لإدارة
+   * أو قسم أو موظفين بالاسم) تطبيق تاني بيكتب فوق سطور المختارين — آخر تطبيق هو اللي بيسري. الزيادة نفسها دايمًا على الأساسي
+   * (التطبيق على الرواتب زي ما هو). بصلاحية «عرض الرواتب» كمان، وتحت قفل الدورة ثم صفوف الموظفين، والعضوية بتتعاد بعد القفل.
+   */
+  async applyPercent(user: JwtPayload, id: number, body: { percent?: unknown; basis?: unknown; audience?: unknown; note?: unknown }) {
+    if (!userHasPerm(user, 'payroll.view')) throw new ForbiddenException(PERCENT_NEEDS_SALARIES)
+    const percent = raisePercent(body.percent), basis = raisePercentBasis(body.basis)
+    if (percent === null) throw new BadRequestException(RAISE_PERCENT_ERROR)
+    if (basis === null) throw new BadRequestException('اختار النسبة من الأساسي ولا من إجمالي الراتب')
+    const extra = raiseNote(body.note, false)
+    if (extra.error !== null) throw new BadRequestException(extra.error)
+    const audience = orgAudienceJson(body.audience, PERCENT_AUDIENCE), scope = branchScopeOf(user)
+    const result = await this.ds.transaction(async em => {
+      await this.assertReady(em)
+      const cycle = await this.lockCycle(em, id)
+      if (!ADJUST_STATUSES.includes(cycle.status)) throw new BadRequestException(`السطور مابتتعدّلش والدورة «${CYCLE_STATUS_LABELS[cycle.status]}»`)
+      await assertAudienceTargets(em, audience, PERCENT_AUDIENCE)
+      const first = (await audienceMembersNow(em, audience, scope)).map(row => row.id)
+      if (!first.length) throw new BadRequestException(PERCENT_NOBODY)
+      if (first.length > RAISE_PERCENT_MAX_EMPLOYEES) throw new BadRequestException(`الاختيار أكبر من ${RAISE_PERCENT_MAX_EMPLOYEES} موظف — طبّق النسبة على فروع أو إدارات`)
+      // قفل صفوف المختارين بترتيب ثابت، وبعده العضوية والراتب بيتقروا من جديد (الحكم بعد القفل)
+      const sorted = [...first].sort((a, b) => a - b)
+      for (let index = 0; index < sorted.length; index += 1000) {
+        await em.query(`SELECT e.[id] FROM [employees] e WITH (UPDLOCK, ROWLOCK) WHERE e.[id] IN (SELECT CAST([value] AS int) FROM OPENJSON(@0)) ORDER BY e.[id]`, [JSON.stringify(sorted.slice(index, index + 1000))])
+      }
+      const locked = new Set(sorted)
+      const members = (await audienceMembersNow(em, audience, scope)).map(row => row.id).filter(memberId => locked.has(memberId))
+      const pay = new Map<number, { branchId: number | null; basic: number; total: number }>()
+      for (let index = 0; index < members.length; index += 1000) {
+        const rows: Array<Record<string, unknown>> = await em.query(
+          `SELECT e.[id], e.[branchId], e.[basicSalary], e.[housingAllowance], e.[transportAllowance], e.[phoneAllowance], e.[workNatureAllowance], e.[otherAllowance], e.[workPressureAllowance]
+           FROM [employees] e WHERE ${ACTIVE} AND e.[id] IN (SELECT CAST([value] AS int) FROM OPENJSON(@0))`, [JSON.stringify(members.slice(index, index + 1000))])
+        for (const row of rows) {
+          const basic = Number(row.basicSalary ?? 0)
+          const allowances = ['housingAllowance', 'transportAllowance', 'phoneAllowance', 'workNatureAllowance', 'otherAllowance', 'workPressureAllowance'].reduce((sum, key) => sum + Number(row[key] ?? 0), 0)
+          pay.set(Number(row.id), { branchId: row.branchId == null ? null : Number(row.branchId), basic, total: basic + allowances })
+        }
+      }
+      const repo = em.getRepository(CompensationProposal), now = new Date(), note = percentNote(percent, basis, extra.note).slice(0, 500)
+      const lineOf = new Map((await repo.find({ where: { cycleId: cycle.id } })).map(row => [row.employeeId, row]))
+      let applied = 0, noSalary = 0, total = 0
+      for (const employeeId of members) {
+        const person = pay.get(employeeId)
+        if (!person || !inBranchScope(scope, person.branchId)) continue
+        const base = basis === 'TOTAL' ? person.total : person.basic
+        if (!(person.basic > 0) || !(base > 0)) { noSalary += 1; continue }
+        const amount = percentAmount(base, percent), basic = round2(person.basic), line = lineOf.get(employeeId)
+        if (amount > RAISE_AMOUNT_MAX) throw new BadRequestException(RAISE_AMOUNT_ERROR)
+        // سطر جديد: «المقترح» = نفس المبلغ بس متعلّم إنه من المراجعة (adjustedBy) — ورقة المدير مابتعرضش مبلغه
+        if (!line) await repo.insert({ cycleId: cycle.id, employeeId, currentBasic: basic, proposedAmount: amount, proposedByUserId: user.sub, proposedAt: now, note: null, finalAmount: amount,
+          adjustedByUserId: user.sub, adjustedAt: now, adjustNote: note, appliedAt: null, appliedByUserId: null, appliedRevision: null })
+        else await repo.update({ id: line.id }, { finalAmount: amount, currentBasic: basic, adjustedByUserId: user.sub, adjustedAt: now, adjustNote: note })
+        applied += 1; total += amount
+      }
+      if (!applied) throw new BadRequestException(noSalary ? 'المختارين مالهمش أساسي مسجّل — مفيش مبلغ يتحسب' : PERCENT_NOBODY)
+      await recordCycleWriter(em, cycle.id, user.sub)
+      await recordAudit(em, { category: 'PAYROLL', action: 'RAISE_PERCENT_APPLIED', entityType: 'compensation_cycle', entityId: String(cycle.id), actorUserId: user.sub,
+        summary: `زيادة بنسبة ${percent}% من ${RAISE_PERCENT_BASIS_LABELS[basis]} لـ${applied} موظف في دورة ${cycle.name}`, after: { percent, basis, audience, applied, noSalary, total: round2(total), note: extra.note } })
+      return { applied, noSalary }
+    })
+    return { ...(await this.detail(user, id)), percentApplied: result }
+  }
+
   // ===== (ج) الاعتماد والتطبيق =====
 
   /** آخر نتيجة أداء معتمدة لكل موظف، أو null لو موديول الأداء مقفول أو جداوله ناقصة أو الحساب مامعهوش صلاحيته */
@@ -380,7 +452,10 @@ export class CompensationCyclesService {
       const rows = team.map(person => {
         const line = lineOf.get(Number(person.id))
         return { employeeId: Number(person.id), fullName: person.fullName, employeeCode: person.employeeCode ?? null, currency: currencyOf(person.branchId == null ? null : Number(person.branchId)),
-          amount: line ? Number(line.proposedAmount) : null, note: line?.note ?? null, adjusted: line ? line.adjustedByUserId != null : false }
+          // B-ADD.11: ورقة المدير «باقتراحي»: مبلغ وملاحظة السطر بيظهروا للي اقترحه هو بس. سطر فتحته المراجعة (زيادة بالنسبة أو إضافة)
+          // مبلغه مايظهرش للمدير — المبلغ مع نسبة معلنة بيكشفوا الراتب
+          amount: line && line.proposedByUserId === user.sub ? Number(line.proposedAmount) : null,
+          note: line && line.proposedByUserId === user.sub ? line.note ?? null : null, adjusted: line ? line.adjustedByUserId != null : false }
       })
       out.push({ id: cycle.id, name: cycle.name, effectivePayrollPeriod: cycle.effectivePayrollPeriod, team: rows,
         totals: [...new Set(rows.map(row => row.currency))].map(currency => ({ currency, amount: round2(rows.filter(row => row.currency === currency).reduce((sum, row) => sum + (row.amount ?? 0), 0)) })) })

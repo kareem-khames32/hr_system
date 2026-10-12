@@ -16,6 +16,12 @@ class AmountDto {
   @IsOptional() amount?: unknown
   @IsOptional() note?: unknown
 }
+class PercentDto {
+  @IsOptional() percent?: unknown
+  @IsOptional() basis?: unknown
+  @IsOptional() audience?: unknown
+  @IsOptional() note?: unknown
+}
 
 // B5.1: «تخطيط الزيادات وسلّم الرواتب» — موديول compensation (مقفول افتراضيًا)
 @RequireModule('compensation')
@@ -66,6 +72,13 @@ export class CompensationController {
   @Put('cycles/:id/lines/:employeeId')
   adjustLine(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Param('employeeId', ParseIntPipe) employeeId: number, @Body() dto: AmountDto) {
     return this.cycles.adjustLine(user, id, employeeId, dto)
+  }
+
+  // B-ADD.11: زيادة بالنسبة على جمهور بالاستهداف الموحد — «عرض الرواتب» بيتفحص في الخدمة
+  @Perm('compensation.manage')
+  @Post('cycles/:id/percent')
+  applyPercent(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: PercentDto) {
+    return this.cycles.applyPercent(user, id, dto)
   }
 
   // (ج) الاعتماد والرجوع والتطبيق: بصلاحية اعتماد المسير ولحساب بكل الفروع؛ «من حد ماقترحش» و«تعديل الموظفين» للتطبيق في الخدمة

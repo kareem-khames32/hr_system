@@ -181,6 +181,26 @@ export function cycleFields(body: unknown): { fields: CycleFields | null; error:
   return { fields: { name, effectivePayrollPeriod: period, note: note.note }, error: null }
 }
 
+// ===== B-ADD.11: الزيادة بالنسبة =====
+
+export type RaisePercentBasis = 'BASIC' | 'TOTAL'
+export const RAISE_PERCENT_BASIS_LABELS: Record<RaisePercentBasis, string> = { BASIC: 'الأساسي', TOTAL: 'إجمالي الراتب (الأساسي + البدلات الثابتة)' }
+export const RAISE_PERCENT_ERROR = 'النسبة رقم من صفر لحد 100 وبمنزلتين عشريتين بالكتير (الصفر = من غير زيادة)'
+export const RAISE_PERCENT_MAX_EMPLOYEES = 5000
+/** نسبة زيادة: من 0 لحد 100 بمنزلتين بالكتير — من غير تقريب صامت */
+export function raisePercent(raw: unknown): number | null {
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0 || raw > 100) return null
+  return Math.abs(raw * 100 - Math.round(raw * 100)) < 1e-7 ? Math.round(raw * 100) / 100 : null
+}
+export const raisePercentBasis = (raw: unknown): RaisePercentBasis | null => (raw === undefined || raw === null || raw === 'BASIC' ? 'BASIC' : raw === 'TOTAL' ? 'TOTAL' : null)
+/** مبلغ الزيادة = الوعاء × النسبة، بالقروش ومتقرّب لأقرب قرش (النص على النص لفوق) */
+export function percentAmount(base: number | string, percent: number): number {
+  const baseCents = Math.round(Number(base) * 100), hundredths = Math.round(percent * 100)
+  return Math.round((baseCents * hundredths) / 10000) / 100
+}
+/** سبب السطر المكتوب من «زيادة بالنسبة» — بيظهر للمراجعة بس (مش في ورقة المدير) */
+export const percentNote = (percent: number, basis: RaisePercentBasis, extra: string | null) => `نسبة ${percent}% من ${RAISE_PERCENT_BASIS_LABELS[basis]}${extra ? ` — ${extra}` : ''}`
+
 const money = (value: number) => Math.round(value * 100) / 100
 /** المستخدم من الميزانية والباقي، و«عدّت» تحذير بس */
 export function budgetUsage(budget: number, used: number): { budget: number; used: number; remaining: number; over: boolean } {
