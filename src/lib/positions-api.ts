@@ -107,6 +107,15 @@ export interface ApiPositionForm {
 
 const json = (method: string, body?: unknown): RequestInit => ({ method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
 
+// B-ADD.12: اقتراحات التوظيف — شواغر معتمدة مالهاش وظيفة مفتوحة في التوظيف
+export interface ApiHiringSuggestion {
+  positionId: number; code: string; title: string; branchId: number; branchName: string | null; departmentId: number | null; departmentName: string | null; teamName: string | null
+  headcount: number; occupied: number; vacant: number; openJobs: number; uncovered: number
+}
+export interface ApiHiringSuggestions { available: boolean; recruitment: boolean; canOpen: boolean; suggestions: ApiHiringSuggestion[] }
+export const fetchHiringSuggestions = () => apiFetch<ApiHiringSuggestions>('/positions/hiring-suggestions')
+export const openPositionJob = (id: number, openings?: number) =>
+  apiFetch<{ jobId: number; jobCode: string; openings: number }>(`/positions/${id}/open-job`, json('POST', openings === undefined ? {} : { openings }))
 export const fetchPositions = () => apiFetch<ApiPositionsList>('/positions')
 export const fetchPosition = (id: number) => apiFetch<ApiPositionDetail>(`/positions/${id}`)
 export const fetchPositionForm = () => apiFetch<ApiPositionForm>('/positions/form')

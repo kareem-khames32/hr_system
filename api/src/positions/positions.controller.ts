@@ -42,6 +42,10 @@ class PositionHolderDto {
   @IsInt() @Min(1) employeeId: number
 }
 
+class OpenJobDto {
+  @IsOptional() openings?: unknown
+}
+
 @RequireModule('positions')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('positions')
@@ -52,6 +56,13 @@ export class PositionsController {
   @Perm('positions.view')
   list(@CurrentUser() user: JwtPayload) {
     return this.positions.list(user)
+  }
+
+  // B-ADD.12: اقتراحات التوظيف — شواغر معتمدة مالهاش وظيفة مفتوحة في التوظيف
+  @Get('hiring-suggestions')
+  @Perm('positions.view')
+  hiringSuggestions(@CurrentUser() user: JwtPayload) {
+    return this.positions.hiringSuggestions(user)
   }
 
   // قايمة الاختيار في نموذج التعيين: وظائف الفرع النشطة بأرقامها
@@ -96,6 +107,13 @@ export class PositionsController {
   @Perm('positions.manage')
   update(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: PositionPatchDto) {
     return this.positions.update(user, id, dto)
+  }
+
+  // B-ADD.12: فتح وظيفة شاغرة في التوظيف من شاغر الوظيفة (صلاحية إدارة التوظيف بتتفحص في الخدمة)
+  @Post(':id/open-job')
+  @Perm('positions.view')
+  openJob(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: OpenJobDto) {
+    return this.positions.openJob(user, id, dto.openings)
   }
 
   @Post(':id/holders')

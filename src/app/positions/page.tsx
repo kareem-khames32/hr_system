@@ -8,7 +8,8 @@ import { MainLayout } from '@/components/layout'
 import PositionFormModal from '@/components/positions/PositionFormModal'
 import PositionGenerateModal from '@/components/positions/PositionGenerateModal'
 import PositionHoldersModal from '@/components/positions/PositionHoldersModal'
-import { fetchPositions, type ApiPosition, type ApiPositionsList } from '@/lib/positions-api'
+import Link from 'next/link'
+import { fetchHiringSuggestions, fetchPositions, openPositionJob, type ApiHiringSuggestions, type ApiPosition, type ApiPositionsList } from '@/lib/positions-api'
 
 const STATUS_BADGE: Record<ApiPosition['status'], string> = { ACTIVE: 'bg-green-50 text-green-700', FROZEN: 'bg-amber-50 text-amber-800', CANCELLED: 'bg-gray-100 text-gray-600' }
 
@@ -18,11 +19,24 @@ export default function PositionsPage() {
   const [form, setForm] = useState<{ position: ApiPosition | null } | null>(null)
   const [holdersOf, setHoldersOf] = useState<number | null>(null)
   const [generating, setGenerating] = useState(false)
+  // B-ADD.12: اقتراحات التوظيف من الشاغر
+  const [hiring, setHiring] = useState<ApiHiringSuggestions | null>(null)
+  const [opening, setOpening] = useState(0)
+  const [info, setInfo] = useState('')
 
   const load = useCallback(async () => {
     setError('')
     try { setData(await fetchPositions()) } catch (err) { setError(err instanceof Error ? err.message : 'تعذر تحميل الوظائف المعتمدة') }
+    try { setHiring(await fetchHiringSuggestions()) } catch { setHiring(null) }
   }, [])
+  const openJob = async (positionId: number) => {
+    setOpening(positionId); setError(''); setInfo('')
+    try {
+      const job = await openPositionJob(positionId)
+      setInfo(`اتفتحت ${job.jobCode} مسودة بعدد ${job.openings} — كمّل وصفها وانشرها من «الوظائف الشاغرة».`)
+      await load()
+    } catch (err) { setError(err instanceof Error ? err.message : 'تعذر فتح الوظيفة') } finally { setOpening(0) }
+  }
   useEffect(() => { void load() }, [load])
 
   return (
@@ -45,6 +59,45 @@ export default function PositionsPage() {
             <p className="text-sm text-gray-500" data-positions-enforce>
               {data.enforce ? 'التعيين مقفول من غير وظيفة معتمدة فيها شاغر.' : 'الوظيفة عند التعيين اختيارية، والتعيين على وظيفة مليانة بيظهر «زيادة».'}
             </p>
+            {info && <div role="status" className="card text-sm text-green-800 bg-green-50 border border-green-200">{info} <Link href="/recruitment/jobs" className="underline">افتحها</Link></div>}
+            {hiring?.available && hiring.suggestions.length > 0 && (
+              <div className="card space-y-3 border border-amber-200" data-hiring-suggestions>
+                <h2 className="font-semibold text-gray-800">اقتراحات التوظيف ({hiring.suggestions.reduce((sum, row) => sum + row.uncovered, 0)} شاغر من غير وظيفة مفتوحة)</h2>
+                <p className="text-sm text-gray-500">العدد الفعلي أقل من المعتمد في الوظايف دي، ومفيش وظيفة مفتوحة في التوظيف تغطي الشاغر.{!hiring.recruitment && ' موديول التوظيف مقفول — فعّله عشان تفتح وظيفة من هنا.'}</p>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-200 text-gray-500">
+                        <th className="py-2 text-start font-medium">الوظيفة</th>
+                        <th className="py-2 text-start font-medium">الفرع / القسم</th>
+                        <th className="py-2 text-center font-medium">معتمد</th>
+                        <th className="py-2 text-center font-medium">مشغول</th>
+                        <th className="py-2 text-center font-medium">شاغر</th>
+                        <th className="py-2 text-center font-medium">مفتوح في التوظيف</th>
+                        <th className="py-2 text-center font-medium">ناقص</th>
+                        <th className="py-2" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {hiring.suggestions.map(row => (
+                        <tr key={row.positionId} className="border-b border-gray-100" data-hiring-row={row.positionId}>
+                          <td className="py-2 text-gray-800">{row.title} <span className="text-xs text-gray-400 font-mono" dir="ltr">{row.code}</span></td>
+                          <td className="py-2 text-gray-600">{row.branchName ?? '—'}{row.departmentName ? ` / ${row.departmentName}` : ''}{row.teamName ? ` / ${row.teamName}` : ''}</td>
+                          <td className="py-2 text-center tabular-nums">{row.headcount}</td>
+                          <td className="py-2 text-center tabular-nums">{row.occupied}</td>
+                          <td className="py-2 text-center tabular-nums">{row.vacant}</td>
+                          <td className="py-2 text-center tabular-nums">{row.openJobs}</td>
+                          <td className="py-2 text-center tabular-nums font-semibold text-amber-700">{row.uncovered}</td>
+                          <td className="py-2 text-end">
+                            {hiring.canOpen && <button type="button" className="btn-secondary text-xs disabled:opacity-50" disabled={opening !== 0} onClick={() => openJob(row.positionId)} data-hiring-open>{opening === row.positionId ? 'بتتفتح…' : `افتح وظيفة شاغرة (${row.uncovered})`}</button>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
             <div className="card space-y-3" data-positions-summary>
               <h2 className="font-semibold text-gray-800">معتمد / مشغول / شاغر لكل قسم</h2>
               {data.summary.length === 0 ? <p className="text-sm text-gray-500">مفيش وظائف ولا موظفين في نطاقك.</p> : (

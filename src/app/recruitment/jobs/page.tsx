@@ -7,7 +7,9 @@ import { MainLayout } from '@/components/layout'
 import EmptyState from '@/components/EmptyState'
 import JobSharePanel from '@/components/recruitment/JobSharePanel'
 import PublishingChannels from '@/components/recruitment/PublishingChannels'
+import Link from 'next/link'
 import { formatDate } from '@/lib/dates'
+import { fetchHiringSuggestions } from '@/lib/positions-api'
 import { formatMoney } from '@/lib/money'
 import {
   RECRUITMENT_JOB_NEXT, createRecruitmentJob, fetchRecruitmentJobForm, fetchRecruitmentJobs, setRecruitmentJobStatus, updateRecruitmentJob,
@@ -55,6 +57,11 @@ export default function RecruitmentJobsPage() {
       .catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل الوظائف'))
   }, [])
   useEffect(load, [load])
+  // B-ADD.12: شواغر معتمدة مالهاش وظيفة مفتوحة — لو موديول الوظائف المعتمدة مقفول أو الحساب مالوش صلاحيته، البند مابيظهرش
+  const [uncovered, setUncovered] = useState(0)
+  useEffect(() => {
+    fetchHiringSuggestions().then((data) => setUncovered(data.available ? data.suggestions.reduce((sum, row) => sum + row.uncovered, 0) : 0)).catch(() => setUncovered(0))
+  }, [])
   useEffect(() => {
     fetchRecruitmentJobForm().then(setForm).catch(() => setForm(null))
   }, [])
@@ -99,6 +106,11 @@ export default function RecruitmentJobsPage() {
             </div>
           )}
         </div>
+        {uncovered > 0 && (
+          <div className="bg-amber-50 text-amber-900 border border-amber-200 rounded-xl p-4 text-sm" data-hiring-banner>
+            فيه {uncovered} شاغر في الوظائف المعتمدة من غير وظيفة مفتوحة هنا. <Link href="/positions" className="underline font-medium">شوف اقتراحات التوظيف</Link>
+          </div>
+        )}
         {error && (
           <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-4">
             {error}

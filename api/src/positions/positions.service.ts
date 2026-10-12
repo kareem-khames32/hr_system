@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { DataSource, EntityManager, In } from 'typeorm'
 import { CostCenter, Grade, JobTitle } from '../assets/assets.entities'
 import { recordAudit } from '../audit/audit'
@@ -9,6 +9,8 @@ import { ModulesService } from '../modules-registry/modules.service'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
+import { RecruitmentJob } from '../recruitment/recruitment-job.entity'
+import { RECRUITMENT_OPENINGS_MAX, jobCode, recruitmentJobsReady } from '../recruitment/recruitment-rules'
 import { ApprovedPosition, PositionHolder, type PositionStatus } from './position.entities'
 import {
   cleanBudget, cleanHeadcount, cleanNewPosition, generationKey, inPositionUnit, isPositionStatus, lockPositionCreation, normalTitle, occupiesSeat, positionCode, positionsReady, seatCounts, seatVerdict,
@@ -30,6 +32,13 @@ const FREEING_SQL = SEAT_FREEING_STATUSES.map(status => `N'${status}'`).join(', 
 const SEATED_SQL = `([e].[status] IS NULL OR [e].[status] NOT IN (${FREEING_SQL})) AND [e].[branchId] = [p].[branchId]
   AND ([p].[departmentId] IS NULL OR [e].[departmentId] = [p].[departmentId]) AND ([p].[teamId] IS NULL OR [e].[teamId] = [p].[teamId])`
 const GENERATE_LIMIT = 500
+// B-ADD.12: اقتراح التوظيف من الشاغر
+const HIRING_NO_RECRUITMENT = 'موديول التوظيف مقفول أو جداوله ناقصة — فعّله الأول'
+const HIRING_NEEDS_RECRUITER = 'فتح وظيفة شاغرة محتاج صلاحية «إدارة التوظيف»'
+const HIRING_COVERED = 'شواغر الوظيفة دي كلها ليها وظايف مفتوحة في التوظيف — مفيش حاجة تتفتح'
+const HIRING_NOT_ACTIVE = 'الوظيفة المعتمدة مش نشطة — مفيش شاغر يتفتح له توظيف'
+/** مفتاح مطابقة الوظيفة المعتمدة بوظايف التوظيف المفتوحة: نفس الفرع والقسم والمسمى (التوظيف مالوش فريق) */
+const hiringKey = (branchId: number, departmentId: number | null, title: string) => `${branchId}:${departmentId ?? 0}:${normalTitle(title)}`
 /**
  * قسم مسجّل على وظيفة أو على موظفين وهو مش تبع فرعهم (قسم اتنقل لفرع تاني وهم فضلوا): مابيتسمّاش — اسمه بتاع فرع تاني — وبيتكتب مكانه
  * النص ده، ومفيش وظيفة بتتولّد عليه (الوظيفة قسمها لازم تبع فرعها، زي الإنشاء من الشاشة).
@@ -244,6 +253,88 @@ export class PositionsService {
     const rank = (line: Line) => line.departmentId == null && line.departmentName === FOREIGN_UNIT ? Number.MAX_SAFE_INTEGER : line.departmentId ?? 0
     const summary = [...lines.values()].sort((a, b) => a.branchId - b.branchId || rank(a) - rank(b))
     return { available: true, canManage, enforce: await this.modules.isFeatureEnabled(POSITIONS_ENFORCE_FEATURE), positions, summary }
+  }
+
+  // ===== B-ADD.12: اقتراح التوظيف من الشاغر =====
+
+  /** فتحات وظايف التوظيف اللي لسه ماتقفلتش (مسودة/منشورة/موقوفة) لكل (فرع، قسم، مسمى) في الفروع دي. hold: بيمسك الصفوف لآخر المعاملة */
+  private async openJobOpenings(em: EntityManager, branchIds: number[], hold = false): Promise<Map<string, number>> {
+    const out = new Map<string, number>()
+    for (const part of idChunks([...new Set(branchIds)])) {
+      const rows: Array<{ branchId: number; departmentId: number | null; title: string; openings: number }> = await em.query(
+        `SELECT [branchId], [departmentId], [title], [openings] FROM [recruitment_jobs]${hold ? ' WITH (UPDLOCK, HOLDLOCK)' : ''} WHERE [status] <> N'CLOSED' AND [branchId] IN (${part.map(Number).join(', ')})`)
+      for (const row of rows) {
+        const key = hiringKey(Number(row.branchId), row.departmentId == null ? null : Number(row.departmentId), row.title)
+        out.set(key, (out.get(key) ?? 0) + Number(row.openings))
+      }
+    }
+    return out
+  }
+
+  /**
+   * «اقتراحات التوظيف»: كل وظيفة معتمدة نشطة فيها شاغر **مالوش وظيفة مفتوحة في التوظيف** — الشاغر ناقص فتحات وظايف التوظيف اللي لسه
+   * ماتقفلتش لنفس الفرع والقسم والمسمى (الفتحات بتتوزّع على وظايف نفس المفتاح بترتيب رقمها). بنطاق فروع الحساب، ووحدة برّه فرعها مابتتقترحش.
+   * لما موظف يخرج أو يتنقل الشاغر بيزيد لوحده (المشغول محسوب)، فالاقتراح بيظهر من غير أي حدث.
+   */
+  async hiringSuggestions(user: JwtPayload) {
+    const em = this.ds.manager
+    if (!(await positionsReady(em))) return { available: false, recruitment: false, canOpen: false, suggestions: [] }
+    const recruitment = (await this.modules.isEnabled('recruitment')) && (await recruitmentJobsReady(em))
+    const rows = await this.scoped(em, branchScopeOf(user)).andWhere('p.status = :status', { status: 'ACTIVE' }).orderBy('p.id', 'ASC').getMany()
+    const views = (await this.views(em, rows)).filter(row => !row.unitHidden && row.vacant > 0)
+    const open = recruitment && views.length ? await this.openJobOpenings(em, views.map(row => row.branchId)) : new Map<string, number>()
+    const suggestions = views.map(row => {
+      const key = hiringKey(row.branchId, row.departmentId, row.title), left = open.get(key) ?? 0, covered = Math.min(row.vacant, left)
+      open.set(key, left - covered)
+      return { positionId: row.id, code: row.code, title: row.title, branchId: row.branchId, branchName: row.branchName, departmentId: row.departmentId, departmentName: row.departmentName,
+        teamName: row.teamName, headcount: row.headcount, occupied: row.occupied, vacant: row.vacant, openJobs: covered, uncovered: row.vacant - covered }
+    }).filter(row => row.uncovered > 0)
+    return { available: true, recruitment, canOpen: recruitment && userHasPerm(user, 'candidates.manage'), suggestions }
+  }
+
+  /**
+   * فتح وظيفة شاغرة «مسودة» في التوظيف من شاغر وظيفة معتمدة — من غير طلب احتياج (العدد معتمد أصلًا). حالة موديول التوظيف بتتقري قبل
+   * المعاملة؛ وجواها: صف الوظيفة مقفول، وصفوف وظايف التوظيف المفتوحة لفرعها ممسوكة، والشاغر اللي من غير وظيفة مفتوحة بيتحسب دلوقتي —
+   * فطلبين مع بعض مايفتحوش أكتر من الشاغر.
+   */
+  async openJob(user: JwtPayload, id: number, rawOpenings: unknown) {
+    if (!userHasPerm(user, 'candidates.manage')) throw new ForbiddenException(HIRING_NEEDS_RECRUITER)
+    if (!(await this.modules.isEnabled('recruitment'))) throw new BadRequestException(HIRING_NO_RECRUITMENT)
+    return this.ds.transaction(async em => {
+      if (!(await recruitmentJobsReady(em))) throw new BadRequestException(HIRING_NO_RECRUITMENT)
+      const position = await this.loadScoped(em, user, id, true)
+      if (position.status !== 'ACTIVE') throw new BadRequestException(HIRING_NOT_ACTIVE)
+      const [view] = await this.views(em, [position])
+      if (view.unitHidden) throw new BadRequestException(POSITION_UNIT_MOVED)
+      const title = await em.getRepository(JobTitle).findOne({ where: { id: position.jobTitleId } })
+      if (!title || title.isActive !== true) throw new BadRequestException('مسمى الوظيفة المعتمدة مش نشط في كتالوج المسميات — فعّله الأول')
+      // وظايف نفس المفتاح اللي قبلها في الرقم بتاخد نصيبها من الفتحات المفتوحة الأول (نفس توزيع الاقتراحات)
+      const open = await this.openJobOpenings(em, [position.branchId], true)
+      const key = hiringKey(position.branchId, position.departmentId, title.title)
+      const siblings = (await this.views(em, await em.getRepository(ApprovedPosition).find({ where: { branchId: position.branchId, jobTitleId: position.jobTitleId, status: 'ACTIVE' }, order: { id: 'ASC' } })))
+        .filter(row => !row.unitHidden && hiringKey(row.branchId, row.departmentId, row.title) === key)
+      let left = open.get(key) ?? 0, uncovered = 0
+      for (const row of siblings) {
+        const covered = Math.min(row.vacant, left)
+        left -= covered
+        if (row.id === position.id) uncovered = row.vacant - covered
+      }
+      if (uncovered <= 0) throw new ConflictException(HIRING_COVERED)
+      const openings = rawOpenings === undefined || rawOpenings === null ? Math.min(uncovered, RECRUITMENT_OPENINGS_MAX) : rawOpenings
+      if (typeof openings !== 'number' || !Number.isSafeInteger(openings) || openings < 1 || openings > Math.min(uncovered, RECRUITMENT_OPENINGS_MAX)) {
+        throw new BadRequestException(`العدد من 1 لحد ${Math.min(uncovered, RECRUITMENT_OPENINGS_MAX)} (الشاغر اللي مالوش وظيفة مفتوحة)`)
+      }
+      const jobs = em.getRepository(RecruitmentJob)
+      const job = await jobs.save(jobs.create({
+        title: title.title, branchId: position.branchId, departmentId: position.departmentId, openings,
+        reason: `شاغر في الوظيفة المعتمدة ${positionCode(position.id)} (معتمد ${view.headcount}، مشغول ${view.occupied})`, salaryFrom: null, salaryTo: null, startDate: null,
+        description: null, requirements: null, status: 'DRAFT', internal: true, external: false, requestId: null, createdByUserId: user.sub, publishedAt: null, closedAt: null, createdAt: new Date(),
+      }))
+      await recordAudit(em, { category: 'SETTINGS', action: 'RECRUITMENT_JOB_CREATED', entityType: 'recruitment_job', entityId: job.id, actorUserId: user.sub, branchId: job.branchId,
+        summary: `وظيفة شاغرة جديدة ${jobCode(job.id)} (${job.title}) بعدد ${job.openings} من شاغر الوظيفة المعتمدة ${positionCode(position.id)}`,
+        after: { title: job.title, branchId: job.branchId, departmentId: job.departmentId, openings: job.openings, positionId: position.id } })
+      return { jobId: job.id, jobCode: jobCode(job.id), openings: job.openings }
+    })
   }
 
   /** وظائف فرع للاختيار في نموذج التعيين: النشطة بس واللي وحدتها تبع الفرع دلوقتي، بأرقامها. فرع برّه النطاق = قايمة فاضية */
