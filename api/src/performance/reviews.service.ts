@@ -23,6 +23,7 @@ import {
   REVIEW_BANDS, REVIEW_CALIBRATE_PERMISSION, REVIEW_CALIBRATION_CHANGED, REVIEW_CALIBRATION_SAME, REVIEW_CALIBRATION_STAGE, bandDistribution, cleanCalibratedScore, cleanCalibrationReason, reviewBand,
   REVIEWS_MIGRATION_MISSING, REVIEW_CYCLE_KIND_LABELS, REVIEW_CYCLE_NOT_FOUND, REVIEW_CYCLE_STATUS_LABELS, REVIEW_NOT_FOUND, REVIEW_STATUS_LABELS, REVIEW_SUBMITTED, REVIEW_TEMPLATE_NOT_FOUND,
   REVIEW_TEXT_MAX, cleanAnswers, cleanCycleAudience, cleanCycleDates, cleanCycleKind, cleanRatingMax, cleanReviewName, cleanSections, parseTemplate, reviewScore, reviewsReady,
+  REVIEW_NO_SELF_EVALUATION, REVIEW_SELF_CLOSED, selfReviewOn,
   type ReviewGoalRef, type ReviewTemplateShape,
 } from './review-rules'
 
@@ -143,9 +144,10 @@ export class ReviewsService {
   async listCycles(user: JwtPayload) {
     this.assertManager(user)
     const em = this.ds.manager
-    if (!(await reviewsReady(em))) return { available: false, message: REVIEWS_MIGRATION_MISSING, canCompany: false, cycles: [] }
+    if (!(await reviewsReady(em))) return { available: false, message: REVIEWS_MIGRATION_MISSING, canCompany: false, selfReview: false, cycles: [] }
     const rows = (await em.getRepository(ReviewCycle).find({ order: { id: 'DESC' } })).filter((row) => this.cycleInScope(user, row))
-    return { available: true, canCompany: branchScopeOf(user) === null, cycles: await this.cycleViews(em, rows) }
+    // B-ADD.18: خطوة التقييم الذاتي مفتوحة؟ (الشاشة بتخبّي ميعاده وعموده وهي مقفولة)
+    return { available: true, canCompany: branchScopeOf(user) === null, selfReview: await selfReviewOn(em), cycles: await this.cycleViews(em, rows) }
   }
 
   /** جمهور الدورة والفروع اللي بتغطيها: كل الشركة لحساب من غير قيد فروع بس؛ والفروع أو الأقسام لازم تبقى موجودة وفي نطاق الحساب (بفرع القسم الحالي) */
@@ -178,9 +180,12 @@ export class ReviewsService {
 
   async createCycle(user: JwtPayload, input: CycleInput) {
     this.assertManager(user)
-    const name = cleanReviewName(input.name), kind = cleanCycleKind(input.kind), dates = cleanCycleDates(input)
+    const name = cleanReviewName(input.name), kind = cleanCycleKind(input.kind)
     const em = this.ds.manager
     await this.assertReady(em)
+    // B-ADD.18: والتقييم الذاتي مقفول الشاشة مابتسألش عن ميعاده — بيتسجّل بميعاد تقييم المدير (العمود إلزامي، ولو الخطوة اتفتحت بعدين ده ميعادها)
+    const noSelfDue = input.selfDueDate === undefined || input.selfDueDate === null || input.selfDueDate === ''
+    const dates = cleanCycleDates(noSelfDue && !(await selfReviewOn(em)) ? { ...input, selfDueDate: input.managerDueDate } : input)
     const template = Number.isSafeInteger(input.templateId) ? await em.getRepository(ReviewTemplate).findOne({ where: { id: input.templateId as number } }) : null
     if (!template || template.isActive !== true) throw new BadRequestException('اختار نموذج تقييم متاح')
     const audience = await this.audienceOf(em, user, input.audienceMode, input.audienceIds, input.audience)
@@ -200,6 +205,8 @@ export class ReviewsService {
   /**
    * إطلاق الدورة: المشاركين = الموظفين الشغالين في جمهورها دلوقتي (بفرعهم وقسمهم الحالي)، ولكل واحد مديره المباشر من الهيكل (المقيِّم) —
    * بيتحسبوا قبل المعاملة (حل المدير خدمة تانية). جوه المعاملة: قفل صف الدورة، لسه مسودة، ونموذجها متاح؛ التكليفات، ونسخة النموذج المتجمّدة، والحالة.
+   * B-ADD.18: المقيِّم = الرئيس المباشر في الهيكل (directSuperiorOf: المدير المسجّل ← قائد الفريق ← مدير القسم ثم الإدارة اللي فوقه ← مدير الفرع)،
+   * ومحدش مقيِّم نفسه.
    */
   async launch(user: JwtPayload, id: number) {
     this.assertManager(user)
@@ -217,7 +224,7 @@ export class ReviewsService {
     if (!participants.length) throw new BadRequestException('مفيش موظفين شغالين في جمهور الدورة')
     const managers = new Map<number, number | null>()
     for (const employee of participants) {
-      const manager = await this.resolver.directManagerOf(employee.id)
+      const manager = await this.resolver.directSuperiorOf(employee.id)
       managers.set(employee.id, manager && manager !== employee.id ? manager : null)
     }
     await this.ds.transaction(async (em) => {
@@ -305,7 +312,7 @@ export class ReviewsService {
     const rows = await em.getRepository(ReviewAssignment).find({ where: { cycleId }, order: { id: 'ASC' } })
     const people = new Map((rows.length ? await em.getRepository(Employee).find({ where: { id: In([...new Set(rows.flatMap((row) => [row.employeeId, row.managerEmployeeId ?? row.employeeId]))]) } }) : []).map((row) => [row.id, row]))
     const scope = branchScopeOf(user)
-    return { cycle: (await this.cycleViews(em, [cycle]))[0], assignments: rows.filter((row) => inBranchScope(scope, people.get(row.employeeId)?.branchId ?? null)).map((row) => {
+    return { cycle: (await this.cycleViews(em, [cycle]))[0], selfReview: await selfReviewOn(em), assignments: rows.filter((row) => inBranchScope(scope, people.get(row.employeeId)?.branchId ?? null)).map((row) => {
       const manager = row.managerEmployeeId != null ? people.get(row.managerEmployeeId) : undefined
       return { id: row.id, employeeId: row.employeeId, employeeName: people.get(row.employeeId)?.fullName ?? '—',
         // اسم المدير بفرعه الحالي في نطاق القارئ
@@ -513,26 +520,44 @@ export class ReviewsService {
   /** «تقييماتي»: تكليفات الموظف في الدورات اللي اتطلقت */
   async mine(user: JwtPayload) {
     const em = this.ds.manager
-    if (!(await reviewsReady(em))) return { available: false, reviews: [] }
-    if (!user.employeeId) return { available: true, reviews: [] }
+    if (!(await reviewsReady(em))) return { available: false, selfReview: false, reviews: [] }
+    // B-ADD.18: selfReview = خطوة التقييم الذاتي مفتوحة (مقفولة: الموظف بيشوف تقييماته ونتيجته بعد الإعلان، من غير مطلوب منه)
+    const selfReview = await selfReviewOn(em)
+    if (!user.employeeId) return { available: true, selfReview, reviews: [] }
     const rows = await em.getRepository(ReviewAssignment).find({ where: { employeeId: user.employeeId }, order: { id: 'DESC' } })
     const cycles = new Map((rows.length ? await em.getRepository(ReviewCycle).find({ where: { id: In(rows.map((row) => row.cycleId)) } }) : []).map((row) => [row.id, row]))
-    return { available: true, reviews: rows.filter((row) => cycles.has(row.cycleId)).map((row) => this.listView(row, cycles.get(row.cycleId)!, null, 'self')) }
+    return { available: true, selfReview, reviews: rows.filter((row) => cycles.has(row.cycleId)).map((row) => this.listView(row, cycles.get(row.cycleId)!, null, 'self')) }
   }
 
-  /** «تقييم فريقي»: التكليفات اللي الحساب مقيِّمها (المدير المتثبّت وقت الإطلاق) */
+  /**
+   * «تقييم فريقي»: التكليفات اللي الحساب مقيِّمها (الرئيس المباشر المتثبّت وقت الإطلاق، أو اللي إدارة الأداء حدّدته بـ«تغيير المقيِّم»).
+   * B-ADD.18 (كلمة المالك 12 أكتوبر): manager = التبويب بيظهر للي تحته حد في الهيكل دلوقتي (نفس تعريف «اللي تحتي» بتاع المهام)، أو له
+   * تكليف هو مقيِّمه؛ غير كده لا تبويب ولا قايمة. وتكليف الموظف نفسه مابيتعرضش هنا أبدًا.
+   */
   async team(user: JwtPayload) {
     const em = this.ds.manager
-    if (!(await reviewsReady(em))) return { available: false, reviews: [] }
-    if (!user.employeeId) return { available: true, reviews: [] }
-    const rows = await em.getRepository(ReviewAssignment).find({ where: { managerEmployeeId: user.employeeId }, order: { id: 'DESC' } })
+    if (!(await reviewsReady(em))) return { available: false, manager: false, reviews: [] }
+    if (!user.employeeId) return { available: true, manager: false, reviews: [] }
+    const rows = (await em.getRepository(ReviewAssignment).find({ where: { managerEmployeeId: user.employeeId }, order: { id: 'DESC' } })).filter((row) => row.employeeId !== user.employeeId)
+    const manager = rows.length > 0 || await this.hasPeopleUnder(em, user.employeeId)
     const cycles = new Map((rows.length ? await em.getRepository(ReviewCycle).find({ where: { id: In(rows.map((row) => row.cycleId)) } }) : []).map((row) => [row.id, row]))
     const people = new Map((rows.length ? await em.getRepository(Employee).find({ where: { id: In(rows.map((row) => row.employeeId)) } }) : []).map((row) => [row.id, row.fullName]))
-    return { available: true, reviews: rows.filter((row) => cycles.has(row.cycleId)).map((row) => this.listView(row, cycles.get(row.cycleId)!, people.get(row.employeeId) ?? null, 'manager')) }
+    return { available: true, manager, reviews: rows.filter((row) => cycles.has(row.cycleId)).map((row) => this.listView(row, cycles.get(row.cycleId)!, people.get(row.employeeId) ?? null, 'manager')) }
+  }
+
+  /** B-ADD.18: الحساب تحته موظف حالي في الهيكل؟ — subordinatesOf (نفس «اللي تحتي» بتاع تكليف المهام)، الحاليين منهم بس */
+  private async hasPeopleUnder(em: EntityManager, employeeId: number): Promise<boolean> {
+    const under = await this.resolver.subordinatesOf(employeeId)
+    for (let at = 0; at < under.length; at += 1000) {
+      const rows = await em.getRepository(Employee).find({ where: { id: In(under.slice(at, at + 1000)), isActive: true }, select: { id: true, status: true } })
+      if (rows.some((row) => !ENDED.includes(row.status))) return true
+    }
+    return false
   }
 
   /** علاقة الحساب بتكليف: صاحبه (ذاتي)، مقيِّمه (مدير)، أو إدارة الأداء في نطاقه — وإلا مالوش حق */
   private async relationTo(em: EntityManager, user: JwtPayload, assignment: ReviewAssignment, cycle: ReviewCycle): Promise<'self' | 'manager' | 'hr' | null> {
+    // صاحب التكليف «ذاتي» دايمًا — حتى لو اتسجّل مقيِّم نفسه أو معاه إدارة الأداء: مابيقراش تقييم مديره قبل الإعلان ومابيسلّمش مكانه
     if (user.employeeId && user.employeeId === assignment.employeeId) return 'self'
     if (user.employeeId && user.employeeId === assignment.managerEmployeeId) return 'manager'
     if (userHasPerm(user, REVIEWS_PERMISSION) && this.cycleInScope(user, cycle)) {
@@ -557,6 +582,7 @@ export class ReviewsService {
     const employee = await em.getRepository(Employee).findOne({ where: { id: assignment.employeeId } })
     const responses = await em.getRepository(ReviewResponse).find({ where: { assignmentId: assignment.id } })
     const announced = assignment.status === 'ANNOUNCED' || assignment.status === 'ACKNOWLEDGED'
+    const selfReview = await selfReviewOn(em)
     const shown = (kind: 'SELF' | 'MANAGER') => {
       const row = responses.find((response) => response.relation === kind)
       const allowed = kind === 'SELF' ? true : relation !== 'self' || announced
@@ -578,7 +604,9 @@ export class ReviewsService {
       objection: objection ? { requestId: objection.requestId, status: objection.status, statusLabel: OBJECTION_STATUS_LABELS[objection.status] ?? objection.status } : null,
       objectionUntil,
       canObject: relation === 'self' && announced && !objection && (!objectionUntil || Date.now() <= objectionUntil.getTime()),
-      canSubmit: cycle.status === 'ACTIVE' && ((relation === 'self' && !assignment.selfSubmittedAt) || (relation === 'manager' && !assignment.managerSubmittedAt)),
+      // B-ADD.18: الذاتي بيتسلّم والخطوة مفتوحة بس
+      selfReview,
+      canSubmit: cycle.status === 'ACTIVE' && ((relation === 'self' && selfReview && !assignment.selfSubmittedAt) || (relation === 'manager' && !assignment.managerSubmittedAt)),
     }
   }
 
@@ -592,9 +620,15 @@ export class ReviewsService {
     await this.ds.transaction(async (em) => {
       await this.assertReady(em)
       const assignment = await em.getRepository(ReviewAssignment).findOne({ where: { id: assignmentId }, lock: { mode: 'pessimistic_write' } })
+      // B-ADD.18 (كلمة المالك: «مفيش موظف بيقيّم نفسه»): صاحب التكليف ردّه «ذاتي» دايمًا — عمره ما بيتسجّل تقييم مدير، حتى لو صف التكليف
+      // اتسجّل فيه هو مقيِّم نفسه
       const relation: ReviewRelation | null = !assignment ? null : assignment.employeeId === user.employeeId ? 'SELF' : assignment.managerEmployeeId === user.employeeId ? 'MANAGER' : null
       // تكليف مش للحساب (لا صاحبه ولا مقيِّمه) زي اللي مش موجود
       if (!assignment || !relation) throw new NotFoundException(REVIEW_NOT_FOUND)
+      // والذاتي نفسه خطوة بإعداد (مقفول افتراضيًا) — بيتقري على اتصال المعاملة. مقفول: الموظف مابيسلّمش أي تقييم لنفسه
+      if (relation === 'SELF' && !(await selfReviewOn(em))) {
+        throw new BadRequestException(assignment.managerEmployeeId === assignment.employeeId ? REVIEW_NO_SELF_EVALUATION : REVIEW_SELF_CLOSED)
+      }
       const cycle = await em.getRepository(ReviewCycle).findOne({ where: { id: assignment.cycleId } })
       const template: ReviewTemplateShape | null = parseTemplate(cycle?.templateSnapshot)
       if (!cycle || !template) throw new NotFoundException(REVIEW_NOT_FOUND)

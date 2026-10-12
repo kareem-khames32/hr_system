@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common'
 import type { EntityManager } from 'typeorm'
+import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { REVIEW_AUDIENCE_MODES, REVIEW_CYCLE_KINDS, type ReviewAudienceMode, type ReviewAssignmentStatus, type ReviewCycleKind, type ReviewCycleStatus } from './review.entities'
 
 // B3.7: قواعد دورات التقييم — فحص وجود ترحيلات 112–115، وشكل نموذج التقييم (أقسام موزونة)، وقيم الدورة، والإجابات، والدرجة المحسوبة بالأوزان.
@@ -30,6 +31,19 @@ export interface ReviewSection { key: string; title: string; kind: ReviewSection
 export interface ReviewTemplateShape { ratingMax: number; sections: ReviewSection[] }
 export interface ReviewGoalRef { id: number; title: string; weight: number }
 export interface ReviewAnswers { sections: Record<string, Record<string, { rating?: number; text?: string }>>; goals: Record<string, { rating: number; comment?: string }> }
+
+// B-ADD.18 (كلمة المالك 12 أكتوبر: «مفيش موظف بيقيّم نفسه»): خطوة التقييم الذاتي إعداد من «سياسات النظام»، مقفول افتراضيًا. مقفول = الخطوة
+// لا بتتطلب ولا بتتعرض ولا بتتسلّم، وتقييم المدير والنتيجة ماشيين من غيرها (ماكانوش واقفين عليها أصلًا). مفتوح = السلوك القديم بالحرف.
+// بيتقري مع كل نداء (من غير كاش)، فبيسري على الدورات الشغالة كمان: ذاتي لسه ماتسلّمش بيختفي وهو مقفول ويرجع لو اتفتح، واللي اتسلّم قبل
+// كده محفوظ وظاهر زي ما هو.
+export const REVIEW_SELF_KEY = 'performance.self_review'
+export const REVIEW_SELF_CLOSED = 'التقييم الذاتي مقفول — اللي بيقيّمك رئيسك المباشر'
+export const REVIEW_NO_SELF_EVALUATION = 'محدش بيقيّم نفسه'
+/** خطوة التقييم الذاتي مفتوحة؟ 'true' بس هي اللي تفتحها (من غير صف = مقفولة). القراءة على اتصال المنادي (معاملته لو جوه معاملة) */
+export async function selfReviewOn(em: EntityManager): Promise<boolean> {
+  const row = await em.getRepository(RequestsConfig).findOne({ where: { key: REVIEW_SELF_KEY }, select: { key: true, value: true } })
+  return String(row?.value ?? '').trim() === 'true'
+}
 
 let ready: boolean | null = null
 /** جداول ترحيلات 112–115 موجودة؟ الموجود بيتحفظ. الناقص بيتفحص مع كل نداء لحد ما الترحيلات تتطبق. */

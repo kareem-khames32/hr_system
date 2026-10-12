@@ -2,6 +2,8 @@
 
 // B3.7: «التقييمات» — تقييماتي (التقييم الذاتي ونتيجتي بعد الإعلان) وتقييم فريقي (للمدير المقيِّم).
 // (كانت شاشة عرض ببيانات وهمية؛ بقت على الخادم.)
+// B-ADD.18 (كلمة المالك 12 أكتوبر): «تقييم فريقي» بيظهر للي تحته حد في الهيكل بس (manager من الخادم)، ومحدش بيقيّم نفسه: التقييم الذاتي
+// خطوة بإعداد مقفول افتراضيًا (selfReview) — مقفول = «تقييماتي» فيها النتيجة بعد الإعلان من غير مطلوب من الموظف.
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { ClipboardCheck } from 'lucide-react'
@@ -23,11 +25,17 @@ export default function ReviewsPage() {
   const [rewards, setRewards] = useState<ApiMyReward[]>([])
   const [info, setInfo] = useState('')
   const [busy, setBusy] = useState(0)
+  // B-ADD.18: تبويب «تقييم فريقي» للي تحته حد بس، وخطوة التقييم الذاتي مفتوحة ولا لأ — الاتنين من الخادم
+  const [manager, setManager] = useState(false)
+  const [selfReview, setSelfReview] = useState(false)
+  useEffect(() => {
+    fetchTeamReviews().then((data) => setManager(data.manager === true)).catch(() => setManager(false))
+  }, [])
 
   const load = useCallback(() => {
     setError('')
     setRows(null)
-    ;(tab === 'mine' ? fetchMyReviews() : fetchTeamReviews())
+    ;(tab === 'mine' ? fetchMyReviews().then((data) => { setSelfReview(data.selfReview === true); return data }) : fetchTeamReviews())
       .then((data) => setRows(data.reviews))
       .catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل التقييمات'))
     if (tab === 'team') fetchMyRewards().then((data) => setRewards(data.suggestions)).catch(() => setRewards([]))
@@ -50,7 +58,7 @@ export default function ReviewsPage() {
 
   // اللي مطلوب من القارئ دلوقتي في كل تقييم
   const todo = (row: ApiReviewRow) =>
-    row.cycleStatus !== 'ACTIVE' ? null : tab === 'mine' ? (row.selfSubmitted ? null : `سلّم تقييمك الذاتي قبل ${formatDate(row.selfDueDate)}`) : row.managerSubmitted ? null : `سلّم تقييمك قبل ${formatDate(row.managerDueDate)}`
+    row.cycleStatus !== 'ACTIVE' ? null : tab === 'mine' ? (row.selfSubmitted || !selfReview ? null : `سلّم تقييمك الذاتي قبل ${formatDate(row.selfDueDate)}`) : row.managerSubmitted ? null : `سلّم تقييمك قبل ${formatDate(row.managerDueDate)}`
 
   return (
     <MainLayout>
@@ -60,9 +68,9 @@ export default function ReviewsPage() {
             <ClipboardCheck size={24} className="text-primary-600" />
             التقييمات
           </h1>
-          <p className="text-gray-500 mt-1">تقييمك الذاتي ونتيجتك بعد إعلانها، وتقييم فريقك لو إنت مدير</p>
+          <p className="text-gray-500 mt-1">{selfReview ? 'تقييمك الذاتي ونتيجتك بعد إعلانها' : 'نتيجة تقييمك بعد إعلانها — اللي بيقيّمك رئيسك المباشر'}{manager ? '، وتقييم اللي تحتك في الهيكل' : ''}</p>
         </div>
-        <div className="flex items-center gap-2" role="tablist">
+        {manager && <div className="flex items-center gap-2" role="tablist" data-reviews-tabs>
           {(['mine', 'team'] as Tab[]).map((key) => (
             <button
               key={key}
@@ -74,7 +82,7 @@ export default function ReviewsPage() {
               {key === 'mine' ? 'تقييماتي' : 'تقييم فريقي'}
             </button>
           ))}
-        </div>
+        </div>}
         {error && (
           <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-4">
             {error}
@@ -132,7 +140,7 @@ export default function ReviewsPage() {
                   <div className="text-end">
                     <span className={`inline-block px-2 py-0.5 rounded-full text-xs ${statusStyle[row.status]}`}>{row.statusLabel}</span>
                     {row.finalScore !== null && <p className="text-lg font-bold text-gray-800 mt-2 tabular-nums">{row.finalScore} / 100</p>}
-                    {row.finalScore === null && row.selfScore !== null && <p className="text-xs text-gray-500 mt-2 tabular-nums">الذاتي: {row.selfScore} / 100</p>}
+                    {row.finalScore === null && row.selfScore !== null && (selfReview || tab === 'team') && <p className="text-xs text-gray-500 mt-2 tabular-nums">الذاتي: {row.selfScore} / 100</p>}
                   </div>
                 </div>
               </Link>

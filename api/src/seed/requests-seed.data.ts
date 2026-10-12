@@ -325,6 +325,9 @@ export const configSeed: Array<{ key: string; value: string }> = [
   // B2.5 محرك المهام: تذكير المسؤول قبل الموعد بيوم، وتصعيد لمديره بعد 3 أيام تأخير (0 = من غير تصعيد)
   { key: 'tasks.reminder_days_before', value: '1' },
   { key: 'tasks.escalation_days_after', value: '3' },
+  // B-ADD.18 (كلمة المالك 12 أكتوبر: «مفيش موظف بيقيّم نفسه»): خطوة التقييم الذاتي في دورات التقييم — مقفولة افتراضيًا. مفتوحة = الموظف
+  // بيسلّم تقييمه الذاتي جنب تقييم مديره زي الأول
+  { key: 'performance.self_review', value: 'false' },
   { key: 'payroll.shortfall_mode', value: 'MINUTES' },
   { key: 'payroll.shortfall_value', value: '1' },
   { key: 'payroll.attendance_overlap_policy', value: 'NET_OF_LATENESS' },

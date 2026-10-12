@@ -1,4 +1,4 @@
-import { Logger, NotFoundException } from '@nestjs/common'
+import { BadRequestException, Logger, NotFoundException } from '@nestjs/common'
 import type { EntityManager } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, inBranchScope, userHasPerm } from '../auth/guards'
@@ -34,6 +34,40 @@ export const TASKS_ESCALATION_DAYS_DEFAULT = 3
 export const TASKS_DAYS_MAX = 60
 /** موظف مش على رأس العمل: مابيتكلّفش بمهمة، ومابيتطلبش منه إقرار مستند (B2.7-ب) */
 export const TASK_OFF_DUTY_STATUSES: EmployeeStatus[] = ['terminated', 'archived']
+
+/** B-ADD.18 (كلمة المالك 12 أكتوبر): محدش بيقيّم نفسه — في تقييم المهام زي دورات التقييم */
+export const TASK_SELF_RATING = 'محدش بيقيّم نفسه — تقييم المهمة للي كلّف بيها، مش للي هي عليه'
+/** B-ADD.18: اختيار في جمهور المهمة الجماعية برّه شجرة المدير — نفس الرد للي مش موجود واللي مش تحته */
+export const TASK_GROUP_OUTSIDE_TREE = 'الاختيار فيه موظف أو وحدة مش تحتك في الهيكل — المهمة الجماعية للي تحتك بس. حد مش في فريقك؟ اعمل طلب، ولما يتعتمد هيتحوّل مهمة'
+
+/** B-ADD.18: شجرة المدير قدام جمهور المهمة الجماعية — اللي تحته (كلهم، وحاليين جوه نطاق حسابه)، ووحداتهم وفرقهم وفروعهم */
+export interface TaskGroupTree {
+  /** كل اللي تحته في الهيكل (subordinatesOf) — حكم التكليف الفردي */
+  under: ReadonlySet<number>
+  /** الحاليين منهم جوه نطاق فروع الحساب — اللي المهمة الجماعية بتوصلهم */
+  employeeIds: ReadonlySet<number>
+  unitIds: ReadonlySet<number>
+  teamIds: ReadonlySet<number>
+  branchIds: ReadonlySet<number>
+}
+
+/**
+ * B-ADD.18: جمهور المهمة الجماعية (بشكل «مين + فين» المحفوظ) كل اختياراته جوه شجرة المدير: الفروع، والإدارات والأقسام، والفرق، والموظفين
+ * بالاسم، والمستثنين. أي رقم برّاها — موجود في الشركة أو لأ — بنفس الرفض (رقم مخمَّن مايتعرفش منه موجود ولا لأ). جمهور نصه تالف = مرفوض.
+ */
+export function assertAudienceInsideTree(audience: string | null, tree: TaskGroupTree): void {
+  if (audience === null) return
+  const refuse = (): never => { throw new BadRequestException(TASK_GROUP_OUTSIDE_TREE) }
+  let value: { ids?: unknown; exclude?: unknown; where?: { mode?: unknown; ids?: unknown; branchId?: unknown } | null }
+  try { value = JSON.parse(audience) } catch { return refuse() }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return refuse()
+  const inside = (list: unknown, allowed: ReadonlySet<number>) => list == null || (Array.isArray(list) && list.every(id => allowed.has(Number(id))))
+  if (!inside(value.ids, tree.employeeIds) || !inside(value.exclude, tree.employeeIds)) refuse()
+  const where = value.where ?? null
+  if (!where) return
+  const allowed = where.mode === 'branches' ? tree.branchIds : where.mode === 'units' ? tree.unitIds : where.mode === 'teams' ? tree.teamIds : null
+  if (!allowed || !inside(where.ids, allowed) || (where.branchId != null && !tree.branchIds.has(Number(where.branchId)))) refuse()
+}
 
 export const TASK_ROLE_LABELS: Record<(typeof FUNCTIONAL_APPROVER_ROLES)[number], string> = {
   hr: 'الموارد البشرية', finance: 'المالية', it: 'تقنية المعلومات', custody_officer: 'مسؤول العهد', payroll_officer: 'مسؤول الرواتب', executive: 'الإدارة التنفيذية',

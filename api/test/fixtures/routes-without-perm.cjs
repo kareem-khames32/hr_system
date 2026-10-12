@@ -94,6 +94,9 @@ const EXCEPTIONS = {
   // التكليف والقراءة والتعديل والحالة: الحق بيتحكم في الخدمة (المسؤول، المنشئ، المدير المباشر، أو صلاحية المهام في فرعها) — برّه كده 404
   'TasksController.create': 'SERVICE_CHECK', // POST /tasks
   'TasksController.createForGroup': 'SERVICE_CHECK', // POST /tasks/group — B-ADD.1: المهمة الجماعية («إدارة المهام» أو «تكليف أي موظف»، بنطاقه)
+  // B-ADD.18: المهمة الجماعية للمدير على اللي تحته في الهيكل — شجرة منتقي «على مين؟» ومعاينته (اللي تحته حد بس، والحكم في الخدمة)
+  'TasksController.groupContext': 'SERVICE_CHECK', // GET /tasks/group-context
+  'TasksController.groupPreview': 'SERVICE_CHECK', // POST /tasks/group-preview
   'TasksController.detail': 'SERVICE_CHECK', // GET /tasks/:id
   'TasksController.update': 'SERVICE_CHECK', // PATCH /tasks/:id
   'TasksController.setStatus': 'SERVICE_CHECK', // POST /tasks/:id/status

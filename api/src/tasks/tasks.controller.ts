@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common'
+import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common'
 import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateIf } from 'class-validator'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
@@ -36,6 +36,11 @@ class TaskGroupDto {
   @IsOptional() @IsIn([...TASK_PRIORITIES]) priority?: string
   @IsOptional() @IsBoolean() requiresProof?: boolean
   @IsOptional() @IsBoolean() needsRating?: boolean
+  @IsOptional() audience?: unknown
+}
+
+// B-ADD.18: معاينة جمهور المهمة الجماعية للمدير (الجسم خام والحكم في الخدمة)
+class TaskGroupPreviewDto {
   @IsOptional() audience?: unknown
 }
 
@@ -121,10 +126,23 @@ export class TasksController {
     return this.tasks.create(user, dto)
   }
 
-  // B-ADD.1: المهمة الجماعية — نفس المهمة لكل موظف في جمهور بالاستهداف الموحد (الفحص في الخدمة: «إدارة المهام» أو «تكليف أي موظف»، بنطاقه)
+  // B-ADD.1: المهمة الجماعية — نفس المهمة لكل موظف في جمهور بالاستهداف الموحد (الفحص في الخدمة: «إدارة المهام» أو «تكليف أي موظف»، بنطاقه؛
+  // B-ADD.18: والمدير على اللي تحته في الهيكل بس)
   @Post('group')
   createForGroup(@CurrentUser() user: JwtPayload, @Body() dto: TaskGroupDto) {
     return this.tasks.createForGroup(user, dto)
+  }
+
+  // B-ADD.18: المهمة الجماعية للمدير على اللي تحته — شجرة منتقي «على مين؟» ومعاينته قبل الحفظ (الفحص في الخدمة: اللي تحته حد بس)
+  @Get('group-context')
+  groupContext(@CurrentUser() user: JwtPayload) {
+    return this.tasks.groupContext(user)
+  }
+
+  @Post('group-preview')
+  @HttpCode(200)
+  groupPreview(@CurrentUser() user: JwtPayload, @Body() dto: TaskGroupPreviewDto) {
+    return this.tasks.groupPreview(user, dto.audience)
   }
 
   @AllowPreboarding()

@@ -79,6 +79,10 @@ before(async () => {
   base = `http://127.0.0.1:${app.getHttpServer().address().port}/api`
   modules = app.get(require('../src/modules-registry/modules.service').ModulesService)
   await app.get(require('../src/settings/config-defaults.service').ConfigDefaultsService).onApplicationBootstrap()
+  // B-ADD.18: الملف ده بيغطي الدورة بخطوة التقييم الذاتي (السلوك قبل الدفعة بالحرف)، فالإعداد بيتفتح له. المقفول (الافتراضي الجديد) متغطّي
+  // في task-scope.integration.cjs
+  assert.equal((await repo('RequestsConfig').findOneBy({ key: 'performance.self_review' }))?.value, 'false', 'الافتراضي مقفول')
+  await repo('RequestsConfig').update({ key: 'performance.self_review' }, { value: 'true' })
 
   org.branchA = await repo('Branch').save({ code: 'RV_A', name: 'فرع التقييم أ', country: 'SA' })
   org.branchB = await repo('Branch').save({ code: 'RV_B', name: 'فرع التقييم ب السري', country: 'SA' })

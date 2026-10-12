@@ -15,7 +15,8 @@ export interface StoredAudience {
 
 export interface OrgAudienceContext {
   branches: Array<{ id: number; name: string }>
-  units: Array<{ id: number; name: string; branchId: number; parentId: number | null; unitType: 'ADMINISTRATION' | 'DEPARTMENT'; isExecutive: boolean }>
+  /** listed = false (B-ADD.18، شجرة المدير): قسم فريق بيقوده من غير ما يدير القسم — بيتعرض عشان الفريق يظهر تحته، ومش من اختياراته */
+  units: Array<{ id: number; name: string; branchId: number; parentId: number | null; unitType: 'ADMINISTRATION' | 'DEPARTMENT'; isExecutive: boolean; listed?: boolean }>
   teams: Array<{ id: number; name: string; departmentId: number; branchId: number }>
   employees: Array<{ id: number; branchId: number | null; departmentId: number | null; teamId: number | null; fullName: string; employeeCode: string | null }>
 }
@@ -29,9 +30,19 @@ export const fetchOrgAudienceContext = () => apiFetch<OrgAudienceContext>('/org/
 export const previewOrgAudience = (audience: StoredAudience | null) =>
   apiFetch<AudiencePreview>('/org/audience-preview', { method: 'POST', body: JSON.stringify({ audience }) })
 
+/**
+ * B-ADD.18: مصدر تاني لشجرة المنتقي ومعاينته بدل شجرة نطاق الفروع — «اللي تحتي في الهيكل» للمهمة الجماعية من المدير. المنتقي بيعرض اللي
+ * المصدر رجّعه بس (من غير «الشركة كلها»)، والخادم هو اللي بيحكم.
+ */
+export interface OrgAudienceSource {
+  context: () => Promise<OrgAudienceContext>
+  preview: (audience: StoredAudience | null) => Promise<AudiencePreview>
+}
+
 // قوايم المنتقي من سياق الخادم
 export const pickerDepartments = (context: OrgAudienceContext): OrgPickerDepartment[] =>
-  context.units.map((u) => ({ id: u.id, name: u.name, branchId: u.branchId, parentId: u.parentId, unitType: u.unitType }))
+  // وحدة مش من اختيارات المنتقي (listed = false) بتتبعت «مش نشطة»: المنتقي بيخبّيها من قوايم الإدارات والأقسام وفلترها، وفرقها بتفضل ظاهرة
+  context.units.map((u) => ({ id: u.id, name: u.name, branchId: u.branchId, parentId: u.parentId, unitType: u.unitType, ...(u.listed === false ? { isActive: false } : {}) }))
 export const pickerTeams = (context: OrgAudienceContext): OrgPickerTeam[] => context.teams.map((t) => ({ id: t.id, name: t.name, departmentId: t.departmentId }))
 export const pickerEmployees = (context: OrgAudienceContext): OrgPickerEmployee[] =>
   context.employees.map((e) => ({ id: e.id, fullName: e.fullName, employeeCode: e.employeeCode ?? undefined, branchId: e.branchId, departmentId: e.departmentId, teamId: e.teamId }))

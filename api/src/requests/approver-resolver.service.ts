@@ -130,6 +130,25 @@ export class ApproverResolver {
     return null
   }
 
+  // B-ADD.18 (كلمة المالك 12 أكتوبر: «مدير الفريق بيقيّم فريقه، مدير القسم بيقيّم القسم اللي تحته، مدير الإدارة بيقيّم اللي تحته»): الرئيس
+  // المباشر في الهيكل — مقيِّم الموظف في دورات التقييم. نفس تدرّج directManagerOf (المدير المسجّل في الملف ← قائد الفريق ← رئيس القسم ←
+  // مدير الفرع) بفرق واحد: قبل مدير الفرع بيطلع من قسم الموظف لفوق بـparentId (القسم ثم الإدارة…) لأول وحدة مديرها حد غيره — فرئيس القسم
+  // مقيِّمه مدير الإدارة اللي فوقه، مش مدير الفرع. ومحدش رئيس نفسه في أي درجة. directManagerOf نفسه (سلاسل اعتماد الطلبات) زي ما هو.
+  async directSuperiorOf(employeeId: number): Promise<number | null> {
+    const emp = await this.employees.findOne({ where: { id: employeeId }, select: { id: true, managerEmployeeId: true, teamId: true, departmentId: true, branchId: true } })
+    if (!emp) return null
+    if (emp.managerEmployeeId && emp.managerEmployeeId !== employeeId) return emp.managerEmployeeId
+    if (emp.teamId) {
+      const team = await this.teams.findOne({ where: { id: emp.teamId }, select: { id: true, leaderEmployeeId: true } })
+      if (team?.leaderEmployeeId && team.leaderEmployeeId !== employeeId) return team.leaderEmployeeId
+    }
+    for (const unit of await this.unitChainOf(emp.departmentId)) {
+      if (unit.managerEmployeeId && unit.managerEmployeeId !== employeeId) return unit.managerEmployeeId
+    }
+    const branch = await this.branches.findOne({ where: { id: emp.branchId }, select: { id: true, managerEmployeeId: true } })
+    return branch?.managerEmployeeId && branch.managerEmployeeId !== employeeId ? branch.managerEmployeeId : null
+  }
+
   // B2.5 («مهام فريقي»): مرؤوسي المدير المباشرين — عكس directManagerOf بنفس ترتيبه بالحرف: المدير المسجّل في الملف، وإلا قائد
   // الفريق، وإلا رئيس القسم، وإلا مدير الفرع. المرشحين من القاعدة، والحكم لكل واحد بنفس التدرّج (اختبار بيقارنه بـdirectManagerOf)
   async directReportsOf(managerEmployeeId: number): Promise<number[]> {
@@ -204,12 +223,15 @@ export class ApproverResolver {
   // B2.5 (إضافة المالك 6 أكتوبر): «تحته في الشجرة» لتكليف المهام — من الموظف لفوق بخطوتين مع بعض: مديره المباشر (directManagerOf)،
   // ومديري الوحدات اللي فوق قسمه (قسمه ثم اللي فوقه بـparentId: القسم والإدارة). أي حد يتوصل له كده «فوقه»، من غير قيد فرع (زي الخطوات
   // الهيكلية). الدواير بتقف: كل موظف مرة
+  // B-ADD.18 (كلمة المالك 12 أكتوبر: «مدير الفريق… فريقه»): قائد فريق الموظف «فوقه» دايمًا — حتى لو ملفه مسجّل فيه مدير تاني (المدير
+  // المسجّل لسه هو «المدير المباشر» في الاعتمادات؛ ده تعريف «اللي تحتي» بس)
   private async managersStepOf(employeeId: number): Promise<number[]> {
-    const emp = await this.employees.findOne({ where: { id: employeeId }, select: { id: true, departmentId: true } })
+    const emp = await this.employees.findOne({ where: { id: employeeId }, select: { id: true, departmentId: true, teamId: true } })
     if (!emp) return []
     const direct = await this.directManagerOf(employeeId)
+    const leader = emp.teamId ? (await this.teams.findOne({ where: { id: emp.teamId }, select: { id: true, leaderEmployeeId: true } }))?.leaderEmployeeId : null
     const heads = (await this.unitChainOf(emp.departmentId)).map(unit => unit.managerEmployeeId)
-    return [...new Set([direct, ...heads].filter((id): id is number => !!id && id !== employeeId))]
+    return [...new Set([direct, leader, ...heads].filter((id): id is number => !!id && id !== employeeId))]
   }
 
   /** الموظف تحت المدير ده في الشجرة (أي عمق)؟ */
@@ -253,6 +275,8 @@ export class ApproverResolver {
         : branchManager && branchManager !== emp.id ? branchManager : null
       const managers = new Set<number>()
       if (direct && direct !== emp.id) managers.add(direct)
+      // B-ADD.18: قائد فريقه فوقه دايمًا (نفس managersStepOf)
+      if (leader && leader !== emp.id) managers.add(leader)
       // مديري الوحدات من قسمه لفوق (نفس unitChainUp: كل وحدة مرة، والوحدة اللي مش موجودة بتوقّف الصعود)
       const seen = new Set<number>()
       for (let unitId: number | null = emp.departmentId ?? null; unitId != null && !seen.has(unitId);) {
@@ -278,6 +302,27 @@ export class ApproverResolver {
       level = next
     }
     return [...found]
+  }
+
+  /**
+   * B-ADD.18: وحدات وفرق «اللي تحتي» — الوحدات (إدارات وأقسام) اللي مديرها المدير ده أو حد تحته، وكل اللي تحتها بـparentId؛ والفرق اللي
+   * قائدها هو أو حد تحته، وفرق الوحدات دي. under = subordinatesOf(المدير) من المنادي (القاعدة واحدة: عضو أي وحدة أو فريق من دول تحته).
+   */
+  async unitsUnder(managerEmployeeId: number, under: readonly number[]): Promise<{ unitIds: number[]; teamIds: number[] }> {
+    if (!managerEmployeeId) return { unitIds: [], teamIds: [] }
+    const [teams, departments] = await Promise.all([
+      this.teams.find({ select: { id: true, leaderEmployeeId: true, departmentId: true } }),
+      this.departments.find({ select: { id: true, managerEmployeeId: true, parentId: true } }),
+    ])
+    const heads = new Set<number>([managerEmployeeId, ...under])
+    const units = new Set(departments.filter(row => !!row.managerEmployeeId && heads.has(row.managerEmployeeId)).map(row => row.id))
+    for (let grew = true; grew;) {
+      grew = false
+      for (const row of departments) {
+        if (!units.has(row.id) && row.parentId != null && units.has(row.parentId)) { units.add(row.id); grew = true }
+      }
+    }
+    return { unitIds: [...units], teamIds: teams.filter(row => (!!row.leaderEmployeeId && heads.has(row.leaderEmployeeId)) || units.has(row.departmentId)).map(row => row.id) }
   }
 
 

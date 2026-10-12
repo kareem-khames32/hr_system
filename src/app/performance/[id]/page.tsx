@@ -260,7 +260,12 @@ export default function ReviewFormPage() {
                   </div>
                 </>
               ) : (
-                !form.self && !form.manager && <div className="card text-sm text-gray-600">مفيش تقييم مسلّم تقدر تشوفه دلوقتي.</div>
+                !form.self && !form.manager && (
+                  <div className="card text-sm text-gray-600" data-review-nothing>
+                    {/* B-ADD.18: التقييم الذاتي مقفول — محدش بيقيّم نفسه */}
+                    {form.relation === 'self' && form.selfReview === false ? 'رئيسك المباشر هو اللي بيقيّمك — مفيش تقييم مطلوب منك. نتيجتك هتظهر هنا بعد ما تتعلن.' : 'مفيش تقييم مسلّم تقدر تشوفه دلوقتي.'}
+                  </div>
+                )
               )}
               {form.self && <ResponseCard title={form.relation === 'self' ? 'تقييمي الذاتي' : 'التقييم الذاتي للموظف'} response={form.self} form={form} />}
               {form.manager && <ResponseCard title="تقييم المدير" response={form.manager} form={form} />}

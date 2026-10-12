@@ -4,12 +4,14 @@
 // من نفس حكمه (GET /tasks/assignees). حد برّه القايمة مايتكلّفش مباشرة: طلب، ولما يتعتمد بيتحوّل مهمة (قواعد المالك 6 أكتوبر).
 // B-ADD.1: «مجموعة» = مهمة جماعية بالاستهداف الموحد (الشركة ← فرع ← إدارة ← قسم ← فريق ← موظفين + «الكل ماعدا…» ومعاينة) — كل موظف
 // في الجمهور بياخد مهمته هو. للمهمة الجديدة بس، ولصاحب «إدارة المهام» أو «تكليف أي موظف».
+// B-ADD.18 (كلمة المالك 12 أكتوبر: «أسند مهمة بس لفريقي… لا أكتر ولا أقل»): التكليف لغيري للي تحته حد في الهيكل بس — اللي مالوش حد تحته
+// النموذج عنده «مهمة شخصية» من غير اختيار مسؤول؛ والمدير «مجموعة» عنده منتقي «على مين؟» محدود باللي تحته (شجرته من الخادم).
 import { useState } from 'react'
 import { EmployeePicker } from '../EmployeePicker'
 import { OrgAudienceField } from '../OrgAudienceField'
 import type { StoredAudience } from '../../lib/org-audience'
 import { localToday } from '../../lib/dates'
-import { createGroupTask, createTask, updateTask, TASK_PRIORITY_LABELS, type ApiTask, type ApiTaskAssignees, type TaskInput, type TaskPriority } from '../../lib/tasks-api'
+import { createGroupTask, createTask, updateTask, TASK_GROUP_TREE_SOURCE, TASK_PRIORITY_LABELS, type ApiTask, type ApiTaskAssignees, type TaskInput, type TaskPriority } from '../../lib/tasks-api'
 
 interface Props {
   assignees: ApiTaskAssignees
@@ -26,10 +28,14 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved, onGro
   const [description, setDescription] = useState(task?.description ?? '')
   const [target, setTarget] = useState<'employee' | 'role' | 'group'>(task?.assigneeRole ? 'role' : 'employee')
   const canGroup = !task && !!assignees.canAssignGroup
+  // B-ADD.18: مالوش حد يكلّفه غير نفسه — المهمة الجديدة شخصية من غير منتقي (canAssignOthers غايبة = خادم قديم: السلوك القديم)
+  const selfOnly = !task && assignees.canAssignOthers === false
+  const me = assignees.employees.find(row => row.self)
+  const inTree = assignees.groupWithin === 'tree'
   const [audience, setAudience] = useState<StoredAudience | null>(null)
   const [audienceComplete, setAudienceComplete] = useState(true)
   const [groupDone, setGroupDone] = useState<{ created: number; skipped: Array<{ employeeId: number; fullName: string; reason: string }> } | null>(null)
-  const [employeeId, setEmployeeId] = useState(task?.assigneeEmployeeId ? String(task.assigneeEmployeeId) : '')
+  const [employeeId, setEmployeeId] = useState(task?.assigneeEmployeeId ? String(task.assigneeEmployeeId) : selfOnly && me ? String(me.id) : '')
   const [role, setRole] = useState(task?.assigneeRole ?? '')
   const [branchId, setBranchId] = useState(task?.assigneeRole ? String(task.branchId) : assignees.branches.length === 1 ? String(assignees.branches[0].id) : '')
   const [dueDate, setDueDate] = useState(task?.dueDate ?? '')
@@ -81,7 +87,7 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved, onGro
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => !busy && onClose()}>
       <div className="bg-white rounded-2xl w-full max-w-lg p-6 shadow-xl max-h-[90vh] overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="task-form-title"
         onClick={event => event.stopPropagation()} data-task-form>
-        <h2 id="task-form-title" className="text-lg font-semibold text-gray-800 mb-4">{task ? 'تعديل المهمة' : 'مهمة جديدة'}</h2>
+        <h2 id="task-form-title" className="text-lg font-semibold text-gray-800 mb-4">{task ? 'تعديل المهمة' : selfOnly ? 'مهمة شخصية' : 'مهمة جديدة'}</h2>
         {error && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 text-sm mb-3">{error}</div>}
         <div className="space-y-3">
           <div>
@@ -101,9 +107,15 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved, onGro
           )}
           {target === 'group' ? (
             <div data-task-group-audience>
-              <OrgAudienceField value={audience} disabled={busy} onChange={(next, complete) => { setAudience(next); setAudienceComplete(complete) }} />
+              <OrgAudienceField value={audience} disabled={busy} onChange={(next, complete) => { setAudience(next); setAudienceComplete(complete) }}
+                source={inTree ? TASK_GROUP_TREE_SOURCE : undefined} />
               <p className="text-xs text-gray-500 mt-1">كل موظف في الاختيار بياخد المهمة دي باسمه ويتابعها لوحده. إنت نفسك مش من المكلَّفين.</p>
+              {inTree && <p className="text-xs text-gray-500 mt-1" data-task-group-tree-hint>الاختيار من اللي تحتك في الهيكل بس: «الفرع كله» هنا معناها كل اللي تحتك في الفرع ده.</p>}
             </div>
+          ) : selfOnly ? (
+            <p className="text-sm text-gray-600 bg-gray-50 rounded-xl p-3" data-task-self-only>
+              مهمة شخصية ليك إنت: بتظهر لك ولمديرك المباشر بس. تكليف حد تاني للي تحته موظفين في الهيكل — محتاج حاجة من زميل؟ <a href="/requests" className="text-primary-600 underline">اعمل طلب</a>، ولما يتعتمد هيتحوّل مهمة.
+            </p>
           ) : target === 'employee' ? (
             <div>
               <label className="label" htmlFor="task-assignee">الموظف المسؤول *</label>
@@ -173,7 +185,7 @@ export default function TaskFormModal({ assignees, task, onClose, onSaved, onGro
           ) : (
             <>
               <button type="button" className="btn-secondary" disabled={busy} onClick={onClose}>إلغاء</button>
-              <button type="button" className="btn-primary" disabled={busy} onClick={save}>{busy ? 'جاري الحفظ…' : task ? 'حفظ' : 'تكليف'}</button>
+              <button type="button" className="btn-primary" disabled={busy} onClick={save}>{busy ? 'جاري الحفظ…' : task || selfOnly ? 'حفظ' : 'تكليف'}</button>
             </>
           )}
         </div>

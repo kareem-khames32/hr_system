@@ -69,7 +69,8 @@ test('RU-02: answers against the frozen template and the period goals, and the w
 test('RU-03: launching and submitting under the row lock with the judgment after it, no other service inside the transaction, and the routes', () => {
   const service = read('api/src/performance/reviews.service.ts')
   const launch = service.slice(service.indexOf('async launch('), service.indexOf('/** قفل الدورة'))
-  const order = ['await this.resolver.directManagerOf(employee.id)', 'this.ds.transaction(', 'await this.lockedCycle(em, user, id)', "if (cycle.status !== 'DRAFT') throw new ConflictException", 'getRepository(ReviewAssignment).insert(',
+  // B-ADD.18: المقيِّم = الرئيس المباشر في الهيكل (directSuperiorOf) — بيتحل قبل المعاملة زي ما كان
+  const order = ['await this.resolver.directSuperiorOf(employee.id)', 'this.ds.transaction(', 'await this.lockedCycle(em, user, id)', "if (cycle.status !== 'DRAFT') throw new ConflictException", 'getRepository(ReviewAssignment).insert(',
     "status: 'ACTIVE', templateSnapshot: JSON.stringify("].map(part => launch.indexOf(part))
   assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), JSON.stringify(order))
   assert.doesNotMatch(launch.slice(launch.indexOf('this.ds.transaction(')), /this\.resolver\./, 'حل المدير قبل المعاملة')

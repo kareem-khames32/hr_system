@@ -1,6 +1,7 @@
 // B2.5: المهام العامة و«مهامي» (المهام العامة + مهام التهيئة اللي على جهتي + بنود الإخلاء اللي عليّ).
 // مسارات نسبية (لا @/) عشان الاختبارات تقرا الملف مباشرة.
 import { apiFetch } from './api'
+import type { AudiencePreview, OrgAudienceContext, OrgAudienceSource } from './org-audience'
 
 export type TaskStatus = 'OPEN' | 'IN_PROGRESS' | 'WAITING' | 'DONE' | 'CANCELLED'
 export type TaskPriority = 'LOW' | 'NORMAL' | 'HIGH'
@@ -118,8 +119,12 @@ export interface ApiTaskAssignees {
   canManage: boolean
   /** الحساب يقدر يكلّف حد: نفسه (مهمة شخصية)، أو حد تحته في الهيكل، أو موظفي نطاقه بصلاحية */
   canAssign: boolean
-  /** B-ADD.1: المهمة الجماعية (نفس المهمة لكل موظف في جمهور) — لصاحب «إدارة المهام» أو «تكليف أي موظف» */
+  /** B-ADD.18: يقدر يكلّف حد غيره — تحته حد في الهيكل، أو معاه «إدارة المهام» أو «تكليف أي موظف». false = مهمته الشخصية بس */
+  canAssignOthers?: boolean
+  /** B-ADD.1: المهمة الجماعية (نفس المهمة لكل موظف في جمهور) — لصاحب «إدارة المهام» أو «تكليف أي موظف»؛ وB-ADD.18: وللمدير على اللي تحته */
   canAssignGroup?: boolean
+  /** B-ADD.18: جمهور المهمة الجماعية جوه إيه — scope: نطاق فروع صاحب الصلاحية؛ tree: اللي تحت المدير في الهيكل بس */
+  groupWithin?: 'scope' | 'tree'
   /** self = الحساب نفسه (مهمة شخصية) */
   employees: Array<{ id: number; fullName: string; employeeCode: string; jobTitle: string | null; branchName: string | null; self?: boolean }>
   /** ترحيل 096 موجود (المهمة الشخصية والتمديد والتقييم)، وميزة التقييم مفتوحة */
@@ -188,6 +193,11 @@ export const createTask = (input: TaskInput) => apiFetch<ApiTask>('/tasks', json
 export interface TaskGroupResult { created: number; taskIds: number[]; skipped: Array<{ employeeId: number; fullName: string; reason: string }> }
 export const createGroupTask = (input: Omit<TaskInput, 'assigneeEmployeeId' | 'assigneeRole' | 'branchId'> & { audience: unknown }) =>
   apiFetch<TaskGroupResult>('/tasks/group', json('POST', input))
+// B-ADD.18: منتقي «على مين؟» للمدير — شجرته (اللي تحته في الهيكل ووحداتهم وفرقهم) ومعاينتها من الخادم بنفس حكم الحفظ
+export const TASK_GROUP_TREE_SOURCE: OrgAudienceSource = {
+  context: () => apiFetch<OrgAudienceContext>('/tasks/group-context'),
+  preview: audience => apiFetch<AudiencePreview>('/tasks/group-preview', json('POST', { audience })),
+}
 export const updateTask = (id: number, input: TaskInput) => apiFetch<ApiTask>(`/tasks/${id}`, json('PATCH', input))
 export const setTaskStatus = (id: number, input: { status: TaskStatus; note?: string; proofNote?: string; proofFileId?: number }) =>
   apiFetch<ApiTask>(`/tasks/${id}/status`, json('POST', input))

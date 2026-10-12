@@ -7,6 +7,7 @@ import {
   CYCLE_NOT_OPEN, EMPLOYEE_NOT_FOUND, FEEDBACK360_MIGRATION_MISSING, Feedback360Invite, Feedback360Response, feedback360Ready, FEEDBACK_MIN_GROUP, FEEDBACK_RELATION_LABELS, FEEDBACK_RELATIONS, feedbackFields,
   feedbackSummary, INVITE_NOT_FOUND, INVITE_STATUS_LABELS, nominationFields, PEERS_MAX, type FeedbackRelation,
 } from './people-feedback'
+import { REVIEW_NO_SELF_EVALUATION } from './review-rules'
 
 // B5.10 (أ): تقييم 360 — الترشيح وقراره تحت قفل صف ملف الموظف المتقيَّم (ثم صف الدعوة)، والحكم بعد القفل: المدير المباشر دلوقتي، أو صاحب
 // `performance.manage` والموظف في نطاقه بفرعه الحالي (غير كده «مش موجود»). الرد تحت قفل صف الدعوة: بيتكتب من غير مقيّم ولا وقت، والدعوة
@@ -75,7 +76,7 @@ export class Feedback360Service {
     return { ready: true, peersMax: PEERS_MAX, cycles: cycles.map(row => ({ id: Number(row.id), name: row.name })),
       nominations: mine.map(row => ({ id: row.id, cycleId: row.cycleId, reviewerName: names.get(row.reviewerEmployeeId)?.fullName ?? '—', status: row.status, statusLabel: INVITE_STATUS_LABELS[row.status] ?? row.status })),
       colleagues: colleagues.map(row => ({ id: Number(row.id), fullName: row.fullName })),
-      toGive: due.filter(row => cycleNames.get(row.cycleId)?.status === 'ACTIVE').map(row => ({ id: row.id, cycleName: cycleNames.get(row.cycleId)?.name ?? '—', subjectName: names.get(row.subjectEmployeeId)?.fullName ?? '—',
+      toGive: due.filter(row => cycleNames.get(row.cycleId)?.status === 'ACTIVE' && row.subjectEmployeeId !== me).map(row => ({ id: row.id, cycleName: cycleNames.get(row.cycleId)?.name ?? '—', subjectName: names.get(row.subjectEmployeeId)?.fullName ?? '—',
         relation: row.relation, relationLabel: FEEDBACK_RELATION_LABELS[row.relation as FeedbackRelation] ?? row.relation })) }
   }
 
@@ -192,6 +193,9 @@ export class Feedback360Service {
       const [cycle]: Array<{ status: string }> = await em.query('SELECT [status] FROM dbo.review_cycles WITH (UPDLOCK, ROWLOCK) WHERE [id] = @0', [peek.cycleId])
       const invite = await repo.findOne({ where: { id: inviteId, cycleId: peek.cycleId }, lock: { mode: 'pessimistic_write' } })
       if (!invite || invite.reviewerEmployeeId !== me) throw new NotFoundException(INVITE_NOT_FOUND)
+      // B-ADD.18 (كلمة المالك 12 أكتوبر: «مفيش موظف بيقيّم نفسه»): 360 مافيهوش نموذج ذاتي (الترشيح وتقييم المدير بيستبعدوا صاحب التقييم) —
+      // ودعوة اتسجّلت للموظف على نفسه بأي طريق مابيتردّش عليها
+      if (invite.subjectEmployeeId === me) throw new BadRequestException(REVIEW_NO_SELF_EVALUATION)
       if (invite.status !== 'APPROVED') throw new ConflictException('الدعوة مش معتمدة')
       if (flag(invite.responded)) throw new ConflictException('رديت على الدعوة دي قبل كده')
       if (cycle?.status !== 'ACTIVE') throw new ConflictException('دورة التقييم اتقفلت')

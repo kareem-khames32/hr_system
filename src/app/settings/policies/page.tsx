@@ -18,6 +18,7 @@ import {
   Plus,
   Bell,
   ListChecks,
+  ClipboardCheck,
 } from 'lucide-react'
 import {
   can, fetchConfig, fetchSecurityStatus, fetchTerminationReasons, saveCustomTerminationReasons, sendMailTest, updateConfig,
@@ -298,6 +299,17 @@ const GROUPS: PolicyGroup[] = [
     fields: [
       { key: 'tasks.reminder_days_before', label: 'تذكير المسؤول قبل الموعد', type: 'number', unit: 'يوم', min: 0, max: 60, integer: true, hint: 'المسؤول بيتبلّغ لما يفضل على موعد المهمة العدد ده من الأيام أو أقل. صفر = يوم الموعد نفسه.' },
       { key: 'tasks.escalation_days_after', label: 'تبليغ المدير بعد التأخير', type: 'number', unit: 'يوم', min: 0, max: 60, integer: true, hint: 'مدير المسؤول المباشر بيتبلّغ لما المهمة تعدّي موعدها بالعدد ده من الأيام (ومهمة الدور بيتبلّغ اللي كلّف بيها). صفر = من غير تبليغ.' },
+    ],
+  },
+  {
+    // B-ADD.18 (كلمة المالك 12 أكتوبر: «مفيش موظف بيقيّم نفسه»): خطوة التقييم الذاتي في دورات التقييم — مقفولة افتراضيًا
+    title: 'تقييم الأداء',
+    icon: ClipboardCheck,
+    iconBg: 'bg-primary-50',
+    iconColor: 'text-primary-500',
+    note: 'اللي بيقيّم الموظف رئيسه المباشر في الهيكل: قائد فريقه، وإلا مدير قسمه، وإلا مدير الإدارة اللي فوقه (والمدير المسجّل في ملفه بيتقدّم عليهم). محدش بيقيّم نفسه.',
+    fields: [
+      { key: 'performance.self_review', label: 'التقييم الذاتي في دورات التقييم', type: 'bool', hint: 'مقفول: الموظف مابيتطلبش منه تقييم لنفسه، وتقييم رئيسه هو النتيجة. مفتوح: الموظف بيسلّم تقييمه الذاتي جنب تقييم رئيسه (مالوش وزن في الدرجة). بيسري على الدورات الشغالة كمان.' },
     ],
   },
 ]
