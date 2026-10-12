@@ -19,57 +19,64 @@ interface SettingsLink {
   icon: LucideIcon
 }
 
+// B-ADD.21: الكروت بنفس ترتيب مجموعات القايمة الجانبية — إعدادات الشركة والهيكل، ثم إعدادات كل موديول، ثم النظام، ثم المستخدمين
 const groups: { title: string; description: string; links: SettingsLink[] }[] = [
   {
-    title: 'الشركة والهيكل الوظيفي',
-    description: 'البيانات التي تربط الموظفين بفروع الشركة وفرقها.',
+    title: 'الشركة والهيكل',
+    description: 'بيانات الشركة وكياناتها، والفروع والإدارات والفرق، والبيانات المرجعية لملفات الموظفين، وتقويم الشركة.',
     links: [
       { title: 'بيانات الشركة', description: 'الاسم والشعار وبيانات التواصل المستخدمة في المستندات.', href: '/settings/company', permission: 'settings.manage', icon: Building2 },
       // B4.1: كيان لكل دولة بأرقام تسجيله، وربط الفروع بيه
       { title: 'الكيانات القانونية', description: 'كيان لكل دولة بأرقام تسجيله وبنك رواتبه، وربط الفروع بكيان دولتها.', href: '/settings/legal-entities', permission: 'settings.manage', icon: Building2 },
-      // B4.3: وصف بنود القسيمة وترتيبها
-      { title: 'بنود الراتب', description: 'بنود القسيمة: نوعها، وخاضعة للتأمين والضريبة، وترتيبها.', href: '/settings/salary-items', permission: 'settings.manage', icon: Building2 },
-      // B4.8 (ب): مدد الاحتفاظ بالبيانات (تنبيه بمهمة، من غير مسح) وسجل حوادث التسريب بموعد 72 ساعة
-      { title: 'حماية البيانات', description: 'مدد الاحتفاظ بالبيانات، وسجل حوادث التسريب بموعد إخطار 72 ساعة.', href: '/settings/data-protection', permission: 'settings.manage', icon: Building2 },
-      // B4.6 (ب): جدول البنوك بأكوادها — كشف البنك بينبّه على آيبان كوده مش في الجدول
-      { title: 'البنوك', description: 'جدول البنوك بأكوادها في الآيبان؛ بنك الموظف بيتعرف من آيبانه.', href: '/settings/banks', permission: 'settings.manage', icon: Building2 },
       // B4.2: القيم القانونية المؤرخة لكل دولة
       { title: 'حزمة الدولة', description: 'القيم القانونية لكل دولة (نسب، حدود، شرائح) بتاريخ سريانها ومصدرها.', href: '/settings/statutory', permission: 'settings.manage', icon: Building2 },
       { title: 'الفروع', description: 'الفروع وأيام العطلة ومراكز التكلفة المرتبطة بها.', href: '/settings/branches', permission: 'org.manage', icon: GitBranch },
       { title: 'الإدارات والأقسام', description: 'الإدارات وأقسامها والتسلسل الإداري داخل كل فرع.', href: '/settings/departments', permission: 'org.manage', icon: Layers3 },
       { title: 'الفرق', description: 'فرق العمل والأقسام التي تتبعها.', href: '/settings/teams', permission: 'org.manage', icon: UsersRound },
+      { title: 'مراكز التكلفة', description: 'المراكز المستخدمة لتوزيع تكاليف الموظفين.', href: '/settings/cost-centers', permission: 'settings.manage', icon: Wallet },
       { title: 'المسميات الوظيفية', description: 'المسميات المتاحة في ملفات الموظفين.', href: '/settings/job-titles', permission: 'settings.manage', icon: Briefcase },
       { title: 'الدرجات الوظيفية', description: 'الدرجات وحدود الرواتب الخاصة بها.', href: '/settings/grades', permission: 'settings.manage', icon: Award },
       { title: 'حقول ملف الموظف', description: 'حقول زيادة على ملف الموظف بترتيبها وإلزامها ومين يشوفها.', href: '/settings/employee-fields', permission: 'settings.manage', icon: ListPlus },
-      { title: 'مراكز التكلفة', description: 'المراكز المستخدمة لتوزيع تكاليف الموظفين.', href: '/settings/cost-centers', permission: 'settings.manage', icon: Wallet },
+      { title: 'أيام العمل', description: 'جداول أيام العمل والراحة التي تُسند للموظفين.', href: '/settings/work-days', permission: 'settings.manage', icon: CalendarClock },
+      { title: 'العطلات الرسمية', description: 'العطلات التي تدخل في احتساب الحضور والإجازات.', href: '/leaves/holidays', permission: 'settings.manage', icon: CalendarDays },
     ],
   },
   {
-    title: 'السياسات والحضور والإجازات',
-    description: 'قواعد الاستحقاق والحساب ومواعيد العمل.',
+    title: 'الحضور والإجازات والرواتب والعهد',
+    description: 'إعدادات كل موديول: بتظهر لما موديولها مفعّل.',
     links: [
-      { title: 'سياسات النظام', description: 'الإجازات والحضور والمسير وعملة النظام وأسباب إنهاء الخدمة وإعداد استقبال البصمات.', href: '/settings/policies', permission: 'settings.manage', icon: Settings2 },
-      { title: 'معادلات الرواتب', description: 'طريقة حساب الخصومات لكل مجموعة موظفين', href: '/payroll/policies', permission: 'payroll.view', icon: Wallet },
-      { title: 'أيام العمل', description: 'جداول أيام العمل والراحة التي تُسند للموظفين.', href: '/settings/work-days', permission: 'settings.manage', icon: CalendarClock },
       { title: 'الورديات', description: 'مواعيد الحضور والانصراف وسماحية التأخير والعمل الإضافي.', href: '/attendance/shifts', permission: 'settings.manage', icon: Clock },
       { title: 'أجهزة البصمة', description: 'الأجهزة التابعة للفروع ومزامنة سجلات الحضور.', href: '/attendance/devices', permission: 'attendance.sync', icon: Fingerprint },
       { title: 'أنواع الإجازات', description: 'الأنواع المتاحة وقواعد استحقاق كل نوع.', href: '/leaves/types', permission: 'settings.manage', icon: CalendarDays },
-      { title: 'العطلات الرسمية', description: 'العطلات التي تدخل في احتساب الحضور والإجازات.', href: '/leaves/holidays', permission: 'settings.manage', icon: CalendarDays },
       { title: 'أنواع الأذونات', description: 'أنواع أذونات الحضور والانصراف وحدودها.', href: '/settings/permission-types', permission: 'settings.manage', icon: Clock },
+      { title: 'معادلات الرواتب', description: 'طريقة حساب الخصومات لكل مجموعة موظفين', href: '/payroll/policies', permission: 'payroll.view', icon: Wallet },
+      // B4.3: وصف بنود القسيمة وترتيبها
+      { title: 'بنود الراتب', description: 'بنود القسيمة: نوعها، وخاضعة للتأمين والضريبة، وترتيبها.', href: '/settings/salary-items', permission: 'settings.manage', icon: Building2 },
+      // B4.6 (ب): جدول البنوك بأكوادها — كشف البنك بينبّه على آيبان كوده مش في الجدول
+      { title: 'البنوك', description: 'جدول البنوك بأكوادها في الآيبان؛ بنك الموظف بيتعرف من آيبانه.', href: '/settings/banks', permission: 'settings.manage', icon: Building2 },
+      { title: 'سجل الأصول', description: 'الأصول المتاحة وحالتها وبياناتها.', href: '/settings/asset-types', permission: 'custody.assign', icon: Package },
     ],
   },
   {
-    title: 'الصلاحيات والطلبات والسجلات',
-    description: 'إدارة الوصول ومسارات الموافقة والبيانات المرجعية.',
+    title: 'النظام والطلبات والمستندات',
+    description: 'سياسات النظام، وأنواع الطلبات ومسارات اعتمادها، والمستندات وقوالبها، وحماية البيانات.',
     links: [
-      { title: 'المستخدمون', description: 'حسابات الدخول وربطها بالموظفين والفروع.', href: '/settings/users', permission: 'users.manage', icon: Users },
-      { title: 'الأدوار والصلاحيات', description: 'الصلاحيات الفعلية الممنوحة لكل دور.', href: '/settings/roles', permission: 'roles.manage', icon: ShieldCheck },
-      { title: 'مسارات الموافقات', description: 'مكتبة كل سلاسل الاعتماد — وربطها بالطلبات من «أنواع الطلبات».', href: '/settings/approvals', permission: 'approval_chains.manage', icon: FileCheck },
+      { title: 'سياسات النظام', description: 'الإجازات والحضور والمسير وعملة النظام وأسباب إنهاء الخدمة وإعداد استقبال البصمات.', href: '/settings/policies', permission: 'settings.manage', icon: Settings2 },
       { title: 'أنواع الطلبات', description: 'الطلبات بفئاتها وحقولها، وسلسلة اعتماد كل فئة (ولكل فرع).', href: '/settings/request-types', permission: 'request_types.manage', icon: FileText },
+      { title: 'مسارات الموافقات', description: 'مكتبة كل سلاسل الاعتماد — وربطها بالطلبات من «أنواع الطلبات».', href: '/settings/approvals', permission: 'approval_chains.manage', icon: FileCheck },
       { title: 'أنواع المستندات', description: 'المستندات التي تُرفق بملفات الموظفين.', href: '/settings/documents', permission: 'settings.manage', icon: FileText },
       { title: 'قوالب المستندات', description: 'قوالب العقود والإقرارات ونماذج الموارد البشرية لإصدارها وحفظها وطباعتها.', href: '/settings/document-templates', permission: 'settings.manage', icon: FileText },
       { title: 'قوالب الخطابات', description: 'صياغة خطابات طلبات الموظفين ونشرها وربطها بالموافقات.', href: '/settings/letter-templates', permission: 'settings.manage', icon: FileText },
-      { title: 'سجل الأصول', description: 'الأصول المتاحة وحالتها وبياناتها.', href: '/settings/asset-types', permission: 'custody.assign', icon: Package },
+      // B4.8 (ب): مدد الاحتفاظ بالبيانات (تنبيه بمهمة، من غير مسح) وسجل حوادث التسريب بموعد 72 ساعة
+      { title: 'حماية البيانات', description: 'مدد الاحتفاظ بالبيانات، وسجل حوادث التسريب بموعد إخطار 72 ساعة.', href: '/settings/data-protection', permission: 'settings.manage', icon: Building2 },
+    ],
+  },
+  {
+    title: 'المستخدمين والصلاحيات',
+    description: 'حسابات الدخول والأدوار.',
+    links: [
+      { title: 'المستخدمون', description: 'حسابات الدخول وربطها بالموظفين والفروع.', href: '/settings/users', permission: 'users.manage', icon: Users },
+      { title: 'الأدوار والصلاحيات', description: 'الصلاحيات الفعلية الممنوحة لكل دور.', href: '/settings/roles', permission: 'roles.manage', icon: ShieldCheck },
     ],
   },
 ]

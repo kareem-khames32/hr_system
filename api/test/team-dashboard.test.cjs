@@ -86,7 +86,8 @@ test('TM-03: the service only reads, uses the standing team definition, and mone
 
 test('TM-04: the sidebar item shows for a manager only, and the screen gates the salary column', () => {
   const sidebar = read('src/components/layout/Sidebar.tsx'), lib = read('src/lib/manager-api.ts'), page = read('src/app/my/team/page.tsx')
-  assert.match(sidebar, /\.\.\.\(teamManager \? \[\{ id: 'my-team', label: 'فريقي', icon: <Users size=\{20\} \/>, href: '\/my\/team' \} satisfies MenuItem\] : \[\]\),/)
+  assert.match(sidebar, /\{ label: 'فريقي', href: '\/my\/team', when: 'team' \},/)
+  assert.match(sidebar, /\n      team: teamManager,\n/)
   assert.match(sidebar, /if \(!managerOn \|\| !getCurrentUser\(\)\) return setTeamManager\(false\)/)
   assert.match(sidebar, /\}, \[managerOn\]\)/, 'مش مع كل انتقال')
   // سؤال واحد للجلسة بمفتاح التوكن، والنداء الفاشل مايتخزّنش

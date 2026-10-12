@@ -80,8 +80,8 @@ test('SFU-04: مصدر الكود — كل كتابة تحت قفل صف الح�
 
 test('SFU-05: الواجهة — الشاشتين بعنوانهم في القايمة، والبلاغ مابيبعتش فرع ولا حالة', () => {
   const mine = web('app/my/safety/page.tsx'), log = web('app/safety/page.tsx'), sidebar = web('components/layout/Sidebar.tsx'), titles = web('components/layout/pageTitles.ts')
-  assert.match(sidebar, /label: 'السلامة وإصابات العمل',\n\s+icon: <ShieldCheck size=\{20\} \/>,\n\s+href: '\/safety',\n\s+perm: 'safety\.manage'/)
-  assert.match(sidebar, /\{ id: 'my-safety', label: 'بلاغات السلامة', icon: <ShieldCheck size=\{20\} \/>, href: '\/my\/safety' \}/)
+  assert.match(sidebar, /\{ label: 'السلامة وإصابات العمل', href: '\/safety', perm: 'safety\.manage' \},/)
+  assert.match(sidebar, /\{ label: 'بلاغات السلامة', href: '\/my\/safety' \},/)
   assert.match(titles, /\['\/safety', 'السلامة وإصابات العمل'\]/); assert.match(titles, /\['\/my\/safety', 'بلاغات السلامة'\]/)
   assert.match(mine, />\s*بلاغات السلامة\s*<\/h1>/); assert.match(log, />\s*السلامة وإصابات العمل\s*<\/h1>/)
   assert.doesNotMatch(mine, /branchId|severity|rootCause/)

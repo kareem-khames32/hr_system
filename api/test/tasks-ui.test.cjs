@@ -98,8 +98,9 @@ test('TU-04: قايمة المهام والقايمة الجانبية والع�
   // والقايمة بتقول لما توصل حدّها (التصدير بيطلّع المعروض)
   assert.match(page, /\{tasks\.length >= 500 \? ' \(أول 500\)' : ''\}/)
   const sidebar = read('src/components/layout/Sidebar.tsx')
-  assert.match(sidebar, /\{ id: 'my-tasks', label: 'مهامي', icon: <ListChecks size=\{20\} \/>, href: '\/my\/tasks', badge: tasksCount \}/)
-  assert.match(sidebar, /id: 'tasks',\s+label: 'المهام',\s+icon: <ListChecks size=\{20\} \/>,\s+href: '\/tasks',\s+perm: 'tasks\.view_all',/)
+  assert.match(sidebar, /\{ label: 'مهامي', href: '\/my\/tasks', badge: 'tasks' \},/)
+  assert.match(sidebar, /const badges: Record<MenuBadge, number> = \{ inbox: inboxCount, payrollApprovals, tasks: tasksCount \}/)
+  assert.match(sidebar, /id: 'tasks',\s+label: 'المهام',\s+icon: <ListChecks size=\{20\} \/>,\s+children: \[\s+\{ label: 'مهامي', href: '\/my\/tasks', badge: 'tasks' \},\s+\{ label: 'المهام', href: '\/tasks', perm: 'tasks\.view_all' \},\s+\],/)
   assert.match(sidebar, /fetchMyTasksCount\(\)\s+\.then\(\(result\) => setTasksCount\(result\.open\)\)\s+\.catch\(\(\) => setTasksCount\(0\)\)\s+\}, \[pathname, tasksRevision\]\)/)
   // وبيتحدّث بعد أي تغيير في المهام من غير انتقال: الشاشتين بيعلنوا، والقايمة بتسمع
   assert.match(sidebar, /window\.addEventListener\(TASKS_CHANGED_EVENT, bump\)/)

@@ -46,6 +46,6 @@ test('SWU-03: الواجهة — «تبديل ورديتي»: موافق أو م
   assert.match(page, />\s*تبديل ورديتي\s*<\/h1>/)
   assert.match(page, /\{row\.open && \(\n\s+<div className="flex flex-wrap items-end gap-3">/)
   assert.match(page, /onClick=\{\(\) => answer\(row\.requestId, true\)\}>موافق<\/button>/)
-  assert.match(web('components/layout/Sidebar.tsx'), /\{ id: 'my-shift-swaps', label: 'تبديل ورديتي', icon: <Clock size=\{20\} \/>, href: '\/my\/shift-swaps' \}/)
+  assert.match(web('components/layout/Sidebar.tsx'), /\{ label: 'تبديل ورديتي', href: '\/my\/shift-swaps' \},/)
   assert.match(web('components/layout/pageTitles.ts'), /\['\/my\/shift-swaps', 'تبديل ورديتي'\]/)
 })

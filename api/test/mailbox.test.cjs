@@ -304,7 +304,7 @@ test('MU-07: wiring — a new closed module outside the presets, the shared-mail
   assert.match(read('api/src/mailbox/mailbox-store.ts'), /if \(ready === true\) return true\n/, 'النتيجة السلبية مابتتحفظش: عملية شغالة من قبل الترحيل بتشوفه أول ما يتطبق')
 
   // الواجهة: الشاشة في القايمة والعنوان والقاموس؛ ونص الرسالة معزول؛ والكاش في ذاكرة الصفحة بس
-  assert.ok(read('src/components/layout/Sidebar.tsx').includes("{ id: 'mail', label: 'البريد', icon: <Mail size={20} />, href: '/mail' },"))
+  assert.ok(read('src/components/layout/Sidebar.tsx').includes("{ label: 'البريد', href: '/mail' },"))
   assert.ok(read('src/components/layout/pageTitles.ts').includes("['/mail', 'البريد'],"))
   assert.match(read('src/i18n/en.ts'), /^\s*'البريد': 'Mail',$/m)
   const body = read('src/app/mail/MessageBody.tsx')

@@ -85,7 +85,8 @@ export const MODULES = {
     nameAr: 'الموظفين والملف والعقود والحركة', group: 'core', core: true, dependsOn: ['org'],
     description: 'ملف الموظف وبياناته وعقوده ونقله وترقيته وإيقافه وأرشفته',
     permissions: ['employees.view', 'employees.create', 'employees.edit', 'employees.archive', 'transfers.view', 'employees.view_compensation'],
-    routes: ['/employees', '/settings/job-titles', '/settings/grades', '/settings/employee-fields'],
+    // B-ADD.21: «استيراد بيانات التجهيز» بيستورد الهيكل والموظفين (كنترولره تبع الموديول ده)
+    routes: ['/employees', '/settings/job-titles', '/settings/grades', '/settings/employee-fields', '/settings/import'],
     requestHandlers: ['employee_update_promotions', 'transfers_effective_date', 'employee_update', 'contracts_register', 'employee_record', 'employee_record_auto'],
     jobs: ['requests.scheduled-transfers'],
   }),
@@ -106,7 +107,8 @@ export const MODULES = {
   notifications: moduleDef({
     nameAr: 'الإشعارات', group: 'core', core: true,
     description: 'إشعارات النظام داخل التطبيق وبالبريد',
-    routes: ['/notifications'],
+    // B-ADD.21: شاشة «قنوات الإشعارات» تبع الإشعارات (كنترولرها تبع الموديول ده)
+    routes: ['/notifications', '/settings/notification-channels'],
     // B2.4: الملخص اليومي للبريد
     jobs: ['notifications.daily-digest'],
   }),
@@ -231,8 +233,9 @@ export const MODULES = {
       'payroll.reverse', 'payroll.policy.manage', 'payroll.chain_manage', 'payroll.self_approval_licence',
       'deductions.view', 'deductions.approve', 'deductions.manage', 'bonuses.view', 'bonuses.approve', 'bonuses.manage', 'bonuses.exceed_cap',
       'financial_exemption.view', 'financial_exemption.grant', 'financial_exemption.approve', 'financial_exemption.override_limits'],
+    // B-ADD.21: «بنود الراتب» و«البنوك» شاشتين تحت /settings ومساراتهم في الخادم تبع الرواتب: كانوا بيفضلوا ظاهرين والرواتب مقفولة وبياناتهم 404
     routes: ['/payroll', '/my/payslips', '/my/deductions', '/my/bonuses', '/my/exemptions', '/reports/payroll-register', '/reports/payroll-cost',
-      '/reports/deductions', '/reports/overtime', '/reports/cost-centers'],
+      '/reports/deductions', '/reports/overtime', '/reports/cost-centers', '/settings/salary-items', '/settings/banks'],
     requestTypes: ['PAYROLL_DEDUCTION', 'PAYROLL_BONUS'],
     requestHandlers: ['salary_update_history', 'payroll_bonus', 'payroll_allowance', 'payroll_adjustment', 'payroll_bank_secure'],
     jobs: ['payroll.daily-accrual', 'payroll.deductions-sla'],

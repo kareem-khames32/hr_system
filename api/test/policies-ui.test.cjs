@@ -180,8 +180,9 @@ test('PU-04: الشاشات والقايمة الجانبية وصلاحيات �
     [true, ['/policies', '/my/policies'], ['policies.manage', 'policies.report'], ['documents']])
   for (const file of ['src/app/policies/page.tsx', 'src/app/policies/reports/page.tsx', 'src/app/my/policies/page.tsx', 'src/app/login/policies/page.tsx']) assert.ok(fs.existsSync(path.join(root, file)), file)
   const sidebar = read('src/components/layout/Sidebar.tsx')
-  assert.match(sidebar, /id: 'policies',\n\s+label: 'السياسات',\n\s+icon: <ScrollText size=\{20\} \/>,\n\s+children: \[\n\s+\{ label: 'مكتبة السياسات', href: '\/policies', perm: 'policies\.manage' \},\n\s+\{ label: 'تقرير الإقرارات', href: '\/policies\/reports', perm: 'policies\.report' \},\n\s+\],/)
-  assert.match(sidebar, /\{ id: 'my-policies', label: 'سياساتي', icon: <ScrollText size=\{20\} \/>, href: '\/my\/policies' \},/)
+  // B-ADD.21: السياسات بقت في مجموعة «المستندات والسياسات» — «سياساتي» لكل حساب، والمكتبة والتقرير كل واحد بصلاحيته
+  assert.match(sidebar, /id: 'documents',\n\s+label: 'المستندات والسياسات',\n\s+icon: <FolderOpen size=\{20\} \/>,\n\s+children: \[\n[\s\S]{0,700}?\{ label: 'مكتبة السياسات', href: '\/policies', perm: 'policies\.manage' \},\n\s+\{ label: 'تقرير الإقرارات', href: '\/policies\/reports', perm: 'policies\.report' \},\n\s+\],/)
+  assert.match(sidebar, /\{ label: 'سياساتي', href: '\/my\/policies' \},/)
   const layout = read('src/components/layout/MainLayout.tsx')
   // التقرير مفتوح في الإطار (الخادم بيحكم بأي واحدة من الصلاحيتين)، والمكتبة لمديرها؛ والتقرير قبل المكتبة في القايمة (أول تطابق)
   assert.ok(layout.indexOf("['/policies/reports', null],") > 0 && layout.indexOf("['/policies/reports', null],") < layout.indexOf("['/policies', 'policies.manage'],"))

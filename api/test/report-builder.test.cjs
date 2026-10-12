@@ -106,7 +106,7 @@ test('RBU-05: مصدر الكود — التشغيل بصلاحيات القار
 
 test('RBU-06: الواجهة — شاشة البانِي بعنوانها في القايمة، والقاموس من الخادم', () => {
   const page = web('app/reports/builder/page.tsx'), sidebar = web('components/layout/Sidebar.tsx'), titles = web('components/layout/pageTitles.ts')
-  assert.match(sidebar, /\{ label: 'بانِي التقارير', href: '\/reports\/builder' \}/)
+  assert.match(sidebar, /\{ label: 'بانِي التقارير', href: '\/reports\/builder', perm: 'reports\.view' \}/)
   assert.match(titles, /\['\/reports\/builder', 'بانِي التقارير'\]/)
   assert.match(page, />\s*بانِي التقارير\s*<\/h1>/)
   assert.match(page, /apiFetch<Overview>\(B\)/)
