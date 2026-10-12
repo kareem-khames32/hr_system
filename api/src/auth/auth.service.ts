@@ -4,6 +4,7 @@ import {
   HttpStatus,
   Injectable,
   Logger,
+  Optional,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common'
@@ -29,6 +30,7 @@ import { UserSessionsService } from './user-sessions.service'
 import { TotpService } from './totp.service'
 import { TOTP_CHALLENGE_MARK, TOTP_FACTOR_CHANGED } from './totp'
 import { PREBOARDING_SESSION_ROLE, preboardingActive, preboardingUntilOf } from './preboarding'
+import { MailSessionService } from '../mailbox/mail-session.service'
 
 // حمولة التوكن — الدور والفرع هما أساس عزل البيانات
 export interface JwtPayload {
@@ -112,7 +114,9 @@ export class AuthService {
     private readonly mail: MailService,
     private readonly security: LoginSecurityService,
     private readonly sessions: UserSessionsService,
-    private readonly totp: TotpService
+    private readonly totp: TotpService,
+    // B-ADD.16: اختياري — الاختبارات اللي بتبني الخدمة بإيدها من غيره
+    @Optional() private readonly mailSession?: MailSessionService
   ) {}
 
   // B1.3: تأخير رد المحاولة الغلط (ثانية ثم 2 ثم 4) — AUTH_FAILURE_DELAY_MS بيصغّره في الاختبارات
@@ -323,6 +327,8 @@ export class AuthService {
       throw error
     }
     const user = await this.domain.resolveUser(directoryUser)
+    // B-ADD.16: اسم الموظف في المجال بيتسجّل لبريده (الاسم بس، ولما موديول البريد مفعّل) — بيه «افتح بريدك» بيعرف يدخل خادم البريد باسم مين
+    await this.mailSession?.rememberLogin(user.id, directoryUser.userPrincipalName)
     // صندوق البريد من AD الأول (322 موظف بريدهم عندنا @maharah.local) وإلا بريد الحساب
     return this.finishLogin(user, 'DOMAIN', directoryUser.mail ?? user.email, context, identifier, session)
   }

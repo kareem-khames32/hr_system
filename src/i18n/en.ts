@@ -39,6 +39,7 @@ const SHELL: Record<string, string> = {
   'الاستبيانات': 'Surveys',
   'الاعتمادات والموافقات': 'Approvals',
   'البدلات': 'Allowances',
+  'البريد': 'Mail',
   'البنوك': 'Banks',
   'التأمينات': 'Social insurance',
   'التدريب والتطوير': 'Training & development',

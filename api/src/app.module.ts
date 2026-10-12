@@ -62,6 +62,7 @@ import { SafetyModule } from './safety/safety.module'
 import { TimesheetsModule } from './timesheets/timesheets.module'
 import { IntegrationsModule } from './integrations/integrations.module'
 import { AiModule } from './ai/ai.module'
+import { MailboxModule } from './mailbox/mailbox.module'
 import { StatutoryModule } from './statutory/statutory.module'
 import { validateEnv } from './auth/jwt-secret'
 import { dbPacketSize } from './common/sql-packet-size'
@@ -178,6 +179,8 @@ import { dbPacketSize } from './common/sql-packet-size'
     IntegrationsModule,
     // B6.6: الذكاء الاصطناعي — مساعد القراءة وسجل ai_actions (موديول ai، مقفول افتراضيًا)
     AiModule,
+    // B-ADD.16: البريد — صندوق Exchange بتاع الموظف جوه النظام (موديول mail، مقفول افتراضيًا)
+    MailboxModule,
     // B2.13-ب: التقارير المحفوظة والمجدولة
     SavedReportsModule,
     // B5.9: بانِي التقارير (ميزة reports.builder، مقفولة افتراضيًا)

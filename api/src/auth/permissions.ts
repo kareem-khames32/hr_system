@@ -142,6 +142,8 @@ export const PERMISSIONS: Record<string, string> = {
   'timesheets.manage': 'إدارة مشاريع ساعات العمل وتقاريرها',
   // B6.3: التكاملات — مفاتيح الـAPI العام ونقاط الـwebhook (لحساب بكل الفروع)
   'integrations.manage': 'إدارة مفاتيح التكامل والـwebhooks',
+  // B-ADD.16: البريد — كل موظف بيفتح صندوقه من غير صلاحية؛ دي لتعريف الصناديق المشتركة ومين عليها
+  'mail.shared.manage': 'إدارة صناديق البريد المشتركة',
   // B2.11: الوظائف المعتمدة
   'positions.view': 'عرض الوظائف المعتمدة',
   'positions.manage': 'إدارة الوظائف المعتمدة',
@@ -173,6 +175,7 @@ export const PERMISSION_MODULES: Array<{ key: string; labelAr: string; permissio
   { key: 'safety', labelAr: 'السلامة وإصابات العمل', permissions: ['safety.manage'] },
   { key: 'timesheets', labelAr: 'ساعات المشاريع', permissions: ['timesheets.manage'] },
   { key: 'integrations', labelAr: 'التكاملات', permissions: ['integrations.manage'] },
+  { key: 'mail', labelAr: 'البريد', permissions: ['mail.shared.manage'] },
   { key: 'positions', labelAr: 'الوظائف المعتمدة', permissions: ['positions.view', 'positions.manage'] },
   { key: 'announcements', labelAr: 'الإعلانات', permissions: ['announcements.manage'] },
   { key: 'org', labelAr: 'الهيكل التنظيمي', permissions: ['org.manage'] },
@@ -228,6 +231,7 @@ export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   'announcements.manage': 'يكتب الإعلانات وينشرها ويسحبها ويشوف مين قراها — حساب الفروع لإعلانات فروعه بس',
   'dependents.manage': 'يشوف معالين موظف في نطاق فروعه ويضيف ويعدّل ويحذف (بسبب) مباشرة — من غير طلب',
   'integrations.manage': 'يعمل ويلغي مفاتيح التكامل (كل مفتاح بنطاقات قراءة وفروع) ونقاط استقبال الأحداث لأنظمة خارجية — لحساب «كل الفروع» بس',
+  'mail.shared.manage': 'يعرّف صناديق البريد المشتركة (العنوان والاسم) ويحدد مين من الحسابات يفتحها من جوه النظام — مابيفتحش بريد حد، وخادم البريد هو اللي بيسمح أو يرفض',
   'timesheets.manage': 'يعرّف مشاريع ساعات العمل ومهامها (مشروع لكل الفروع = حساب بكل الفروع)، ويعتمد أسابيع ساعات موظفين نطاق فروعه، ويشوف تقرير ساعات المشاريع',
   'safety.manage': 'يشوف حوادث السلامة في نطاق فروعه ويصنّفها ويحقق فيها، ويفتح إجراءات تصحيحية ومهمة إبلاغ الجهة كمهام، ويربط الحادث بإجازة المصاب، ويقفله',
   'succession.manage': 'يعلّم وظائف نطاق فروعه «حرجة» ويرشّح خلفاءها بدرجة جاهزية — بيانات سرّية مابتظهرش للموظف المرشح',

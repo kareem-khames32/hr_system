@@ -30,6 +30,7 @@ import { SSO_TX_COOKIE, SSO_TX_SECONDS, ssoCookieHeader } from './sso-oidc'
 import { TotpService } from './totp.service'
 import { RequireModule } from '../modules-registry/module.guard'
 import { AllowDuringPolicyGate } from '../policies/policy-gate.decorator'
+import { MailSessionService } from '../mailbox/mail-session.service'
 
 // B2.17: «جلسة cookie» بطلب العميل (الواجهة): التوكن في cookie httpOnly والرد من غيره. «تذكرني» = الـcookie بتفضل لآخر مدة
 // الجلسة؛ من غيرها بتتمسح مع قفل المتصفح. من غير cookieSession الرد زي ما هو بالحرف (توكن في الجسم — السكربتات والاختبارات).
@@ -130,7 +131,7 @@ class ChangePasswordDto {
   remember?: boolean
 }
 
-type CookieResponse = { setHeader(name: string, value: string | string[]): unknown }
+type CookieResponse = { setHeader(name: string, value: string | string[]): unknown; getHeader?(name: string): unknown }
 type SessionRequest = { headers: Record<string, unknown>; method?: string; ip?: string }
 
 @RequireModule('platform')
@@ -138,7 +139,7 @@ type SessionRequest = { headers: Record<string, unknown>; method?: string; ip?: 
 @Controller('auth')
 export class AuthController {
   constructor(private readonly auth: AuthService, private readonly config: ConfigService, private readonly sessions: UserSessionsService,
-    private readonly totp: TotpService, private readonly sso: SsoService) {}
+    private readonly totp: TotpService, private readonly sso: SsoService, private readonly mailSession: MailSessionService) {}
 
   /**
    * B2.17: تسليم الجلسة. جلسة cookie = التوكن في cookie httpOnly والرد من غير accessToken (سكربت الصفحة مايشوفوش)؛ غير كده، أو
@@ -197,7 +198,10 @@ export class AuthController {
   @Post('login/domain')
   async domainLogin(@Body() dto: DomainLoginDto, @Ip() ip: string, @Res({ passthrough: true }) res: CookieResponse, @Headers('user-agent') userAgent?: string) {
     const cookie = dto.cookieSession === true
-    return this.deliver(res, await this.auth.domainLogin(dto.username, dto.password, { ip, userAgent }, { cookie }), cookie, dto.remember === true)
+    const delivered = this.deliver(res, await this.auth.domainLogin(dto.username, dto.password, { ip, userAgent }, { cookie }), cookie, dto.remember === true)
+    // B-ADD.16: الجلسة اتفتحت وموديول البريد مفعّل للحساب = كلمة السر بتتخزن مشفّرة للجلسة ومفتاحها بيروح للمتصفح في cookie (الموظف مايكتبهاش مرتين)
+    await this.mailSession.afterDomainLogin(res, delivered, dto.password)
+    return delivered
   }
 
   // الخطوة الثانية للمسارين: الرمز اللي وصل على البريد → الجلسة
@@ -232,6 +236,8 @@ export class AuthController {
     // B2.17-ب: والجلسة نفسها بتتنهي من الخادم (التوكن اللي الطلب شايله — ترويسة أو cookie)
     await this.auth.endSessionOfToken(bearer ?? cookie)
     if (cookie !== null) res.setHeader('Set-Cookie', clearedSessionCookieHeader(options))
+    // B-ADD.16: نص كلمة سر البريد بتاع الجلسة دي بيتمسح من الخادم مع الخروج، ومفتاحه من المتصفح
+    await this.mailSession.afterLogout(res, bearer ?? cookie)
     return { ok: true }
   }
 
