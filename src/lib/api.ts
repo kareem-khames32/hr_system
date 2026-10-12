@@ -8,6 +8,7 @@ import { branchScopeOfUser } from './branch-scope'
 import { PRODUCT_NAME } from './product'
 export type { EmployeeStatus, AttendanceStatus, CustodyStatus, OvertimeStatus, LeaveStatus, LeavePeriod, LoanStatus, TransferStatus, LetterStatus, BalanceType, LeaveTypeCode } from '../../api/src/common/domain-status'
 import type { PayrollCalendarChange } from './payroll-calendar-api'
+import type { ApiRequestWaitingAt } from './request-waiting'
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'
@@ -600,6 +601,8 @@ export interface ApiRequest {
   submittedBy?: ApiRequestSubmittedBy | null
   // B4.5 (هـ): المدد القانونية لطلب استقالة لسه في المسار (لو حسابها مفعّل) — عرض بس
   resignationTerms?: ApiResignationTerms
+  // B-ADD.17: الطلب اللي قيد المراجعة «واقف عند» مين (طلباتي، لوحة الطلبات، تفاصيل الطلب) — مش مع السري المحجوب
+  waitingAt?: ApiRequestWaitingAt
 }
 // صاحب الطلب كما في ملفه الحالي: الاسم والكود والمسمى وتنظيمه ومديره المباشر (نفس حل المدير المباشر في سلسلة الاعتماد)
 export interface ApiRequestRequester {

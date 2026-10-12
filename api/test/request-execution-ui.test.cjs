@@ -95,7 +95,8 @@ test('RXU-03: تقرير «معتمد ومااتنفذش» — فلتر من ا�
   assert.match(page, /<label className="flex items-center gap-2 text-sm text-gray-700" data-pending-execution>\s+<input type="checkbox" checked=\{pendingExecution\} onChange=\{\(e\) => \{ setLoading\(true\); setPendingExecution\(e\.target\.checked\) \}\} \/>\s+معتمد ومااتنفذش/)
   const controller = read('api/src/requests/requests.controller.ts')
   assert.match(controller, /@Query\('execution'\) execution\?: string/)
-  assert.match(controller, /return this\.service\.listAll\(user, \{ status, typeCode, execution \}\)/)
+  // B-ADD.17: نفس النداء بالفلتر نفسه، وناتجه بيتزوّد عليه «واقف عند» قبل ما يرجع
+  assert.match(controller, /return this\.holders\.attach\(user, await this\.service\.listAll\(user, \{ status, typeCode, execution \}\)\)/)
   const service = read('api/src/requests/requests.service.ts')
   assert.match(service, /if \(filters\.execution === 'pending'\) where\.status = In\(\['APPROVED', 'IN_EXECUTION'\]\)/)
   // «الخطوة الحالية»: مين مسؤول التنفيذ وموعد مهمته ومتأخرة ولا لأ

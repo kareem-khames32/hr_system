@@ -28,6 +28,7 @@ import ApprovalDelegations from '@/components/approvals/ApprovalDelegations'
 import RequestPayload from '@/components/RequestPayload'
 // بطاقة صاحب الطلب أعلى التفاصيل: الاسم والكود والمسمى والقسم والفرع والفريق والمدير المباشر
 import RequestEmployeeCard from '@/components/requests/RequestEmployeeCard'
+import RequestWaitingAt from '@/components/requests/RequestWaitingAt'
 import CommentsThread from '@/components/comments/CommentsThread'
 import OvertimeRequestSummary, { overtimeApprovalLimit, overtimeComputedAtApproval } from '@/components/OvertimeRequestSummary'
 import { payloadSummary } from '@/lib/request-payload'
@@ -618,6 +619,8 @@ export default function ApprovalsInboxPage() {
               <div className="flex justify-between items-center"><h2 className="font-bold text-lg">تفاصيل الطلب #{detailId}</h2><button type="button" aria-label="إغلاق التفاصيل" onClick={() => setDetailId(null)}><X size={20} /></button></div>
               {detailLoading && <p>جارٍ تحميل تفاصيل الطلب...</p>}
               {detailError && <p role="alert" className="text-red-700">{detailError}</p>}
+              {/* B-ADD.17: الطلب دلوقتي واقف عند مين (خطوة متوازية، أو طلب اعتمدته وراح للي بعدي) */}
+              {detail && <RequestWaitingAt waitingAt={detail.waitingAt} roleLabels={roleLabels} />}
               {detail && <><RequestEmployeeCard requester={detail.requester} submittedBy={detail.submittedBy} resignationTerms={detail.resignationTerms} /><RequestPayload payload={detail.payload} />
                 {/* نوع السلفة: «سلفة استثنائية — N قسط» أو «سلفة (مرة واحدة)» */}
                 {detail.typeCode === 'LOAN' && loanRequestKindLabel(detail.payload) && <p className="text-sm font-medium text-gray-700 bg-gray-50 rounded-xl px-3 py-2" data-testid="loan-kind">{loanRequestKindLabel(detail.payload)}</p>}

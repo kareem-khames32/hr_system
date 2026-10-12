@@ -19,12 +19,12 @@ import { ModulesService } from '../modules-registry/modules.service'
 import { routeAvailable } from '../modules-registry/registry'
 import { enqueueQueueJob, queueTablesReady, type DomainEventType } from '../queue/outbox'
 import { QueueService } from '../queue/queue.service'
-import { activeDelegationsFrom } from '../requests/approval-delegations'
-import { ApproverResolver, FUNCTIONAL_APPROVER_ROLES } from '../requests/approver-resolver.service'
+import { ApproverResolver } from '../requests/approver-resolver.service'
 import { RequestType } from '../requests/entities/request-type.entity'
 import { Request } from '../requests/entities/request.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { RequestsService } from '../requests/requests.service'
+import { RequestHoldersService } from '../requests/request-holders.service'
 import { Task, TASK_OPEN_STATUSES, type TaskStatus } from '../tasks/task.entity'
 import { taskExtrasOfOne } from '../tasks/task-extras'
 import { taskAccess, taskAwaitsAccount, taskLocalDate, taskStampCurrent, tasksTableReady, TASK_ROLE_LABELS } from '../tasks/task-rules'
@@ -163,7 +163,8 @@ export class NotificationsService implements OnModuleInit {
     private readonly resolver: ApproverResolver,
     private readonly comments: CommentsService,
     private readonly announcements: AnnouncementsService,
-    private readonly channels: NotificationChannelsService
+    private readonly channels: NotificationChannelsService,
+    private readonly holders: RequestHoldersService
   ) {}
 
   onModuleInit() {
@@ -251,24 +252,12 @@ export class NotificationsService implements OnModuleInit {
 
   /**
    * الحسابات اللي خطوة الطلب الحالية مستنياها (role: حاملي الدور اللي الخطوة اتصعّدت له بس). حساب «طلب بانتظار اعتمادك» نفسه، وبتستعمله
-   * إشارة «المعتمد الحالي» في التعليقات (B2.8).
+   * إشارة «المعتمد الحالي» في التعليقات (B2.8). B-ADD.17: الحساب نفسه اتنقل لـRequestHoldersService.accountsAwaited (المرشحين: حاملي الدور
+   * الوظيفي، والمعتمدين المسمّين، وبدلاءهم في تفويض ساري؛ والحكم النهائي لكل حساب في stepAwaitsAccount بسياق تفويضه) — «واقف عند» في شاشات
+   * الطلب بيقرا منه كمان، فالاسم المكتوب هو اللي بيتبعتله البريد.
    */
   private async stepAccounts(req: Request, role: string | null): Promise<JwtPayload[]> {
-    const waiting = this.requests.waitingSteps(req).filter(step => !role || step.role === role)
-    if (!waiting.length) return []
-    // خطوة وظيفية = أي حساب بيحملها؛ وكلها هيكلية = حسابات المعتمدين المسمّين بس
-    const functional = waiting.some(step => (FUNCTIONAL_APPROVER_ROLES as readonly string[]).includes(step.role))
-    const named = waiting.map(step => step.approverEmployeeId).filter((id): id is number => id != null)
-    if (!functional && !named.length) return []
-    // B2.6-ب: بدلاء المعتمدين المسمّين في تفويض ساري بيتبلّغوا كمان — الحكم النهائي لكل حساب في stepAwaitsAccount بسياق تفويضه
-    const delegates = new Set(named.length ? (await activeDelegationsFrom(this.ds.manager, named)).map(row => row.delegateEmployeeId) : [])
-    const users = await this.ds.getRepository(User).find({ where: functional ? { isActive: true } : { isActive: true, employeeId: In([...named, ...delegates]) } })
-    const recipients: JwtPayload[] = []
-    for (const account of await this.auth.accountPayloads(users)) {
-      const actingFor = account.employeeId != null && delegates.has(account.employeeId) ? (await this.requests.delegationContext(account, [req]))?.(req) : undefined
-      if (this.requests.stepAwaitsAccount(account, req, role, actingFor)) recipients.push(account)
-    }
-    return recipients
+    return ((await this.holders.accountsAwaited([req], role)).get(req.id) ?? []).map(row => row.account)
   }
 
   /** طلب وصل لخطوة مستنية معتمد (أو اتصعّد): للي الخطوة عليهم فعلًا. بريد بس — جوه التطبيق العدّاد المحسوب الموجود */

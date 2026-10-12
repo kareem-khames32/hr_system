@@ -35,6 +35,7 @@ import { definitionBranchQuery, definitionBranchWhere } from '../common/definiti
 import { LeaveBalancesService } from './leave-balances.service'
 import { RequestsService } from './requests.service'
 import { ApprovalDelegationsService } from './approval-delegations.service'
+import { RequestHoldersService } from './request-holders.service'
 import { leaveTypeView } from '../common/leave-contract'
 // ملاحظة النقل تُحفظ في custody_assignments.condition nvarchar(100) — الحد نفسه في الـDTO والخدمة
 import { TransferCustodyDto } from '../assets/custody.dto'
@@ -176,7 +177,8 @@ export class RequestsController {
     private readonly balances: LeaveBalancesService,
     @InjectRepository(LeaveType)
     private readonly leaveTypes: Repository<LeaveType>,
-    private readonly employees: EmployeesService
+    private readonly employees: EmployeesService,
+    private readonly holders: RequestHoldersService
   ) {}
 
   // كتالوج الأنواع — مفلتر بجمهور كل نوع للمستخدم الحالي
@@ -300,11 +302,12 @@ export class RequestsController {
 
   // «طلباتي»: طلبات صاحب الحساب. شاشة «طلباتي» وحدها تطلب معها ما قدّمه نيابةً
   // عن غيره (includeOnBehalf=1) — الشاشات الشخصية الأخرى تبقى على طلباته هو
+  // B-ADD.17: والطلب اللي لسه قيد المراجعة معاه «واقف عند» (اسم اللي خطوته الحالية مستنياه)
   @Get('requests/mine')
-  mine(@CurrentUser() user: JwtPayload, @Query('includeOnBehalf') includeOnBehalf?: string) {
-    return this.service.mine(user, {
+  async mine(@CurrentUser() user: JwtPayload, @Query('includeOnBehalf') includeOnBehalf?: string) {
+    return this.holders.attach(user, await this.service.mine(user, {
       includeOnBehalf: includeOnBehalf === '1' || includeOnBehalf === 'true',
-    })
+    }))
   }
 
   // إجازاتي المعتمدة — لمنتقي «إلغاء/تعديل إجازة» (خدمة ذاتية)
@@ -317,15 +320,16 @@ export class RequestsController {
   }
 
   // السجل الكامل — كونسول HR (بنطاق الفرع)
+  // B-ADD.17: «واقف عند» على الصفوف اللي قيد المراجعة — السري المحجوب مابيتزوّدش عليه حاجة
   @Perm('requests.view_all')
   @Get('requests/all')
-  listAll(
+  async listAll(
     @CurrentUser() user: JwtPayload,
     @Query('status') status?: string,
     @Query('typeCode') typeCode?: string,
     @Query('execution') execution?: string
   ) {
-    return this.service.listAll(user, { status, typeCode, execution })
+    return this.holders.attach(user, await this.service.listAll(user, { status, typeCode, execution }))
   }
 
   @Get('requests/my-decisions')
@@ -358,12 +362,13 @@ export class RequestsController {
     return this.delegationsService.revoke(user, id)
   }
 
+  // B-ADD.17: بعد بوابة التفاصيل (readable) — اللي مايشوفش الطلب مابيوصلش هنا، والسري المحجوب بيرجع زي ما هو
   @Get('requests/:id')
-  detail(
+  async detail(
     @CurrentUser() user: JwtPayload,
     @Param('id', ParseIntPipe) id: number
   ) {
-    return this.service.detail(user, id)
+    return (await this.holders.attach(user, [await this.service.detail(user, id)]))[0]
   }
 
   @Post('requests')

@@ -9,6 +9,9 @@ import BonusRequestForm from '@/components/requests/BonusRequestForm'
 import DeductionRequestForm from '@/components/requests/DeductionRequestForm'
 // بطاقة صاحب الطلب أعلى التفاصيل — وطلب الموارد البشرية نيابةً يقول اتقدّم لمين
 import RequestEmployeeCard from '@/components/requests/RequestEmployeeCard'
+// B-ADD.17: «واقف عند» — اسم اللي الخطوة الحالية مستنياه
+import RequestWaitingAt from '@/components/requests/RequestWaitingAt'
+import { waitingNamesOfRole, type ApiRequestWaitingAt } from '@/lib/request-waiting'
 import CommentsThread from '@/components/comments/CommentsThread'
 import OvertimePreview from '@/components/OvertimePreview'
 import OvertimeRequestSummary from '@/components/OvertimeRequestSummary'
@@ -272,7 +275,9 @@ interface MyRequestRow {
   submittedAt: string
   status: RequestStatus
   // سلسلة الاعتماد وخطوتها الحالية
-  steps: { name: string; state: 'done' | 'current' | 'waiting' | 'rejected' }[]
+  steps: { name: string; state: 'done' | 'current' | 'waiting' | 'rejected'; who?: string }[]
+  // B-ADD.17: الطلب اللي قيد المراجعة واقف عند مين (من الخادم)
+  waitingAt?: ApiRequestWaitingAt
   details: string
   destinationRecord?: string // مرجع الوجهة بعد الاكتمال
   // طلب قدّمته نيابة عن موظف آخر — اسمه من السيرفر
@@ -302,7 +307,10 @@ const mapRequest = (r: ApiRequest, types: ApiRequestType[]): MyRequestRow => {
           : s.stepOrder === r.currentStep
           ? 'current'
           : 'waiting',
+      // اسم اللي الخطوة الحالية مستنياه جنب اسم دورها
+      who: s.stepOrder === r.currentStep && !s.actedAt ? waitingNamesOfRole(r.waitingAt, s.role) : '',
     })),
+    waitingAt: r.waitingAt,
     details: payloadSummary(r.payload),
     destinationRecord: r.destinationRef ?? undefined,
     onBehalfOfName: (r as { onBehalfOfName?: string }).onBehalfOfName,
@@ -1447,6 +1455,7 @@ export default function MyRequestsPage() {
                               {step.state === 'current' && <Clock size={12} />}
                               {step.state === 'rejected' && <XCircle size={12} />}
                               {step.name}
+                              {step.state === 'current' && step.who && `: ${step.who}`}
                               {step.state === 'current' && ' (الآن)'}
                             </div>
                             {i < req.steps.length - 1 && (
@@ -1456,6 +1465,8 @@ export default function MyRequestsPage() {
                         ))}
                       </div>
                     )}
+                    {/* B-ADD.17: «واقف عند» بالاسم والمسمى ومن إمتى */}
+                    {req.waitingAt && <div className="mt-2"><RequestWaitingAt waitingAt={req.waitingAt} roleLabels={roleLabels} compact /></div>}
                   </div>
                 )
               })}
@@ -1473,6 +1484,7 @@ export default function MyRequestsPage() {
         {requestDetail && <div className="fixed inset-0 bg-black/50 z-50 flex justify-end" onClick={() => setRequestDetail(null)}>
           <div className="bg-white w-full max-w-lg h-full overflow-y-auto p-6 space-y-5" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between"><h2 className="text-xl font-bold">تفاصيل الطلب #{requestDetail.id}</h2><button onClick={() => setRequestDetail(null)} aria-label="إغلاق التفاصيل"><X size={22} /></button></div>
+            <RequestWaitingAt waitingAt={requestDetail.waitingAt} roleLabels={roleLabels} />
             <RequestEmployeeCard requester={requestDetail.requester} submittedBy={requestDetail.submittedBy} resignationTerms={requestDetail.resignationTerms} />
             <RequestPayload payload={requestDetail.payload} />
             {/* نوع السلفة: «سلفة استثنائية — N قسط» أو «سلفة (مرة واحدة)» */}
