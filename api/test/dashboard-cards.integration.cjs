@@ -591,3 +591,170 @@ test('DC-12 (B-ADD.7): the modules strip — a tile only with its module and its
     await repo('Asset').delete({ id: asset.id })
   }
 })
+
+// ===== B-ADD.20: اللوحة الإحصائية من غير جداول — المسارين الجداد، والنزول بالفرع، وأسماء اللوحة الجانبية =====
+// (بعد DC-08 فيه فرع رابع «فرع القياس» بـ600 موظف في القاعدة: فحوص حساب الشركة هنا بالاسم مش بعدد الصفوف)
+const closeAttendance = async run => {
+  const admin = claims(U.admin)
+  // الحضور عليه موديولات معتمدة عليه: تتقفل الأول وترجع بعده
+  const dependents = ['overtime', 'shifts']
+  for (const key of dependents) await modules.setModule(admin, key, { enabled: false })
+  await modules.setModule(admin, 'attendance', { enabled: false })
+  try { await run() } finally {
+    await modules.setModule(admin, 'attendance', { enabled: true })
+    for (const key of [...dependents].reverse()) await modules.setModule(admin, key, { enabled: true })
+  }
+}
+
+test('DC-13 (B-ADD.20): today by branch — counts only, a branch account gets its own branch alone, behind the attendance card permission and module', async () => {
+  const mine = await card(U.hr, '/branches'), top = await card(U.hr, '/attendance')
+  assert.deepEqual(mine.rows.map(row => [row.branchId, row.name, row.total]), [[B.j.id, 'فرع جدة', 12]])
+  assert.deepEqual([mine.total, mine.date, mine.isToday], [12, today, true])
+  assert.deepEqual(mine.rows[0].counts, top.counts, 'نفس خانات كارت الحضور')
+  assert.deepEqual(mine.counts, top.counts)
+  // أعداد بس: مفاتيح الصف، ومفيش اسم موظف ولا تليفون ولا أي ذكر لفرع برّه النطاق
+  assert.deepEqual(Object.keys(mine.rows[0]).sort(), ['branchId', 'counts', 'name', 'total'])
+  const text = JSON.stringify(mine)
+  assert.deepEqual([text.includes('الرياض'), text.includes('القياس'), text.includes('موظف لوحة'), text.includes('0500000'), mine.rows.some(row => row.branchId !== B.j.id)], [false, false, false, false, false])
+  // حساب الشركة: كل فرع بأعداده، ومجموع الصفوف = الإجمالي، والأكبر الأول
+  const all = await card(U.admin, '/branches')
+  const of = name => all.rows.find(row => row.name === name)
+  assert.deepEqual([of('فرع جدة').total, of('فرع الرياض').total, of('فرع راحته النهارده').total, of('فرع راحته النهارده').counts.rest], [12, 3, 1, 1])
+  assert.deepEqual(of('فرع جدة').counts, top.counts, 'رقم الفرع عند حساب الشركة = رقم حساب الفرع نفسه')
+  assert.equal(all.rows.reduce((sum, row) => sum + row.total, 0), all.total)
+  assert.deepEqual(all.rows.map(row => row.total), all.rows.map(row => row.total).sort((a, b) => b - a))
+  assert.equal(JSON.stringify(all).includes('موظف لوحة'), false)
+  // النزول: الضغط على فرع = نفس النداءات بفلتر الفرع — صف الفرع لوحده، وكارت الحضور بيفتح على إداراته
+  const riyadh = await card(U.admin, `/branches?branchId=${B.r.id}`)
+  assert.deepEqual(riyadh.rows.map(row => [row.name, row.total, row.counts.absent, row.counts.present]), [['فرع الرياض', 3, 2, 1]])
+  assert.deepEqual((await card(U.admin, `/attendance?branchId=${B.r.id}`)).rows.map(row => [row.name, row.total]), [['إدارة الرياض', 3]])
+  // فلتر اللوحة (إدارة/قسم/فريق) تضييق فوق النطاق: فريق المعرض 4، وقسم من فرع برّه النطاق ولا حد
+  assert.deepEqual((await card(U.hr, `/branches?teamId=${T.showroom.id}`)).rows.map(row => [row.name, row.total, row.counts.absent]), [['فرع جدة', 4, 2]])
+  assert.deepEqual((await card(U.hr, `/branches?departmentIds=${D.rdep.id}`)).rows, [])
+  // يوم فات: صفوفه المحسوبة
+  const yesterday = await card(U.hr, `/branches?date=${addDays(today, -1)}`)
+  assert.deepEqual([yesterday.isToday, yesterday.rows[0].counts.present, yesterday.rows[0].counts.late, yesterday.rows[0].counts.absent], [false, 1, 1, 1])
+  // الصلاحية والنطاق: قارئ الحضور يشوفه؛ فرع برّه النطاق 403؛ لوحة من غير صلاحية الحضور 403؛ ومن غير اللوحة 403؛ ومدخل غلط 400
+  assert.equal((await card(U.att, '/branches')).rows.length, 1)
+  for (const [user, route, status] of [[U.hr, `/branches?branchId=${B.r.id}`, 403], [U.bare, '/branches', 403], [U.plain, '/branches', 403],
+    [U.hr, `/branches?date=${addDays(today, 1)}`, 400], [U.hr, '/branches?date=2026-02-31', 400]]) {
+    assert.equal((await call(user, `/dashboard/cards${route}`)).status, status, `${user.email} ${route}`)
+  }
+  // موديول الحضور مقفول: المسار زي مسار مش موجود (نفس رد كروت الحضور)
+  await closeAttendance(async () => {
+    const closed = await call(U.hr, '/dashboard/cards/branches')
+    assert.equal(closed.status, 404); assert.match(closed.body.message, /^Cannot GET \/api\/dashboard\/cards\/branches/)
+    assert.equal((await call(U.admin, '/dashboard/cards/attendance/employees?bucket=absent&limit=5')).status, 404)
+    assert.equal((await call(U.admin, '/dashboard/cards/trends?days=7')).status, 404)
+  })
+  assert.equal((await card(U.hr, '/branches')).rows.length, 1)
+})
+
+test('DC-14 (B-ADD.20): the workforce numbers behind the charts — headcount month by month, turnover by the dictionary rule, tenure and headcount per branch; counts only, inside the scope and the filter', async () => {
+  const rules = require('../src/dashboard/dashboard-cards'), metrics = require('../src/reports/metrics')
+  const month = today.slice(0, 7)
+  const mine = await card(U.hr, '/workforce/insights'), monthly = await card(U.hr, '/workforce/monthly'), workforce = await card(U.hr, '/workforce')
+  assert.deepEqual([mine.months.length, mine.to, mine.months[11].month, mine.from], [12, month, month, rules.lastMonths(today, 12)[0]])
+  assert.deepEqual(Object.keys(mine.months[0]).sort(), ['headcount', 'joiners', 'leavers', 'month'], 'أعداد بس')
+  // فرع جدة: 12 موظف من 2024 (منهم «gone» اللي آخر يوم له النهارده)، وj11 اتعيّن النهارده — نفس تعيينات وخروج السلسلة القديمة
+  assert.deepEqual(mine.months.slice(6).map(row => [row.joiners, row.leavers]), monthly.months.map(row => [row.joiners, row.leavers]))
+  assert.deepEqual([mine.months[11].joiners, mine.months[11].leavers, workforce.leavers], [1, 1, 1])
+  assert.deepEqual(mine.months.map(row => row.headcount), [...Array(11).fill(12), 13], 'آخر يوم خدمة جوه العدّ في يومه (تعريف «آخر الفترة» في دوران العمالة)')
+  // الدوران بدالة القاموس: الخارجين ÷ متوسط العدد أول الفترة وآخرها
+  assert.deepEqual(mine.turnover, { leavers: 1, atStart: 12, atEnd: 13, rate: metrics.turnoverRate(1, 12, 13) })
+  assert.equal(mine.turnover.rate, 8)
+  // مدة الخدمة: الموظفين الحاليين (12) — j11 أقل من 3 شهور، والباقي من 2024-01-01
+  const old = rules.tenureBandOf(rules.monthsBetween('2024-01-01', today)).key
+  assert.deepEqual(Object.fromEntries(mine.tenure.bands.filter(band => band.count > 0).map(band => [band.key, band.count])), { lt3m: 1, [old]: 11 })
+  assert.deepEqual([mine.tenure.unknown, mine.tenure.averageMonths], [0, Math.round((rules.monthsBetween('2024-01-01', today) * 11) / 12)])
+  assert.equal(mine.tenure.bands.reduce((sum, band) => sum + band.count, 0), workforce.headcount, 'مجموع الشرايح = عدد الكارت')
+  // العدد لكل فرع: فرع الحساب بس — ولا اسم موظف ولا فرع تاني في الرد
+  assert.deepEqual(mine.byBranch, [{ branchId: B.j.id, name: 'فرع جدة', total: 12 }])
+  const text = JSON.stringify(mine)
+  assert.deepEqual([text.includes('الرياض'), text.includes('القياس'), text.includes('موظف لوحة')], [false, false, false])
+  // حساب الشركة: نفس أرقام جدة لما يفلتر عليها، والرياض لوحدها، وكل الفروع في التوزيع
+  const company = await card(U.admin, '/workforce/insights')
+  const jeddah = await card(U.admin, `/workforce/insights?branchId=${B.j.id}`), riyadh = await card(U.admin, `/workforce/insights?branchId=${B.r.id}`)
+  assert.deepEqual([jeddah.months, jeddah.turnover, jeddah.tenure, jeddah.byBranch], [mine.months, mine.turnover, mine.tenure, mine.byBranch])
+  assert.deepEqual([riyadh.months[11].headcount, riyadh.months[11].joiners, riyadh.turnover.leavers, riyadh.byBranch.map(row => [row.name, row.total])], [3, 0, 0, [['فرع الرياض', 3]]])
+  const total = name => company.byBranch.find(row => row.name === name)?.total
+  assert.deepEqual([total('فرع جدة'), total('فرع الرياض'), total('فرع راحته النهارده')], [12, 3, 1])
+  assert.equal(company.months[11].headcount, company.byBranch.reduce((sum, row) => sum + row.total, 0) + 1, 'عدد الشركة = مجموع الفروع + اللي آخر يوم له النهارده')
+  // فلتر الإدارة/القسم/الفريق: فريق المعرض 4 حاليين (و«gone» كان فيه)؛ وقسم برّه النطاق ولا حد
+  const showroom = await card(U.hr, `/workforce/insights?teamId=${T.showroom.id}`)
+  assert.deepEqual([showroom.months[11].headcount, showroom.turnover.leavers, showroom.byBranch, showroom.tenure.bands.reduce((sum, band) => sum + band.count, 0)], [5, 1, [{ branchId: B.j.id, name: 'فرع جدة', total: 4 }], 4])
+  const outside = await card(U.hr, `/workforce/insights?departmentIds=${D.rdep.id}`)
+  assert.deepEqual([outside.months.map(row => row.headcount), outside.byBranch, outside.turnover.rate], [Array(12).fill(0), [], null])
+  // الصلاحية والنطاق: من غير عرض الموظفين 403، وفرع برّه النطاق 403، ومن غير اللوحة 403
+  for (const [user, route] of [[U.att, '/workforce/insights'], [U.hr, `/workforce/insights?branchId=${B.r.id}`], [U.plain, '/workforce/insights'], [U.bare, '/workforce/insights']]) {
+    assert.equal((await call(user, `/dashboard/cards${route}`)).status, 403, `${user.email} ${route}`)
+  }
+})
+
+test('DC-15 (B-ADD.20): the drill-down never returns a person outside the reader\'s scope — the side-panel names, the period and the leave types', async t => {
+  // اللوحة الجانبية: أول N اسم من خانة — والعدد الكلي والقطع مكتوبين
+  // (بعد 23:50 وردية j8 الليلية بتبدأ وممكن يتحسب غايب لحظي — زي حارس DC-02)
+  if (minutesNow() >= 23 * 60 + 50) return t.skip('قرب نص الليل: غياب اليوم اللحظي بيتغيّر')
+  const two = await card(U.hr, '/attendance/employees?bucket=absent&limit=2')
+  assert.deepEqual([two.employees.length, two.total, two.truncated], [2, 3, true])
+  const absentJeddah = [E.j3.fullName, E.j4.fullName, E.j5.fullName]
+  assert.equal(two.employees.every(row => absentJeddah.includes(row.name) && row.status === 'غايب' && !('phone' in row)), true)
+  assert.deepEqual(Object.keys(two.employees[0]).sort(), ['bucket', 'code', 'detail', 'firstPunch', 'id', 'jobTitle', 'lateMinutes', 'name', 'shift', 'status', 'team', 'unit'])
+  const fifty = await card(U.hr, '/attendance/employees?bucket=absent&limit=50')
+  assert.deepEqual([names(fifty.employees), fifty.truncated, fifty.total], [[...absentJeddah].sort(), false, 3])
+  assert.deepEqual(names((await card(U.hr, '/attendance/employees?bucket=absent')).employees), [...absentJeddah].sort(), 'من غير limit زي الأول')
+  for (const bad of ['0', '501', 'abc', '-1', '1.5']) assert.equal((await call(U.hr, `/dashboard/cards/attendance/employees?bucket=absent&limit=${bad}`)).status, 400, bad)
+  // حساب الفرع: غايبين الرياض (r1 وr3) مابيرجعوش بأي طريق — لا من غير فلتر، ولا بفلتر فرعهم، ولا بوحدتهم ولا بفريقهم
+  const everyBucket = await Promise.all(['present', 'late', 'absent', 'leave', 'mission', 'pending', 'rest', 'other'].map(bucket => card(U.hr, `/attendance/employees?bucket=${bucket}&limit=50`)))
+  const seen = everyBucket.flatMap(body => body.employees.map(row => row.name))
+  assert.deepEqual([seen.length, seen.some(name => [E.r1.fullName, E.r2.fullName, E.r3.fullName, E.x1.fullName].includes(name)), seen.some(name => name.includes('قياس'))], [12, false, false])
+  assert.equal(JSON.stringify(everyBucket).includes('الرياض'), false)
+  for (const [route, status] of [[`/attendance/employees?bucket=absent&limit=50&branchId=${B.r.id}`, 403], [`/attendance/employees?bucket=absent&limit=50&group=unit:${D.rdep.id}`, 404],
+    [`/attendance/employees?bucket=absent&limit=50&group=team:${T.rteam.id}`, 404], [`/attendance?branchId=${B.r.id}`, 403], [`/trends?days=7&branchId=${B.r.id}`, 403], [`/trends?days=7&group=unit:${D.radm.id}`, 404]]) {
+    assert.equal((await call(U.hr, `/dashboard/cards${route}`)).status, status, route)
+  }
+  assert.deepEqual((await card(U.hr, `/attendance/employees?bucket=absent&limit=50&departmentIds=${D.rdep.id}`)).employees, [])
+  // النزول بالفرع عند حساب الشركة: فلتر الفرع = أسماء الفرع ده بس
+  const riyadh = await card(U.admin, `/attendance/employees?bucket=absent&limit=50&branchId=${B.r.id}`)
+  assert.deepEqual([names(riyadh.employees), riyadh.total], [[E.r1.fullName, E.r3.fullName].sort(), 2])
+  const sales = await card(U.admin, `/attendance/employees?bucket=absent&limit=50&branchId=${B.j.id}&group=team:${T.showroom.id}`)
+  assert.deepEqual(names(sales.employees), [E.j3.fullName, E.j4.fullName].sort())
+  // موظف اتنقل برّه نطاق القارئ: مابيرجعش في أسماء اللوحة الجانبية ولا في أعداد الفرع
+  await repo('Employee').update({ id: E.j3.id }, { branchId: B.r.id })
+  try {
+    const after = await card(U.hr, '/attendance/employees?bucket=absent&limit=50')
+    assert.deepEqual([names(after.employees), JSON.stringify(after).includes(E.j3.fullName)], [[E.j4.fullName, E.j5.fullName].sort(), false])
+    assert.deepEqual([(await card(U.hr, '/branches')).rows.map(row => [row.name, row.total]), (await card(U.hr, '/workforce/insights')).byBranch.map(row => row.total)], [[['فرع جدة', 11]], [11]])
+  } finally { await repo('Employee').update({ id: E.j3.id }, { branchId: B.j.id }) }
+
+  // الفترة: 7 أو 30 أو 90 يوم (من غيرها 30)، وأي قيمة تانية مرفوضة — والنطاق هو هو
+  const week = await card(U.hr, '/trends?days=7'), quarter = await card(U.hr, '/trends?days=90'), month = await card(U.hr, '/trends')
+  assert.deepEqual([[week.window, week.from, week.days.length], [quarter.window, quarter.from, quarter.days.length], [month.window, month.from, month.days.length]],
+    [[7, addDays(today, -6), 7], [90, addDays(today, -89), 90], [30, addDays(today, -29), 30]])
+  assert.deepEqual([week.summary, week.days[6]], [month.summary, month.days[29]], 'أيام الاختبار كلها جوه آخر 7 أيام')
+  assert.equal(JSON.stringify(week).includes('الرياض'), false)
+  for (const bad of ['0', '31', '365', 'abc', '7.5']) assert.equal((await call(U.hr, `/dashboard/cards/trends?days=${bad}`)).status, 400, bad)
+  // المقارنة بالفترة اللي قبلها: نفس المسار بتاريخ أقدم — فترة من غير أيام محسوبة نسبها null (مش صفر)
+  const before = await card(U.hr, `/trends?days=7&date=${addDays(today, -7)}`)
+  assert.deepEqual([before.to, before.from, before.summary.required, before.summary.attendance], [addDays(today, -7), addDays(today, -13), 0, null])
+
+  // الإجازات حسب النوع: نفس نافذة «أكتر الأقسام» — j6 (3 أيام) وj1 (يومين) في جدة، ومن غير إجازة الرياض
+  const leaves = await card(U.hr, '/leaves')
+  assert.deepEqual(leaves.byType.map(row => [row.code, row.days, row.employees]), [['ANNUAL', 5, 2]])
+  assert.deepEqual(leaves.byType[0].days, leaves.topUnits.reduce((sum, unit) => sum + unit.days, 0))
+  assert.deepEqual((await card(U.admin, `/leaves?branchId=${B.r.id}`)).byType.map(row => [row.code, row.days, row.employees]), [['ANNUAL', 1, 1]])
+  assert.deepEqual((await card(U.hr, `/leaves?teamId=${T.showroom.id}`)).byType.map(row => [row.days, row.employees]), [[2, 1]])
+
+  // السرعة: النداءات الجديدة اللي اللوحة بتطلبها عند الفتح لفرع الـ600 موظف (الفروع، أرقام القوى العاملة، والفترة اللي قبلها)
+  const perf = await repo('User').findOneBy({ email: 'perf@dashboard-cards.invalid' })
+  if (perf) {
+    const started = Date.now()
+    const [insights] = await Promise.all([card(perf, '/workforce/insights'), card(perf, `/trends?days=30&date=${addDays(today, -30)}`), card(perf, '/trends?days=90')])
+    const took = Date.now() - started
+    // الفروع بتقرا نفس حساب خانات اليوم المشترك مع كارت الحضور (اتقاس في DC-08) — هنا صحته بس
+    const branches = await card(perf, '/branches')
+    assert.deepEqual([branches.rows.map(row => row.total), insights.byBranch.map(row => row.total), insights.months[11].headcount], [[600], [600], 600])
+    t.diagnostic(`600 employees — the new calls of the statistics dashboard in parallel (workforce insights, previous period, 90-day trend): ${took} ms`)
+    assert.ok(took < 3000, `النداءات الجديدة لـ600 موظف أخدت ${took} ms (الهدف أقل من 3000)`)
+  }
+})

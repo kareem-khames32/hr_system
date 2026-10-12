@@ -13,6 +13,9 @@ interface CardQuery {
   teamId?: string
   group?: string
   bucket?: string
+  // B-ADD.20: نافذة الاتجاه (7 أو 30 أو 90 يوم)، وأقصى أسماء في قايمة
+  days?: string
+  limit?: string
 }
 
 // B-ADD.3: كروت لوحة الإدارة — مسار لكل كارت (كل كارت بيتحمّل لوحده، فالبطيء مايوقّفش الصفحة).
@@ -52,7 +55,14 @@ export class DashboardCardsController {
   @Get('attendance/employees')
   async attendanceEmployees(@CurrentUser() user: JwtPayload, @Req() request: any, @Query() query: CardQuery) {
     const date = this.cards.dayOf(query.date)
-    return this.cards.attendanceEmployees(await this.open('attendance', user, request, query), date, query.group, query.bucket)
+    return this.cards.attendanceEmployees(await this.open('attendance', user, request, query), date, query.group, query.bucket, query.limit)
+  }
+
+  // B-ADD.20: خانات حضور اليوم لكل فرع من فروع الحساب — أعداد بس، بنفس صلاحية كارت الحضور
+  @Get('branches')
+  async branches(@CurrentUser() user: JwtPayload, @Req() request: any, @Query() query: CardQuery) {
+    const date = this.cards.dayOf(query.date)
+    return this.cards.branchesCard(await this.open('attendance', user, request, query), date)
   }
 
   @Get('absent-late')
@@ -76,6 +86,12 @@ export class DashboardCardsController {
   @Get('workforce/monthly')
   async workforceMonthly(@CurrentUser() user: JwtPayload, @Req() request: any, @Query() query: CardQuery) {
     return this.cards.workforceMonthly(await this.open('workforce', user, request, query))
+  }
+
+  // B-ADD.20: العدد شهر بشهر والدوران ومدة الخدمة والعدد لكل فرع — أعداد بس، بنفس صلاحية كارت القوى العاملة
+  @Get('workforce/insights')
+  async workforceInsights(@CurrentUser() user: JwtPayload, @Req() request: any, @Query() query: CardQuery) {
+    return this.cards.workforceInsights(await this.open('workforce', user, request, query))
   }
 
   @Get('requests')
@@ -102,6 +118,6 @@ export class DashboardCardsController {
   @Get('trends')
   async trends(@CurrentUser() user: JwtPayload, @Req() request: any, @Query() query: CardQuery) {
     const date = this.cards.dayOf(query.date)
-    return this.cards.trendsCard(await this.open('trends', user, request, query), date, query.group)
+    return this.cards.trendsCard(await this.open('trends', user, request, query), date, query.group, query.days)
   }
 }

@@ -82,8 +82,9 @@ export interface AbsentLateCard {
 }
 
 export const fetchAttendanceCard = (filter: DashboardFilter, group?: string) => apiFetch<AttendanceCard>(withFilter('/attendance', filter, { group }))
-export const fetchAttendanceEmployees = (filter: DashboardFilter, bucket: AttendanceBucket, group?: string) =>
-  apiFetch<AttendanceEmployees>(withFilter('/attendance/employees', filter, { group, bucket }))
+// B-ADD.20: limit = أقصى أسماء (اللوحة بتطلب أول 50 بس لكروت الأشخاص)
+export const fetchAttendanceEmployees = (filter: DashboardFilter, bucket: AttendanceBucket, group?: string, limit?: number) =>
+  apiFetch<AttendanceEmployees>(withFilter('/attendance/employees', filter, { group, bucket, limit: limit ? String(limit) : undefined }))
 export const fetchAbsentLateCard = (filter: DashboardFilter) => apiFetch<AbsentLateCard>(withFilter('/absent-late', filter))
 
 // ===== كارت 3: الإجازات =====
@@ -94,6 +95,8 @@ export interface LeavesCard {
   today: { onLeave: number; halfDay: number }
   nextWeek: { employees: number; list: Array<{ id: number; name: string; unit: string | null; team: string | null; type: string; from: string; to: string; halfDay: boolean }> }
   topUnits: Array<{ id: number | null; name: string; days: number; employees: number }>
+  // B-ADD.20: أيام نفس النافذة (اليوم + 7 أيام) حسب نوع الإجازة
+  byType: Array<{ code: string; name: string; days: number; employees: number }>
 }
 export const fetchLeavesCard = (filter: DashboardFilter) => apiFetch<LeavesCard>(withFilter('/leaves', filter))
 
@@ -181,12 +184,17 @@ export interface TrendRates { required: number; attendance: number | null; late:
 export interface TrendsCard {
   from: string
   to: string
+  // B-ADD.20: طول النافذة بالأيام (7 أو 30 أو 90)
+  window: number
   group: CardGroupLabel | null
   summary: TrendRates & { tone: DashboardTone }
   days: Array<{ date: string } & TrendRates>
   units: Array<{ group: string; name: string; level: string; expandable: boolean; tone: DashboardTone } & TrendRates>
 }
-export const fetchTrendsCard = (filter: DashboardFilter, group?: string) => apiFetch<TrendsCard>(withFilter('/trends', filter, { group }))
+export const TREND_WINDOWS = [7, 30, 90] as const
+export type TrendWindow = (typeof TREND_WINDOWS)[number]
+export const fetchTrendsCard = (filter: DashboardFilter, group?: string, days?: TrendWindow) =>
+  apiFetch<TrendsCard>(withFilter('/trends', filter, { group, days: days ? String(days) : undefined }))
 
 // ===== «اتصل/راسل»: لينكات بتتبني في المتصفح من رقم الملف — الخادم مابيبعتش حاجة =====
 /** الرقم بأرقامه بس (ومعاه + لو دولي) — null لرقم فاضي أو أقصر من 6 أرقام */
@@ -230,3 +238,25 @@ export interface ModuleTile {
 }
 export interface ModulesStrip { modules: ModuleTile[] }
 export const fetchModulesStrip = (filter: { org: OrgFilterParams }) => apiFetch<ModulesStrip>(withFilter('/modules', filter))
+
+// ===== B-ADD.20: اللوحة الإحصائية من غير جداول =====
+/** خانات حضور اليوم لكل فرع من فروع الحساب (أعداد بس) — أول مستوى في النزول «شركة ← فرع ← إدارة ← قسم ← فريق» */
+export interface BranchesCard {
+  date: string
+  isToday: boolean
+  total: number
+  counts: BucketCounts
+  rows: Array<{ branchId: number | null; name: string; total: number; counts: BucketCounts }>
+}
+export const fetchBranchesCard = (filter: DashboardFilter) => apiFetch<BranchesCard>(withFilter('/branches', filter))
+
+/** أرقام قسم القوى العاملة: العدد والتعيينات والخروج لآخر 12 شهر، ودوران الفترة، ومدة الخدمة، والعدد لكل فرع — أعداد بس */
+export interface WorkforceInsights {
+  from: string
+  to: string
+  months: Array<{ month: string; joiners: number; leavers: number; headcount: number }>
+  turnover: { leavers: number; atStart: number; atEnd: number; rate: number | null }
+  tenure: { averageMonths: number | null; unknown: number; bands: Array<{ key: string; label: string; count: number }> }
+  byBranch: Array<{ branchId: number | null; name: string; total: number }>
+}
+export const fetchWorkforceInsights = (filter: { org: OrgFilterParams }) => apiFetch<WorkforceInsights>(withFilter('/workforce/insights', filter))

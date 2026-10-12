@@ -258,3 +258,57 @@ export const YMD = /^\d{4}-\d{2}-\d{2}$/
 /** تاريخ فعلي بصيغة YYYY-MM-DD؟ (2026-02-31 لأ) */
 export const isDay = (value: unknown): value is string =>
   typeof value === 'string' && YMD.test(value) && dayAfter(value, 0) === value
+
+// ===== B-ADD.20: اللوحة الإحصائية من غير جداول =====
+
+/** نوافذ الاتجاه المتاحة من فلتر اللوحة (بالأيام) — والافتراضي هو نافذة B-ADD.3 */
+export const TREND_WINDOWS: readonly number[] = [7, 30, 90]
+export const DEFAULT_TREND_DAYS = 30
+/** نافذة الاتجاه المطلوبة: الافتراضية لو مش مبعوتة، وnull لقيمة برّه النوافذ المتاحة */
+export function trendDaysOf(raw: unknown): number | null {
+  if (raw === undefined || raw === null || raw === '') return DEFAULT_TREND_DAYS
+  const value = typeof raw === 'string' && /^\d{1,3}$/.test(raw) ? Number(raw) : NaN
+  return TREND_WINDOWS.includes(value) ? value : null
+}
+
+/** أقصى أسماء مطلوبة في قايمة: الحد كله لو مش مبعوت، وnull لقيمة غلط (صفر، كسر، أكبر من الحد) */
+export function listLimitOf(raw: unknown, max: number): number | null {
+  if (raw === undefined || raw === null || raw === '') return max
+  const value = typeof raw === 'string' && /^[1-9]\d{0,3}$/.test(raw) ? Number(raw) : NaN
+  return value >= 1 && value <= max ? value : null
+}
+
+/** شرايح مدة الخدمة بالشهور الكاملة */
+export const TENURE_BANDS: ReadonlyArray<{ key: string; label: string; min: number; max: number }> = [
+  { key: 'lt3m', label: 'أقل من 3 شهور', min: 0, max: 2 },
+  { key: 'm3_12', label: '3 شهور – سنة', min: 3, max: 11 },
+  { key: 'y1_3', label: 'سنة – 3 سنين', min: 12, max: 35 },
+  { key: 'y3_5', label: '3 – 5 سنين', min: 36, max: 59 },
+  { key: 'y5', label: 'أكتر من 5 سنين', min: 60, max: Number.MAX_SAFE_INTEGER },
+]
+export const tenureBandOf = (months: number) => TENURE_BANDS.find(band => months >= band.min && months <= band.max) ?? TENURE_BANDS[0]
+
+/** شهور كاملة من يوم ليوم (YYYY-MM-DD) — سالب = صفر */
+export function monthsBetween(from: string, to: string): number {
+  const [fy, fm, fd] = from.split('-').map(Number), [ty, tm, td] = to.split('-').map(Number)
+  const months = (ty - fy) * 12 + (tm - fm) - (td < fd ? 1 : 0)
+  return Number.isFinite(months) && months > 0 ? months : 0
+}
+
+/** آخر N شهر ميلادي لحد شهر اليوم (YYYY-MM)، الأقدم الأول */
+export function lastMonths(today: string, count: number): string[] {
+  const [year, month] = today.split('-').map(Number)
+  const out: string[] = []
+  for (let back = count - 1; back >= 0; back--) {
+    const at = new Date(Date.UTC(year, month - 1 - back, 1))
+    out.push(`${at.getUTCFullYear()}-${pad(at.getUTCMonth() + 1)}`)
+  }
+  return out
+}
+
+/** آخر يوم في الشهر (YYYY-MM) — ومش بعد اليوم المبعوت (الشهر الجاري لحد النهارده) */
+export function monthEndOf(month: string, notAfter: string): string {
+  const [year, index] = month.split('-').map(Number)
+  const end = `${month}-${pad(new Date(Date.UTC(year, index, 0)).getUTCDate())}`
+  return end > notAfter ? notAfter : end
+}

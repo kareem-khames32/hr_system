@@ -1,44 +1,24 @@
 'use client'
 
-// B-ADD.7 (طلب المالك 11 أكتوبر 2026): اللوحة بقت إحصائية — مؤشرات ورسوم فوق (StatsDashboard)، والكروت التفصيلية (الجداول والأسماء) ورا الضغطة:
-// أي مؤشر أو رسمة بتفتح كارتها في نافذة، و«عرض الجداول التفصيلية» بيفتحهم كلهم تحت. الصلاحيات والنطاق والفلتر زي B-ADD.3 بالحرف.
-// B-ADD.3: لوحة الإدارة — فلتر واحد للوحة كلها (الفلتر الموحد: فرع، إدارة، قسم، فريق + اليوم، والنهارده افتراضي)، وتحته الكروت.
-// الكروت اللي بتترسم هي اللي الخادم قال إن الحساب يشوفها (كل كارت بصلاحيته وموديوله)، وكل كارت بيتحمّل لوحده. الأرقام كلها من
-// الخادم جوه نطاق فروع الحساب: مدير HR فرع جدة يشوف جدة بس. لوحة الموظف العادي («لوحتي») مكوّن تاني (EmployeeHome).
+// B-ADD.20 (طلب المالك 12 أكتوبر 2026): لوحة الإدارة إحصائيات بس — مفيش جداول ولا «عرض الجداول التفصيلية»؛ كل قسم بيودّي لشاشته
+// التفصيلية، والأسماء بتتفتح كروت أشخاص في لوحة جانبية (StatsDashboard). فلتر واحد فوق بيحرّك اللوحة كلها: المكان، واليوم، والفترة.
+// B-ADD.3: الفلتر الموحد (فرع، إدارة، قسم، فريق) + اليوم (النهارده افتراضي). الأقسام اللي بتترسم هي اللي الخادم قال إن الحساب يشوف
+// كروتها (كل كارت بصلاحيته وموديوله)، وكل رقم من الخادم جوه نطاق فروع الحساب: مدير HR فرع جدة يشوف جدة بس.
+// لوحة الموظف العادي («لوحتي») مكوّن تاني (EmployeeHome).
 import { useEffect, useMemo, useState } from 'react'
-import { CalendarDays, ChevronDown, Table2 } from 'lucide-react'
+import { CalendarDays, CalendarRange } from 'lucide-react'
 import { useOrgFilter } from '@/components/OrgFilter'
-import { fetchDashboardAccess, type DashboardAccess, type DashboardCardKey, type DashboardFilter } from '@/lib/dashboard-api'
-import { AbsentLateCard, AttendanceTodayCard, TrendsCard } from './cards/AttendanceCards'
-import { LeavesCard, WorkforceCard } from './cards/PeopleCards'
-import { OvertimeCard, PayrollCard, RequestsCard, TasksCard } from './cards/WorkCards'
-import { ListModal } from './cards/shared'
+import { TREND_WINDOWS, fetchDashboardAccess, type DashboardAccess, type DashboardFilter, type TrendWindow } from '@/lib/dashboard-api'
 import StatsDashboard from './StatsDashboard'
-
-interface CardProps { filter: DashboardFilter; filterKey: string; href: string; access: DashboardAccess }
-
-// ترتيب العرض: الحضور وتفاصيله، ثم الإجازات والقوى العاملة، ثم الشغل (طلبات، مهام، إضافي، رواتب)، ثم الاتجاهات
-const CARD_COMPONENTS: Array<[DashboardCardKey, (props: CardProps) => JSX.Element]> = [
-  ['attendance', AttendanceTodayCard],
-  ['absentLate', AbsentLateCard],
-  ['leaves', LeavesCard],
-  ['workforce', WorkforceCard],
-  ['requests', RequestsCard],
-  ['tasks', TasksCard],
-  ['overtime', OvertimeCard],
-  ['payroll', PayrollCard],
-  ['trends', TrendsCard],
-]
 
 export default function AdminDashboard() {
   const org = useOrgFilter()
   const [access, setAccess] = useState<DashboardAccess | null>(null)
   const [error, setError] = useState('')
-  // اليوم المختار: يوم الشركة من الخادم (مش ساعة المتصفح) أول ما الكروت المتاحة تتعرف
+  // اليوم المختار: يوم الشركة من الخادم (مش ساعة المتصفح) أول ما الأقسام المتاحة تتعرف
   const [date, setDate] = useState('')
-  // الكارت التفصيلي المفتوح في نافذة (بالضغط على مؤشر أو رسمة)، والجداول التفصيلية كلها (مقفولة لحد ما تتطلب)
-  const [detail, setDetail] = useState<DashboardCardKey | null>(null)
-  const [showTables, setShowTables] = useState(false)
+  // الفترة: نافذة الاتجاه والمقارنة (7 أو 30 أو 90 يوم لحد اليوم المختار) — 30 افتراضي زي الأول
+  const [period, setPeriod] = useState<TrendWindow>(30)
 
   useEffect(() => {
     let cancelled = false
@@ -54,18 +34,18 @@ export default function AdminDashboard() {
   if (error) return <div className="bg-red-50 text-red-700 rounded-xl p-4" role="alert">{error}</div>
   if (!access || !date) {
     return (
-      <div className="card flex items-center justify-center py-10" aria-busy="true">
-        <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+      <div className="space-y-4" aria-busy="true" data-dashboard-loading>
+        <div className="h-16 rounded-2xl bg-gray-100 animate-pulse" />
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {[0, 1, 2, 3].map((index) => <div key={index} className="h-28 rounded-2xl bg-gray-100 animate-pulse" />)}
+        </div>
       </div>
     )
   }
-  const hrefOf = new Map(access.cards.map((card) => [card.key, card.href]))
-  const titleOf = new Map(access.cards.map((card) => [card.key, card.title]))
-  const DetailCard = detail && hrefOf.has(detail) ? CARD_COMPONENTS.find(([key]) => key === detail)?.[1] : undefined
 
   return (
     <div className="space-y-6" data-admin-dashboard>
-      {/* فلتر واحد للوحة كلها */}
+      {/* فلتر واحد للوحة كلها: المكان + اليوم + الفترة */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 flex flex-wrap items-end gap-3" data-dashboard-filter>
         {org.element}
         <label className="flex items-center gap-2 min-w-0">
@@ -84,45 +64,29 @@ export default function AdminDashboard() {
             }}
           />
         </label>
+        <label className="flex items-center gap-2 min-w-0">
+          <CalendarRange size={16} className="text-gray-400 shrink-0" />
+          <span className="sr-only">الفترة</span>
+          <select aria-label="الفترة" className="input min-w-0 sm:w-40" value={period} onChange={(event) => setPeriod(Number(event.target.value) as TrendWindow)} data-dashboard-period>
+            {TREND_WINDOWS.map((days) => <option key={days} value={days}>{days === 7 ? 'آخر 7 أيام' : `آخر ${days} يوم`}</option>)}
+          </select>
+        </label>
         {date !== access.today && (
           <button type="button" onClick={() => setDate(access.today)} className="text-xs text-primary-600 hover:underline px-1 py-2">
             ارجع للنهارده
           </button>
         )}
-        {org.label && <p className="basis-full text-xs text-gray-500">الأرقام على: {org.label}</p>}
+        <p className="basis-full text-xs text-gray-500">
+          {org.label ? `الأرقام على: ${org.label} — ` : ''}الفترة بتحرّك الاتجاهات والمقارنة بالفترة اللي قبلها؛ الإضافي والرواتب بشهر الرواتب الجاري، والقوى العاملة بآخر 12 شهر.
+        </p>
       </div>
 
       {access.cards.length === 0 ? (
         <div className="card text-sm text-gray-600">
-          حسابك معاه «لوحة التحكم الإدارية» من غير صلاحية أي شاشة من شاشات كروتها (الحضور، الإجازات، الموظفين، الطلبات، المهام، الرواتب) — اطلب الصلاحية من مدير النظام.
+          حسابك معاه «لوحة التحكم الإدارية» من غير صلاحية أي شاشة من شاشات أقسامها (الحضور، الإجازات، الموظفين، الطلبات، المهام، الرواتب) — اطلب الصلاحية من مدير النظام.
         </div>
       ) : (
-        <>
-          <StatsDashboard filter={filter} filterKey={filterKey} access={access} onDetail={setDetail} />
-
-          {/* الجداول التفصيلية: نفس كروت B-ADD.3 (أعداد لكل قسم وفريق، وقوايم الأسماء) — مقفولة لحد ما تتطلب */}
-          <section data-detail-tables>
-            <button type="button" onClick={() => setShowTables((open) => !open)} aria-expanded={showTables}
-              className="inline-flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-primary-600 px-1 py-2">
-              <Table2 size={16} />
-              {showTables ? 'إخفاء الجداول التفصيلية' : 'عرض الجداول التفصيلية'}
-              <ChevronDown size={14} className={showTables ? 'rotate-180 transition-transform' : 'transition-transform'} />
-            </button>
-            {showTables && (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {CARD_COMPONENTS.filter(([key]) => hrefOf.has(key)).map(([key, Card]) => (
-                  <Card key={key} filter={filter} filterKey={filterKey} href={hrefOf.get(key)!} access={access} />
-                ))}
-              </div>
-            )}
-          </section>
-
-          {detail && DetailCard && (
-            <ListModal title={titleOf.get(detail) ?? 'التفاصيل'} subtitle="الأعداد لكل قسم وفريق، والضغط على رقم بيفتح الأسماء" onClose={() => setDetail(null)}>
-              <DetailCard filter={filter} filterKey={filterKey} href={hrefOf.get(detail)!} access={access} />
-            </ListModal>
-          )}
-        </>
+        <StatsDashboard filter={filter} filterKey={filterKey} period={period} access={access} />
       )}
     </div>
   )

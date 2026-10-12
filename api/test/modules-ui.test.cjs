@@ -417,7 +417,8 @@ test('MU-08: شاشات الأساس مع موديول مقفول — اللين
   // لوحة الإدارة وكروتها، والقايمة الجانبية، وبنود الإخلاء
   const adminHome = read('src/app/page.tsx')
   // B-ADD.3: اللوحة الإدارية بترسم الكروت اللي الخادم مسمّيها للحساب بس (الصلاحية والموديول والنطاق في الخادم)
-  assert.ok(adminHome.includes('<AdminDashboard />') && read('src/components/dashboard/AdminDashboard.tsx').includes('CARD_COMPONENTS.filter(([key]) => hrefOf.has(key))'))
+  // B-ADD.20: الكروت بقت أقسام إحصائية — نفس القاعدة: القسم بيترسم لو كارته في قايمة الخادم للحساب
+  assert.ok(adminHome.includes('<AdminDashboard />') && read('src/components/dashboard/StatsDashboard.tsx').includes('const allowed = new Set(access.cards.map((card) => card.key))'))
   assert.ok(read('src/components/dashboard/StatsCards.tsx').includes("].filter((card) => (attendanceOn || !['present', 'late', 'absent'].includes(card.id)) && (leaveOn || card.id !== 'on-leave'))"))
   assert.ok(read('src/components/layout/Sidebar.tsx').includes('if (!payrollOn) setPayrollApprovals(0)'))
   assert.ok(read('src/components/dashboard/MyClearanceItems.tsx').includes('if (!offboardingOn) { setItems([]); return }'))

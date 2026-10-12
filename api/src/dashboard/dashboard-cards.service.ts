@@ -21,7 +21,7 @@ import { PayrollLiveService } from '../payroll/payroll-live.service'
 import { PayrollService } from '../payroll/payroll.service'
 import { FinancialReportService } from '../reports/financial-report.service'
 import {
-  OVERTIME_COUNTED_STATUSES, absenceOutsideServiceSql, currentEmployeeSql, percent, serviceEndSql, serviceStartSql,
+  OVERTIME_COUNTED_STATUSES, absenceOutsideServiceSql, currentEmployeeSql, percent, serviceEndSql, serviceStartSql, turnoverRate,
 } from '../reports/metrics'
 import { MetricsService } from '../reports/metrics.service'
 import { LOAN_DEFERRAL_TYPE } from '../requests/loan-installment-requests'
@@ -30,7 +30,8 @@ import { notPersonalTask, taskExtrasReady } from '../tasks/task-extras'
 import { TASK_OPEN_STATUSES } from '../tasks/task.entity'
 import {
   AGE_BANDS, ATTENDANCE_BUCKETS, DASHBOARD_CARDS, DASHBOARD_CONTACT_PERM, DASHBOARD_MONEY_PERM, ageBandOf, ageInDays, attendanceBucketOfDay, cardGroupChildren,
-  cardTree, dashboardCardOf, dayAfter, emptyBucketCounts, inCardGroup, isAttendanceBucket, isDay, parseCardGroup, startGroupOf, toneOfRate, visiblePlacement,
+  cardTree, dashboardCardOf, dayAfter, emptyBucketCounts, inCardGroup, isAttendanceBucket, isDay, lastMonths, listLimitOf, monthEndOf, monthsBetween, parseCardGroup,
+  startGroupOf, TENURE_BANDS, tenureBandOf, toneOfRate, trendDaysOf, visiblePlacement,
   type AttendanceBucket, type BucketCounts, type CardGroup, type CardGroupRow, type CardTree, type DashboardCardKey,
 } from './dashboard-cards'
 
@@ -45,10 +46,10 @@ const CONFIDENTIAL_REQUEST_SQL = `(ISNULL(t.isConfidential, 0) = 1
 const LIST_LIMIT = 500
 // نافذة «هتنتهي» في كارت القوى العاملة
 const EXPIRY_WINDOW_DAYS = 30
-// نافذة الاتجاهات
-const TREND_DAYS = 30
 // B-ADD.7: شهور سلسلة «تعيينات مقابل خروج»
 const WORKFORCE_MONTHS = 6
+// B-ADD.20: شهور سلسلة العدد والدوران في اللوحة الإحصائية
+const INSIGHT_MONTHS = 12
 
 const round2 = (value: unknown): number => Math.round(Number(value ?? 0) * 100) / 100
 const num = (value: unknown): number | null => (value === null || value === undefined ? null : Number(value))
@@ -434,17 +435,20 @@ export class DashboardCardsService {
   }
 
   /** قايمة أسماء خانة في مجموعة (الضغط على رقم): اسم، فريق، وردية، أول بصمة، الحالة */
-  async attendanceEmployees(ctx: CardContext, date: string, rawGroup: unknown, rawBucket: unknown) {
+  async attendanceEmployees(ctx: CardContext, date: string, rawGroup: unknown, rawBucket: unknown, rawLimit?: unknown) {
     if (!isAttendanceBucket(rawBucket)) throw new BadRequestException('الحالة المطلوبة غير صالحة')
+    // B-ADD.20: اللوحة بتطلب أول 50 اسم بس (كروت أشخاص في لوحة جانبية) — من غير limit الحد كله زي الأول
+    const limit = listLimitOf(rawLimit, LIST_LIMIT)
+    if (limit === null) throw new BadRequestException(`عدد الأسماء من 1 لـ${LIST_LIMIT}`)
     const group = this.groupOf(ctx, rawGroup)
     const states = await this.daySnapshot(date, ctx.scope)
     const members = (group ? ctx.people.filter(person => inCardGroup(ctx.tree, group, person)) : ctx.people)
       .filter(person => (states.get(person.id)?.bucket ?? 'other') === rawBucket)
       .sort((a, b) => byArabic(a.fullName, b.fullName) || a.id - b.id)
-    const listed = members.slice(0, LIST_LIMIT)
+    const listed = members.slice(0, limit)
     await this.fillShifts(date, states, listed)
     return {
-      date, group: this.groupLabel(ctx, group), bucket: rawBucket, total: members.length, truncated: members.length > LIST_LIMIT,
+      date, group: this.groupLabel(ctx, group), bucket: rawBucket, total: members.length, truncated: members.length > listed.length,
       employees: listed.map(person => this.personRow(ctx, person, states.get(person.id), false)),
     }
   }
@@ -473,6 +477,25 @@ export class DashboardCardsService {
       date, isToday: date === ctx.today, absent, late, contact, truncated: absent + late > LIST_LIMIT,
       teams: [...teams.values()].sort((a, b) => (b.absent.length + b.late.length) - (a.absent.length + a.late.length) || byArabic(a.name, b.name)),
     }
+  }
+
+  /**
+   * B-ADD.20: خانات حضور اليوم لكل فرع من فروع الحساب جوه فلتر اللوحة — أعداد بس (أول مستوى في النزول «شركة ← فرع ← إدارة ← قسم ← فريق»).
+   * اسم الفرع من شجرة نطاق القارئ (filterContext)، والموظف اللي فرعه مش فيها (من غير فرع) في صف واحد من غير رقم فرع.
+   */
+  async branchesCard(ctx: CardContext, date: string) {
+    const states = await this.daySnapshot(date, ctx.scope)
+    const byBranch = new Map<number | null, Person[]>()
+    for (const person of ctx.people) {
+      const branchId = person.branchId !== null && ctx.branchName(person.branchId) !== null ? person.branchId : null
+      const list = byBranch.get(branchId)
+      if (list) list.push(person)
+      else byBranch.set(branchId, [person])
+    }
+    const rows = [...byBranch.entries()].map(([branchId, members]) => ({
+      branchId, name: branchId === null ? 'من غير فرع' : ctx.branchName(branchId)!, total: members.length, counts: this.countBuckets(states, members),
+    })).sort((a, b) => b.total - a.total || byArabic(a.name, b.name))
+    return { date, isToday: date === ctx.today, total: ctx.people.length, counts: this.countBuckets(states, ctx.people), rows }
   }
 
   // ===== كارت 3: الإجازات =====
@@ -514,6 +537,8 @@ export class DashboardCardsService {
     })
     // أكتر الأقسام إجازات: أيام الإجازة جوه نافذة اليوم + 7 أيام (نص اليوم بنص)، وعدد أصحابها
     const units = new Map<number | null, { days: number; people: Set<number> }>()
+    // B-ADD.20: نفس أيام النافذة حسب نوع الإجازة — أعداد بس
+    const byType = new Map<string, { days: number; people: Set<number> }>()
     for (const row of mine) {
       const from = row.from > date ? row.from : date, to = row.to < weekEnd ? row.to : weekEnd
       const span = Math.round((Date.parse(`${to}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) / 86_400_000) + 1
@@ -523,11 +548,17 @@ export class DashboardCardsService {
       cell.days += row.period === 'FULL' ? span : span * 0.5
       cell.people.add(row.employeeId)
       units.set(unitId, cell)
+      const kind = byType.get(row.type) ?? { days: 0, people: new Set<number>() }
+      kind.days += row.period === 'FULL' ? span : span * 0.5
+      kind.people.add(row.employeeId)
+      byType.set(row.type, kind)
     }
+    const leaveTypes = [...byType.entries()].map(([code, cell]) => ({ code, name: typeName.get(code) ?? code, days: round2(cell.days), employees: cell.people.size }))
+      .sort((a, b) => b.days - a.days || byArabic(a.name, b.name))
     const topUnits = [...units.entries()].map(([unitId, cell]) => ({
       id: unitId, name: unitId === null ? 'من غير قسم' : ctx.tree.units.get(unitId)!.name, days: round2(cell.days), employees: cell.people.size,
     })).sort((a, b) => b.days - a.days || b.employees - a.employees || byArabic(a.name, b.name)).slice(0, 5)
-    return { date, isToday: date === ctx.today, weekEnd, today: { onLeave, halfDay }, nextWeek: { employees: nextWeekIds.size, list }, topUnits }
+    return { date, isToday: date === ctx.today, weekEnd, today: { onLeave, halfDay }, nextWeek: { employees: nextWeekIds.size, list }, topUnits, byType: leaveTypes }
   }
 
   // ===== كارت 4: القوى العاملة =====
@@ -633,6 +664,67 @@ export class DashboardCardsService {
     return {
       from: months[0], to: months[months.length - 1],
       months: months.map(key => ({ month: key, joiners: Number(byMonth.get(key)?.joined ?? 0), leavers: Number(byMonth.get(key)?.gone ?? 0) })),
+    }
+  }
+
+  /**
+   * B-ADD.20: أرقام قسم «القوى العاملة» في اللوحة الإحصائية — أعداد بس، بفحص كارت القوى العاملة ونطاقه وفلتره:
+   * العدد آخر كل شهر (الشهر الجاري لحد النهارده) والتعيينات والخروج لآخر INSIGHT_MONTHS شهر من نفس فترات الخدمة (spansCte)، ودوران
+   * الفترة بدالة قاموس المؤشرات (turnoverRate: الخارجين ÷ متوسط العدد أول الفترة وآخرها)، وتوزيع الموظفين الحاليين على مدة الخدمة،
+   * وعددهم لكل فرع من فروع الحساب.
+   */
+  async workforceInsights(ctx: CardContext) {
+    const months = lastMonths(ctx.today, INSIGHT_MONTHS)
+    const from = `${months[0]}-01`
+    const params: unknown[] = [from, ctx.today]
+    const cte = await this.spansCte(ctx, params)
+    const flows: Array<{ m: string; joined: number; gone: number }> = await this.ds.query(
+      `${cte}
+       SELECT x.m AS m, SUM(x.joined) AS joined, SUM(x.gone) AS gone FROM (
+         SELECT CONVERT(varchar(7), startDate, 23) AS m, 1 AS joined, 0 AS gone FROM spans WHERE startDate >= @0 AND startDate <= @1
+         UNION ALL
+         SELECT CONVERT(varchar(7), endDate, 23) AS m, 0 AS joined, 1 AS gone FROM spans WHERE endDate >= @0 AND endDate <= @1
+       ) x GROUP BY x.m`,
+      [...params]
+    )
+    // العدد في يوم = فترات الخدمة اللي اليوم ده جواها (تعريف «أول الفترة وآخرها» في دوران العمالة بالحرف) — أول يوم في النافذة وآخر كل شهر
+    const ends = months.map(month => monthEndOf(month, ctx.today))
+    const points = [from, ...ends].map(day => `(CONVERT(date, @${params.push(day) - 1}, 23))`).join(', ')
+    const counted: Array<{ d: string; n: number }> = await this.ds.query(
+      `${cte}
+       SELECT CONVERT(varchar(10), p.d, 23) AS d, COUNT(s.startDate) AS n
+       FROM (VALUES ${points}) p(d) LEFT JOIN spans s ON s.startDate <= p.d AND (s.endDate IS NULL OR s.endDate >= p.d)
+       GROUP BY p.d`,
+      params
+    )
+    const flowOf = new Map(flows.map(row => [String(row.m), row]))
+    const countOf = new Map(counted.map(row => [String(row.d), Number(row.n ?? 0)]))
+    const series = months.map((month, index) => ({
+      month, joiners: Number(flowOf.get(month)?.joined ?? 0), leavers: Number(flowOf.get(month)?.gone ?? 0), headcount: countOf.get(ends[index]) ?? 0,
+    }))
+    const leavers = series.reduce((sum, row) => sum + row.leavers, 0)
+    const atStart = countOf.get(from) ?? 0, atEnd = series[series.length - 1].headcount
+    // مدة الخدمة: الموظفين الحاليين جوه الفلتر، من أول يوم فعلي (أو تاريخ التعيين) لحد النهارده
+    const bands = new Map(TENURE_BANDS.map(band => [band.key, 0]))
+    let known = 0, totalMonths = 0, unknown = 0
+    const branches = new Map<number | null, number>()
+    for (const person of ctx.people) {
+      const branchId = person.branchId !== null && ctx.branchName(person.branchId) !== null ? person.branchId : null
+      branches.set(branchId, (branches.get(branchId) ?? 0) + 1)
+      if (!person.startDate) { unknown += 1; continue }
+      const served = monthsBetween(person.startDate, ctx.today)
+      bands.set(tenureBandOf(served).key, (bands.get(tenureBandOf(served).key) ?? 0) + 1)
+      known += 1; totalMonths += served
+    }
+    return {
+      from: months[0], to: months[months.length - 1], months: series,
+      turnover: { leavers, atStart, atEnd, rate: turnoverRate(leavers, atStart, atEnd) },
+      tenure: {
+        averageMonths: known > 0 ? Math.round(totalMonths / known) : null, unknown,
+        bands: TENURE_BANDS.map(band => ({ key: band.key, label: band.label, count: bands.get(band.key) ?? 0 })),
+      },
+      byBranch: [...branches.entries()].map(([branchId, total]) => ({ branchId, name: branchId === null ? 'من غير فرع' : ctx.branchName(branchId)!, total }))
+        .sort((a, b) => b.total - a.total || byArabic(a.name, b.name)),
     }
   }
 
@@ -877,10 +969,13 @@ export class DashboardCardsService {
   /**
    * نسبة الحضور والتأخير والغياب آخر 30 يوم لحد اليوم المختار، يوم بيوم، وللمستوى اللي تحت المجموعة (إدارة أو قسم). المقام مقام مؤشر
    * «نسبة الغياب» في القاموس بالحرف: أيام العمل المطلوبة (حضور + تأخير + انصراف مبكر + غياب)، من غير غياب برّه فترة الخدمة.
+   * B-ADD.20: النافذة من فلتر اللوحة (7 أو 30 أو 90 يوم) — من غيرها 30 زي الأول.
    */
-  async trendsCard(ctx: CardContext, date: string, rawGroup: unknown) {
+  async trendsCard(ctx: CardContext, date: string, rawGroup: unknown, rawDays?: unknown) {
+    const window = trendDaysOf(rawDays)
+    if (window === null) throw new BadRequestException('الفترة المتاحة: 7 أو 30 أو 90 يوم')
     const group = this.groupOf(ctx, rawGroup)
-    const from = dayAfter(date, -(TREND_DAYS - 1))
+    const from = dayAfter(date, -(window - 1))
     const params: unknown[] = [from, date]
     // مع اختيار إدارة أو قسم أو فريق: مكان الموظف الحالي بيتقري جوه نطاق القارئ بس (CR21-B01) — موظف اتنقل لفرع برّه النطاق مايطابقش
     // قسمه الجديد، فالنسبة ماتكشفش تنظيم فرع تاني
@@ -924,6 +1019,6 @@ export class DashboardCardsService {
       return { group: child.group, name: child.name, level: child.level, expandable: child.expandable, ...rate, tone: toneOfRate(rate.absence, 5, 10) }
     }).filter(unit => unit.required > 0).sort((a, b) => (b.absence ?? 0) - (a.absence ?? 0) || byArabic(a.name, b.name))
     const summary = rates(total)
-    return { from, to: date, group: this.groupLabel(ctx, group), summary: { ...summary, tone: toneOfRate(summary.absence, 5, 10) }, days, units }
+    return { from, to: date, window, group: this.groupLabel(ctx, group), summary: { ...summary, tone: toneOfRate(summary.absence, 5, 10) }, days, units }
   }
 }
