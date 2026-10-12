@@ -3,19 +3,24 @@
 // B-ADD.15: الاجتماع اللي التبويب جواه — فوق الصفحات (في الإطار الدائم)، فبيكمّل مع التنقل بين الشاشات: صفحة /meet/<الكود> مجرد عرض له
 // (قبل الدخول، الانتظار، الغرفة كاملة)، وفي أي شاشة تانية الاجتماع بيكمّل في نافذة صغيرة في ركن الشاشة. مكتبة livekit-client برّه حزمة النظام
 // الأساسية: بتتحمّل مع الدخول، وشاشة الغرفة حزمة لوحدها.
-import type { DisconnectReason, LocalAudioTrack, LocalVideoTrack, Room, Track } from 'livekit-client'
+import type { DisconnectReason, LocalAudioTrack, LocalVideoTrack, Room, RoomOptions, Track } from 'livekit-client'
 import dynamic from 'next/dynamic'
 import { usePathname, useRouter } from 'next/navigation'
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { cancelKnock as cancelKnockCall, fetchKnockState, fetchMeeting, fetchMeetingToken, knockMeeting, meetErrorCode, meetErrorText, meetPath, type MeetingDetail } from '@/lib/meet-api'
-import { loadPrefs, type MeetPrefs, savePrefs } from './devices'
-import { meetNotify, setActiveMeeting } from './meetState'
+import {
+  acceptCall, cancelKnock as cancelKnockCall, dialCall, fetchCall, fetchCallToken, fetchKnockState, fetchMeeting, fetchMeetingToken, hangupCall, knockMeeting, meetErrorCode, meetErrorText, meetPath,
+  type CallPerson, type CallRing, type CallTarget, type MeetingDetail,
+} from '@/lib/meet-api'
+import { loadPrefs, mediaErrorText, type MeetPrefs, savePrefs } from './devices'
+import { getActiveMeeting, meetNotify, setActiveMeeting } from './meetState'
 
 const RoomView = dynamic(() => import('./RoomView'), { ssr: false })
 const MeetLiveWindow = dynamic(() => import('./MeetLiveWindow'), { ssr: false })
 
 /** اللي مستني موافقة صاحب الاجتماع بيسأل كل كام ثانية (والسؤال نفسه بيقول للخادم إنه لسه مستني) */
 const KNOCK_POLL_MS = 3000
+/** B-ADD.23: المتصل بيسأل عن مكالمته كل كام ثانية لحد ما يترد عليه (أو تترفض، أو محدش يرد) */
+const CALL_POLL_MS = 2000
 
 export type LeftReason = 'self' | 'ended' | 'removed' | 'duplicate' | 'lost'
 
@@ -39,6 +44,12 @@ export interface JoinMedia {
   handOver: (tracks: Track[]) => void
 }
 
+/**
+ * B-ADD.23: المكالمة اللي التبويب فيها (بين اتنين، على نفس خادم الاجتماعات) — بيتصل ومستني الرد، أو بيفتحها، أو شغالة. حالتها لوحدها جنب حالة
+ * الاجتماع: التبويب في واحد منهم بس. صوت الأول: المايك بس، والكاميرا بإيد المستخدم من نافذة المكالمة.
+ */
+export interface CallSession { id: string; person: CallPerson; phase: 'calling' | 'connecting' | 'talking'; room: Room | null; joinedAt: number }
+
 interface State {
   id: string | null
   meeting: MeetingDetail | null
@@ -61,6 +72,14 @@ export interface MeetSession extends State {
   leave: () => Promise<void>
   minimize: () => void
   expand: () => void
+  /** B-ADD.23: المكالمة اللي التبويب فيها */
+  call: CallSession | null
+  /** اتصال برقم تحويلة أو بحساب بالاسم — رفض الخادم (مشغول، مفيش حد بالتحويلة…) بيترمي للي نادى */
+  dial: (target: CallTarget) => Promise<void>
+  /** رد على مكالمة بترن */
+  answer: (ring: CallRing) => Promise<void>
+  /** قفل المكالمة (أو إلغاؤها قبل الرد): بتنتهي للطرفين */
+  hangup: () => void
 }
 
 const IDLE: State = { id: null, meeting: null, phase: { k: 'idle' }, joinError: null, joinedAt: 0 }
@@ -83,6 +102,23 @@ export const LEFT_TEXT: Record<LeftReason, string> = {
   lost: 'الاتصال بالاجتماع اتقطع',
 }
 const CONNECT_FAILED = 'تعذر الاتصال بخادم الاجتماعات — جرّب تاني'
+const CALL_ENDED = 'المكالمة انتهت'
+const CALL_LOST = 'الاتصال بالمكالمة اتقطع'
+const CALL_ELSEWHERE = 'المكالمة اتفتحت من مكان تاني بنفس الحساب'
+const BUSY_HERE = 'إنت في اجتماع أو مكالمة دلوقتي — اقفلها الأول'
+const CALL_FIRST = 'إنت في مكالمة دلوقتي — اقفلها الأول وبعدين ادخل الاجتماع'
+
+/** إعداد غرفة LiveKit بأجهزة المستخدم المختارة (للاجتماع وللمكالمة) */
+const roomOptions = (lk: typeof import('livekit-client'), chosen: MeetPrefs): RoomOptions => ({
+  adaptiveStream: true,
+  dynacast: true,
+  // قفل التبويب = خروج من الاجتماع
+  disconnectOnPageLeave: true,
+  publishDefaults: { simulcast: true, videoCodec: 'vp8', dtx: true, red: true },
+  videoCaptureDefaults: { deviceId: chosen.camId || undefined, resolution: lk.VideoPresets.h720.resolution },
+  audioCaptureDefaults: { deviceId: chosen.micId || undefined, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  audioOutput: chosen.outId ? { deviceId: chosen.outId } : undefined,
+})
 
 export function MeetSessionProvider({ children }: { children: ReactNode }) {
   const router = useRouter()
@@ -115,6 +151,17 @@ export function MeetSessionProvider({ children }: { children: ReactNode }) {
   onPageRef.current = onPage
   const routerRef = useRef(router)
   routerRef.current = router
+
+  // B-ADD.23: المكالمة — حالتها هنا، وأفعالها تحت (بعد أفعال الاجتماع)
+  const [call, setCallState] = useState<CallSession | null>(null)
+  const callRef = useRef<CallSession | null>(null)
+  const setCall = useCallback((next: CallSession | null) => {
+    callRef.current = next
+    setCallState(next)
+  }, [])
+  /** بيزيد كل ما المكالمة اللي مستنيينها (رد، تذكرة، اتصال) مابقتش تهم */
+  const callGen = useRef(0)
+  const dialing = useRef(false)
 
   /** الغرفة راحت (خروج، إنهاء، إخراج، انقطاع): مرة واحدة لكل غرفة */
   const teardown = useCallback((room: Room, reason: LeftReason) => {
@@ -171,6 +218,8 @@ export function MeetSessionProvider({ children }: { children: ReactNode }) {
   const join = useCallback(async (getMedia: () => JoinMedia) => {
     const id = stateRef.current.id
     if (!id) return
+    // B-ADD.23: التبويب في مكالمة — اجتماع ومكالمة مع بعض لأ
+    if (callRef.current) return void update({ joinError: CALL_FIRST })
     mediaRef.current = getMedia
     const generation = gen.current
     const stale = () => gen.current !== generation || stateRef.current.id !== id
@@ -206,16 +255,7 @@ export function MeetSessionProvider({ children }: { children: ReactNode }) {
     if (stale()) return
 
     const chosen = prefsRef.current
-    const room = new lk.Room({
-      adaptiveStream: true,
-      dynacast: true,
-      // قفل التبويب = خروج من الاجتماع
-      disconnectOnPageLeave: true,
-      publishDefaults: { simulcast: true, videoCodec: 'vp8', dtx: true, red: true },
-      videoCaptureDefaults: { deviceId: chosen.camId || undefined, resolution: lk.VideoPresets.h720.resolution },
-      audioCaptureDefaults: { deviceId: chosen.micId || undefined, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      audioOutput: chosen.outId ? { deviceId: chosen.outId } : undefined,
-    })
+    const room = new lk.Room(roomOptions(lk, chosen))
     dropRoom()
     roomRef.current = room
     const reasons = lk.DisconnectReason
@@ -296,6 +336,124 @@ export function MeetSessionProvider({ children }: { children: ReactNode }) {
     if (id) routerRef.current.push(meetPath(id))
   }, [])
 
+  // ------------------------------------------------------------ B-ADD.23: المكالمة
+  /** المكالمة راحت من التبويب ده (قفل، رفض، محدش رد، انقطاع): غرفتها بتتساب ونافذتها بتتقفل — بكلمة لو مش بإيدينا */
+  const endCall = useCallback((text?: string, tone: 'info' | 'danger' = 'info') => {
+    callGen.current++
+    const current = callRef.current
+    if (current?.room) {
+      current.room.removeAllListeners()
+      void current.room.disconnect()
+    }
+    if (current && getActiveMeeting() === current.id) setActiveMeeting(null)
+    setCall(null)
+    if (text) meetNotify(text, tone)
+  }, [setCall])
+
+  const hangup = useCallback(() => {
+    const current = callRef.current
+    if (!current) return
+    hangupCall(current.id).catch(() => undefined)
+    endCall()
+  }, [endCall])
+
+  /** بعد الرد: تذكرة المكالمة ودخول غرفتها — المايك بس، والكاميرا مقفولة لحد ما المستخدم يفتحها */
+  const connectCall = useCallback(async (id: string) => {
+    const current = callRef.current
+    if (!current || current.id !== id || current.phase === 'talking') return
+    const generation = callGen.current
+    const stale = () => callGen.current !== generation || callRef.current?.id !== id
+    setCall({ ...current, phase: 'connecting' })
+    let room: Room | null = null
+    try {
+      const lk = await import('livekit-client')
+      const ticket = await fetchCallToken(id)
+      if (stale()) return
+      const live = (room = new lk.Room(roomOptions(lk, prefsRef.current)))
+      const reasons = lk.DisconnectReason
+      live.once(lk.RoomEvent.Disconnected, (reason?: DisconnectReason) => {
+        if (callRef.current?.room !== live) return
+        const closed = reason === reasons.ROOM_DELETED || reason === reasons.ROOM_CLOSED
+        // اتقطعت من عندنا: الطرف التاني مايفضلش مستني
+        if (!closed) hangupCall(id).catch(() => undefined)
+        endCall(reason === reasons.CLIENT_INITIATED ? undefined : closed ? CALL_ENDED : reason === reasons.DUPLICATE_IDENTITY ? CALL_ELSEWHERE : CALL_LOST)
+      })
+      // الطرف التاني قفل التبويب من غير «اقفل»: المكالمة بتنتهي
+      live.on(lk.RoomEvent.ParticipantDisconnected, () => {
+        if (callRef.current?.room !== live || live.remoteParticipants.size > 0) return
+        hangupCall(id).catch(() => undefined)
+        endCall(CALL_ENDED)
+      })
+      await live.connect(ticket.url, ticket.token, { autoSubscribe: true })
+      if (stale()) {
+        live.removeAllListeners()
+        void live.disconnect()
+        return
+      }
+      setActiveMeeting(id)
+      setCall({ id, person: current.person, phase: 'talking', room: live, joinedAt: Date.now() })
+      await live.localParticipant.setMicrophoneEnabled(true).catch((error) => {
+        const text = mediaErrorText(error, 'mic')
+        if (text) meetNotify(text, 'danger')
+      })
+      // الطرف التاني قفل وإحنا بندخل (دخولنا بيعمل الغرفة من جديد): نتأكد إن المكالمة لسه شغالة
+      fetchCall(id).then((entry) => {
+        if (!stale() && entry.state !== 'active') endCall(CALL_ENDED)
+      }).catch(() => undefined)
+    } catch (error) {
+      if (room) {
+        room.removeAllListeners()
+        void room.disconnect()
+      }
+      if (stale()) return
+      hangupCall(id).catch(() => undefined)
+      endCall(meetErrorCode(error) === 'CALL_OVER' ? CALL_ENDED : meetErrorText(error, CONNECT_FAILED), 'danger')
+    }
+  }, [endCall, setCall])
+
+  const dial = useCallback(async (target: CallTarget) => {
+    if (dialing.current || callRef.current || roomRef.current || stateRef.current.phase.k === 'connecting' || stateRef.current.phase.k === 'knocking') throw new Error(BUSY_HERE)
+    dialing.current = true
+    try {
+      const made = await dialCall(target)
+      callGen.current++
+      setCall({ id: made.id, person: made.person, phase: 'calling', room: null, joinedAt: 0 })
+    } finally {
+      dialing.current = false
+    }
+  }, [setCall])
+
+  const answer = useCallback(async (ring: CallRing) => {
+    if (dialing.current || callRef.current || roomRef.current) throw new Error(BUSY_HERE)
+    callGen.current++
+    setCall({ id: ring.id, person: ring.from, phase: 'connecting', room: null, joinedAt: 0 })
+    try {
+      await acceptCall(ring.id)
+    } catch (error) {
+      endCall(meetErrorText(error, 'تعذر الرد على المكالمة'), 'danger')
+      return
+    }
+    await connectCall(ring.id)
+  }, [connectCall, endCall, setCall])
+
+  // المتصل مستني: النظام من غير اتصال لحظي، فبيسأل عن مكالمته لحد ما يترد عليه أو تترفض أو محدش يرد
+  const callId = call?.id ?? null
+  const calling = call?.phase === 'calling'
+  useEffect(() => {
+    if (!calling || !callId) return
+    const generation = callGen.current
+    const waiting = () => callGen.current === generation && callRef.current?.id === callId && callRef.current.phase === 'calling'
+    const timer = setInterval(() => {
+      fetchCall(callId).then((entry) => {
+        if (!waiting()) return
+        if (entry.state === 'active') void connectCall(callId)
+        else if (entry.state === 'rejected') endCall(`${entry.person.displayName} رفض المكالمة`)
+        else if (entry.state !== 'ringing') endCall(`${entry.person.displayName} ماردّش`)
+      }).catch(() => undefined)
+    }, CALL_POLL_MS)
+    return () => clearInterval(timer)
+  }, [calling, callId, connectCall, endCall])
+
   // ------------------------------------------------------------ الانتظار: النظام من غير اتصال لحظي، فاللي مستني بيسأل
   const phaseKind = state.phase.k
   useEffect(() => {
@@ -322,11 +480,22 @@ export function MeetSessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => () => {
     gen.current++
     dropRoom()
+    // B-ADD.23: والمكالمة كمان (الطرف التاني مايفضلش مستني)
+    callGen.current++
+    const current = callRef.current
+    callRef.current = null
+    if (!current) return
+    hangupCall(current.id).catch(() => undefined)
+    if (current.room) {
+      current.room.removeAllListeners()
+      void current.room.disconnect()
+    }
+    if (getActiveMeeting() === current.id) setActiveMeeting(null)
   }, [dropRoom])
 
   const value = useMemo<MeetSession>(
-    () => ({ ...state, prefs, setPrefs, open, rejoin, join, cancelKnock, abandon, leave, minimize, expand }),
-    [state, prefs, setPrefs, open, rejoin, join, cancelKnock, abandon, leave, minimize, expand],
+    () => ({ ...state, prefs, setPrefs, open, rejoin, join, cancelKnock, abandon, leave, minimize, expand, call, dial, answer, hangup }),
+    [state, prefs, setPrefs, open, rejoin, join, cancelKnock, abandon, leave, minimize, expand, call, dial, answer, hangup],
   )
 
   const phase = state.phase
@@ -340,6 +509,10 @@ export function MeetSessionProvider({ children }: { children: ReactNode }) {
             minimized={!onPage} onMinimize={minimize} onLeave={() => void leave()} />
           {!onPage && <MeetLiveWindow room={phase.room} title={state.meeting.title} joinedAt={state.joinedAt} onExpand={expand} onLeave={() => void leave()} />}
         </>
+      )}
+      {/* B-ADD.23: المكالمة الشغالة — نافذة صغيرة في الركن في أي شاشة (مالهاش صفحة) */}
+      {call?.phase === 'talking' && call.room && (
+        <MeetLiveWindow key={call.id} call room={call.room} title={`مكالمة مع ${call.person.displayName}`} joinedAt={call.joinedAt} onExpand={expand} onLeave={hangup} />
       )}
     </Context.Provider>
   )

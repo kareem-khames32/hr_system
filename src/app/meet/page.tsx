@@ -3,17 +3,18 @@
 // B-ADD.15: «الاجتماعات» — اجتماعاتي (الشغال دلوقتي، والجاي، واللي فات)، واجتماع فوري أو بميعاد. الاجتماع نفسه في /meet/<الكود>.
 import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Calendar, Link2, Pencil, PhoneOff, Search, Trash2, Video, VideoOff } from 'lucide-react'
+import Link from 'next/link'
+import { Calendar, Link2, Pencil, Phone, PhoneOff, Search, Trash2, Video, VideoOff } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import EmptyState from '@/components/EmptyState'
 import { formatDateTime } from '@/lib/dates'
 import { normalizeSearchText } from '@/lib/employee-search'
 import {
-  cancelMeeting, endMeeting, fetchMeetings, MEET_INSECURE_TEXT, MEET_NOT_CONFIGURED_TEXT, MEET_NOT_READY_TEXT, MEET_PRIVACY_TEXT, meetErrorText, meetPath, type MeetingSummary, type MeetStatus,
+  CALLS_PATH, cancelMeeting, endMeeting, fetchMeetings, MEET_INSECURE_TEXT, MEET_NOT_CONFIGURED_TEXT, MEET_NOT_READY_TEXT, MEET_PRIVACY_TEXT, meetErrorText, meetInvitedText, meetPath, type MeetingSummary, type MeetStatus,
 } from '@/lib/meet-api'
 import MeetDialog, { type MeetDialogMode } from '@/components/meet/MeetDialog'
 import { MeetModal } from '@/components/meet/MeetBits'
-import { useMeetInbox } from '@/components/meet/meetState'
+import { meetNotify, useMeetInbox } from '@/components/meet/meetState'
 
 const STATUS: Record<MeetStatus, { label: string; style: string }> = {
   live: { label: 'شغال دلوقتي', style: 'bg-green-50 text-green-700' },
@@ -153,6 +154,10 @@ export default function MeetPage() {
             <button type="button" className="btn-secondary inline-flex items-center gap-2 disabled:opacity-50" onClick={() => setDialog({ mode: 'schedule' })} disabled={!usable}>
               <Calendar size={18} /> اجتماع بميعاد
             </button>
+            {/* B-ADD.23: مكالمة بين اتنين برقم التحويلة أو بالاسم */}
+            <Link href={CALLS_PATH} className="btn-secondary inline-flex items-center gap-2" data-meet-calls-link>
+              <Phone size={18} /> الاتصال
+            </Link>
           </div>
         </div>
 
@@ -190,12 +195,16 @@ export default function MeetPage() {
 
       {dialog && (
         <MeetDialog mode={dialog.mode} meetingId={dialog.id} onClose={() => setDialog(null)}
-          onDone={(id) => {
+          onDone={(id, created) => {
             const mode = dialog.mode
+            // B-ADD.22: الدعوة بالفلاتر — كام اتدعى وكام موظف من غير حساب
+            const invited = created ? meetInvitedText(created) : ''
             setDialog(null)
-            if (mode === 'instant') router.push(meetPath(id))
-            else {
-              setNotice(mode === 'schedule' ? 'الاجتماع اتحدد ميعاده — هيرن عند المدعوين لما ييجي' : 'التعديل اتحفظ')
+            if (mode === 'instant') {
+              meetNotify(invited)
+              router.push(meetPath(id))
+            } else {
+              setNotice(mode === 'schedule' ? `الاجتماع اتحدد ميعاده — هيرن عند المدعوين لما ييجي${invited ? ` · ${invited}` : ''}` : 'التعديل اتحفظ')
               load()
             }
           }} />

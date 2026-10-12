@@ -2,6 +2,7 @@
 
 // B-ADD.15: الاجتماع اللي التبويب جواه وهو متصغّر — نافذة صغيرة في ركن الشاشة: اللي بيتكلم، والعنوان، والوقت، وعدد المشاركين، وأزرار المايك
 // والكاميرا والرجوع للغرفة والخروج. الجلسة نفسها (والصوت) عند MeetSessionProvider؛ النافذة دي بتعرضها بس.
+// B-ADD.23: ونفس النافذة هي المكالمة بين اتنين (call): مالهاش غرفة ملء الشاشة، فصوت الطرف التاني بيتشغّل هنا، ومن غير «ارجع للاجتماع».
 import { type Participant, type Room, RoomEvent, Track } from 'livekit-client'
 import { useEffect, useRef, useState } from 'react'
 import { Maximize2, Mic, MicOff, PhoneOff, Video, VideoOff, Volume2 } from 'lucide-react'
@@ -9,6 +10,7 @@ import { mediaErrorText } from './devices'
 import { MeetAvatar } from './MeetBits'
 import { meetNotify } from './meetState'
 import { Elapsed } from './RoomView'
+import { AudioTrackPlayer } from './Tile'
 
 const REDRAW = [
   RoomEvent.ParticipantConnected, RoomEvent.ParticipantDisconnected, RoomEvent.TrackPublished, RoomEvent.TrackUnpublished, RoomEvent.TrackSubscribed, RoomEvent.TrackUnsubscribed,
@@ -17,7 +19,7 @@ const REDRAW = [
 
 const control = (off: boolean) => `inline-flex h-9 w-9 items-center justify-center rounded-full text-white disabled:opacity-50 ${off ? 'bg-red-600 hover:bg-red-500' : 'bg-gray-700 hover:bg-gray-600'}`
 
-export default function MeetLiveWindow({ room, title, joinedAt, onExpand, onLeave }: { room: Room; title: string; joinedAt: number; onExpand: () => void; onLeave: () => void }) {
+export default function MeetLiveWindow({ room, title, joinedAt, onExpand, onLeave, call = false }: { room: Room; title: string; joinedAt: number; onExpand: () => void; onLeave: () => void; call?: boolean }) {
   const [, setTick] = useState(0)
   const lastSpoke = useRef(new Map<string, number>())
   const [reconnecting, setReconnecting] = useState(false)
@@ -71,8 +73,11 @@ export default function MeetLiveWindow({ room, title, joinedAt, onExpand, onLeav
   }
 
   return (
-    <section className="fixed bottom-4 end-4 z-[65] w-64 overflow-hidden rounded-2xl bg-gray-900 text-white shadow-2xl" aria-label="الاجتماع الشغال" data-meet-live>
-      <div className="relative h-36 bg-gray-800" onDoubleClick={onExpand}>
+    <section className="fixed bottom-4 end-4 z-[65] w-64 overflow-hidden rounded-2xl bg-gray-900 text-white shadow-2xl" aria-label={call ? 'المكالمة الشغالة' : 'الاجتماع الشغال'} data-meet-live={call ? 'call' : 'meeting'}>
+      {/* المكالمة: صوت الطرف التاني من هنا (في الاجتماع الغرفة المتصغّرة هي اللي بتشغّله) */}
+      {call && remotes.flatMap((participant) =>
+        [...participant.audioTrackPublications.values()].map((publication) => (publication.track && publication.isSubscribed ? <AudioTrackPlayer key={publication.trackSid} track={publication.track} /> : null)))}
+      <div className="relative h-36 bg-gray-800" onDoubleClick={call ? undefined : onExpand}>
         <SpeakerVideo key={speaker.identity} participant={speaker} />
         <span className="absolute bottom-1.5 start-1.5 flex max-w-[90%] items-center gap-1 rounded-md bg-black/60 px-1.5 py-0.5 text-xs">
           {!speaker.isMicrophoneEnabled && <MicOff size={13} className="shrink-0 text-red-400" />}
@@ -88,7 +93,7 @@ export default function MeetLiveWindow({ room, title, joinedAt, onExpand, onLeav
       <div className="px-3 pt-2">
         <strong className="block truncate text-sm" title={title}>{title}</strong>
         <span className="text-xs text-gray-400">
-          <Elapsed since={joinedAt} /> · {remotes.length + 1} مشارك
+          <Elapsed since={joinedAt} /> · {call ? (remotes.length ? 'مكالمة صوت — الكاميرا بإيدك' : 'مستنيين الطرف التاني يدخل…') : `${remotes.length + 1} مشارك`}
         </span>
       </div>
       <div className="flex items-center justify-center gap-2 p-3">
@@ -98,10 +103,12 @@ export default function MeetLiveWindow({ room, title, joinedAt, onExpand, onLeav
         <button type="button" className={control(!camOn)} onClick={() => void toggle('cam')} disabled={busy.cam} title={camOn ? 'اقفل الكاميرا' : 'افتح الكاميرا'} aria-label={camOn ? 'اقفل الكاميرا' : 'افتح الكاميرا'} aria-pressed={!camOn}>
           {camOn ? <Video size={18} /> : <VideoOff size={18} />}
         </button>
-        <button type="button" className={control(false)} onClick={onExpand} title="ارجع للاجتماع" aria-label="ارجع للاجتماع" data-meet-expand>
-          <Maximize2 size={18} />
-        </button>
-        <button type="button" className={control(true)} onClick={onLeave} title="اخرج" aria-label="اخرج">
+        {!call && (
+          <button type="button" className={control(false)} onClick={onExpand} title="ارجع للاجتماع" aria-label="ارجع للاجتماع" data-meet-expand>
+            <Maximize2 size={18} />
+          </button>
+        )}
+        <button type="button" className={control(true)} onClick={onLeave} title={call ? 'اقفل المكالمة' : 'اخرج'} aria-label={call ? 'اقفل المكالمة' : 'اخرج'} data-meet-hangup={call ? '' : undefined}>
           <PhoneOff size={18} />
         </button>
       </div>

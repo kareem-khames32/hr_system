@@ -3,12 +3,17 @@ import { InjectDataSource } from '@nestjs/typeorm'
 import { randomUUID } from 'node:crypto'
 import { DataSource, In, MoreThanOrEqual, type EntityManager } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
+import { branchScopeOf, userHasPerm } from '../auth/guards'
 import { User } from '../auth/user.entity'
+import { audienceMembersNow } from '../org/audience-preview'
+import { assertAudienceTargets } from '../org/org-audience'
+import { ORG_AUDIENCE_PERMS } from '../org/org.controller'
 import { LivekitError, livekitConfig, livekitDeleteRoom, livekitMuteParticipant, livekitRemoveParticipant, livekitRoomCounts, participantToken, type LivekitConfig } from './livekit'
 import {
-  MEET_CANCELLED, MEET_ENDED, MEET_EXPIRE_MS, MEET_HOST_ONLY, MEET_KNOCK_FRESH_MS, MEET_KNOCK_REQUIRED, MEET_LIST_DAYS, MEET_MIGRATION_MISSING, MEET_NOT_CONFIGURED, MEET_NOT_FOUND, MEET_NOT_IN_ROOM,
+  MEET_AUDIENCE_LABEL, MEET_AUDIENCE_NOBODY, MEET_AUDIENCE_NO_ACCOUNTS, MEET_AUDIENCE_ON_CREATE, MEET_AUDIENCE_PERM,
+  MEET_CANCELLED, MEET_ENDED, MEET_EXPIRE_MS, MEET_HOST_ONLY, MEET_KNOCK_FRESH_MS, MEET_KNOCK_REQUIRED, MEET_LIST_DAYS, MEET_MAX_INVITES, MEET_MIGRATION_MISSING, MEET_NOT_CONFIGURED, MEET_NOT_FOUND, MEET_NOT_IN_ROOM,
   MEET_NOT_YOURSELF, MEET_REJOIN_MS, MEET_RING_MS, MEET_TRACK, MEET_UNAVAILABLE, MEET_USER,
-  cleanMeetInvites, cleanMeetLobby, cleanMeetStart, cleanMeetTitle, cleanMeetUserId, meetReady, meetStartOf, meetStatusOf,
+  cleanMeetAudience, cleanMeetInvites, cleanMeetLobby, cleanMeetStart, cleanMeetTitle, cleanMeetUserId, meetReady, meetStartOf, meetStatusOf, meetTooManyInvites,
 } from './meet-rules'
 import { Meeting, MeetingAttendance, MeetingInvite } from './meet.entities'
 
@@ -17,7 +22,11 @@ export interface MeetPerson { id: number; displayName: string; jobTitle: string 
 type Role = 'host' | 'invited' | 'none'
 interface Knock { user: MeetPerson; at: number; seenAt: number; hostUserId: number; title: string }
 interface Decline { meetingId: string; title: string; user: MeetPerson; at: number }
-export interface MeetInput { title?: unknown; startsAt?: unknown; lobby?: unknown; inviteUserIds?: unknown }
+export interface MeetInput { title?: unknown; startsAt?: unknown; lobby?: unknown; inviteUserIds?: unknown; audience?: unknown }
+/** B-ADD.22: اللي الجمهور اتحوّل له وقت الإنشاء */
+interface AudienceInvites { userIds: number[]; employees: number; withoutAccount: number }
+const jsonIds = (ids: readonly number[]) => JSON.stringify(ids)
+const IN_JSON = '(SELECT CAST([value] AS int) FROM OPENJSON(@0))'
 
 const person = (row: { id: number; displayName: string; jobTitle?: string | null }): MeetPerson => ({ id: Number(row.id), displayName: row.displayName, jobTitle: row.jobTitle || null })
 const unknownPerson = (id: number): MeetPerson => ({ id, displayName: `حساب #${id}`, jobTitle: null })
@@ -261,15 +270,53 @@ export class MeetService {
   async create(user: JwtPayload, input: MeetInput) {
     const title = cleanMeetTitle(input?.title), startsAt = cleanMeetStart(input?.startsAt) ?? null, lobby = cleanMeetLobby(input?.lobby) ?? true
     const wanted = cleanMeetInvites(input?.inviteUserIds) ?? []
+    // B-ADD.22: «على مين؟» بالاستهداف الموحد — بنفس صلاحية شجرة المنتقي ومعاينته (org/audience-preview)
+    const audience = cleanMeetAudience(input?.audience)
+    if (audience && !ORG_AUDIENCE_PERMS.some((perm) => userHasPerm(user, perm))) throw new ForbiddenException({ code: 'MEET_AUDIENCE_PERM', message: MEET_AUDIENCE_PERM })
     return this.ds.transaction(async (em) => {
       await this.guard(em)
-      const invitees = await this.activeUsers(em, wanted, user.sub)
+      const expanded = audience ? await this.audienceInvites(em, user, audience.text) : null
+      const invitees = [...new Set([...(await this.activeUsers(em, wanted, user.sub)), ...(expanded?.userIds ?? [])])]
+      if (invitees.length > MEET_MAX_INVITES) throw new BadRequestException({ code: 'MEET_TOO_MANY_INVITES', message: meetTooManyInvites(invitees.length) })
       const now = new Date(), code = randomUUID()
       const created = await em.getRepository(Meeting).insert({ code, title, hostUserId: user.sub, startsAt, lobby, createdAt: now, endedAt: null, cancelledAt: null })
       const meetingId = Number(created.identifiers[0].id)
-      if (invitees.length) await em.getRepository(MeetingInvite).insert(invitees.map((userId) => ({ meetingId, userId, createdAt: now })))
-      return { id: code }
+      for (let offset = 0; offset < invitees.length; offset += 250) {
+        await em.getRepository(MeetingInvite).insert(invitees.slice(offset, offset + 250).map((userId) => ({ meetingId, userId, createdAt: now })))
+      }
+      if (!expanded) return { id: code }
+      return { id: code, invited: invitees.length, audience: { employees: expanded.employees, withoutAccount: expanded.withoutAccount } }
     })
+  }
+
+  /**
+   * B-ADD.22: الجمهور ← حسابات موظفينه الحاليين دلوقتي (مرة واحدة وقت الإنشاء: الاجتماع مابيحفظش الجمهور، واللي ينضم للقسم بعدين مش مدعو).
+   * جوه نطاق فروع صاحب الاجتماع بنفس مقيّم المعاينة (audienceMembersNow) — فالعدد اللي شافه هو اللي بيتدعى، من غيره هو نفسه؛ والموظف اللي مالوش
+   * حساب نشط بيتعدّ ومابيتدعاش. صفوف الموظفين اللي هيتدعوا بتتقفل بترتيب أرقامهم وبعدها الجمهور والحسابات بيتقروا تاني (الحكم بعد القفل).
+   */
+  private async audienceInvites(em: EntityManager, user: JwtPayload, audience: string | null): Promise<AudienceInvites> {
+    const scope = branchScopeOf(user)
+    // فرع اختيار برّه نطاق الحساب = مش موجود: نفس رد الفرع اللي مالوش وجود، قبل أي فحص وجود
+    const where = audience ? (JSON.parse(audience) as { where?: { mode?: string; branchId?: number } | null }).where : null
+    if (scope !== null && where?.branchId != null && !scope.includes(Number(where.branchId))) throw new BadRequestException(`الفرع المختار في ${MEET_AUDIENCE_LABEL} مش موجود`)
+    await assertAudienceTargets(em, audience, MEET_AUDIENCE_LABEL)
+    const others = (member: { id: number }) => member.id !== user.employeeId
+    const accountsOf = async (employeeIds: number[]): Promise<Array<{ id: number; employeeId: number }>> => employeeIds.length ? em.query(
+      `SELECT u.[id], u.[employeeId] FROM [users] u WHERE u.[isActive] = 1 AND u.[id] <> @1 AND u.[employeeId] IN ${IN_JSON} ORDER BY u.[id]`, [jsonIds(employeeIds), user.sub]) : []
+    const seen = (await audienceMembersNow(em, audience, scope)).filter(others)
+    if (!seen.length) throw new BadRequestException(MEET_AUDIENCE_NOBODY)
+    const first = await accountsOf(seen.map((member) => member.id))
+    if (!first.length) throw new BadRequestException(MEET_AUDIENCE_NO_ACCOUNTS)
+    // الحد قبل القفل: جمهور أكبر من الحد مابيقفلش صفوف
+    if (first.length > MEET_MAX_INVITES) throw new BadRequestException({ code: 'MEET_TOO_MANY_INVITES', message: meetTooManyInvites(first.length) })
+    const lockIds = [...new Set(first.map((row) => Number(row.employeeId)))].sort((a, b) => a - b)
+    await em.query(`SELECT [id] FROM [employees] WITH (UPDLOCK, ROWLOCK) WHERE [id] IN ${IN_JSON} ORDER BY [id]`, [jsonIds(lockIds)])
+    const members = (await audienceMembersNow(em, audience, scope)).filter(others)
+    const locked = new Set(lockIds)
+    const accounts = await accountsOf(members.filter((member) => locked.has(member.id)).map((member) => member.id))
+    if (!accounts.length) throw new BadRequestException(MEET_AUDIENCE_NO_ACCOUNTS)
+    const withAccount = new Set(accounts.map((row) => Number(row.employeeId)))
+    return { userIds: accounts.map((row) => Number(row.id)), employees: members.length, withoutAccount: members.filter((member) => !withAccount.has(member.id)).length }
   }
 
   /**
@@ -305,6 +352,7 @@ export class MeetService {
   async update(user: JwtPayload, code: string, input: MeetInput) {
     const title = input?.title === undefined ? undefined : cleanMeetTitle(input.title)
     const startsAt = cleanMeetStart(input?.startsAt), lobby = cleanMeetLobby(input?.lobby), wanted = cleanMeetInvites(input?.inviteUserIds)
+    if (input?.audience !== undefined && input.audience !== null) throw new BadRequestException(MEET_AUDIENCE_ON_CREATE)
     await this.ds.transaction(async (em) => {
       await this.guard(em)
       const meeting = await this.load(em, code, true)

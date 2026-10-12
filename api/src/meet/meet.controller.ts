@@ -3,6 +3,7 @@ import { IsOptional } from 'class-validator'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, RolesGuard } from '../auth/guards'
 import { RequireModule } from '../modules-registry/module.guard'
+import { MeetCallsService } from './meet-calls.service'
 import { MeetService } from './meet.service'
 
 // القيم بتتفحص في الخدمة برسايلها
@@ -11,6 +12,8 @@ class MeetingDto {
   @IsOptional() startsAt?: unknown
   @IsOptional() lobby?: unknown
   @IsOptional() inviteUserIds?: unknown
+  // B-ADD.22: «على مين؟» بالاستهداف الموحد (وقت الإنشاء بس)
+  @IsOptional() audience?: unknown
 }
 class ParticipantDto {
   @IsOptional() userId?: unknown
@@ -23,11 +26,12 @@ class ParticipantDto {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('meet')
 export class MeetController {
-  constructor(private readonly meet: MeetService) {}
+  constructor(private readonly meet: MeetService, private readonly calls: MeetCallsService) {}
 
+  // B-ADD.23: والمكالمات اللي بترن عند الحساب في نفس السؤال الدوري
   @Get('inbox')
-  inbox(@CurrentUser() user: JwtPayload) {
-    return this.meet.inbox(user)
+  async inbox(@CurrentUser() user: JwtPayload) {
+    return { ...(await this.meet.inbox(user)), calls: await this.calls.ringing(user) }
   }
 
   @Get('directory')

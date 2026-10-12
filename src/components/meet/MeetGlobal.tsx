@@ -3,10 +3,11 @@
 // B-ADD.15: مركّب مرة واحدة في الإطار الدائم (لما موديول الاجتماعات مفتوح للحساب). النظام من غير اتصال لحظي، فهنا بيتسأل «صندوق الاجتماعات»
 // كل كام ثانية والتبويب ظاهر، ومنه: الدعوة اللي بترن (ادخل / اعتذر)، وطلبات دخول اجتماعات الحساب (دخّله / ارفض)، واعتذارات مدعويه، والرسايل
 // القصيرة. اللي جوه الغرفة بيوصله الباقي من LiveKit نفسه.
+// B-ADD.23: ومن نفس الصندوق المكالمة اللي بترن («فلان بيتصل بيك» وتحويلته: رد / ارفض)، وبطاقة المتصل وهو مستني الرد (إلغاء).
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
-import { Check, PhoneOff, Video, X } from 'lucide-react'
-import { answerKnock, declineMeeting, fetchMeetInbox, meetErrorText, meetPath, type MeetKnock, type MeetRing } from '@/lib/meet-api'
+import { Check, Phone, PhoneOff, Video, X } from 'lucide-react'
+import { answerKnock, callPersonLine, declineMeeting, fetchMeetInbox, meetErrorText, meetPath, rejectCall, type CallRing, type MeetKnock, type MeetRing } from '@/lib/meet-api'
 import { MeetAvatar } from './MeetBits'
 import { useOptionalMeetSession } from './MeetSession'
 import { dismissMeetNotice, meetNotify, setMeetInbox, useActiveMeeting, useMeetInbox, useMeetNotices } from './meetState'
@@ -31,6 +32,7 @@ function ringOnce(context: AudioContext) {
 }
 
 const knockKey = (knock: MeetKnock) => `${knock.meetingId}:${knock.user.id}`
+const callKey = (ring: CallRing) => `call:${ring.id}`
 
 export default function MeetGlobal() {
   const router = useRouter()
@@ -96,7 +98,11 @@ export default function MeetGlobal() {
   const roomOnScreen = session?.phase.k === 'room' && pathname === meetPath(session.id ?? '')
   const knocks: MeetKnock[] = (inbox?.knocks ?? []).filter((knock) => !dismissed.has(knockKey(knock)) && !(roomOnScreen && knock.meetingId === session?.id))
 
-  const ringing = rings.length > 0
+  // B-ADD.23: المكالمة اللي بترن — مابتطلعش فوق اجتماع أو مكالمة شغالة في التبويب (بتتسجّل فايتة)
+  const outgoing = session?.call && session.call.phase !== 'talking' ? session.call : null
+  const callRings: CallRing[] = active || session?.call ? [] : (inbox?.calls ?? []).filter((ring) => !dismissed.has(callKey(ring)))
+
+  const ringing = rings.length > 0 || callRings.length > 0
   useEffect(() => {
     if (!ringing) return
     let context: AudioContext | null = null
@@ -123,6 +129,14 @@ export default function MeetGlobal() {
     dismiss(invite.id)
     if (!invite.isHost) declineMeeting(invite.id).catch(() => undefined)
   }
+  const answerCall = (ring: CallRing) => {
+    dismiss(callKey(ring))
+    session?.answer(ring).catch((error) => meetNotify(meetErrorText(error, 'تعذر الرد على المكالمة'), 'danger'))
+  }
+  const refuseCall = (ring: CallRing) => {
+    dismiss(callKey(ring))
+    rejectCall(ring.id).catch(() => undefined)
+  }
   const answer = (knock: MeetKnock, admit: boolean) => {
     dismiss(knockKey(knock))
     // لو نفس الشخص طلب تاني بعدين، طلبه الجديد يظهر
@@ -134,7 +148,7 @@ export default function MeetGlobal() {
     answerKnock(knock.meetingId, knock.user.id, admit).catch((error) => meetNotify(meetErrorText(error, 'تعذر الرد على طلب الدخول'), 'danger'))
   }
 
-  if (!rings.length && !knocks.length && !notices.length) return null
+  if (!rings.length && !knocks.length && !notices.length && !callRings.length && !outgoing) return null
   const card = 'w-80 max-w-[calc(100vw-2rem)] rounded-2xl bg-white p-4 text-gray-800 shadow-2xl ring-1 ring-black/5'
   const accept = 'inline-flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-green-600 px-3 py-2 text-sm text-white hover:bg-green-500'
   const refuse = 'inline-flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700 hover:bg-red-100'
@@ -146,6 +160,35 @@ export default function MeetGlobal() {
           <button type="button" onClick={() => dismissMeetNotice(notice.id)} aria-label="إغلاق" className="rounded p-0.5 hover:bg-white/20">
             <X size={14} />
           </button>
+        </div>
+      ))}
+      {outgoing && (
+        <div className={card} data-meet-calling={outgoing.phase}>
+          <div className="flex items-center gap-3">
+            <MeetAvatar id={outgoing.person.id} name={outgoing.person.displayName} size={38} />
+            <div className="min-w-0 flex-1">
+              <strong className="block truncate text-sm">{outgoing.phase === 'calling' ? `بتتصل بـ${outgoing.person.displayName}…` : `جاري فتح المكالمة مع ${outgoing.person.displayName}…`}</strong>
+              <span className="block truncate text-xs text-gray-500">{callPersonLine(outgoing.person)}</span>
+            </div>
+          </div>
+          <div className="mt-3 flex gap-2">
+            <button type="button" className={refuse} onClick={() => session?.hangup()}><PhoneOff size={16} /> إلغاء</button>
+          </div>
+        </div>
+      )}
+      {callRings.map((ring) => (
+        <div key={ring.id} className={card} data-meet-call-ring>
+          <div className="flex items-center gap-3">
+            <MeetAvatar id={ring.from.id} name={ring.from.displayName} size={38} />
+            <div className="min-w-0 flex-1">
+              <strong className="block truncate text-sm">{ring.from.displayName} بيتصل بيك</strong>
+              <span className="block truncate text-xs text-gray-500">{callPersonLine(ring.from)}</span>
+            </div>
+          </div>
+          <div className="mt-3 flex gap-2">
+            <button type="button" className={accept} onClick={() => answerCall(ring)}><Phone size={16} /> رد</button>
+            <button type="button" className={refuse} onClick={() => refuseCall(ring)}><PhoneOff size={16} /> ارفض</button>
+          </div>
         </div>
       ))}
       {rings.map((invite) => (

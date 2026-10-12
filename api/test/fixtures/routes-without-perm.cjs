@@ -258,6 +258,9 @@ const EXCEPTIONS = {
   'MeetController.knock': 'SELF', // POST /meet/rooms/:id/knock
   'MeetController.knockState': 'SELF', // GET /meet/rooms/:id/knock
   'MeetController.list': 'SELF', // GET /meet/rooms
+  // B-ADD.23: الاتصال من جوه النظام — سجل مكالمات الحساب نفسه، واتصاله هو (بتحويلة أو باسم)
+  'MeetCallsController.dial': 'SELF', // POST /meet/calls
+  'MeetCallsController.list': 'SELF', // GET /meet/calls
   // ===== AUTH_ANY_OK (11) — أي حساب داخل: كتالوجات ومراجع للنماذج من غير بيانات حساسة =====
   'AssetsController.availableAssets': 'AUTH_ANY_OK', // GET /assets/available
   'AttendanceController.payrollMonth': 'AUTH_ANY_OK', // GET /attendance/payroll-month
@@ -366,6 +369,12 @@ const EXCEPTIONS = {
   'MeetController.remove': 'SERVICE_CHECK', // POST /meet/rooms/:id/remove — صاحب الاجتماع
   'MeetController.token': 'SERVICE_CHECK', // POST /meet/rooms/:id/token — صاحبه والمدعوين، أو أي حساب لو من غير غرفة انتظار
   'MeetController.update': 'SERVICE_CHECK', // PATCH /meet/rooms/:id — صاحب الاجتماع
+  // B-ADD.23: المكالمة لطرفيها بس (أي حساب تالت = مش موجودة)، والفحص في الخدمة
+  'MeetCallsController.accept': 'SERVICE_CHECK', // POST /meet/calls/:id/accept — اللي بيتّصلوا بيه
+  'MeetCallsController.detail': 'SERVICE_CHECK', // GET /meet/calls/:id — الطرفين
+  'MeetCallsController.hangup': 'SERVICE_CHECK', // POST /meet/calls/:id/hangup — الطرفين
+  'MeetCallsController.reject': 'SERVICE_CHECK', // POST /meet/calls/:id/reject — اللي بيتّصلوا بيه
+  'MeetCallsController.token': 'SERVICE_CHECK', // POST /meet/calls/:id/token — الطرفين، بعد الرد
 }
 
 module.exports = { EXCEPTIONS, REASONS }
