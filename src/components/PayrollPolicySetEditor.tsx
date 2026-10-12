@@ -355,10 +355,10 @@ export function PayrollPolicyChargeRulesPanel({ summary, version, onSaved }: { s
         <span className="text-xs text-gray-500">القيمة التي تأخذها أي معادلة تركت الخانة السابقة فارغة.</span></label>
       <label className="min-w-0" data-missing-punch-penalty><span className={labelClass}>خصم نسيان البصمة — المعامل (لكل المعادلات)</span>
         <input className="input w-full" type="number" min={0} max={5} step={0.25} value={missingPunch.penalty} onChange={event => setMissingPunch(current => ({ ...current, penalty: event.target.value }))} />
-        <span className="text-xs text-gray-500">كل «تصحيح/طلب بصمة» معتمد بعد المسموح يُخصم = قيمة اليوم × المعامل (0.25 = ربع يوم). صفر = من غير خصم.</span></label>
+        <span className="text-xs text-gray-500">اليوم اللي فيه بصمة واحدة بس (حضور من غير انصراف أو العكس) والموظف ماقدّمش عنه طلب تصحيح: بعد المسموح يُخصم = قيمة اليوم × المعامل (0.25 = ربع يوم). صفر = من غير خصم.</span></label>
       <label className="min-w-0" data-missing-punch-free><span className={labelClass}>مرات نسيان البصمة المسموحة في الفترة</span>
         <input className="input w-full" type="number" min={0} max={31} step={1} value={missingPunch.free} onChange={event => setMissingPunch(current => ({ ...current, free: event.target.value }))} />
-        <span className="text-xs text-gray-500">أول كام تصحيح في فترة المسير من غير خصم. الإدخال اليدوي من الموارد البشرية (عطل جهاز) مش محسوب.</span></label>
+        <span className="text-xs text-gray-500">أول كام يوم نسيان في فترة المسير من غير خصم. اللي قدّم طلب تصحيح عن اليوم مابيتعدّش عليه.</span></label>
     </fieldset>
 
     <fieldset disabled={!canEdit || busy} className="space-y-3">

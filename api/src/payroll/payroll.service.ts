@@ -53,7 +53,7 @@ import { CostCenter } from '../assets/assets.entities'
 import { loadAttendanceExemptions, exemptionPolicyOnDate } from '../attendance/attendance-exemption-resolver'
 import { Request } from '../requests/entities/request.entity'
 import { attendanceDeductionDay, AttendanceDeductionPolicy, splitLatenessPermission } from './attendance-deductions'
-import { missingPunchCharge, readPunchCorrectionDates } from './missing-punch-charge'
+import { missingPunchCharge, readPunchRequestDates, reviewIsMissingPunchOnly } from './missing-punch-charge'
 import { computeSocialInsurance } from './social-insurance'
 import { readSocialInsuranceContext } from './social-insurance.service'
 import { readGosiFirstRegistered } from '../employees/employee-gosi-registration'
@@ -486,7 +486,9 @@ export class PayrollService {
     for (const { item, saved } of parsed) {
       // المسيرات القديمة تسبق هذا الدليل؛ لا نصنع لها لقطة من الإعدادات الحالية.
       if (!Array.isArray(saved.attendanceRules)) continue
-      if (saved.attendanceRules.some((day: { reviewRequired: boolean }) => day.reviewRequired)) {
+      // B-ADD.14: والخصم مفعّل في لقطة المسير، يوم مراجعته سببها البصمة الناقصة بس اتحاسب في الحساب (خصم أو سماح أو طلب مقدَّم) فمايوقّفش الاعتماد
+      const missingPunchSettled = Number(parsePayrollRunPolicySnapshot(run)?.values.missingPunchPenaltyDays ?? 0) > 0
+      if (saved.attendanceRules.some((day: { reviewRequired: boolean }) => day.reviewRequired && !(missingPunchSettled && reviewIsMissingPunchOnly(day)))) {
         throw new ConflictException({ code: 'PAYRUN-ATTENDANCE-REVIEW',
           message: `حضور الموظف #${item.employeeId} يحتاج مراجعة؛ صحح البصمة أو إعداد الدوام ثم أعد حساب المسودة` })
       }
@@ -986,10 +988,11 @@ export class PayrollService {
         return waiveAttendanceDeductionDay({ ...attendanceDeductionDay(row, attendancePolicy, tier.amount), latenessTier: tier.trace }, waived,
           row.attendanceRuleSnapshot?.flexEnabled === false)
       })
-      // B-ADD.14: خصم نسيان البصمة — تصحيحات البصمة المعتمدة في أيام خصم الحضور، بعد «المسموح»، كل مرة بأجر اليوم × المعامل. المبلغ على يومه
-      // جوه عمود التأخير (زي «إذن بخصم»): نفس «شيل خصم التأخير» والإعفاء وحماية الصافي، وسطر «نسيان بصمة» في القسيمة. مقفول = null = ولا قرش يتغير.
+      // B-ADD.14: خصم نسيان البصمة — أيام «بصمة ناقصة» (بصمة واحدة بس) اللي الموظف ماقدّمش عنها طلب تصحيح، بعد «المسموح»، كل يوم بأجر اليوم ×
+      // المعامل. المبلغ على يومه جوه عمود التأخير (زي «إذن بخصم»): نفس «شيل خصم التأخير» والإعفاء وحماية الصافي، وسطر «نسيان بصمة» في القسيمة.
+      // مقفول = null = ولا قرش يتغير. (attRows من غير أيام المستثنى والإيقاف.)
       const missingPunch = missingPunchPenalty > 0 && !waived.has('LATENESS')
-        ? missingPunchCharge(await readPunchCorrectionDates(em, emp.id, coverFrom, coverTo), new Set(attendanceDeductionDays.map(day => day.date)), missingPunchFree, dayRate, missingPunchPenalty)
+        ? missingPunchCharge(attRows.filter(row => row.status === 'missing_punch').map(row => row.date), await readPunchRequestDates(em, emp.id, coverFrom, coverTo), missingPunchFree, dayRate, missingPunchPenalty)
         : null
       const missingPunchByDate = new Map((missingPunch?.days ?? []).map(day => [day.date, day.amount]))
       const missingPunchOf = (date: string) => missingPunchByDate.get(date) ?? 0

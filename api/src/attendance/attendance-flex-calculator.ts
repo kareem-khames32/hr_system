@@ -127,6 +127,7 @@ export function calculateAttendanceFlex(input: AttendanceFlexInput): AttendanceF
   const missing = (checkIn == null) !== (checkOut == null)
   const issues: string[] = []
   if (input.flexEnabled && !validWindow) issues.push('المرونة مفعلة دون مدة نافذة صالحة؛ اضبط تعريف الدوام قبل اعتماد الراتب')
+  // النص ده بيتقارن في اعتماد المسير (MISSING_PUNCH_REVIEW_REASON في payroll/missing-punch-charge.ts) — أي تغيير فيه يتغيّر هناك
   if (missing) issues.push('بصمة حضور أو انصراف مفقودة؛ نقص الساعات غير محسوم')
   if (input.irregularTime) issues.push('جلسة الحضور تعبر تغير التوقيت؛ راجع المدة الفعلية قبل الاعتماد')
   if (checkIn != null && checkOut != null && checkOut <= checkIn) issues.push('ترتيب بصمتي الحضور والانصراف غير صالح')

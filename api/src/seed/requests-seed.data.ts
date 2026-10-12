@@ -331,7 +331,7 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'payroll.attendance_daily_cap_days', value: '1' },
   // معامل عقوبة الغياب بلا إذن (يوم × المعامل) — 1.5 أو 2 حسب السياسة
   { key: 'attendance.absence_penalty_days', value: '1' },
-  // B-ADD.14: خصم نسيان البصمة — المعامل (كسر من أجر اليوم لكل تصحيح بصمة بعد المسموح؛ 0 = من غير خصم) والمرات المسموحة في الفترة
+  // B-ADD.14: خصم نسيان البصمة — المعامل (كسر من أجر اليوم لكل يوم ببصمة واحدة ومن غير طلب تصحيح، بعد المسموح؛ 0 = من غير خصم) والمرات المسموحة في الفترة
   { key: 'payroll.missing_punch.penalty_days', value: '0' },
   { key: 'payroll.missing_punch.free_count', value: '0' },
   // العطلة الأسبوعية (SUN..SAT مفصولة بفواصل) — تجاوز لكل فرع من شاشة الفروع

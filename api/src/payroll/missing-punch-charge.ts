@@ -1,14 +1,20 @@
 import type { EntityManager } from 'typeorm'
 
-// B-ADD.14 (كلمة المالك 12 أكتوبر 2026): «خصم نسيان البصمة» — كل طلب «تصحيح/طلب بصمة» معتمد = بصمة منسية. اللي بيتخصم: كل مرة بعد
-// «المرات المسموحة» في فترة المسير × (أجر اليوم × المعامل). المعامل صفر (الافتراضي) = مفيش خصم = الحساب زي ما كان بالحرف.
-//  - الإدخال اليدوي من الموارد البشرية (عطل جهاز مثلًا) مش تصحيح من الموظف، فمابيتعدّش.
+// B-ADD.14 (كلمة المالك 12 أكتوبر 2026، واتصحّحت نفس اليوم): «خصم نسيان البصمة» — اليوم اللي فيه **بصمة واحدة بس** (حضور من غير
+// انصراف أو العكس) وفضل كده لحد حساب المسير **والموظف ماقدّمش عنه طلب تصحيح**. أول «المرات المسموحة» في فترة المسير من غير خصم،
+// وكل مرة بعدها بـ(أجر اليوم × المعامل) — مش يوم كامل. المعامل صفر (الافتراضي) = مفيش خصم = الحساب زي ما كان بالحرف.
+//  - اللي قدّم طلب «تصحيح/طلب بصمة» عن اليوم (مستني أو معتمد) مابيتخصمش منه، حتى لو اليوم لسه ناقص وقت الحساب.
+//  - اليوم اللي من غير أي بصمة خالص غياب زي ما هو — مالوش دعوة بالقاعدة دي.
 //  - المبلغ بيتحط على يومه جوه عمود التأخير (زي «إذن بخصم»): نفس الإعفاءات وحماية الصافي، وسطر لوحده في القسيمة.
 
 export const PAYROLL_MISSING_PUNCH_PENALTY_KEY = 'payroll.missing_punch.penalty_days'
 export const PAYROLL_MISSING_PUNCH_FREE_KEY = 'payroll.missing_punch.free_count'
 export const MISSING_PUNCH_PENALTY_MAX = 5
 export const MISSING_PUNCH_FREE_MAX = 31
+/** وجهة طلب «تصحيح/طلب بصمة» في محرك الطلبات (أي نوع طلب وجهته دي بيتعدّ طلب تصحيح) */
+const CORRECTION_HANDLER = 'attendance_corrections'
+/** الطلب المقدَّم اللي بيتعدّ: كل الحالات ماعدا المسودة والمرفوض والملغي */
+const NOT_A_REQUEST = ['DRAFT', 'REJECTED', 'CANCELLED']
 
 /** المعامل من نص الإعداد: رقم من 0 لحد 5 بمنزلتين. أي حاجة تانية = صفر (مقفول) */
 export function missingPunchPenaltyOf(raw: string | null | undefined): number {
@@ -21,24 +27,33 @@ export function missingPunchFreeOf(raw: string | null | undefined): number {
   return /^\d{1,2}$/.test(text) && value <= MISSING_PUNCH_FREE_MAX ? value : 0
 }
 
-/** تواريخ تصحيحات البصمة المعتمدة للموظف في الفترة — صف لكل تصحيح (تصحيحين في يوم = مرتين)، بترتيب التاريخ ثم الرقم */
-export async function readPunchCorrectionDates(em: EntityManager, employeeId: number, from: string, to: string): Promise<string[]> {
-  const rows: Array<{ date: string }> = await em.query(
-    `SELECT CONVERT(varchar(10), [date], 23) AS [date] FROM [attendance_corrections] WHERE [employeeId] = @0 AND [date] BETWEEN @1 AND @2 ORDER BY [date], [id]`, [employeeId, from, to])
-  return rows.map(row => String(row.date).slice(0, 10))
+/** الأيام اللي الموظف قدّم عنها طلب تصحيح بصمة في الفترة: طلب لسه ماشي أو خلص (تاريخه في حمولة الطلب)، أو تصحيح اتسجّل فعلًا */
+export async function readPunchRequestDates(em: EntityManager, employeeId: number, from: string, to: string): Promise<Set<string>> {
+  const rows: Array<{ date: string | null }> = await em.query(
+    `SELECT CONVERT(varchar(10), c.[date], 23) AS [date] FROM [attendance_corrections] c WHERE c.[employeeId] = @0 AND c.[date] BETWEEN @1 AND @2
+     UNION
+     SELECT LEFT(JSON_VALUE(r.[payload], '$.date'), 10) AS [date] FROM [requests] r INNER JOIN [request_types] t ON t.[code] = r.[typeCode]
+     WHERE r.[requesterId] = @0 AND t.[destinationHandler] = N'${CORRECTION_HANDLER}' AND r.[status] NOT IN (${NOT_A_REQUEST.map(status => `N'${status}'`).join(', ')})
+       AND ISJSON(r.[payload]) = 1 AND LEFT(JSON_VALUE(r.[payload], '$.date'), 10) BETWEEN @1 AND @2`, [employeeId, from, to])
+  return new Set(rows.map(row => String(row.date ?? '').slice(0, 10)).filter(date => /^\d{4}-\d{2}-\d{2}$/.test(date)))
 }
 
-export interface MissingPunchCharge { penaltyDays: number; free: number; count: number; charged: number; days: Array<{ date: string; times: number; amount: number }> }
+export interface MissingPunchCharge { penaltyDays: number; free: number; missingDays: number; withRequest: number; count: number; charged: number; days: Array<{ date: string; amount: number }> }
 
 /**
- * اللي بيتخصم: التصحيحات اللي يومها من أيام خصم الحضور (مش مستثنى ولا إيقاف)، بترتيبها — الأوائل لحد «المسموح» من غير خصم، والباقي كل
- * مرة بأجر اليوم × المعامل. المبلغ لكل يوم من غير تقريب (التقريب على مجموع العمود زي باقي خصومات الحضور).
+ * اللي بيتخصم: أيام «بصمة ناقصة» (من أيام خصم الحضور — مش مستثنى ولا إيقاف) اللي مالهاش طلب، بترتيب التاريخ — الأوائل لحد «المسموح»
+ * من غير خصم، والباقي كل يوم بأجر اليوم × المعامل. المبلغ من غير تقريب (التقريب على مجموع العمود زي باقي خصومات الحضور).
  */
-export function missingPunchCharge(dates: readonly string[], chargeableDates: ReadonlySet<string>, free: number, dayRate: number, penaltyDays: number): MissingPunchCharge {
-  const counted = dates.filter(date => chargeableDates.has(date))
-  const byDate = new Map<string, number>()
-  for (const date of counted.slice(Math.max(0, free))) byDate.set(date, (byDate.get(date) ?? 0) + 1)
+export function missingPunchCharge(missingDates: readonly string[], requestDates: ReadonlySet<string>, free: number, dayRate: number, penaltyDays: number): MissingPunchCharge {
+  const sorted = [...new Set(missingDates)].sort()
+  const counted = sorted.filter(date => !requestDates.has(date))
   const amount = Math.max(0, dayRate) * Math.max(0, penaltyDays)
-  const days = [...byDate.entries()].map(([date, times]) => ({ date, times, amount: times * amount }))
-  return { penaltyDays, free, count: counted.length, charged: days.reduce((sum, day) => sum + day.times, 0), days }
+  const days = counted.slice(Math.max(0, free)).map(date => ({ date, amount }))
+  return { penaltyDays, free, missingDays: sorted.length, withRequest: sorted.length - counted.length, count: counted.length, charged: days.length, days }
 }
+
+/** سبب المراجعة اللي محرك الحضور بيكتبه على يوم البصمة الناقصة (attendance-flex-calculator) — بيه اعتماد المسير بيعرف إن وقف اليوم سببه النسيان بس */
+export const MISSING_PUNCH_REVIEW_REASON = 'بصمة حضور أو انصراف مفقودة؛ نقص الساعات غير محسوم'
+/** يوم مراجعته سببها البصمة الناقصة بس: والخصم مفعّل اليوم ده اتحاسب في المسير، فمايوقّفش اعتماده */
+export const reviewIsMissingPunchOnly = (day: { status?: unknown; reviewRequired?: unknown; reviewReason?: unknown }): boolean =>
+  day.reviewRequired === true && day.status === 'missing_punch' && day.reviewReason === MISSING_PUNCH_REVIEW_REASON
