@@ -26,7 +26,9 @@ const isWellKnown = (key: string): key is WellKnownKey => (WELL_KNOWN_KEYS as re
 
 const MAX_INLINE_IMAGE = 3 * 1024 * 1024
 /** طلبات EWS اللي تجري مع بعض للموظف الواحد (Exchange بيحدّ جلسات المخزن لكل مستخدم) */
-const MAX_PARALLEL = 4
+// أول تجربة على Exchange الشركة (12 أكتوبر 2026): فتح البريد (طلب واحد) نجح، وتحميل المجلدات (ست طلبات مع بعض بدخول NTLM) الخادم قطع
+// اتصالاتها (ECONNRESET). طلبات الموظف الواحد بقت واحد ورا التاني، وكل طلب بناقل جديد (مصافحة NTLM مابتتشاركش بين طلبين).
+const MAX_PARALLEL = 1
 
 /** مين بينادي EWS: دخول الموظف نفسه في المجال. كلها من الجلسة والمخزن — ولا خانة من طلب */
 export interface MailIdentity {
@@ -102,7 +104,7 @@ export class EwsService implements OnApplicationBootstrap {
     const { XhrApi: Transport } = require('@ewsjs/xhr') as typeof import('@ewsjs/xhr')
     const make = () => new Transport({ rejectUnauthorized: this.config.rejectUnauthorized, timeout: this.config.timeoutMs })
       .useNtlmAuthentication(ewsCredentialName(who.login, this.config.domain), who.password)
-    let inner = make()
+    const inner = make()
     const slot = () => {
       const row = this.slots.get(who.userId) ?? { active: 0, queue: [] }
       this.slots.set(who.userId, row)
@@ -122,11 +124,15 @@ export class EwsService implements OnApplicationBootstrap {
       xhr: async (options: unknown, progress?: unknown) => {
         await slot()
         try {
-          return await (inner as any).xhr(options, progress)
-        } catch (err) {
-          if (!/ECONNRESET|EPIPE|socket hang up|ECONNABORTED/i.test(String((err as Error)?.message ?? err))) throw err
-          inner = make()
-          return await (inner as any).xhr(options, progress)
+          // ناقل جديد لكل طلب، ولحد محاولتين كمان بمهلة قصيرة لو الخادم قطع الاتصال
+          for (let attempt = 0; ; attempt++) {
+            try {
+              return await (make() as any).xhr(options, progress)
+            } catch (err) {
+              if (attempt >= 2 || !/ECONNRESET|EPIPE|socket hang up|ECONNABORTED/i.test(String((err as Error)?.message ?? err))) throw err
+              await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)))
+            }
+          }
         } finally {
           release()
         }
