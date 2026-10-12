@@ -19,7 +19,9 @@ const registry = require('../src/modules-registry/registry')
 
 test('PU-01: القايمة والمسار والعنوان — بصلاحية العرض، وتبع موديول positions المقفول افتراضيًا', () => {
   const sidebar = read('src/components/layout/Sidebar.tsx')
-  assert.match(sidebar, /id: 'positions',\n    label: 'الوظائف المعتمدة',\n    icon: <Briefcase size=\{20\} \/>,\n    href: '\/positions',\n    perm: 'positions\.view',/)
+  // كلمة المالك 12 أكتوبر: البند بقى جوه مجموعة «التوظيف» بصلاحيته هو، والمجموعة من غير صلاحية على مستواها
+  assert.ok(sidebar.includes("{ label: 'الوظائف المعتمدة', href: '/positions', perm: 'positions.view' },") && !sidebar.includes("id: 'positions',"))
+  assert.ok(sidebar.includes("{ label: 'إدارة الوظائف', href: '/recruitment/jobs', perm: 'candidates.manage' },"))
   assert.ok(read('src/components/layout/MainLayout.tsx').includes("['/positions', 'positions.view'],"))
   assert.ok(read('src/components/layout/pageTitles.ts').includes("['/positions', 'الوظائف المعتمدة'],"))
   // المسار تبع الموديول، والموديول مقفول من غير صف في القاعدة: البند والشاشة مش ظاهرين لحد ما يتفعّل

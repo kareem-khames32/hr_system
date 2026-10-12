@@ -117,14 +117,6 @@ const adminMenuDefs: MenuItem[] = [
     href: '/offboarding',
     perm: 'offboarding.manage',
   },
-  // B2.11: الوظائف المعتمدة (الموديول مقفول افتراضيًا: البند بيظهر لما يتفعّل)
-  {
-    id: 'positions',
-    label: 'الوظائف المعتمدة',
-    icon: <Briefcase size={20} />,
-    href: '/positions',
-    perm: 'positions.view',
-  },
   // B5.4: المهارات والإحلال (الموديول مقفول افتراضيًا: البند بيظهر لما يتفعّل)
   {
     id: 'skills',
@@ -248,14 +240,16 @@ const adminMenuDefs: MenuItem[] = [
     id: 'recruitment',
     label: 'التوظيف',
     icon: <UserPlus size={20} />,
-    perm: 'candidates.manage',
+    // كلمة المالك 12 أكتوبر: «الوظائف المعتمدة» جوه التوظيف (B2.11؛ الموديول مقفول افتراضيًا: البند بيظهر لما يتفعّل). الصلاحية بقت على كل
+    // بند بدل المجموعة، فصاحب «عرض الوظائف المعتمدة» من غير «إدارة التوظيف» بيشوف بنده بس
     children: [
-      { label: 'الوظائف الشاغرة', href: '/recruitment' },
-      { label: 'إدارة الوظائف', href: '/recruitment/jobs' },
-      { label: 'المتقدمين', href: '/recruitment/applicants' },
-      { label: 'المقابلات', href: '/recruitment/interviews' },
-      { label: 'عروض العمل', href: '/recruitment/offers' },
-      { label: 'أرقام التوظيف', href: '/recruitment/metrics' },
+      { label: 'الوظائف المعتمدة', href: '/positions', perm: 'positions.view' },
+      { label: 'الوظائف الشاغرة', href: '/recruitment', perm: 'candidates.manage' },
+      { label: 'إدارة الوظائف', href: '/recruitment/jobs', perm: 'candidates.manage' },
+      { label: 'المتقدمين', href: '/recruitment/applicants', perm: 'candidates.manage' },
+      { label: 'المقابلات', href: '/recruitment/interviews', perm: 'candidates.manage' },
+      { label: 'عروض العمل', href: '/recruitment/offers', perm: 'candidates.manage' },
+      { label: 'أرقام التوظيف', href: '/recruitment/metrics', perm: 'candidates.manage' },
     ],
   },
   {
