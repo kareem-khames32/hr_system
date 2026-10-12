@@ -53,6 +53,7 @@ import { CostCenter } from '../assets/assets.entities'
 import { loadAttendanceExemptions, exemptionPolicyOnDate } from '../attendance/attendance-exemption-resolver'
 import { Request } from '../requests/entities/request.entity'
 import { attendanceDeductionDay, AttendanceDeductionPolicy, splitLatenessPermission } from './attendance-deductions'
+import { missingPunchCharge, readPunchCorrectionDates } from './missing-punch-charge'
 import { computeSocialInsurance } from './social-insurance'
 import { readSocialInsuranceContext } from './social-insurance.service'
 import { readGosiFirstRegistered } from '../employees/employee-gosi-registration'
@@ -760,6 +761,8 @@ export class PayrollService {
       const absencePenalty = policyValues.absencePenaltyDays
       // B1.6: حارس الفترة من اللقطة (غيابه = مقفول = زي ما كان)
       const periodDeductionGuard = policyValues.periodDeductionGuard === true
+      // B-ADD.14: خصم نسيان البصمة من اللقطة (غيابه = مقفول = زي ما كان)
+      const missingPunchPenalty = Number(policyValues.missingPunchPenaltyDays ?? 0), missingPunchFree = Number(policyValues.missingPunchFreeCount ?? 0)
       // B1.10 / D03: مسار حساب واحد — الحساب الحالي هو اللي بيتصرف. SHADOW بيفضل بس لو مدير النظام اختاره للفحص (آخر حدث تحويل وضع
       // لـSHADOW)؛ SHADOW من افتراضي العمود القديم وPOLICY (متركن) والفاضي = LEGACY
       const chosenShadow = run.engineMode === 'SHADOW' && !!run.id && (await em.getRepository(PayrollRunEvent).findOne({ where: { runId: run.id, eventType: 'ENGINE_MODE_CHANGED' },
@@ -983,9 +986,16 @@ export class PayrollService {
         return waiveAttendanceDeductionDay({ ...attendanceDeductionDay(row, attendancePolicy, tier.amount), latenessTier: tier.trace }, waived,
           row.attendanceRuleSnapshot?.flexEnabled === false)
       })
+      // B-ADD.14: خصم نسيان البصمة — تصحيحات البصمة المعتمدة في أيام خصم الحضور، بعد «المسموح»، كل مرة بأجر اليوم × المعامل. المبلغ على يومه
+      // جوه عمود التأخير (زي «إذن بخصم»): نفس «شيل خصم التأخير» والإعفاء وحماية الصافي، وسطر «نسيان بصمة» في القسيمة. مقفول = null = ولا قرش يتغير.
+      const missingPunch = missingPunchPenalty > 0 && !waived.has('LATENESS')
+        ? missingPunchCharge(await readPunchCorrectionDates(em, emp.id, coverFrom, coverTo), new Set(attendanceDeductionDays.map(day => day.date)), missingPunchFree, dayRate, missingPunchPenalty)
+        : null
+      const missingPunchByDate = new Map((missingPunch?.days ?? []).map(day => [day.date, day.amount]))
+      const missingPunchOf = (date: string) => missingPunchByDate.get(date) ?? 0
       // المجموع المالي (عمود التأخير وحماية الصافي والإعفاء والظل) يشمل الأذونات المدفوعة كما كان — ولا قرش يتغير.
       // التقسيم بين سطري القسيمة «التأخير» و«إذن بخصم» يتحسب تحت من نفس الأيام بعد ما يستقر المبلغ المصروف.
-      const latenessRequested = round2(attendanceDeductionDays.reduce((sum, day) => sum + day.latenessAmount + day.permissionAmount, 0))
+      const latenessRequested = round2(attendanceDeductionDays.reduce((sum, day) => sum + day.latenessAmount + day.permissionAmount + missingPunchOf(day.date), 0))
       const shortfallMinutes = attRows.reduce((sum, day) => sum + Number(day.shortfallMinutes ?? 0), 0)
       const shortfallRequested = round2(attendanceDeductionDays.reduce((sum, day) => sum + day.shortfallAmount, 0))
 
@@ -1003,7 +1013,7 @@ export class PayrollService {
         rules: { monthlyDays, dailyHours, lateEnabled, shortfallEnabled: shortfallEnabledValue === 'true', shortfallMode, shortfallValue, overlapPolicy,
           dailyCapDays, earlyLeaveEnabled: earlyLeaveValue === 'true', absencePenalty, latenessTiers: tiers },
         suspendedDates: suspension.dates,
-        legacy: { days: attendanceDeductionDays.map(day => ({ date: day.date, lateness: day.latenessAmount + day.permissionAmount, shortfall: day.shortfallAmount })),
+        legacy: { days: attendanceDeductionDays.map(day => ({ date: day.date, lateness: day.latenessAmount + day.permissionAmount + missingPunchOf(day.date), shortfall: day.shortfallAmount })),
           absentDates: absentRows.map(row => row.date), absenceDayAmount,
           totals: { lateness: latenessRequested, shortfall: shortfallRequested, absence: absenceRequested } } })
 
@@ -1073,7 +1083,7 @@ export class PayrollService {
       const exemptionRules = await readActiveRunExemptions(em, run.id, emp.id)
       const exemptionFacts = exemptionRules.length ? await readExemptionObligationFacts(em, pendingObligations) : new Map()
       const exemption = applyFinancialExemptions({ rules: exemptionRules,
-        attendance: { days: attendanceDeductionDays.map(day => ({ date: day.date, lateness: day.latenessAmount + day.permissionAmount, shortfall: day.shortfallAmount })),
+        attendance: { days: attendanceDeductionDays.map(day => ({ date: day.date, lateness: day.latenessAmount + day.permissionAmount + missingPunchOf(day.date), shortfall: day.shortfallAmount })),
           absentDates: absentRows.map(row => row.date), absenceDayAmount,
           requested:{ lateness: latenessRequested, shortfall: shortfallRequested, absence: absenceRequested } },
         debits: pendingObligations.filter((o) => o.type === 'DEBIT').map(o => ({ ...obligationEntry(o), ...exemptionFacts.get(o.id), label: o.label })),
@@ -1087,6 +1097,8 @@ export class PayrollService {
       const permissionRequested = round2(attendanceDeductionDays
         .filter(day => !latenessExemptDates.has(day.date))
         .reduce((sum, day) => sum + day.permissionAmount, 0))
+      // B-ADD.14: مبلغ «نسيان بصمة» المطلوب بعد الإعفاء — إعفاء «تأخير يوم» بيسقط اليوم كله ومعاه نسيان بصمته
+      const missingPunchRequested = round2(attendanceDeductionDays.filter(day => !latenessExemptDates.has(day.date)).reduce((sum, day) => sum + missingPunchOf(day.date), 0))
       const protectionInput = {
         earnedFixedGross: grossEarned, overtime: otAmount, unpaidLeave: unpaidDeduction,
         attendance: exemption.attendance,
@@ -1200,6 +1212,8 @@ export class PayrollService {
       totalNet = round2(totalNet + itemAmounts.netPay)
       // تقسيم عمود التأخير المصروف بين سطري القسيمة «التأخير» و«إذن بخصم» (المجموع = العمود بالقرش، فالصافي وإجمالي الخصم ما يتغيرانش).
       const latenessSplit = splitLatenessPermission(paid.latenessDeduction, permissionRequested)
+      // B-ADD.14: «نسيان بصمة» من باقي العمود بعد الإذن: التأخير + الإذن + نسيان البصمة = العمود بالقرش
+      const missingPunchSplit = missingPunch ? splitLatenessPermission(latenessSplit.lateness, missingPunchRequested) : null
       const leaveLinesAll = payrollLeaveDeductionLines(paid.unpaidDeduction, unpaidOnlyDeduction, unpaidDays, sick.lines)
       const leaveLines = { ...leaveLinesAll, lines: withSuspensionLine(leaveLinesAll.lines, suspension.days) }
 
@@ -1251,8 +1265,11 @@ export class PayrollService {
               // latenessDeduction = العمود المحفوظ كما هو (تأخير + إذن بخصم)، وتحته تقسيمه بالقرش:
               // latenessOnlyDeduction + permissionDeduction = latenessDeduction دائمًا، ومنهم سطرا القسيمة.
               totals: { lateMinutes, permissionMinutes, shortfallMinutes, latenessDeduction: paid.latenessDeduction,
-                latenessOnlyDeduction: latenessSplit.lateness, permissionDeduction: latenessSplit.permission,
+                latenessOnlyDeduction: missingPunchSplit ? missingPunchSplit.lateness : latenessSplit.lateness, permissionDeduction: latenessSplit.permission,
+                ...(missingPunchSplit ? { missingPunchDeduction: missingPunchSplit.permission } : {}),
                 shortfallDeduction: paid.shortfallDeduction },
+              // B-ADD.14: تفصيل خصم نسيان البصمة (المعامل، المسموح، عدد التصحيحات، اللي اتخصم، ويوم بيوم) — موجود لما الخصم مفعّل بس
+              ...(missingPunch ? { missingPunch } : {}),
               // الخطوة 21: مجموعة الشرائح المؤرخة المطبقة (من لقطة السياسة)
               latenessTierSet: { setId: policySnapshot.latenessTiers.setId, effectivePeriod: policySnapshot.latenessTiers.effectivePeriod, contentHash: policySnapshot.latenessTiers.contentHash } },
             attendanceRules: attRows.map(row => this.attendanceRuleTrace(row)),

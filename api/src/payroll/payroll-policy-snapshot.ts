@@ -6,6 +6,7 @@ import { readPayrollLatenessTierSetById, type PayrollLatenessTierSetSnapshot, PA
 import { PayrollPolicy, PayrollPolicyVersion } from './payroll-policy.entities'
 import { PayrollPolicyVersionSeal } from './payroll-policy-seal.entities'
 import { inspectPayrollPolicySettings, PAYROLL_POLICY_CONFIG_KEYS, parsePayrollPolicyConfigValue } from './payroll-policy-settings'
+import { missingPunchFreeOf, missingPunchPenaltyOf, PAYROLL_MISSING_PUNCH_FREE_KEY, PAYROLL_MISSING_PUNCH_PENALTY_KEY } from './missing-punch-charge'
 
 /**
  * الخطوة 19 — لقطة السياسة على المسير: نسخة السياسة وإعدادات الحساب وشرائح التأخير وأساس الأيام وبصمة واحدة.
@@ -35,7 +36,11 @@ export interface PayrollRunPolicyValues {
   maxDeductionPctOfGross: string | null
   /** B1.6: حارس الفترة — موجود في اللقطة لما يكون مفعّل بس، فاللقطة من غيره بنفس محتواها وبصمتها قبل B1.6 */
   periodDeductionGuard?: true
+  /** B-ADD.14: خصم نسيان البصمة — المعامل (كسر من أجر اليوم لكل مرة) والمرات المسموحة. موجودين في اللقطة لما المعامل أكبر من صفر بس */
+  missingPunchPenaltyDays?: number
+  missingPunchFreeCount?: number
 }
+type OptionalPolicyValueKey = 'periodDeductionGuard' | 'missingPunchPenaltyDays' | 'missingPunchFreeCount'
 export type PayrollRunPolicyValueKey = keyof PayrollRunPolicyValues
 export interface PayrollRunPolicyValueSource { kind: 'POLICY_VERSION' | 'CONFIG' | 'DEFAULT'; key: string }
 export interface PayrollRunPolicySnapshot {
@@ -56,7 +61,7 @@ export interface PayrollRunPolicySnapshot {
 export interface PayrollPolicySnapshotDifference { key: string; label: string; stored: string; current: string }
 
 // المفتاح وقيمته الافتراضية في الكود (نفس ما كان يقرؤه calculateDefined قبل اللقطة).
-const CONFIG: Record<Exclude<PayrollRunPolicyValueKey, 'periodDeductionGuard'>, { key: string; fallback: string | null }> = {
+const CONFIG: Record<Exclude<PayrollRunPolicyValueKey, OptionalPolicyValueKey>, { key: string; fallback: string | null }> = {
   monthlyDays: { key: 'payroll.monthly_days', fallback: '30' },
   dailyHours: { key: 'payroll.daily_hours', fallback: '8' },
   lateDeductionEnabled: { key: 'payroll.late_deduction_enabled', fallback: 'true' },
@@ -83,10 +88,11 @@ export const PAYROLL_RUN_POLICY_VALUE_LABELS: Record<PayrollRunPolicyValueKey, s
   exemptUnpaidLeaveDeductible: 'خصم الإجازة بلا أجر للمستثنى', currency: 'العملة', minNetGuarantee: 'الحد الأدنى المضمون للصافي',
   netFloorPct: 'أرضية الصافي (% من الإجمالي)', maxDeductionPctOfGross: 'سقف الخصومات (% من الإجمالي)',
   periodDeductionGuard: 'حارس الفترة (الإجازة بدون راتب ماتعديش راتب الفترة)',
+  missingPunchPenaltyDays: 'خصم نسيان البصمة (كسر من أجر اليوم لكل مرة)', missingPunchFreeCount: 'مرات نسيان البصمة المسموحة في الفترة',
 }
 // B1.6: مفتاح حارس الفترة — برّه CONFIG عن قصد: مصدره وقيمته بيدخلوا اللقطة لما يكون مفعّل بس
 export const PAYROLL_PERIOD_DEDUCTION_GUARD_KEY = 'payroll.period_deduction_guard.enabled'
-const KEYS = Object.keys(CONFIG) as Array<Exclude<PayrollRunPolicyValueKey, 'periodDeductionGuard'>>
+const KEYS = Object.keys(CONFIG) as Array<Exclude<PayrollRunPolicyValueKey, OptionalPolicyValueKey>>
 const fail = (message: string): never => { throw new BadRequestException({ code: 'PAYRUN-POLICY-SETTINGS-INVALID', message }) }
 
 function stable(value: unknown): string {
@@ -114,10 +120,11 @@ const nonNegative = (field: string, text: string) => {
 
 /** تلتقط اللقطة من نسخة السياسة المرتبطة والإعدادات الحالية ومجموعة شرائح شهر المسير؛ قراءة فقط. */
 export async function capturePayrollRunPolicySnapshot(em: EntityManager, run: { period: string; policyVersionId: number | null }, capturedBy: number): Promise<PayrollRunPolicySnapshot> {
-  const rows = await em.getRepository(RequestsConfig).findBy({ key: In([...KEYS.map(field => CONFIG[field].key), PAYROLL_PERIOD_DEDUCTION_GUARD_KEY]) })
+  const rows = await em.getRepository(RequestsConfig).findBy({ key: In([...KEYS.map(field => CONFIG[field].key), PAYROLL_PERIOD_DEDUCTION_GUARD_KEY,
+    PAYROLL_MISSING_PUNCH_PENALTY_KEY, PAYROLL_MISSING_PUNCH_FREE_KEY]) })
   const stored = new Map(rows.map(row => [row.key, row.value]))
   const sources = {} as Record<PayrollRunPolicyValueKey, PayrollRunPolicyValueSource>
-  const text = (field: Exclude<PayrollRunPolicyValueKey, 'periodDeductionGuard'>) => {
+  const text = (field: Exclude<PayrollRunPolicyValueKey, OptionalPolicyValueKey>) => {
     const { key, fallback } = CONFIG[field]
     sources[field] = { kind: stored.has(key) ? 'CONFIG' : 'DEFAULT', key }
     return stored.get(key) ?? fallback
@@ -151,6 +158,15 @@ export async function capturePayrollRunPolicySnapshot(em: EntityManager, run: { 
   if (stored.get(PAYROLL_PERIOD_DEDUCTION_GUARD_KEY) === 'true') {
     values.periodDeductionGuard = true
     sources.periodDeductionGuard = { kind: 'CONFIG', key: PAYROLL_PERIOD_DEDUCTION_GUARD_KEY }
+  }
+
+  // B-ADD.14: خصم نسيان البصمة — المعامل الأكبر من صفر بس بيدخل اللقطة (ومعاه المسموح)، والصفر أو التالف = اللقطة زي ما كانت
+  const missingPunchPenalty = missingPunchPenaltyOf(stored.get(PAYROLL_MISSING_PUNCH_PENALTY_KEY))
+  if (missingPunchPenalty > 0) {
+    values.missingPunchPenaltyDays = missingPunchPenalty
+    sources.missingPunchPenaltyDays = { kind: 'CONFIG', key: PAYROLL_MISSING_PUNCH_PENALTY_KEY }
+    values.missingPunchFreeCount = missingPunchFreeOf(stored.get(PAYROLL_MISSING_PUNCH_FREE_KEY))
+    sources.missingPunchFreeCount = { kind: stored.has(PAYROLL_MISSING_PUNCH_FREE_KEY) ? 'CONFIG' : 'DEFAULT', key: PAYROLL_MISSING_PUNCH_FREE_KEY }
   }
 
   let policy: PayrollRunPolicySnapshot['policy'] = null
@@ -263,6 +279,10 @@ export function diffPayrollRunPolicySnapshots(stored: PayrollRunPolicySnapshot |
   // B1.6: حارس الفترة (غيابه في اللقطة = مقفول)
   const guardText = (snapshot: PayrollRunPolicySnapshot | null) => !snapshot ? '—' : snapshot.values.periodDeductionGuard === true ? 'نعم' : 'لا'
   push('values.periodDeductionGuard', PAYROLL_RUN_POLICY_VALUE_LABELS.periodDeductionGuard, guardText(stored), guardText(current))
+  // B-ADD.14: خصم نسيان البصمة (غيابه في اللقطة = مقفول)
+  const missingText = (snapshot: PayrollRunPolicySnapshot | null) => !snapshot ? '—' : snapshot.values.missingPunchPenaltyDays
+    ? `${snapshot.values.missingPunchPenaltyDays} من أجر اليوم لكل مرة بعد ${snapshot.values.missingPunchFreeCount ?? 0} مسموحة` : 'لا'
+  push('values.missingPunchPenaltyDays', PAYROLL_RUN_POLICY_VALUE_LABELS.missingPunchPenaltyDays, missingText(stored), missingText(current))
   push('latenessTiers', 'شرائح التأخير', stored ? tiersText(stored.latenessTiers) : '—', tiersText(current.latenessTiers))
   if (stored) {
     const integrity = (set: PayrollLatenessTierSetSnapshot) => `${set?.source ?? '—'} • بصمة ${set?.contentHash?.slice(0, 12) ?? '—'}`

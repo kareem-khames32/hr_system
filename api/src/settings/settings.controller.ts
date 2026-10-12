@@ -685,6 +685,9 @@ export class SettingsController {
     // معامل عقوبة الغياب: القيمة السالبة كانت تُحفظ فيصير الغياب «إضافة» للموظف في
     // أرقام التراكم اليومي (Number(value) || 1 بيمرر السالب) — نفس حدّ تجاوز المعادلة (0..9999)
     'attendance.absence_penalty_days': 0,
+    // B-ADD.14: خصم نسيان البصمة — المعامل (0 = مقفول) والمرات المسموحة
+    'payroll.missing_punch.penalty_days': 0,
+    'payroll.missing_punch.free_count': 0,
     // مضاعف بدل دوام العطلة: السالب/الصفر كان يُحفظ وقارئه يرجع للافتراضي بصمت
     'attendance.holiday_work_multiplier': 0.01,
     // فاصل مزامنة أجهزة البصمة بالدقائق (0 = متوقفة) — السالب لا معنى له
@@ -899,6 +902,15 @@ export class SettingsController {
       if (n > 9999 || n !== Number(n.toFixed(2))) {
         throw new BadRequestException('معامل عقوبة الغياب بلا إذن رقم من 0 إلى 9999 بمنزلتين عشريتين على الأكثر')
       }
+    }
+    // B-ADD.14: خصم نسيان البصمة — المعامل من 0 لحد 5 بمنزلتين، والمسموح عدد صحيح من 0 لحد 31
+    if (dto.key === 'payroll.missing_punch.penalty_days') {
+      const n = Number(dto.value)
+      if (n > 5 || n !== Number(n.toFixed(2))) throw new BadRequestException('معامل خصم نسيان البصمة رقم من 0 إلى 5 بمنزلتين عشريتين على الأكثر (0 = من غير خصم)')
+    }
+    if (dto.key === 'payroll.missing_punch.free_count') {
+      const n = Number(dto.value)
+      if (!Number.isInteger(n) || n > 31) throw new BadRequestException('مرات نسيان البصمة المسموحة عدد صحيح من 0 إلى 31')
     }
     if (dto.key === 'attendance.holiday_work_multiplier') {
       const n = Number(dto.value)

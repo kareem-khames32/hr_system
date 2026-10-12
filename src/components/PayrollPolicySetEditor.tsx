@@ -232,6 +232,9 @@ const boolOf = (value: string): boolean | null => value === '' ? null : value ==
 const textOf = (value: number | null) => value == null ? '' : String(value)
 // أ1: شرائح التأخير صارت داخل المعادلة نفسها — لا جدول شهري ولا اختيار بالشهر.
 const ABSENCE_KEY = 'attendance.absence_penalty_days'
+// B-ADD.14: خصم نسيان البصمة — إعدادين عامّين لكل المعادلات (المعامل صفر = من غير خصم)
+const MISSING_PUNCH_PENALTY_KEY = 'payroll.missing_punch.penalty_days'
+const MISSING_PUNCH_FREE_KEY = 'payroll.missing_punch.free_count'
 const emptyTier = (): LatenessTierDraftRow => ({ fromMinutes: '', toMinutes: '', mode: 'FRACTION', value: '0.25', label: '' })
 const tierRowsOf = (set: LatenessTierSet | undefined): LatenessTierDraftRow[] => (set?.tiers ?? []).map(tier => ({
   fromMinutes: String(tier.fromMinutes), toMinutes: tier.toMinutes === null ? '' : String(tier.toMinutes), mode: tier.mode,
@@ -248,6 +251,8 @@ export function PayrollPolicyChargeRulesPanel({ summary, version, onSaved }: { s
   const [savedTierRows, setSavedTierRows] = useState<LatenessTierDraftRow[]>([])
   const [generalAbsence, setGeneralAbsence] = useState('')
   const [savedGeneralAbsence, setSavedGeneralAbsence] = useState('')
+  const [missingPunch, setMissingPunch] = useState({ penalty: '0', free: '0' })
+  const [savedMissingPunch, setSavedMissingPunch] = useState({ penalty: '0', free: '0' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const canEdit = summary.capabilities.canEdit && summary.policy.isActive
@@ -264,6 +269,8 @@ export function PayrollPolicyChargeRulesPanel({ summary, version, onSaved }: { s
       if (cancelled) return
       const value = rows.find(row => row.key === ABSENCE_KEY)?.value ?? '1'
       setGeneralAbsence(value); setSavedGeneralAbsence(value)
+      const missing = { penalty: rows.find(row => row.key === MISSING_PUNCH_PENALTY_KEY)?.value ?? '0', free: rows.find(row => row.key === MISSING_PUNCH_FREE_KEY)?.value ?? '0' }
+      setMissingPunch(missing); setSavedMissingPunch(missing)
     }).catch(() => { /* تبقى القيمة العامة غير معروضة */ })
     return () => { cancelled = true }
   }, [initial.latenessTierSetId])
@@ -277,7 +284,8 @@ export function PayrollPolicyChargeRulesPanel({ summary, version, onSaved }: { s
   const versionLate = version?.settingsStatus === 'COMPLETE' && typeof version.lateDeductionEnabled === 'boolean' ? version.lateDeductionEnabled : null
   const valueLabel = rules.shortfallMode === 'MULTIPLIER' ? 'مضاعف خصم النقص' : rules.shortfallMode === 'FRACTION' ? 'جزء اليوم لخصم النقص (مثل 0.25)' : 'قيمة خصم النقص'
   const tiersDirty = JSON.stringify(tierRows) !== JSON.stringify(savedTierRows)
-  const dirty = tiersDirty || generalAbsence.trim() !== savedGeneralAbsence.trim() ||
+  const missingPunchDirty = missingPunch.penalty.trim() !== savedMissingPunch.penalty.trim() || missingPunch.free.trim() !== savedMissingPunch.free.trim()
+  const dirty = tiersDirty || missingPunchDirty || generalAbsence.trim() !== savedGeneralAbsence.trim() ||
     JSON.stringify({ ...rules, shortfallValue: shortfallValueText.trim(), absencePenaltyDays: absenceText.trim() })
     !== JSON.stringify({ ...initial, shortfallValue: textOf(initial.shortfallValue), absencePenaltyDays: textOf(initial.absencePenaltyDays) })
 
@@ -296,6 +304,13 @@ export function PayrollPolicyChargeRulesPanel({ summary, version, onSaved }: { s
       if (generalAbsence.trim() !== savedGeneralAbsence.trim()) {
         if (!(Number(generalAbsence) >= 0)) throw new Error('معامل الغياب العام رقم غير سالب')
         await updateConfig(ABSENCE_KEY, String(Number(generalAbsence)))
+      }
+      if (missingPunchDirty) {
+        const penalty = Number(missingPunch.penalty), free = Number(missingPunch.free)
+        if (missingPunch.penalty.trim() === '' || !(penalty >= 0 && penalty <= 5)) throw new Error('معامل خصم نسيان البصمة رقم من 0 إلى 5 (0 = من غير خصم)')
+        if (missingPunch.free.trim() === '' || !Number.isInteger(free) || free < 0 || free > 31) throw new Error('مرات نسيان البصمة المسموحة عدد صحيح من 0 إلى 31')
+        if (missingPunch.penalty.trim() !== savedMissingPunch.penalty.trim()) await updateConfig(MISSING_PUNCH_PENALTY_KEY, String(penalty))
+        if (missingPunch.free.trim() !== savedMissingPunch.free.trim()) await updateConfig(MISSING_PUNCH_FREE_KEY, String(free))
       }
       setBusy(false)
       await onSaved(`حُفظت طريقة الخصم في «${summary.policy.name}»؛ تُطبّق على أي مسير لم يُعتمد عند إعادة حسابه.`)
@@ -338,6 +353,12 @@ export function PayrollPolicyChargeRulesPanel({ summary, version, onSaved }: { s
       <label className="min-w-0"><span className={labelClass}>معامل الغياب العام (لكل المعادلات)</span>
         <input className="input w-full" type="number" min={0} step={0.5} value={generalAbsence} onChange={event => setGeneralAbsence(event.target.value)} />
         <span className="text-xs text-gray-500">القيمة التي تأخذها أي معادلة تركت الخانة السابقة فارغة.</span></label>
+      <label className="min-w-0" data-missing-punch-penalty><span className={labelClass}>خصم نسيان البصمة — المعامل (لكل المعادلات)</span>
+        <input className="input w-full" type="number" min={0} max={5} step={0.25} value={missingPunch.penalty} onChange={event => setMissingPunch(current => ({ ...current, penalty: event.target.value }))} />
+        <span className="text-xs text-gray-500">كل «تصحيح/طلب بصمة» معتمد بعد المسموح يُخصم = قيمة اليوم × المعامل (0.25 = ربع يوم). صفر = من غير خصم.</span></label>
+      <label className="min-w-0" data-missing-punch-free><span className={labelClass}>مرات نسيان البصمة المسموحة في الفترة</span>
+        <input className="input w-full" type="number" min={0} max={31} step={1} value={missingPunch.free} onChange={event => setMissingPunch(current => ({ ...current, free: event.target.value }))} />
+        <span className="text-xs text-gray-500">أول كام تصحيح في فترة المسير من غير خصم. الإدخال اليدوي من الموارد البشرية (عطل جهاز) مش محسوب.</span></label>
     </fieldset>
 
     <fieldset disabled={!canEdit || busy} className="space-y-3">

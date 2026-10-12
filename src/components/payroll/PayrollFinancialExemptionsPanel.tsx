@@ -72,7 +72,8 @@ export function PayrollRemoveDeductionModal({ runId, period, employeeId, employe
   // فالمبلغ القابل للإلغاء = سطر التأخير + سطر الإذن بخصم — وإلا ما ينفعش يُشال إذن بخصم بلا تأخير.
   const permissionAmount = lineAmountOf(lines, 'DEDUCT_PERMISSION')
   const amounts: RemovableAttendanceAmounts = {
-    lateness: sumMoney([lineAmountOf(lines, 'LATENESS'), permissionAmount]), shortfall: lineAmountOf(lines, 'SHORTFALL'), absence: lineAmountOf(lines, 'ABSENCE'),
+    // B-ADD.14: «نسيان بصمة» كمان جوه بند «كل خصم التأخير» في الخادم
+    lateness: sumMoney([lineAmountOf(lines, 'LATENESS'), permissionAmount, lineAmountOf(lines, 'MISSING_PUNCH')]), shortfall: lineAmountOf(lines, 'SHORTFALL'), absence: lineAmountOf(lines, 'ABSENCE'),
   }
   const [entries, setEntries] = useState<ExemptionEmployeeEntries | null>(null)
   const [waivers, setWaivers] = useState<DeductionWaiverRow[]>([])

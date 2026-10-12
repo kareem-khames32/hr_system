@@ -44,7 +44,7 @@ export interface PayrollLineItem {
 
 export const PAYROLL_LINE_NAMES = {
   BASIC: 'الأساسي', SALARY_ALLOWANCES: 'البدلات الثابتة', OVERTIME: 'الإضافي', HOLIDAY_WORK: HOLIDAY_WORK_LABEL, OTHER_ADDITIONS: 'إضافات أخرى',
-  LATENESS: 'التأخير', DEDUCT_PERMISSION: 'إذن بخصم', EARLY_LEAVE: 'الانصراف المبكر', SHORTFALL: 'نقص الساعات', ABSENCE: 'الغياب', UNPAID_LEAVE: 'إجازة بدون راتب',
+  LATENESS: 'التأخير', DEDUCT_PERMISSION: 'إذن بخصم', MISSING_PUNCH: 'نسيان بصمة', EARLY_LEAVE: 'الانصراف المبكر', SHORTFALL: 'نقص الساعات', ABSENCE: 'الغياب', UNPAID_LEAVE: 'إجازة بدون راتب',
   SUSPENSION: 'الإيقاف', SICK_LEAVE: 'خصم المرضية', OTHER_DEDUCTIONS: 'خصومات أخرى', LOAN: 'السلف', SOCIAL_INSURANCE: 'التأمينات (حصة الموظف)',
 } as const
 export const PAYROLL_LINE_TOTAL_NAMES = { earnings: 'إجمالي الاستحقاقات', deductions: 'إجمالي الاستقطاعات', net: 'الصافي' } as const
@@ -153,6 +153,14 @@ function storedPermissionCents(breakdown: Record<string, any>, latenessColumn: n
   return sign * Math.min(Math.abs(latenessColumn), Math.max(0, Math.abs(cents(stored))))
 }
 
+/** مبلغ «نسيان بصمة» (B-ADD.14) جوه باقي عمود التأخير بعد الإذن بالقرش، أو null لما البند مايحملوش. مقصوص على الباقي وبإشارته */
+function storedMissingPunchCents(breakdown: Record<string, any>, remaining: number): number | null {
+  const stored = breakdown.attendanceDeductions?.totals?.missingPunchDeduction
+  if (typeof stored === 'number' ? !Number.isFinite(stored) : !(typeof stored === 'string' && stored.trim() !== '')) return null
+  const sign = remaining < 0 ? -1 : 1
+  return sign * Math.min(Math.abs(remaining), Math.max(0, Math.abs(cents(stored))))
+}
+
 /** أيام الوردية الثابتة (flexEnabled = false) من لقطة قواعد الحضور المحفوظة مع البند: نقصها بعد التأخير = انصراف مبكر. */
 function fixedShiftDates(breakdown: Record<string, any>): Set<string> {
   const dates = new Set<string>()
@@ -198,8 +206,12 @@ export function projectPayrollItemLines(item: PayrollLineItem, facts: ReadonlyMa
   // المسير الأقدم من التقسيم (بلا permissionDeduction في التفصيل) يفضل سطر «التأخير» واحد كما كان بالضبط — لا سطر «إذن بخصم» بصفر.
   const latenessColumn = cents(item.latenessDeduction)
   const permission = storedPermissionCents(breakdown, latenessColumn)
-  deductions.add('LATENESS', PAYROLL_LINE_NAMES.LATENESS, latenessColumn - (permission ?? 0))
+  // B-ADD.14: «نسيان بصمة» من باقي العمود بعد الإذن (موجود في التفصيل لما الخصم مفعّل بس)؛ المسير من غيره = السطرين زي ما هم
+  const afterPermission = latenessColumn - (permission ?? 0)
+  const missingPunch = storedMissingPunchCents(breakdown, afterPermission)
+  deductions.add('LATENESS', PAYROLL_LINE_NAMES.LATENESS, afterPermission - (missingPunch ?? 0))
   if (permission !== null) deductions.add('DEDUCT_PERMISSION', PAYROLL_LINE_NAMES.DEDUCT_PERMISSION, permission)
+  if (missingPunch !== null) deductions.add('MISSING_PUNCH', PAYROLL_LINE_NAMES.MISSING_PUNCH, missingPunch)
   // عمود النقص = انصراف مبكر (أيام الوردية الثابتة) + نقص ساعات (المرنة)، بأيام الخصم المحفوظة بعد «شيل خصم»
   const shortfall = cents(item.shortfallDeduction)
   const fixed = fixedShiftDates(breakdown)

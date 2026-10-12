@@ -60,11 +60,11 @@ test('«إذن بخصم» في الواجهة: عموده ودقائقه في ج
   }
   // القسيمة: سطر الإذن بخصم تحت نفس قرار «إلغاء خصم التأخير» (الإلغاء بيشيل الاثنين)
   const payslip = read('src/app/payroll/payslip/[id]/page.tsx').replace(/\r\n/g, '\n')
-  assert.ok(payslip.includes("key === 'LATENESS' || key === 'DEDUCT_PERMISSION' ? 'LATENESS'"))
+  assert.ok(payslip.includes("key === 'LATENESS' || key === 'DEDUCT_PERMISSION' || key === 'MISSING_PUNCH' ? 'LATENESS'"))
   // «شيل خصم»: المبلغ القابل للإلغاء في بند التأخير = سطر التأخير + سطر الإذن بخصم
   const panel = read('src/components/payroll/PayrollFinancialExemptionsPanel.tsx').replace(/\r\n/g, '\n')
   assert.ok(panel.includes("lineAmountOf(lines, 'DEDUCT_PERMISSION')"))
-  assert.ok(panel.includes("sumMoney([lineAmountOf(lines, 'LATENESS'), permissionAmount])"))
+  assert.ok(panel.includes("sumMoney([lineAmountOf(lines, 'LATENESS'), permissionAmount, lineAmountOf(lines, 'MISSING_PUNCH')])"))
 })
 
 test('إجماليات الأعمدة بالقرش، والاحتياطي من أعمدة البند بنفس المجاميع', () => {
