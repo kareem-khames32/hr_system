@@ -47,7 +47,7 @@ export interface ApiRaiseBudget {
   over: boolean
 }
 export interface ApiRaiseCycleDetail {
-  cycle: ApiRaiseCycle; salaries: boolean; canMove: boolean; canAdjust: boolean; canBudget: boolean
+  cycle: ApiRaiseCycle; salaries: boolean; canMove: boolean; canAdjust: boolean; canBudget: boolean; canPercent?: boolean
   /** (ج) الاعتماد (من حد ماقترحش — الخادم بيحكم) والتطبيق على الرواتب، وهل عمود نتيجة الأداء معروض */
   canApprove: boolean; canApply: boolean; performance: boolean
   lines: ApiRaiseLine[]; budgets: ApiRaiseBudget[]

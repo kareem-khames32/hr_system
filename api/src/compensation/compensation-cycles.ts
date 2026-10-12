@@ -149,6 +149,8 @@ export const cycleStepOf = (raw: unknown): CycleStep | null => (typeof raw === '
 /** المدير بيقترح والدورة مفتوحة بس؛ والمراجعة بتعدّل والدورة مفتوحة أو تحت المراجعة؛ والميزانية لحد قبل الاعتماد */
 export const PROPOSE_STATUSES: readonly CycleStatus[] = ['OPEN']
 export const ADJUST_STATUSES: readonly CycleStatus[] = ['OPEN', 'REVIEW']
+/** B-ADD.11: «زيادة بالنسبة» من أول ما الدورة تتعمل (المراجعة بتجهّز النسبة قبل ما تفتح للمديرين، أو من غير ما تفتح لهم خالص) ولحد قبل الاعتماد */
+export const PERCENT_STATUSES: readonly CycleStatus[] = ['DRAFT', 'OPEN', 'REVIEW']
 export const BUDGET_STATUSES: readonly CycleStatus[] = ['DRAFT', 'OPEN', 'REVIEW']
 
 export const RAISE_AMOUNT_MAX = 9999999.99

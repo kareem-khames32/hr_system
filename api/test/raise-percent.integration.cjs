@@ -100,6 +100,11 @@ test('RP-02: الصلاحيتين وحالة الدورة والقيم الصح 
   const after = t.expectStatus(await sheet(), 200).cycles.find(row => row.id === S.cycle)
   assert.deepEqual(after.team.find(row => row.employeeId === E.seller.id).amount, 250)
   assert.equal(lineOf(t.expectStatus(await t.request(U.admin, 'GET', `${C}/${S.cycle}`), 200), E.seller).finalAmount, 600)
+  // دورة لسه مسودة: النسبة بتتطبّق من غير ما تتفتح للمديرين (والتعديل اليدوي لسه محتاجها مفتوحة)
+  const draft = t.expectStatus(await t.request(U.admin, 'POST', C, { name: 'مسودة بالنسبة', effectivePayrollPeriod: '2027-02' }), 201).cycle.id
+  const drafted = t.expectStatus(await apply(U.hr, { percent: 4, audience: { mode: 'employees', ids: [E.operator.id] } }, draft), 201)
+  assert.deepEqual([drafted.cycle.status, drafted.canPercent, drafted.canAdjust, lineOf(drafted, E.operator).finalAmount], ['DRAFT', true, false, 160])
+  assert.equal((await t.request(U.hr, 'PUT', `${C}/${draft}/lines/${E.operator.id}`, { amount: 100, note: 'يدوي' })).status, 400)
   // الدورة بعد الاعتماد: النسبة مابتتطبّقش
   t.expectStatus(await t.request(U.admin, 'POST', `${C}/${S.cycle}/steps/review`, {}), 201)
   t.expectStatus(await apply(U.hr, { percent: 3, audience: { mode: 'employees', ids: [E.operator.id] } }), 201)

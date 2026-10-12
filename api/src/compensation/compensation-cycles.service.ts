@@ -12,7 +12,7 @@ import { applyEmployeeSalaryChange, type EmployeeSalaryValue } from '../payroll/
 import { readSalaryHistory, readSalaryHistoryCurrent } from '../payroll/payroll-salary-history'
 import { REVIEW_BANDS, reviewBand, reviewsReady } from '../performance/review-rules'
 import { ADJUST_STATUSES, approverIssue, cycleWriterIds, recordCycleWriter, BUDGET_STATUSES, budgetUsage, CompensationBudget, CompensationCycle, CompensationProposal, compensationCyclesReady, coveringUnits, CYCLE_STATUS_LABELS,
-  CYCLE_STEPS, cycleEvidenceReference, cycleFields, cycleStepOf, percentAmount, percentNote, PROPOSE_STATUSES, RAISE_AMOUNT_ERROR, RAISE_AMOUNT_MAX, RAISE_PERCENT_BASIS_LABELS, RAISE_PERCENT_ERROR, RAISE_PERCENT_MAX_EMPLOYEES,
+  CYCLE_STEPS, cycleEvidenceReference, cycleFields, cycleStepOf, percentAmount, percentNote, PERCENT_STATUSES, PROPOSE_STATUSES, RAISE_AMOUNT_ERROR, RAISE_AMOUNT_MAX, RAISE_PERCENT_BASIS_LABELS, RAISE_PERCENT_ERROR, RAISE_PERCENT_MAX_EMPLOYEES,
   raiseAmount, raisedBasic, raiseNote, raisePercent, raisePercentBasis, sameBasic } from './compensation-cycles'
 
 // B5.1 (ب، ج): دورة الزيادات — الدورة وميزانياتها وسطور الاقتراح، واعتمادها وتطبيقها. الراتب بيتكتب في مكان واحد بس: `apply`، ومن خدمة تاريخ
@@ -181,7 +181,7 @@ export class CompensationCyclesService {
     const withLine = new Set(lines.map(line => line.employeeId))
     return {
       cycle: this.view(cycle), salaries, canMove: scope === null,
-      canAdjust: ADJUST_STATUSES.includes(cycle.status), canBudget: BUDGET_STATUSES.includes(cycle.status),
+      canAdjust: ADJUST_STATUSES.includes(cycle.status), canBudget: BUDGET_STATUSES.includes(cycle.status), canPercent: salaries && PERCENT_STATUSES.includes(cycle.status),
       // (ج) الاعتماد والتطبيق: لحساب بكل الفروع بصلاحية اعتماد المسير (والتطبيق محتاج تعديل الموظفين كمان)
       canApprove: scope === null && userHasPerm(user, 'payroll.approve'), canApply: scope === null && userHasPerm(user, 'payroll.approve') && userHasPerm(user, 'employees.edit'),
       performance: scores !== null,
@@ -273,7 +273,7 @@ export class CompensationCyclesService {
     const result = await this.ds.transaction(async em => {
       await this.assertReady(em)
       const cycle = await this.lockCycle(em, id)
-      if (!ADJUST_STATUSES.includes(cycle.status)) throw new BadRequestException(`السطور مابتتعدّلش والدورة «${CYCLE_STATUS_LABELS[cycle.status]}»`)
+      if (!PERCENT_STATUSES.includes(cycle.status)) throw new BadRequestException(`السطور مابتتعدّلش والدورة «${CYCLE_STATUS_LABELS[cycle.status]}»`)
       await assertAudienceTargets(em, audience, PERCENT_AUDIENCE)
       const first = (await audienceMembersNow(em, audience, scope)).map(row => row.id)
       if (!first.length) throw new BadRequestException(PERCENT_NOBODY)

@@ -88,12 +88,13 @@ test('CCU-07: B-ADD.11 الزيادة بالنسبة — النسبة من 0 ل�
   assert.deepEqual([-1, 100.01, 5.123, '5', null, undefined, NaN, Infinity].map(rules.raisePercent), [null, null, null, null, null, null, null, null])
   assert.deepEqual([rules.percentAmount(6000, 5), rules.percentAmount(3333.33, 5), rules.percentAmount('8000.00', 2.5), rules.percentAmount(1000, 0), rules.percentAmount(0.1, 5), rules.percentAmount(4000.3, 12.34)],
     [300, 166.67, 200, 0, 0.01, 493.64])
+  assert.deepEqual([rules.PERCENT_STATUSES, rules.ADJUST_STATUSES], [['DRAFT', 'OPEN', 'REVIEW'], ['OPEN', 'REVIEW']], 'النسبة من المسودة؛ التعديل اليدوي زي ما هو')
   assert.deepEqual([undefined, null, 'BASIC', 'TOTAL', 'GROSS', 5].map(rules.raisePercentBasis), ['BASIC', 'BASIC', 'BASIC', 'TOTAL', null, null])
   assert.deepEqual([rules.percentNote(5, 'BASIC', null), rules.percentNote(2.5, 'TOTAL', 'استثناء')], ['نسبة 5% من الأساسي', 'نسبة 2.5% من إجمالي الراتب (الأساسي + البدلات الثابتة) — استثناء'])
   const service = read('compensation/compensation-cycles.service.ts')
   const body = service.slice(service.indexOf('  async applyPercent('), service.indexOf('  // ===== (ج) الاعتماد والتطبيق'))
   const inOrder = (...parts) => parts.every((part, index) => body.includes(part) && (index === 0 || body.indexOf(parts[index - 1]) < body.indexOf(part)))
-  assert.ok(inOrder("if (!userHasPerm(user, 'payroll.view')) throw new ForbiddenException(PERCENT_NEEDS_SALARIES)", 'const cycle = await this.lockCycle(em, id)', 'if (!ADJUST_STATUSES.includes(cycle.status))',
+  assert.ok(inOrder("if (!userHasPerm(user, 'payroll.view')) throw new ForbiddenException(PERCENT_NEEDS_SALARIES)", 'const cycle = await this.lockCycle(em, id)', 'if (!PERCENT_STATUSES.includes(cycle.status))',
     'await assertAudienceTargets(em, audience, PERCENT_AUDIENCE)', 'WITH (UPDLOCK, ROWLOCK)', 'const members = (await audienceMembersNow(em, audience, scope))', 'await recordCycleWriter(em, cycle.id, user.sub)',
     "action: 'RAISE_PERCENT_APPLIED'"), 'الحكم بعد قفل الدورة ثم صفوف الموظفين')
   assert.ok(!body.includes('applyEmployeeSalaryChange('), 'النسبة مابتكتبش راتب')
