@@ -93,7 +93,8 @@ test('PW-03: زرار التثبيت — مابيترسمش من غير عرض �
 
 test('PW-04: من غير service worker ولا تخزين مؤقت ولا تغيير في viewport — وخطوة HTTPS مكتوبة في دليل التحديث', () => {
   assert.equal(fs.existsSync(path.join(root, 'public', 'sw.js')), false)
-  assert.deepEqual(fs.readdirSync(path.join(root, 'public')), ['icons'])
+  // vendor: ناتج بناء (prepare-pdf-viewer.cjs بينسخ عارض PDF قبل next build) ومتجاهل في git — الاختبار كان بيفشل على أي شجرة اتبنت
+  assert.deepEqual(fs.readdirSync(path.join(root, 'public')).filter(name => name !== 'vendor'), ['icons'])
   assert.deepEqual(fs.readdirSync(path.join(root, 'public', 'icons')).sort(), ['icon-192.png', 'icon-512.png', 'icon-maskable-512.png'])
   const walk = dir => fs.readdirSync(path.join(root, dir), { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? walk(`${dir}/${entry.name}`) : [`${dir}/${entry.name}`])
   for (const file of walk('src').filter(name => /\.(tsx|ts)$/.test(name))) assert.doesNotMatch(read(file), /serviceWorker|caches\.open|export (const|function) viewport\b/, file)
