@@ -207,6 +207,10 @@ export default function RecruitmentJobsPage() {
                           ))}
                         </div>
                       )}
+                      {/* كلمة المالك 12 أكتوبر: سبب قفل «نشر» كان في تلميح الماوس بس — بقى مكتوب تحت الأزرار */}
+                      {data.canManage && job.status !== 'PUBLISHED' && job.status !== 'CLOSED' && !publishable(job) && (
+                        <p className="text-xs text-amber-700 mt-1 text-end" data-publish-needs>«نشر» مقفول: دوس «تعديل» واكتب وصف الوظيفة (10 حروف على الأقل) واختار مكان نشر واحد على الأقل.</p>
+                      )}
                     </td>
                   </tr>
                 ))}
