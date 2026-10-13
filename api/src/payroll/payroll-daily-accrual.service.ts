@@ -28,13 +28,39 @@ import {
   type PayrollAccrualDayFacts,
 } from './payroll-daily-accrual'
 import { attendanceDeductionDay, type AttendanceDeductionPolicy } from './attendance-deductions'
-import { payrollLatenessTierDeduction } from './payroll-lateness-tiers'
+import { payrollLatenessTierDeduction, type PayrollLatenessTierRow } from './payroll-lateness-tiers'
+import { capturePayrollRunPolicySnapshot } from './payroll-policy-snapshot'
 import { roundPayrollMoney as round2 } from './payroll-money'
 import { payrollPeriodBounds, payrollPeriodOfDate } from './payroll-period'
 import { lockPayrollEmployees } from './payroll-settlement-boundary'
 
-// نتيجة تراكم مدى لموظف واحد
-export interface PayrollAccrualRangeResult { computed: number; reused: number }
+// نتيجة تراكم مدى لموظف واحد. repriced = أيام حضورها زي ما هو واتعاد تسعيرها بس عشان المعادلة اتغيّرت (محسوبة جوه reused)
+export interface PayrollAccrualRangeResult { computed: number; reused: number; repriced?: number }
+
+/**
+ * معادلة تسعير اليوم في التراكم اليومي (كلمة المالك 13 أكتوبر 2026): نفس القيم اللي لقطة المسير بتاخدها — من معادلة مسير الموظف
+ * (طريقة الخصم وشرائح التأخير ومعامل الغياب) فوق الإعدادات العامة. المبالغ لسه استرشادية: المسير بيحسب بلقطته هو.
+ *  RUN = معادلة مسيره في الفترة دي؛ LAST_RUN = معادلة آخر مسير عادي دخله (بنسختها السارية دلوقتي)؛ GENERAL = الإعدادات العامة من غير شرائح.
+ */
+export interface PayrollAccrualFormula {
+  source: 'RUN' | 'LAST_RUN' | 'GENERAL'; policyId: number | null; policyName: string | null; versionId: number | null
+  monthlyDays: number; dailyHours: number; lateEnabled: boolean; shortfallEnabled: boolean; shortfallMode: AttendanceDeductionPolicy['shortfallMode']; shortfallValue: number
+  overlapPolicy: AttendanceDeductionPolicy['overlapPolicy']; dailyCapDays: number; earlyLeaveEnabled: boolean; absencePenalty: number; tiers: PayrollLatenessTierRow[]
+  /** بصمة قيم التسعير بس (من غير اسم المعادلة ولا مصدرها): معادلتين بنفس القيم = نفس البصمة */
+  hash: string
+}
+const formulaHashOf = (formula: Omit<PayrollAccrualFormula, 'hash' | 'source' | 'policyId' | 'policyName' | 'versionId'>): string => payrollAccrualInputsHash({ v: 1,
+  monthlyDays: formula.monthlyDays, dailyHours: formula.dailyHours, late: formula.lateEnabled, shortfall: [formula.shortfallEnabled, formula.shortfallMode, formula.shortfallValue],
+  overlap: formula.overlapPolicy, cap: formula.dailyCapDays, early: formula.earlyLeaveEnabled, absence: formula.absencePenalty,
+  tiers: formula.tiers.map(tier => [tier.sequence, tier.fromMinutes, tier.toMinutes, tier.mode, String(tier.value)]) }).slice(0, 24)
+/** بصمة المعادلة اللي صف اليوم المخزّن اتسعّر بيها (null = صف أقدم من التعديل ده أو تفصيله تالف) */
+function storedFormulaHash(row: { components?: string | null } | undefined): string | null {
+  if (!row?.components) return null
+  try {
+    const hash = (JSON.parse(row.components) as { formula?: { hash?: unknown } } | null)?.formula?.hash
+    return typeof hash === 'string' ? hash : null
+  } catch { return null }
+}
 // شغل الخلفية بيستنى قفل الموظف المالي المدة دي بس: عملية مالية طويلة على الموظف (حساب مسير كبير) مابتوقّفش مهمة الليل —
 // الموظف بيتخطّى (مهمة الليل والزرار) أو المهمة بتتعاد بعد مهلة (الطابور)
 export const PAYROLL_ACCRUAL_LOCK_WAIT_MS = 2000
@@ -176,6 +202,58 @@ export class PayrollDailyAccrualService implements OnModuleInit {
       shortfallValue: Number(value('payroll.shortfall_value', '1')) || 1,
       earlyLeaveEnabled: value('payroll.early_leave_deduction_enabled', 'true') === 'true',
       absencePenalty: Number(value('attendance.absence_penalty_days', '1')) || 1,
+      // معادلات الدفعة دي (مهمة الليل أو ضغطة «حدّث الحساب»): المعادلة الواحدة بتتقري مرة للدفعة مش مرة لكل موظف
+      formulas: new Map<string, PayrollAccrualFormula>(),
+    }
+  }
+
+  /**
+   * معادلة الموظف في الفترة: مسير الصف (لو الحساب جاي من مسير)، وإلا مسيره العادي في نفس الفترة، وإلا آخر مسير عادي دخله قبلها بنسخة
+   * معادلته السارية دلوقتي، وإلا الإعدادات العامة. القيم من نفس دالة لقطة المسير (capturePayrollRunPolicySnapshot) فتعديل مجموعة
+   * المعادلات أو شرائحها بيبان هنا على طول. أي تعذّر (إعداد تالف، نسخة اتمسحت) = الإعدادات العامة زي الأول — التقدير مايوقّفش حاجة.
+   */
+  private async formulaFor(em: EntityManager, input: { employeeId: number; period: string; runId: number | null; to: string },
+    basis: Awaited<ReturnType<PayrollDailyAccrualService['deductionBasis']>>): Promise<PayrollAccrualFormula> {
+    const general = (): PayrollAccrualFormula => {
+      const values = { monthlyDays: basis.monthlyDays, dailyHours: basis.dailyHours, lateEnabled: basis.lateEnabled, shortfallEnabled: basis.shortfallEnabled, shortfallMode: basis.shortfallMode,
+        shortfallValue: basis.shortfallValue, overlapPolicy: 'CUMULATIVE' as const, dailyCapDays: 0, earlyLeaveEnabled: basis.earlyLeaveEnabled, absencePenalty: basis.absencePenalty, tiers: [] }
+      return { source: 'GENERAL', policyId: null, policyName: null, versionId: null, ...values, hash: formulaHashOf(values) }
+    }
+    try {
+      let versionId: number | null = null, source: PayrollAccrualFormula['source'] = 'GENERAL'
+      if (input.runId != null) {
+        const [run]: Array<{ policyVersionId: number | null }> = await em.query('SELECT [policyVersionId] FROM [payroll_runs] WHERE [id] = @0', [input.runId])
+        if (run?.policyVersionId != null) { versionId = Number(run.policyVersionId); source = 'RUN' }
+      }
+      if (versionId === null) {
+        const [last]: Array<{ policyVersionId: number; policyId: number | null; period: string }> = await em.query(
+          `SELECT TOP (1) r.[policyVersionId], r.[policyId], r.[period] FROM [payroll_items] i INNER JOIN [payroll_runs] r ON r.[id] = i.[runId]
+           WHERE i.[employeeId] = @0 AND r.[policyVersionId] IS NOT NULL AND r.[period] <= @1 AND r.[status] <> 'CANCELLED' AND (r.[runType] IS NULL OR r.[runType] = 'REGULAR')
+           ORDER BY r.[period] DESC, r.[id] DESC`, [input.employeeId, input.period])
+        if (last) {
+          versionId = Number(last.policyVersionId); source = last.period === input.period ? 'RUN' : 'LAST_RUN'
+          if (source === 'LAST_RUN' && last.policyId != null) {
+            const [current]: Array<{ id: number }> = await em.query(`SELECT TOP (1) v.[id] FROM [payroll_policy_versions] v WHERE v.[policyId] = @0 AND v.[status] = 'ACTIVE'
+              AND v.[publishedAt] IS NOT NULL AND v.[effectiveFrom] <= @1 ORDER BY v.[effectiveFrom] DESC, v.[versionNo] DESC`, [Number(last.policyId), input.to])
+            if (current?.id != null) versionId = Number(current.id)
+          }
+        }
+      }
+      const key = `${versionId ?? 'general'}:${input.period}`
+      const cached = basis.formulas.get(key)
+      if (cached) return cached.source === source ? cached : { ...cached, source }
+      const snapshot = await capturePayrollRunPolicySnapshot(em, { period: input.period, policyVersionId: versionId }, 0)
+      const values = { monthlyDays: snapshot.values.monthlyDays, dailyHours: snapshot.values.dailyHours, lateEnabled: snapshot.values.lateDeductionEnabled,
+        shortfallEnabled: snapshot.values.shortfallEnabled, shortfallMode: snapshot.values.shortfallMode, shortfallValue: snapshot.values.shortfallValue,
+        overlapPolicy: snapshot.values.overlapPolicy, dailyCapDays: snapshot.values.dailyCapDays, earlyLeaveEnabled: snapshot.values.earlyLeaveDeductionEnabled,
+        absencePenalty: snapshot.values.absencePenaltyDays, tiers: snapshot.latenessTiers.tiers }
+      const formula: PayrollAccrualFormula = { source: versionId === null ? 'GENERAL' : source, policyId: snapshot.policy?.policyId ?? null, policyName: snapshot.policy?.name ?? null, versionId,
+        ...values, hash: formulaHashOf(values) }
+      basis.formulas.set(key, formula)
+      return formula
+    } catch (error) {
+      this.logger.warn(`تعذرت قراءة معادلة الموظف ${input.employeeId} للفترة ${input.period}؛ التقدير اليومي بالإعدادات العامة: ${String((error as Error)?.message ?? error).slice(0, 160)}`)
+      return general()
     }
   }
 
@@ -279,13 +357,14 @@ export class PayrollDailyAccrualService implements OnModuleInit {
       const date = String(row.date).slice(0, 10)
       overtimeByDate.set(date, [...(overtimeByDate.get(date) ?? []), row])
     }
-    // أساس الأجر لليوم (استرشادي): راتب ملف الموظف الحالي
+    // أساس الأجر لليوم (استرشادي): راتب ملف الموظف الحالي، بمعادلة مسيره (طريقة الخصم وشرائح التأخير ومعامل الغياب)
     const gross = grossMonthlySalary(employee)
-    const dayRate = gross / basis.monthlyDays
-    const minuteRate = dayRate / basis.dailyHours / 60
-    const policy: AttendanceDeductionPolicy = { schemaVersion: 1, lateEnabled: basis.lateEnabled,
-      shortfallEnabled: basis.shortfallEnabled, shortfallMode: basis.shortfallMode, shortfallValue: basis.shortfallValue,
-      overlapPolicy: 'CUMULATIVE', dailyCapDays: 0, dayRate, minuteRate, earlyLeaveEnabled: basis.earlyLeaveEnabled }
+    const formula = await this.formulaFor(em, { employeeId: input.employeeId, period: input.period, runId: input.runId, to: end }, basis)
+    const dayRate = gross / formula.monthlyDays
+    const minuteRate = dayRate / formula.dailyHours / 60
+    const policy: AttendanceDeductionPolicy = { schemaVersion: 1, lateEnabled: formula.lateEnabled,
+      shortfallEnabled: formula.shortfallEnabled, shortfallMode: formula.shortfallMode, shortfallValue: formula.shortfallValue,
+      overlapPolicy: formula.overlapPolicy, dailyCapDays: formula.dailyCapDays, dayRate, minuteRate, earlyLeaveEnabled: formula.earlyLeaveEnabled }
 
     const dayInputs = (date: string, attendanceRow: AttendanceDay | null) => {
       const suspended = suspendedDates.has(date), suspendedPaid = paidSuspendedDates.has(date)
@@ -296,16 +375,22 @@ export class PayrollDailyAccrualService implements OnModuleInit {
         v: 1, attendance: payrollAccrualAttendanceInput(attendanceRow), suspended, exempt, ...(suspendedPaid ? { suspendedPaid } : {}),
         leaves: dayLeaves.map(row => [row.id, row.leaveTypeCode ?? null, row.isUnpaid === true, row.period ?? 'FULL']).sort(),
         overtime: dayOvertime.map(row => [row.id, row.source ?? null, accrualOvertimeHours(row), row.calculationSnapshot ?? null]).sort(),
-        gross, monthlyDays: basis.monthlyDays,
+        gross, monthlyDays: formula.monthlyDays,
       })
       return { suspended, suspendedPaid, exempt, dayLeaves, dayOvertime, hash }
     }
 
     // (1) أي يوم محتاج إعادة حساب؟ الناقص، المتسخ، اللي بصمة مدخلاته اتغيرت، واليوم اللي لسه ما خلصش
-    const pending: string[] = [], recomputed: string[] = []
+    // repriced: يوم حضوره ومدخلاته زي ما هي بس اتسعّر بمعادلة غير معادلة دلوقتي (المعادلة اتعدّلت، أو الموظف دخل مسير بمعادلة تانية، أو صف
+    // أقدم من التسعير بالمعادلة) — مبالغه بتتكتب تاني من صف الحضور المخزّن، من غير إعادة حساب الحضور
+    const pending: string[] = [], recomputed: string[] = [], repriced: string[] = []
     for (const date of payrollAccrualDates(start, end)) {
       const { suspended, hash } = dayInputs(date, days.get(date) ?? null)
-      if (!payrollAccrualNeedsCompute(stored.get(date), hash, date, today)) { result.reused++; continue }
+      if (!payrollAccrualNeedsCompute(stored.get(date), hash, date, today)) {
+        if (storedFormulaHash(stored.get(date)) !== formula.hash) repriced.push(date)
+        result.reused++
+        continue
+      }
       pending.push(date)
       // يوم الإيقاف: المسير بيخصمه «يوم إيقاف» بس، ومحرك الحضور ما بيلمسوش — يتخزن بلا إعادة حساب
       if (!suspended) {
@@ -315,7 +400,7 @@ export class PayrollDailyAccrualService implements OnModuleInit {
       }
       result.computed++
     }
-    if (!pending.length) return result
+    if (!pending.length && !repriced.length) return result
     // إعادة قراءة الأيام المحسوبة مرة واحدة (بدل قراءة بعد كل computeDay)
     if (recomputed.length) {
       for (const row of await em.getRepository(AttendanceDay).find({
@@ -331,13 +416,24 @@ export class PayrollDailyAccrualService implements OnModuleInit {
       const attendanceRow = days.get(date) ?? null
       const { suspended, suspendedPaid, exempt, dayLeaves, dayOvertime, hash } = dayInputs(date, attendanceRow)
       const facts = this.dayFacts({ date, attendanceRow, suspended, suspendedPaid, exempt, leaves: dayLeaves, sickCodes, overtime: dayOvertime,
-        policy, dayRate, absencePenalty: basis.absencePenalty, dailyHours: basis.dailyHours })
+        policy, dayRate, formula })
       const row = stored.get(date) ?? repo.create({ employeeId: input.employeeId, period: input.period, date })
       Object.assign(row, facts, { components: JSON.stringify(facts.components), runId: input.runId ?? row.runId ?? null,
         inputsHash: hash, isDirty: false, dirtyReason: null, dirtyAt: null, computedAt: now })
       await repo.save(row)
       input.onComputed?.(date, attendanceRow)
     }
+    // (3) إعادة التسعير: نفس صف الحضور المخزّن ونفس بصمة المدخلات ووقت الحساب — المبالغ وبصمة المعادلة بس
+    for (const date of repriced) {
+      const row = stored.get(date)
+      if (!row) continue
+      const attendanceRow = days.get(date) ?? null
+      const { suspended, suspendedPaid, exempt, dayLeaves, dayOvertime } = dayInputs(date, attendanceRow)
+      const facts = this.dayFacts({ date, attendanceRow, suspended, suspendedPaid, exempt, leaves: dayLeaves, sickCodes, overtime: dayOvertime, policy, dayRate, formula })
+      Object.assign(row, facts, { components: JSON.stringify(facts.components) })
+      await repo.save(row)
+    }
+    if (repriced.length) result.repriced = repriced.length
     return result
   }
 
@@ -345,7 +441,7 @@ export class PayrollDailyAccrualService implements OnModuleInit {
   private dayFacts(input: {
     date: string; attendanceRow: AttendanceDay | null; suspended: boolean; suspendedPaid?: boolean; exempt: boolean
     leaves: Leave[]; sickCodes: Set<string>; overtime: OvertimeEntry[]
-    policy: AttendanceDeductionPolicy; dayRate: number; absencePenalty: number; dailyHours: number
+    policy: AttendanceDeductionPolicy; dayRate: number; formula: PayrollAccrualFormula
   }): PayrollAccrualDayFacts {
     const row = input.attendanceRow
     const status = row?.status ?? null
@@ -353,15 +449,17 @@ export class PayrollDailyAccrualService implements OnModuleInit {
     const sick = input.leaves.filter(leave => input.sickCodes.has(String(leave.leaveTypeCode ?? '')))
     const overtimeMinutes = Math.round(input.overtime.reduce((sum, entry) => sum + accrualOvertimeHours(entry), 0) * 60)
     const overtimeAmount = round2(input.overtime.reduce((sum, entry) => {
+      // مبلغ الإضافي المعتمد في خانته (amountSnapshot، بتتكتب مع الاعتماد المالي) — كان بيتقري من مكان مابيتكتبش فيه فالمبلغ دايمًا صفر
       const snapshot = entry.calculationSnapshot as { amount?: unknown } | null
-      return sum + Number(snapshot?.amount ?? 0)
+      return sum + (Number(entry.amountSnapshot ?? snapshot?.amount ?? 0) || 0)
     }, 0))
     // يوم الإيقاف: خصم يوم إيقاف بس — لا تأخير ولا نقص ولا غياب
     const deduction = row && !input.suspended && !input.exempt
       ? attendanceDeductionDay({ date: input.date, lateMinutes: row.lateMinutes ?? 0,
         unexcusedLateMinutes: row.unexcusedLateMinutes, shortfallMinutes: row.shortfallMinutes,
         deductibleMinutes: row.deductibleMinutes, attendanceRuleSnapshot: row.attendanceRuleSnapshot },
-      input.policy, payrollLatenessTierDeduction(row.lateMinutes ?? 0, [], input.policy.dayRate, input.policy.minuteRate).amount)
+      // شريحة التأخير من معادلة الموظف (من غير شرائح = بالدقيقة) — نفس نداء المسير
+      input.policy, payrollLatenessTierDeduction(row.lateMinutes ?? 0, input.formula.tiers, input.policy.dayRate, input.policy.minuteRate).amount)
       : null
     const isAbsent = !input.suspended && !input.exempt && status === 'absent'
     const workMinutes = Number(row?.workMinutes ?? 0)
@@ -383,7 +481,7 @@ export class PayrollDailyAccrualService implements OnModuleInit {
       earningsAmount: round2(earnings),
       latenessAmount: round2((deduction?.latenessAmount ?? 0) + (deduction?.permissionAmount ?? 0)),
       shortfallAmount: round2(deduction?.shortfallAmount ?? 0),
-      absenceAmount: round2(isAbsent ? input.dayRate * input.absencePenalty : 0),
+      absenceAmount: round2(isAbsent ? input.dayRate * input.formula.absencePenalty : 0),
       leaveAmount: round2(unpaid.length && !input.suspended ? input.dayRate * ((unpaid[0].period ?? 'FULL') === 'FULL' ? 1 : 0.5) : 0),
       suspensionAmount: round2(input.suspended && !input.suspendedPaid ? input.dayRate : 0),
       components: {
@@ -391,6 +489,8 @@ export class PayrollDailyAccrualService implements OnModuleInit {
         attendanceDayId: row?.id ?? null, deduction: deduction ?? null,
         leaveIds: input.leaves.map(leave => leave.id), overtimeIds: input.overtime.map(entry => entry.id),
         dayRate: round2(input.dayRate),
+        // المعادلة اللي اليوم اتسعّر بيها: بصمتها بتقول لو محتاج إعادة تسعير، واسمها ومصدرها للعرض
+        formula: { hash: input.formula.hash, source: input.formula.source, policyId: input.formula.policyId, name: input.formula.policyName, versionId: input.formula.versionId },
       },
     }
   }
@@ -556,7 +656,8 @@ export class PayrollDailyAccrualService implements OnModuleInit {
         try {
           const result = await withPayrollAccrualDeadlockRetry(() => this.runs.manager.transaction(em =>
             this.accrueEmployeeRange(em, { ...item, today: window.today, basis, background: true })))
-          totals.employees++; totals.computed += result.computed; totals.reused += result.reused
+          // اليوم اللي اتعاد تسعيره بمعادلة اتغيّرت بيتعدّ مع المحسوب في رسالة الزرار (مش «مفيش حاجة جديدة»)
+          totals.employees++; totals.computed += result.computed + (result.repriced ?? 0); totals.reused += result.reused - (result.repriced ?? 0)
         } catch (error) {
           totals.failed++
           this.logger.warn(`تعذر تراكم أيام الموظف ${item.employeeId} للفترة ${item.period}: ${(error as Error).message}`)

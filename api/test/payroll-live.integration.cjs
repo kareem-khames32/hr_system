@@ -11,6 +11,7 @@
 //  LV-10) (CRP2B-C-B01) صلاحية الحساب من غير صلاحية العرض: «حدّث الحساب» بيشتغل وبيرجّع أعداد بس — لا أسماء ولا مبالغ.
 //  LV-11) (CRP2B-C-B03) «مكتمل» = كل أيام الفترة المطلوبة موجودة: آخر يوم لوحده أو يوم ناقص في النص = لسه محتاج حساب، وبتاريخ التعيين.
 //  LV-12) (CRP2B-C-B02) الإقفال بيتفحص جوه المعاملة تحت قفل الموظف المالي: مسير اتعتمد بين الاختيار والكتابة مابيتكتبش على أيامه.
+//  LV-14) التقدير بمعادلة مسير الموظف (مسير الفترة، أو آخر مسير دخله، أو الإعدادات العامة): الشرائح ومعامل الغياب، ومبلغ الإضافي المعتمد، وإعادة التسعير لما المعادلة تتغيّر.
 //  LV-07) سباق معاملتين على نفس مفتاح المهمة: التانية بتستنى وبترجع false ومعاملتها سليمة — بالعزل الافتراضي وبـRCSI (الفهرس الفريد هو الحكم).
 // الفترة الجارية من ساعة التشغيل (دورة 23)، فالتأكيدات نسبية ليها: مفيش تاريخ ثابت يبوظ مع الوقت.
 // Run (من api/): node --test test/payroll-live.integration.cjs
@@ -623,5 +624,78 @@ test('LV-13 (CRP2C-C-N01): الموظف اللي عليه عملية مالية 
   } finally { await release(holder) }
   const done = await accrual.refreshDirty(run.id)
   assert.deepEqual([done.computed, done.failed], [1, 0])
+  await repo('PayrollRun').update({ id: run.id }, { status: 'CANCELLED' })
+})
+
+test('LV-14: التقدير بمعادلة مسير الموظف — شرائح التأخير ومعامل الغياب من معادلته، ومبلغ الإضافي المعتمد، وتغيير المعادلة بيعيد تسعير أيام الفترة من غير إعادة حساب الحضور', async t => {
+  const workdays = dates(win.startDate, win.upTo).filter(isWorkday)
+  if (workdays.length < 2) return t.skip('الفترة الجارية لسه مافيهاش يومين شغل قبل النهارده')
+  const [lateDay, absentDay] = workdays
+  const previous = (() => { const [year, month] = win.period.split('-').map(Number); return month === 1 ? `${year - 1}-12` : `${year}-${String(month - 1).padStart(2, '0')}` })()
+  const before = date => new Date(Date.parse(`${date}T12:00:00Z`) - 86400000).toISOString().slice(0, 10)
+  // معادلة منشورة: شريحة تأخير «من 1 لـ60 دقيقة = نص يوم»، ومعامل الغياب 2
+  const tiers = async value => ok(await request(U.admin, 'POST', '/payroll/rules/lateness-tier-sets', { effectivePeriod: win.period, reason: 'لائحة جزاءات اختبار الراتب الحي',
+    tiers: [{ fromMinutes: 1, toMinutes: 60, mode: 'FRACTION', value }] }), 201).savedId
+  const half = await tiers('0.5')
+  const created = ok(await request(U.admin, 'POST', '/payroll/policies', { name: 'معادلة الراتب الحي', effectiveFrom: '2020-01-23',
+    settings: { defaultPeriodType: 'CUSTOM_DAY_RANGE', cycleStartDay: 23, cycleEndMode: 'DERIVED', cycleEndDay: null } }), 201)
+  const published = ok(await request(U.admin, 'POST', `/payroll/policies/${created.policy.id}/versions/${created.versions[0].id}/publish`,
+    { expectedRevision: created.versions[0].revision, reason: 'نشر معادلة اختبار الراتب الحي' }))
+  const policyId = created.policy.id, versionId = published.version.id
+  await repo('PayrollPolicy').update({ id: policyId }, { latenessTierSetId: half, absencePenaltyDays: 2 })
+  // تلات موظفين بنفس الحضور (يوم تأخير 25 دقيقة ويوم غياب): في مسير الفترة بالمعادلة، في مسير الشهر اللي فات بالمعادلة، ومن غير أي مسير
+  const branch = await repo('Branch').save({ code: 'LVFORMULA', name: 'فرع معادلات الراتب الحي' })
+  const P = {}
+  for (const key of ['inRun', 'lastRun', 'none']) { P[key] = await employee(branch); await punches(P[key], { lateOn: [lateDay], absentOn: [absentDay] }) }
+  const run = await repo('PayrollRun').save({ name: 'مسير الفترة بالمعادلة', period: win.period, startDate: win.startDate, endDate: win.endDate, branchId: branch.id, scopeType: 'CUSTOM',
+    employeeIds: JSON.stringify([P.inRun.id]), runType: 'REGULAR', status: 'CALCULATED', totalNet: 11100, policyId, policyVersionId: versionId })
+  await repo('PayrollItem').save({ runId: run.id, employeeId: P.inRun.id, basicSalary: 9000, netPay: 11100, absenceDays: 0, unpaidLeaveDays: 0, payMethod: 'cash' })
+  const old = await repo('PayrollRun').save({ name: 'مسير الشهر اللي فات بالمعادلة', period: previous, startDate: '2020-01-01', endDate: before(win.startDate), branchId: branch.id, scopeType: 'CUSTOM',
+    employeeIds: JSON.stringify([P.lastRun.id]), runType: 'REGULAR', status: 'PAID', totalNet: 11100, approvedAt: new Date(), policyId, policyVersionId: versionId })
+  await repo('PayrollItem').save({ runId: old.id, employeeId: P.lastRun.id, basicSalary: 9000, netPay: 11100, absenceDays: 0, unpaidLeaveDays: 0, payMethod: 'cash' })
+  // إضافي معتمد بمبلغه في خانته (amountSnapshot) — لحد دلوقتي كان بيظهر في التقدير من غير مبلغ
+  await repo('OvertimeEntry').save({ employeeId: P.none.id, date: lateDay, source: 'PRE_REQUESTED', hoursRequested: 2, payableHours: 2, status: 'APPROVED', approvedMinutes: 120,
+    hourlyRateSnapshot: 75, amountSnapshot: 150, calculationSnapshot: { schemaVersion: 1, evidence: 'اختبار' } })
+  const ids = Object.values(P).map(emp => emp.id)
+  const dayOf = async (emp, date) => {
+    const [row] = await query(`SELECT [latenessAmount], [absenceAmount], [overtimeAmount], [components], [inputsHash], [computedAt] FROM [payroll_daily_accrual]
+      WHERE [employeeId] = @0 AND [period] = @1 AND CONVERT(varchar(10), [date], 23) = @2`, [emp.id, win.period, date])
+    return { lateness: Number(row.latenessAmount), absence: Number(row.absenceAmount), overtime: Number(row.overtimeAmount), formula: JSON.parse(row.components).formula,
+      stamp: [row.inputsHash, new Date(row.computedAt).toISOString()] }
+  }
+  const attendanceStamp = async emp => (await repo('AttendanceDay').find({ where: { employeeId: emp.id }, order: { date: 'ASC' } })).map(row => [row.date, row.status, row.lateMinutes, String(row.computedAt)])
+  const amounts = async () => Object.fromEntries(await Promise.all(Object.entries(P).map(async ([key, emp]) => [key, [(await dayOf(emp, lateDay)).lateness, (await dayOf(emp, absentDay)).absence]])))
+  const gross = 9000 + 1500 + 600, dayRate = gross / 30, perMinute = Math.round(25 * (dayRate / 8 / 60) * 100) / 100
+
+  const first = await accrual.refreshLive(ids)
+  assert.deepEqual([first.employees, first.failed], [3, 0])
+  // اللي في مسير بالمعادلة (الفترة دي أو آخر مسير له): 25 دقيقة = نص يوم (الشريحة) والغياب يومين؛ واللي من غير مسير: بالدقيقة والغياب بالإعداد العام
+  assert.deepEqual(await amounts(), { inRun: [dayRate * 0.5, dayRate * 2], lastRun: [dayRate * 0.5, dayRate * 2], none: [perMinute, dayRate * 1] })
+  assert.deepEqual([(await dayOf(P.inRun, lateDay)).formula, (await dayOf(P.lastRun, lateDay)).formula.source, (await dayOf(P.none, lateDay)).formula].map(value => typeof value === 'string' ? value : { ...value, hash: typeof value.hash }),
+    [{ hash: 'string', source: 'RUN', policyId, name: 'معادلة الراتب الحي', versionId }, 'LAST_RUN', { hash: 'string', source: 'GENERAL', policyId: null, name: null, versionId: null }])
+  assert.equal((await dayOf(P.none, lateDay)).overtime, 150, 'مبلغ الإضافي المعتمد')
+  const preview = ok(await request(U.admin, 'GET', '/payroll/live'))
+  assert.deepEqual([rowOf(preview, P.inRun).formulaName, rowOf(preview, P.lastRun).formulaName, rowOf(preview, P.none).formulaName, rowOf(preview, P.none).overtime],
+    ['معادلة الراتب الحي', 'معادلة الراتب الحي', null, 150])
+  assert.equal(cents(rowOf(preview, P.inRun).lateness), cents(dayRate * 0.5))
+
+  // مفيش تغيير = مفيش حساب ولا تسعير
+  assert.equal((await accrual.refreshLive(ids)).computed, 0)
+  // المعادلة اتعدّلت (معامل الغياب 3 وشريحة ربع يوم): أيام الفترة القديمة لأصحاب المعادلة بتتسعّر تاني — من غير إعادة حساب الحضور
+  const stamps = { attendance: await attendanceStamp(P.inRun), accrual: (await dayOf(P.inRun, absentDay)).stamp, none: await dayOf(P.none, absentDay) }
+  const totalDays = dates(win.startDate, win.upTo).length
+  await repo('PayrollPolicy').update({ id: policyId }, { latenessTierSetId: await tiers('0.25'), absencePenaltyDays: 3 })
+  const repriced = await accrual.refreshLive(ids)
+  assert.deepEqual([repriced.computed, repriced.failed], [2 * totalDays, 0], 'أيام صاحبَي المعادلة كلها اتسعّرت، واللي على الإعدادات العامة زي ما هو')
+  assert.deepEqual(await amounts(), { inRun: [dayRate * 0.25, dayRate * 3], lastRun: [dayRate * 0.25, dayRate * 3], none: [perMinute, dayRate * 1] })
+  assert.deepEqual([await attendanceStamp(P.inRun), (await dayOf(P.inRun, absentDay)).stamp, await dayOf(P.none, absentDay)], [stamps.attendance, stamps.accrual, stamps.none],
+    'صفوف الحضور وبصمة مدخلات اليوم ووقت حسابه زي ما هم')
+  assert.equal((await accrual.refreshLive(ids)).computed, 0)
+  // والإعداد العام لما يتغيّر: اللي من غير مسير بمعادلة هو اللي بيتسعّر تاني (المعادلة شايلة معاملها)
+  await repo('RequestsConfig').update({ key: 'attendance.absence_penalty_days' }, { value: '1.5' })
+  try {
+    assert.equal((await accrual.refreshLive(ids)).computed, totalDays)
+    assert.deepEqual(await amounts(), { inRun: [dayRate * 0.25, dayRate * 3], lastRun: [dayRate * 0.25, dayRate * 3], none: [perMinute, dayRate * 1.5] })
+  } finally { await repo('RequestsConfig').update({ key: 'attendance.absence_penalty_days' }, { value: '1' }) }
   await repo('PayrollRun').update({ id: run.id }, { status: 'CANCELLED' })
 })

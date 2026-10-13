@@ -104,3 +104,28 @@ test('LV-UI-05: الإعدادين في شاشة السياسات بنفس مف�
   assert.match(seed, /\{ key: 'payroll\.live_accrual_all', value: 'true' \}/)
   assert.match(seed, /\{ key: 'payroll\.approval\.net_change_alert_percent', value: '20' \}/)
 })
+
+test('LV-UI-06 (B-ADD.24): التقدير بمعادلة مسير الموظف — الشرائح ومعامل الغياب من المعادلة، مبلغ الإضافي من خانته، وبصمة المعادلة على صف اليوم واسمها في الشاشة', () => {
+  const service = read('api/src/payroll/payroll-daily-accrual.service.ts').split('\r\n').join('\n')
+  // نفس دالة لقطة المسير، ومعادلة مسير الصف ثم مسير الفترة ثم آخر مسير عادي
+  assert.ok(service.includes('const snapshot = await capturePayrollRunPolicySnapshot(em, { period: input.period, policyVersionId: versionId }, 0)'))
+  assert.ok(service.includes("r.[policyVersionId] IS NOT NULL AND r.[period] <= @1 AND r.[status] <> 'CANCELLED' AND (r.[runType] IS NULL OR r.[runType] = 'REGULAR')"))
+  assert.ok(service.includes("source = last.period === input.period ? 'RUN' : 'LAST_RUN'"))
+  // التسعير: شرائح المعادلة (مش قايمة فاضية)، ومعامل غيابها، ومبلغ الإضافي المعتمد
+  assert.ok(service.includes('payrollLatenessTierDeduction(row.lateMinutes ?? 0, input.formula.tiers, input.policy.dayRate, input.policy.minuteRate).amount)'))
+  assert.ok(!service.includes('payrollLatenessTierDeduction(row.lateMinutes ?? 0, [],'))
+  assert.ok(service.includes('absenceAmount: round2(isAbsent ? input.dayRate * input.formula.absencePenalty : 0),'))
+  assert.ok(service.includes('return sum + (Number(entry.amountSnapshot ?? snapshot?.amount ?? 0) || 0)'))
+  // إعادة التسعير: اليوم اللي مدخلاته زي ما هي وبصمة معادلته اختلفت بيتكتب من غير computeDay، وبصمة المدخلات ووقت الحساب مابيتلمسوش
+  assert.ok(service.includes('if (storedFormulaHash(stored.get(date)) !== formula.hash) repriced.push(date)'))
+  const reprice = service.slice(service.indexOf('// (3) إعادة التسعير'), service.indexOf('if (repriced.length) result.repriced = repriced.length'))
+  assert.ok(reprice.includes('Object.assign(row, facts, { components: JSON.stringify(facts.components) })') && !reprice.includes('computeDay(') && !reprice.includes('inputsHash:') && !reprice.includes('computedAt:'))
+  assert.ok(service.includes('formula: { hash: input.formula.hash, source: input.formula.source, policyId: input.formula.policyId, name: input.formula.policyName, versionId: input.formula.versionId },'))
+  // بصمة مدخلات اليوم زي ما كانت (نفس الحقول): النقل مابيعيدش حساب حضور الأيام القديمة
+  assert.ok(service.includes('gross, monthlyDays: formula.monthlyDays,'))
+  // الشاشة
+  assert.ok(read('api/src/payroll/payroll-live.service.ts').includes("MAX(CASE WHEN ISJSON(a.[components]) = 1 THEN JSON_VALUE(a.[components], '$.formula.name') END) AS [formulaName]"))
+  assert.ok(read('src/lib/payroll-live-api.ts').includes('formulaName?: string | null'))
+  const tab = read('src/components/payroll/PayrollLivePreviewTab.tsx')
+  assert.ok(tab.includes('data-testid="payroll-live-formula"') && tab.includes('معادلة: ${row.formulaName}') && tab.includes('الإعدادات العامة (مالوش مسير بمعادلة)') && tab.includes('{row.days > 0 && <p'))
+})

@@ -24,6 +24,8 @@ interface AccrualSums {
   lateMinutes: number; shortfallMinutes: number; overtimeMinutes: number
   earnings: number; overtime: number; lateness: number; shortfall: number; absence: number; unpaidLeave: number; suspension: number
   dirtyDays: number; lastDate: string | null
+  /** اسم معادلة الرواتب اللي أيامه اتسعّرت بيها (معادلة مسيره أو آخر مسير دخله)؛ null = الإعدادات العامة */
+  formulaName: string | null
   /** صفوف التراكم من أول يوم مطلوب للموظف (تعيينه أو أول الفترة) */
   dueDays: number
 }
@@ -57,6 +59,7 @@ export class PayrollLiveService {
           CONVERT(varchar(40), SUM(a.[absenceAmount])) AS [absence], CONVERT(varchar(40), SUM(a.[leaveAmount])) AS [unpaidLeave],
           CONVERT(varchar(40), SUM(a.[suspensionAmount])) AS [suspension], SUM(CAST(a.[isDirty] AS int)) AS [dirtyDays],
           CONVERT(varchar(10), MAX(CASE WHEN a.[isDirty] = 0 THEN a.[date] END), 23) AS [lastDate],
+          MAX(CASE WHEN ISJSON(a.[components]) = 1 THEN JSON_VALUE(a.[components], '$.formula.name') END) AS [formulaName],
           SUM(CASE WHEN a.[date] >= COALESCE(e.[actualStartDate], e.[joinDate], a.[date]) THEN 1 ELSE 0 END) AS [dueDays]
         FROM [payroll_daily_accrual] a INNER JOIN [employees] e ON e.[id] = a.[employeeId]
         WHERE a.[period] = @0 AND a.[date] >= @1 AND a.[date] <= @2 AND a.[employeeId] IN (SELECT CAST([value] AS int) FROM OPENJSON(@3))
@@ -67,6 +70,7 @@ export class PayrollLiveService {
           suspendedDays: number('suspendedDays'), lateMinutes: number('lateMinutes'), shortfallMinutes: number('shortfallMinutes'), overtimeMinutes: number('overtimeMinutes'),
           earnings: number('earnings'), overtime: number('overtime'), lateness: number('lateness'), shortfall: number('shortfall'), absence: number('absence'),
           unpaidLeave: number('unpaidLeave'), suspension: number('suspension'), dirtyDays: number('dirtyDays'), lastDate: row.lastDate ? String(row.lastDate).slice(0, 10) : null,
+          formulaName: typeof row.formulaName === 'string' && row.formulaName ? row.formulaName : null,
           dueDays: number('dueDays') })
       }
     }
@@ -76,7 +80,7 @@ export class PayrollLiveService {
   private row(employee: Employee, sums: AccrualSums | undefined, window: { startDate: string; upTo: string }, names: { branch: (id: number | null) => string | null; department: (id: number | null) => string | null },
     currency: string): PayrollLiveRow {
     const empty: AccrualSums = { employeeId: employee.id, days: 0, absentDays: 0, unpaidLeaveDays: 0, suspendedDays: 0, lateMinutes: 0, shortfallMinutes: 0, overtimeMinutes: 0,
-      earnings: 0, overtime: 0, lateness: 0, shortfall: 0, absence: 0, unpaidLeave: 0, suspension: 0, dirtyDays: 0, lastDate: null, dueDays: 0 }
+      earnings: 0, overtime: 0, lateness: 0, shortfall: 0, absence: 0, unpaidLeave: 0, suspension: 0, dirtyDays: 0, lastDate: null, formulaName: null, dueDays: 0 }
     const { earnings, dueDays, ...facts } = sums ?? empty
     // الأيام المطلوبة: من تعيينه (أو أول الفترة) لحد اليوم المطلوب — نفس حدود دالة التراكم. آخر يوم موجود لوحده مش دليل اكتمال
     const hire = String(employee.actualStartDate || employee.joinDate || '').slice(0, 10)

@@ -131,6 +131,7 @@ export function PayrollLivePreviewTab() {
               <td className="table-cell">
                 <p className="font-medium text-gray-800">{row.fullName}</p>
                 <p className="text-xs text-gray-400">{[row.employeeCode, row.branchName, row.departmentName].filter(Boolean).join(' • ')}</p>
+                {row.days > 0 && <p className="text-xs text-gray-400" data-testid="payroll-live-formula">{row.formulaName ? `معادلة: ${row.formulaName}` : 'الإعدادات العامة (مالوش مسير بمعادلة)'}</p>}
                 {!row.complete && <p className="text-xs text-amber-700">{row.days === 0 ? 'لسه ماتحسبش' : row.dirtyDays > 0 ? `${row.dirtyDays} يوم محتاج إعادة حساب` : `ناقص ${row.missingDays} يوم`}</p>}
               </td>
               <td className="table-cell text-center">{row.days}</td>

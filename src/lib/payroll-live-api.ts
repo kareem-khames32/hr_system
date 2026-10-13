@@ -10,6 +10,8 @@ export interface PayrollLiveRow extends Omit<PayrollLiveTotals, 'employees'> {
   employeeId: number; employeeCode: string; fullName: string; branchId: number | null; branchName: string | null; departmentName: string | null; currency: string
   days: number; absentDays: number; unpaidLeaveDays: number; suspendedDays: number; lateMinutes: number; shortfallMinutes: number; overtimeMinutes: number
   dirtyDays: number; lastDate: string | null; missingDays: number; complete: boolean
+  /** اسم معادلة الرواتب اللي أيامه اتسعّرت بيها؛ null = الإعدادات العامة */
+  formulaName?: string | null
 }
 export interface PayrollLivePreview {
   available: boolean; period: string; startDate: string; endDate: string; upTo: string; estimated: true; note: string
