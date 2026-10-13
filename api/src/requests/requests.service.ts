@@ -2304,7 +2304,10 @@ export class RequestsService {
   }
 
   // ===== صندوق الموافقات: الطلبات المنتظرة فعلي =====
-  async inbox(user: JwtPayload) {
+  // hrAll (B-ADD.25، كلمة المالك 13 أكتوبر 2026): صاحب سلطة الموارد البشرية بيطلب كل الطلبات قيد المراجعة في نطاقه — حتى الواقفة عند
+  // غيره — عشان يقرر فيها من نفس شاشة الصندوق. نفس حكم الفعل (act) بالحرف: مش طلبه هو، وجوه نطاق فروعه. والنوع السرّي برّه القايمة دي:
+  // السلطة حق تصرّف مش إذن اطلاع، فمحتواه مايتعرضش على غير أطرافه. من غير الاختيار = الصندوق زي ما كان.
+  async inbox(user: JwtPayload, options: { hrAll?: boolean } = {}) {
     const scope = branchScopeOf(user)
     const where: Record<string, unknown> = { status: 'UNDER_REVIEW' }
     if (scope !== null) where.branchId = branchIdIn(scope)
@@ -2318,6 +2321,14 @@ export class RequestsService {
     const stuck = this.resolver.hasHrOverride(user)
       ? await this.stuckRequestIds(candidates)
       : new Set<number>()
+    const hrAll = options.hrAll === true && this.resolver.hasHrOverride(user)
+    const confidentialCodes = hrAll ? new Set((await this.types.find({ where: { isConfidential: true }, select: { code: true } })).map((type) => type.code)) : new Set<string>()
+    const confidentialType = (req: Request) => {
+      const code = definitionCodeOf(req)
+      return confidentialCodes.has(code) || confidentialCodes.has(req.typeCode) || (code === LOAN_DEFERRAL_TYPE && confidentialCodes.has('LOAN'))
+    }
+    // الطلبات اللي وصلت للحساب بالسلطة بس (خطوتها مش بتاعته ولا واقفة): للشارة في الشاشة
+    const byAuthority = new Set<number>()
     // B2.6-ب: خطوات المفوِّض بتظهر في صندوق بديله طول فترة التفويض
     const acting = await this.delegationContext(user, candidates)
     const pending = candidates.filter((req) => {
@@ -2325,12 +2336,11 @@ export class RequestsService {
       const selfRequest = this.isOwnRequestFor(user, req)
       const hrUnblock = stuck.has(req.id) && !selfRequest
       // المجموعة الحالية: أي عضو لم يتصرف ويطابق المستخدم
-      return resolved.some(
-        (s) =>
-          s.stepOrder === req.currentStep &&
-          !s.actedAt &&
-          this.resolver.satisfies(user, s, { hrUnblock, selfRequest, actingFor: acting?.(req) })
-      )
+      const waiting = resolved.filter((s) => s.stepOrder === req.currentStep && !s.actedAt)
+      if (waiting.some((s) => this.resolver.satisfies(user, s, { hrUnblock, selfRequest, actingFor: acting?.(req) }))) return true
+      if (!hrAll || selfRequest || !waiting.length || confidentialType(req)) return false
+      byAuthority.add(req.id)
+      return true
     })
     // الطلب اللي في الصندوق بالنيابة (خطوته بتاعة المفوِّض مش بتاعة الحساب): المفوِّض، للشارة
     const delegatorOf = new Map<number, number>()
@@ -2358,6 +2368,7 @@ export class RequestsService {
         requesterJobTitle: emp && inBranchScope(scope, emp.branchId) ? emp.jobTitle : undefined,
         ...(delegatorOf.has(req.id)
           ? { onBehalfOfEmployeeId: delegatorOf.get(req.id), onBehalfOfName: empById.get(delegatorOf.get(req.id)!)?.fullName ?? null } : {}),
+        ...(byAuthority.has(req.id) ? { byHrAuthority: true } : {}),
       }
     })
   }

@@ -338,9 +338,10 @@ export class RequestsController {
   }
 
   // صندوق الموافقات: المنتظر فعلي حسب دوره
+  // ?scope=hr (B-ADD.25): صاحب سلطة الموارد البشرية بياخد كمان الطلبات الواقفة عند غيره في نطاقه؛ لغيره نفس الصندوق العادي
   @Get('requests/inbox')
-  inbox(@CurrentUser() user: JwtPayload) {
-    return this.service.inbox(user)
+  inbox(@CurrentUser() user: JwtPayload, @Query('scope') scope?: string) {
+    return this.service.inbox(user, { hrAll: scope === 'hr' })
   }
 
   // ===== B2.6-ب: تفويض الاعتمادات =====

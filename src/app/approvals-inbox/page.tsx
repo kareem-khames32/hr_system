@@ -129,6 +129,8 @@ interface InboxItem {
   slaDaysLeft: number | null // المتبقي قبل انتهاء مهلة الرد — من dueAt للخطوة الحالية
   // B2.6-ب: الطلب عندي بالنيابة عن المعتمد ده (تفويض ساري) — null لو الخطوة بتاعتي أنا
   onBehalfOf: string | null
+  // B-ADD.25: الطلب واقف عند غيري وظاهر لي بسلطة الموارد البشرية
+  byHrAuthority: boolean
 }
 
 export default function ApprovalsInboxPage() {
@@ -137,6 +139,9 @@ export default function ApprovalsInboxPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [filterType, setFilterType] = useState('')
+  // B-ADD.25: «كل طلبات نطاقي» لصاحب سلطة الموارد البشرية (صلاحية «اعتماد خطوات الموارد البشرية») — حتى الواقفة عند غيره
+  const [hrAuthority, setHrAuthority] = useState(false)
+  const [hrAll, setHrAll] = useState(false)
   const [actionModal, setActionModal] = useState<{
     item: InboxItem
     action: 'approve' | 'reject' | 'return'
@@ -157,6 +162,8 @@ export default function ApprovalsInboxPage() {
   const [loanOverrideReason, setLoanOverrideReason] = useState('')
   useEffect(() => {
     setCanAdjustOvertime(can('overtime.adjust'))
+    setHrAuthority(can('approve.hr'))
+    if (can('approve.hr') && new URLSearchParams(window.location.search).get('scope') === 'hr') setHrAll(true)
     const requestId = Number(new URLSearchParams(window.location.search).get('request'))
     if (Number.isSafeInteger(requestId) && requestId > 0) setDetailId(requestId)
   }, [])
@@ -242,7 +249,7 @@ export default function ApprovalsInboxPage() {
       // اسم المقدّم يأتي مع الصندوق من السيرفر — لا GET /employees (403 للمعتمد بدور موظف).
       // الأنواع والفروع للعرض فقط: فشلها يعرض اسماً احتياطياً ولا يُسقط الصندوق (REQ-17)
       const [inbox, typeList, branches] = await Promise.all([
-        fetchInbox(),
+        fetchInbox(hrAll),
         fetchRequestTypes().catch((): ApiRequestType[] => []),
         fetchBranches().catch((): ApiBranch[] => []),
       ])
@@ -275,6 +282,7 @@ export default function ApprovalsInboxPage() {
             stepRoleLabel: roleLabelOf(current?.role ?? ''),
             slaDaysLeft,
             onBehalfOf: r.onBehalfOfEmployeeId ? r.onBehalfOfName ?? 'المعتمد' : null,
+            byHrAuthority: r.byHrAuthority === true,
           }
         })
       )
@@ -290,7 +298,7 @@ export default function ApprovalsInboxPage() {
   useEffect(() => {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [hrAll])
   useEffect(() => {
     loadCustodyPending()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -483,6 +491,10 @@ export default function ApprovalsInboxPage() {
           </div>
         ) : (
           <>
+            {hrAuthority && <label className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900" data-hr-all>
+              <input type="checkbox" className="mt-1 rounded border-gray-300" checked={hrAll} onChange={e => { setLoading(true); setHrAll(e.target.checked) }} />
+              <span><span className="font-bold">كل الطلبات قيد المراجعة في نطاقي</span> — حتى الواقفة عند غيرك. قرارك بسلطة الموارد البشرية بيعدّي الخطوة الحالية وبيتسجّل باسمك. طلباتك إنت والأنواع السرّية مش هنا.</span>
+            </label>}
             {/* Type Filters */}
             <div className="flex gap-2 flex-wrap">
               <button
@@ -539,6 +551,7 @@ export default function ApprovalsInboxPage() {
                             <h3 className="font-bold text-gray-800">{item.title}</h3>
                             <span className={`badge text-xs ${cfg.color}`}>{cfg.label}</span>
                             {item.onBehalfOf && <span className="badge text-xs bg-amber-100 text-amber-800" data-on-behalf>بالنيابة عن {item.onBehalfOf}</span>}
+                            {item.byHrAuthority && <span className="badge text-xs bg-amber-100 text-amber-800" data-hr-authority>واقف عند غيرك — بسلطة الموارد البشرية</span>}
                             {item.branchName && (
                               <span className="badge text-xs bg-indigo-100 text-indigo-700">
                                 {item.branchName}

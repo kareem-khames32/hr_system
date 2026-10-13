@@ -591,6 +591,8 @@ export interface ApiRequest {
   requesterName?: string; requesterCode?: string; requesterJobTitle?: string
   // B2.6-ب: الطلب في صندوقي بالنيابة عن المعتمد ده (تفويض ساري)
   onBehalfOfEmployeeId?: number; onBehalfOfName?: string | null
+  // B-ADD.25: الطلب واقف عند غيري وظاهر لي بسلطة الموارد البشرية
+  byHrAuthority?: boolean
   // سرّي محجوب لغير أطرافه: requesterId/payload/تعليقات المعتمدين = null
   confidentialMasked?: boolean
   overtimeReviewRequired?: boolean
@@ -1071,7 +1073,8 @@ export const fetchAllRequests = (q?: { status?: string; typeCode?: string; execu
   const qs = p.toString()
   return get<ApiRequest[]>(`/requests/all${qs ? `?${qs}` : ''}`)
 }
-export const fetchInbox = () => get<ApiRequest[]>('/requests/inbox')
+// hrAll (B-ADD.25): صاحب سلطة الموارد البشرية بيطلب كمان الطلبات الواقفة عند غيره في نطاقه
+export const fetchInbox = (hrAll = false) => get<ApiRequest[]>(hrAll ? '/requests/inbox?scope=hr' : '/requests/inbox')
 export const fetchRequest = (id: number) => get<ApiRequest>(`/requests/${id}`)
 export const createRequest = (typeCode: string, payload: Record<string, unknown>, submit = true, onBehalfEmployeeId?: number, definitionCode?: string) =>
   post<ApiRequest>('/requests', { typeCode, payload, submit, ...(onBehalfEmployeeId ? { onBehalfEmployeeId } : {}), ...(definitionCode ? { definitionCode } : {}) })
