@@ -166,3 +166,53 @@ test('MPD-04 (P8A-B04): الإعفاء من التأخير — المعاينة 
   // اللي اتشال = اللي اتعرض واتوافق عليه، بالقرش
   assert.deepEqual([after, before - after, Number(grant.estimatedAmount)], [0, before, before])
 })
+
+test('MPD-05 (P8B-B03): طلب تصحيح بيتقدّم (أو حالته بتتغيّر) والاعتماد شغال — بيستنى لحد ما الاعتماد يثبت، فمفيش اعتماد بحساب اتقادم في النص', async () => {
+  t.expectStatus(await config('payroll.missing_punch.penalty_days', '0.25'), 200)
+  t.expectStatus(await config('payroll.missing_punch.free_count', '0'), 200)
+  t.expectStatus(await config('payroll.late_deduction_enabled', 'false'), 200)
+  const chain = await t.repo('ApprovalChain').save({ code: 'MPD_CORRECTION', nameAr: 'اعتماد تصحيح البصمة' })
+  await t.repo('ApprovalStep').save({ chainId: chain.id, stepOrder: 1, approverRole: 'hr', slaDays: 3 })
+  await t.repo('RequestType').update({ code: 'PUNCH_CORRECTION' }, { approvalChainId: chain.id, requiredFields: JSON.stringify(['date', 'punchType', 'time', 'reason']) })
+  const filer = await employee('موظف بيقدّم والاعتماد شغال', ['2026-09-03']), waiting = await employee('موظف طلبه بيترفض والاعتماد شغال', ['2026-09-03'])
+  const warm = await employee('موظف للتسخين', ['2026-09-03'])
+  const account = emp => t.user({ role: 'employee', permissions: '[]', employeeId: emp.id, branchId: branch.id })
+  const submit = (user, date) => t.request(user, 'POST', '/requests', { typeCode: 'PUNCH_CORRECTION', submit: true, payload: { date, punchType: 'OUT', time: '17:00', reason: 'نسيت أبصم الانصراف' } })
+  // مسار تقديم الطلب بيتجرّب مرة برّه أي اعتماد (عشان المدة جوه الاعتماد تبقى انتظار قفل مش أول تشغيل)
+  assert.equal(t.expectStatus(await submit(await account(warm), '2026-09-03'), 201).status, 'UNDER_REVIEW')
+  const pending = await correctionRequest(waiting, '2026-09-03', 'UNDER_REVIEW')
+  const run = await runFor([filer, waiting])
+  assert.deepEqual([Number(itemOf(run, filer).latenessDeduction), Number(itemOf(run, waiting).latenessDeduction)], [75, 0])
+  // بعد ما فحص الاعتماد يرجع وقبل ما الاعتماد يثبت: الموظف بيقدّم طلبه، وطلب التاني بيترفض — الاتنين لازم يستنوا
+  const owner = await account(filer)
+  const service = t.app.get(require('../src/payroll/payroll.service').PayrollService), original = service.assertAttendanceRuleSnapshot
+  const racing = {}
+  let hit = false
+  service.assertAttendanceRuleSnapshot = async function (...args) {
+    const result = await original.apply(this, args)
+    if (!hit) {
+      hit = true
+      const mark = (key, promise) => { racing[key] = { done: false, promise: promise.then(value => { racing[key].done = true; return value }) } }
+      mark('filed', submit(owner, '2026-09-03'))
+      mark('rejected', t.repo('Request').update({ id: pending.id }, { status: 'REJECTED' }))
+      await new Promise(resolve => setTimeout(resolve, 2500))
+      racing.during = [racing.filed.done, racing.rejected.done]
+    }
+    return result
+  }
+  let approved
+  try { approved = await approve(run) } finally { service.assertAttendanceRuleSnapshot = original }
+  assert.equal(hit, true)
+  assert.deepEqual(racing.during, [false, false], 'الطلب الجديد وتغيير الحالة مستنيين قفل قراءة الاعتماد')
+  t.expectStatus(approved, 201)
+  // الاعتماد ثبت بالحساب اللي الطلبات كانت عليه وقته؛ وبعده الاتنين كمّلوا
+  const filed = await racing.filed.promise
+  await racing.rejected.promise
+  assert.deepEqual([filed.status, filed.body.status, (await t.repo('Request').findOneByOrFail({ id: pending.id })).status], [201, 'UNDER_REVIEW', 'REJECTED'])
+  const items = await t.repo('PayrollItem').findBy({ runId: run.id })
+  assert.deepEqual([(await t.repo('PayrollRun').findOneByOrFail({ id: run.id })).status, Number(items.find(row => row.employeeId === filer.id).latenessDeduction),
+    Number(items.find(row => row.employeeId === waiting.id).latenessDeduction)], ['APPROVED', 75, 0])
+  // والحساب (مش الاعتماد) بيقرا من غير ما يمسك حاجة: قراءة عادية
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'src/payroll/payroll.service.ts'), 'utf8')
+  assert.ok(source.includes('await readPunchRequestDates(em, emp.id, coverFrom, coverTo), missingPunchFree') && source.includes('saved.coverTo ?? run.endDate, true))) {'))
+})

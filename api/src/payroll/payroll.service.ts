@@ -490,9 +490,10 @@ export class PayrollService {
       const missingPunchSettled = Number(parsePayrollRunPolicySnapshot(run)?.values.missingPunchPenaltyDays ?? 0) > 0
       // P8A-B03: واليوم ده اتحاسب على إن الموظف «ماقدّمش طلب تصحيح» — لو الطلبات اتغيّرت بعد الحساب (طلب اتقدّم، أو طلب اترفض أو اتلغى)
       // الحساب متقادم: الاعتماد بيقف لحد ما المسير يتحسب تاني. بيتقري لبنود فيها أيام بصمة ناقصة بس.
+      // P8B-B03: والقراءة ماسكة اللي قرته لآخر معاملة الاعتماد — طلب بيتقدّم أو حالته بتتغيّر في النص بيستنى الاعتماد يثبت.
       const missingPunchSaved = missingPunchSettled ? saved.attendanceDeductions?.missingPunch : null
       if (missingPunchSaved && Number(missingPunchSaved.missingDays ?? 0) > 0
-        && missingPunchSourceStale(missingPunchSaved, await readPunchRequestDates(em, item.employeeId, saved.coverFrom ?? run.startDate, saved.coverTo ?? run.endDate))) {
+        && missingPunchSourceStale(missingPunchSaved, await readPunchRequestDates(em, item.employeeId, saved.coverFrom ?? run.startDate, saved.coverTo ?? run.endDate, true))) {
         throw new ConflictException({ code: 'PAYRUN-MISSING-PUNCH-STALE',
           message: `طلبات تصحيح البصمة للموظف #${item.employeeId} اتغيّرت بعد حساب المسير؛ أعد الحساب قبل الاعتماد عشان خصم «نسيان البصمة» يتحسب عليها` })
       }

@@ -66,7 +66,9 @@ test('MPC-05 (P8A-B03، B04): مصدر حكم «من غير طلب» محفوظ 
   assert.deepEqual([rules.missingPunchSourceStale({ ...charge, requestDates: undefined }, new Set(['2026-09-08'])), rules.missingPunchSourceStale({ ...charge, countedDates: 'x' }, new Set(['2026-09-08'])),
     rules.missingPunchSourceStale(null, new Set())], [true, true, true])
   const service = read('payroll/payroll.service.ts'), exemptions = read('payroll/financial-exemptions.service.ts')
-  assert.ok(service.includes('missingPunchSourceStale(missingPunchSaved, await readPunchRequestDates(em, item.employeeId, saved.coverFrom ?? run.startDate, saved.coverTo ?? run.endDate))'))
+  assert.ok(service.includes('missingPunchSourceStale(missingPunchSaved, await readPunchRequestDates(em, item.employeeId, saved.coverFrom ?? run.startDate, saved.coverTo ?? run.endDate, true))'), 'الاعتماد بيقرا وهو ماسك اللي قراه')
+  const chargeSource = read('payroll/missing-punch-charge.ts')
+  assert.ok(chargeSource.includes("const lock = hold ? ' WITH (UPDLOCK, HOLDLOCK)' : ''") && chargeSource.includes('FROM [attendance_corrections] c${lock} WHERE') && chargeSource.includes('FROM [requests] r${lock} INNER JOIN'))
   assert.ok(service.includes("code: 'PAYRUN-MISSING-PUNCH-STALE'") && service.includes('const missingPunchSaved = missingPunchSettled ? saved.attendanceDeductions?.missingPunch : null'), 'والخصم مقفول مفيش قراءة ولا رفض')
   assert.ok(exemptions.includes('Number(day.latenessAmount ?? 0) + Number(day.permissionAmount ?? 0) + (missingPunch.get(String(day.date)) ?? 0)'), 'أساس تقدير الإعفاء = أساس تنفيذه')
 })

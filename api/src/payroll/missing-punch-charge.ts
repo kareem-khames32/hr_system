@@ -28,11 +28,14 @@ export function missingPunchFreeOf(raw: string | null | undefined): number {
 }
 
 /** الأيام اللي الموظف قدّم عنها طلب تصحيح بصمة في الفترة: طلب لسه ماشي أو خلص (تاريخه في حمولة الطلب)، أو تصحيح اتسجّل فعلًا */
-export async function readPunchRequestDates(em: EntityManager, employeeId: number, from: string, to: string): Promise<Set<string>> {
+export async function readPunchRequestDates(em: EntityManager, employeeId: number, from: string, to: string, hold = false): Promise<Set<string>> {
+  // P8B-B03: hold = القراءة بتمسك اللي قرته لحد آخر المعاملة (قفل تحديث + قفل مدى): طلب تصحيح جديد للموظف، أو تغيير حالة طلب، أو تصحيح
+  // بيتسجّل — كلهم بيستنوا المعاملة تخلص. اعتماد المسير بيقرا كده، فالطلب يا يثبت قبل فحص الاعتماد فيتشاف، يا يستنى لحد ما الاعتماد يثبت.
+  const lock = hold ? ' WITH (UPDLOCK, HOLDLOCK)' : ''
   const rows: Array<{ date: string | null }> = await em.query(
-    `SELECT CONVERT(varchar(10), c.[date], 23) AS [date] FROM [attendance_corrections] c WHERE c.[employeeId] = @0 AND c.[date] BETWEEN @1 AND @2
+    `SELECT CONVERT(varchar(10), c.[date], 23) AS [date] FROM [attendance_corrections] c${lock} WHERE c.[employeeId] = @0 AND c.[date] BETWEEN @1 AND @2
      UNION
-     SELECT LEFT(JSON_VALUE(r.[payload], '$.date'), 10) AS [date] FROM [requests] r INNER JOIN [request_types] t ON t.[code] = r.[typeCode]
+     SELECT LEFT(JSON_VALUE(r.[payload], '$.date'), 10) AS [date] FROM [requests] r${lock} INNER JOIN [request_types] t ON t.[code] = r.[typeCode]
      WHERE r.[requesterId] = @0 AND t.[destinationHandler] = N'${CORRECTION_HANDLER}' AND r.[status] NOT IN (${NOT_A_REQUEST.map(status => `N'${status}'`).join(', ')})
        AND ISJSON(r.[payload]) = 1 AND LEFT(JSON_VALUE(r.[payload], '$.date'), 10) BETWEEN @1 AND @2`, [employeeId, from, to])
   return new Set(rows.map(row => String(row.date ?? '').slice(0, 10)).filter(date => /^\d{4}-\d{2}-\d{2}$/.test(date)))
