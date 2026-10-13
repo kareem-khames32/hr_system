@@ -737,6 +737,7 @@ export class SettingsController {
     'loan.first_installment_max_months_ahead': 0,
     'loan.request_from_day': 1,
     'loan.request_to_day': 1,
+    'loan.min_service_months': 0,
     // C2: الخصومات المصنفة
     'deductions.reason_min_length': 1,
     'deductions.duplicate_window_hours': 0,
@@ -885,6 +886,11 @@ export class SettingsController {
     if (['loan.request_from_day', 'loan.request_to_day'].includes(dto.key)) {
       const n = Number(dto.value)
       if (!Number.isInteger(n) || n > 31) throw new BadRequestException('أيام طلب السلفة أعداد صحيحة من 1 إلى 31')
+    }
+    // B-ADD.26: أقل مدة خدمة لطلب السلفة — شهور صحيحة (0 = من غير شرط)
+    if (dto.key === 'loan.min_service_months') {
+      const n = Number(dto.value)
+      if (dto.value.trim() === '' || !Number.isInteger(n) || n > 600) throw new BadRequestException('أقل مدة خدمة لطلب السلفة عدد شهور صحيح من 0 إلى 600 (0 = من غير شرط)')
     }
     // B2.2: أقصى حجم للملف المرفوع (ميجا صحيح من 1 لـ50)، والأنواع المسموحة من القايمة المعروفة بس (بتتحفظ بحروف صغيرة من غير تكرار)
     if (dto.key === FILES_MAX_SIZE_KEY) {

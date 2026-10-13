@@ -10,7 +10,7 @@ import { repayLoanEarly } from '../payroll/payroll-installment-ledger'
 import { loanScheduleAmounts } from '../requests/loan-installment-requests'
 import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
 import { addDays, LoanCapPolicyValues, loanMoney, normalizeLoanCapPolicyInput } from './loan-caps'
-import { evaluateEmployeeLoanCap, isLoanCapRequestType, LOAN_CAP_POLICY_COLUMNS, loanRequestDayWindow, localDate, parseLoanCapPolicyRow, REGULAR_LOAN_SINGLE_DEDUCTION } from './loan-request-caps'
+import { evaluateEmployeeLoanCap, isLoanCapRequestType, LOAN_CAP_POLICY_COLUMNS, loanRequestWindowFor, localDate, parseLoanCapPolicyRow, REGULAR_LOAN_SINGLE_DEDUCTION } from './loan-request-caps'
 import { collectLoanRecovery, LOAN_RECOVERY_COLUMNS, openRecoveryAmount, writeOffLoanRecovery } from './loan-recovery'
 // B1.8 / R09: تسجيل صرف السلفة
 import { loanDisbursementDetails, readLoanDisbursementInput, recordLoanDisbursement } from './loan-disbursement'
@@ -135,7 +135,8 @@ export class LoansService {
       const amount = blank(query.amount) ? '0.00' : loanMoney(query.amount, 'المبلغ', true)
       const evaluation = await evaluateEmployeeLoanCap(em, { employeeId: target, amount, months, asOf: localDate() })
       // أيام طلب السلفة من الشهر تظهر في نافذة الطلب قبل التقديم (لا تُحفظ في لقطة السقف)
-      return { ...evaluation, requestWindow: await loanRequestDayWindow(em, localDate()) }
+      // B-ADD.26: وفوقها شرط مدة الخدمة للموظف المطلوب له
+      return { ...evaluation, requestWindow: await loanRequestWindowFor(em, target, localDate()) }
     })
   }
 

@@ -142,6 +142,9 @@ export default function ApprovalsInboxPage() {
   // B-ADD.25: «كل طلبات نطاقي» لصاحب سلطة الموارد البشرية (صلاحية «اعتماد خطوات الموارد البشرية») — حتى الواقفة عند غيره
   const [hrAuthority, setHrAuthority] = useState(false)
   const [hrAll, setHrAll] = useState(false)
+  // B-ADD.26: فلتر بنوع الطلب بالاسم، وباسم الموظف
+  const [filterTitle, setFilterTitle] = useState('')
+  const [requesterQuery, setRequesterQuery] = useState('')
   const [actionModal, setActionModal] = useState<{
     item: InboxItem
     action: 'approve' | 'reject' | 'return'
@@ -304,7 +307,9 @@ export default function ApprovalsInboxPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [custodyOn])
 
-  const filtered = items.filter((i) => !filterType || i.category === filterType)
+  const titles = [...new Set(items.map((i) => i.title))].sort((a, b) => a.localeCompare(b, 'ar'))
+  const requesterNeedle = requesterQuery.trim()
+  const filtered = items.filter((i) => (!filterType || i.category === filterType) && (!filterTitle || i.title === filterTitle) && (!requesterNeedle || i.requester.includes(requesterNeedle)))
   const overdue = items.filter((i) => i.slaDaysLeft !== null && i.slaDaysLeft <= 0).length
 
   const actionLabels = {
@@ -495,6 +500,14 @@ export default function ApprovalsInboxPage() {
               <input type="checkbox" className="mt-1 rounded border-gray-300" checked={hrAll} onChange={e => { setLoading(true); setHrAll(e.target.checked) }} />
               <span><span className="font-bold">كل الطلبات قيد المراجعة في نطاقي</span> — حتى الواقفة عند غيرك. قرارك بسلطة الموارد البشرية بيعدّي الخطوة الحالية وبيتسجّل باسمك. طلباتك إنت والأنواع السرّية مش هنا.</span>
             </label>}
+            {items.length > 0 && <div className="flex flex-wrap gap-2" data-inbox-filters>
+              <input type="text" placeholder="اسم الموظف" className="input w-52" value={requesterQuery} onChange={e => setRequesterQuery(e.target.value)} />
+              <select className="input w-56" value={filterTitle} onChange={e => setFilterTitle(e.target.value)}>
+                <option value="">كل أنواع الطلبات ({titles.length})</option>
+                {titles.map(title => <option key={title} value={title}>{title}</option>)}
+              </select>
+              {(filterTitle || requesterNeedle) && <span className="self-center text-xs text-gray-500">{filtered.length} من {items.length}</span>}
+            </div>}
             {/* Type Filters */}
             <div className="flex gap-2 flex-wrap">
               <button

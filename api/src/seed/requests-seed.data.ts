@@ -418,6 +418,8 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'loan.request_to_day', value: '31' },
   // ب2: مفتاح «اقفل طلب السلفة دلوقتي» — الأصل مفتوح، ويُقفل من «سياسات النظام» بلا تغيير أيام النافذة
   { key: 'loan.request_open', value: 'true' },
+  // B-ADD.26: أقل مدة خدمة (بالشهور) لطلب السلفة العادية — صفر = من غير شرط
+  { key: 'loan.min_service_months', value: '0' },
   // PL-01: افتراضات تُنسخ إلى السياسة الجديدة فقط؛ لا تعيد تسعير أي مسير قائم.
   ...PAYROLL_POLICY_DEFAULT_CONFIG_SEED,
   // قرارات المالك D1/D2/D3/D10/D11 (14 سبتمبر) — PAYROLL_DECISIONS_2026-09-14.md

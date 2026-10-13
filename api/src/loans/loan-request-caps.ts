@@ -87,6 +87,39 @@ async function assertLoanRequestDayWindow(em: EntityManager, today: string) {
   if (!dayWindow.open) throw new BadRequestException({ code: 'LOAN_REQUEST_DAY_WINDOW', message: dayWindow.message })
 }
 
+// B-ADD.26 (كلمة المالك 14 أكتوبر 2026): الموظف اللي ماكمّلش مدة خدمة معيّنة مايطلبش سلفة عادية. المدة بالشهور من تاريخ المباشرة الفعلية
+// (أو تاريخ التعيين)، والإعداد صفر (الافتراضي) = من غير شرط = زي الأول بالحرف. السلفة الاستثنائية من المخوّل برّه الشرط (زي أيام الطلب).
+export const LOAN_MIN_SERVICE_MONTHS_KEY = 'loan.min_service_months'
+export const LOAN_MIN_SERVICE_MONTHS_MAX = 600
+/** تاريخ + شهور (اليوم بيتقصّ على آخر الشهر: 31 يناير + شهر = آخر فبراير) */
+export function loanServiceDateAfter(start: string, months: number): string {
+  const [year, month, day] = start.split('-').map(Number)
+  const total = year * 12 + (month - 1) + months, y = Math.floor(total / 12), m = total % 12
+  const last = new Date(y, m + 1, 0).getDate()
+  return `${y}-${String(m + 1).padStart(2, '0')}-${String(Math.min(day, last)).padStart(2, '0')}`
+}
+export async function loanServiceEligibility(em: EntityManager, employeeId: number, today: string) {
+  const months = await intConfig(em, LOAN_MIN_SERVICE_MONTHS_KEY, 0, 0, LOAN_MIN_SERVICE_MONTHS_MAX)
+  if (months === 0) return { minServiceMonths: 0, eligible: true, eligibleFrom: null as string | null, message: null as string | null }
+  const [row]: Array<{ start: string | null }> = await em.query(
+    'SELECT CONVERT(varchar(10), COALESCE([actualStartDate], [joinDate]), 23) AS [start] FROM [employees] WHERE [id]=@0', [employeeId])
+  const start = row?.start && /^\d{4}-\d{2}-\d{2}$/.test(row.start) ? row.start : null
+  if (!start) return { minServiceMonths: months, eligible: false, eligibleFrom: null, message: `طلب السلفة متاح بعد ${months} شهر خدمة، وتاريخ التعيين غير مسجّل في ملف الموظف` }
+  const eligibleFrom = loanServiceDateAfter(start, months), eligible = today >= eligibleFrom
+  return { minServiceMonths: months, eligible, eligibleFrom,
+    message: eligible ? null : `طلب السلفة متاح بعد إكمال ${months} شهر خدمة — متاح من ${eligibleFrom}` }
+}
+async function assertLoanServiceEligibility(em: EntityManager, employeeId: number, today: string) {
+  const service = await loanServiceEligibility(em, employeeId, today)
+  if (!service.eligible) throw new BadRequestException({ code: 'LOAN_MIN_SERVICE', message: service.message, eligibleFrom: service.eligibleFrom })
+}
+/** اللي شاشة الطلب بتعرضه قبل التقديم: أيام الطلب، وفوقها شرط مدة الخدمة للموظف ده (الرسالة والقفل بنفس خانات نافذة الأيام) */
+export async function loanRequestWindowFor(em: EntityManager, employeeId: number, today: string) {
+  const dayWindow = await loanRequestDayWindow(em, today), service = await loanServiceEligibility(em, employeeId, today)
+  return { ...dayWindow, minServiceMonths: service.minServiceMonths, eligibleFrom: service.eligibleFrom,
+    ...(dayWindow.open && !service.eligible ? { open: false, message: service.message as string } : {}) }
+}
+
 /** العميل لا يكتب لقطة السقف ولا المبلغ المعتمد ولا هوية منشئ الاستثناء. */
 export function assertLoanRequestClientPayload(payload: Record<string, unknown> | null | undefined) {
   for (const key of LOAN_REQUEST_SERVER_FIELDS) {
@@ -170,7 +203,10 @@ export async function stageLoanRequestSubmission(em: EntityManager, input: { req
   const today = input.today ?? localDate()
   const { capCheck: _capCheck, capApprovals: _capApprovals, approvedAmount: _approved, exceptionalBy: _by, firstInstallmentPeriodBy: chosenBy, ...client } = input.payload
   const exceptional = parseFlag(client.exceptional)
-  if (!exceptional) await assertLoanRequestDayWindow(em, today)
+  if (!exceptional) {
+    await assertLoanRequestDayWindow(em, today)
+    await assertLoanServiceEligibility(em, input.requesterId, today)
+  }
   const schedule = loanScheduleAmounts(client.amount, client.months ?? 1)
   if (!exceptional && schedule.months !== 1) throw new BadRequestException({ code: 'LOAN_REGULAR_SINGLE_DEDUCTION', message: REGULAR_LOAN_SINGLE_DEDUCTION })
   await lockPayrollEmployees(em, [input.requesterId])

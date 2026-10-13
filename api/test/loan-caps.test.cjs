@@ -181,3 +181,24 @@ test('AD-13 SRS example: loan balance 3340 against dues 2100 leaves 1240 PENDING
   assert.deepEqual(caps.settlementLoanRecovery({ loanBalance: '100.00', credits: '0.00', debits: '900.00' }), { loanBalance: '100.00', covered: '0.00', uncovered: '100.00' })
   assert.equal(caps.settlementLoanRecovery({ loanBalance: '0.00', credits: '0.00', debits: '900.00' }), null)
 })
+
+// B-ADD.26: أقل مدة خدمة لطلب السلفة — بلا قاعدة بيانات: قارئ مزيف بيرجّع قيمة الإعداد وتاريخ بداية الموظف
+test('B-ADD.26: minimum service months gate — zero is no gate, the eligible date is start plus months clamped to the month end, and a broken value is refused loudly', async () => {
+  const fake = (months, start) => ({ query: async (sql, params) => sql.includes('[employees]') ? (start === undefined ? [] : [{ start }]) : months === undefined || params[0] !== 'loan.min_service_months' ? [] : [{ value: months }] })
+  assert.deepEqual([requestCaps.loanServiceDateAfter('2026-01-31', 1), requestCaps.loanServiceDateAfter('2026-03-15', 6), requestCaps.loanServiceDateAfter('2025-11-30', 3), requestCaps.loanServiceDateAfter('2024-02-29', 12)],
+    ['2026-02-28', '2026-09-15', '2026-02-28', '2025-02-28'])
+  // صفر أو من غير إعداد = من غير شرط، ومن غير ما ملف الموظف يتقري
+  for (const months of [undefined, '0']) assert.deepEqual(await requestCaps.loanServiceEligibility(fake(months, undefined), 7, '2026-10-14'), { minServiceMonths: 0, eligible: true, eligibleFrom: null, message: null })
+  const early = await requestCaps.loanServiceEligibility(fake('6', '2026-06-01'), 7, '2026-10-14')
+  assert.deepEqual(early, { minServiceMonths: 6, eligible: false, eligibleFrom: '2026-12-01', message: 'طلب السلفة متاح بعد إكمال 6 شهر خدمة — متاح من 2026-12-01' })
+  // يوم الاستحقاق نفسه مسموح
+  assert.deepEqual([(await requestCaps.loanServiceEligibility(fake('6', '2026-04-14'), 7, '2026-10-14')).eligible, (await requestCaps.loanServiceEligibility(fake('6', '2026-04-15'), 7, '2026-10-14')).eligible], [true, false])
+  // من غير تاريخ تعيين: مش مستحق برسالة واضحة
+  assert.deepEqual([(await requestCaps.loanServiceEligibility(fake('3', null), 7, '2026-10-14')).eligible, (await requestCaps.loanServiceEligibility(fake('3', null), 7, '2026-10-14')).eligibleFrom], [false, null])
+  await assert.rejects(() => requestCaps.loanServiceEligibility(fake('1.5', '2026-01-01'), 7, '2026-10-14'), error => error.getResponse().code === 'LOAN_CONFIG_INVALID')
+  // شاشة الطلب: أيام الطلب أولًا، وبعدها شرط المدة بنفس الخانات
+  const window = await requestCaps.loanRequestWindowFor(fake('6', '2026-06-01'), 7, '2026-10-14')
+  assert.deepEqual([window.open, window.message, window.minServiceMonths, window.eligibleFrom], [false, early.message, 6, '2026-12-01'])
+  const source = fs.readFileSync(path.join(__dirname, '..', 'src/loans/loan-request-caps.ts'), 'utf8').split('\r\n').join('\n')
+  assert.ok(source.includes('  if (!exceptional) {\n    await assertLoanRequestDayWindow(em, today)\n    await assertLoanServiceEligibility(em, input.requesterId, today)\n  }'), 'السلفة الاستثنائية برّه الشرطين')
+})

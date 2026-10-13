@@ -1045,6 +1045,19 @@ test('F1 — loan.request_open / request_from_day / request_to_day: فتح وق�
   expect('بقفل طلب السلفة: التقديم مرفوض', () => assert.ok(closed.status >= 400, `status=${closed.status}`))
   expect('رسالة القفل عربية', () => assert.ok(closed.status < 400 || isArabic(msg(closed)), msg(closed)))
   await mustSet('loan.request_open', 'true')
+  // B-ADD.26: أقل مدة خدمة لطلب السلفة — صفر افتراضيًا، ومدة أطول من خدمة أي موظف بترفض التقديم برسالة عربية
+  cover('loan.min_service_months', 'behaviour')
+  await expectAsync('أقل مدة خدمة: الافتراضي صفر', async () => assert.equal(await readKey('loan.min_service_months'), '0'))
+  await mustSet('loan.min_service_months', '600')
+  const tooNew = await tryLoan(e2.user)
+  expect('بمدة خدمة أطول من خدمته: التقديم مرفوض', () => assert.ok(tooNew.status >= 400, `status=${tooNew.status}`))
+  expect('رسالة مدة الخدمة عربية', () => assert.ok(tooNew.status < 400 || isArabic(msg(tooNew)), msg(tooNew)))
+  await mustSet('loan.min_service_months', '0')
+  cover('loan.min_service_months', 'validate')
+  for (const bad of ['601', '1.5', '-1']) {
+    const refused = await setKey('loan.min_service_months', bad)
+    expect(`أقل مدة خدمة: القيمة ${bad} مرفوضة`, () => assert.ok(refused.status >= 400, `status=${refused.status}`))
+  }
   // نافذة أيام الشهر: نطاق لا يشمل اليوم
   const today = new Date().getDate()
   const from = today === 1 ? 2 : 1, to = today === 1 ? 3 : Math.max(1, today - 1)

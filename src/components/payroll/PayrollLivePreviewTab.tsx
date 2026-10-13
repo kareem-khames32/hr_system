@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { can } from '@/lib/api'
 import { currencyLabel } from '@/lib/currency'
+import { downloadCsv } from '@/lib/csv'
 import { formatMoney, formatMoneyOrDash } from '@/lib/money'
 import { fetchPayrollLive, refreshPayrollLive, type PayrollLivePreview, type PayrollLiveRow } from '@/lib/payroll-live-api'
 import { payrollRunErrorMessage } from '@/lib/payroll-runs-api'
@@ -53,6 +54,17 @@ export function PayrollLivePreviewTab() {
     return (data?.rows ?? []).filter((row: PayrollLiveRow) => (!branch || String(row.branchId ?? '') === branch) && (!onlyPending || !row.complete)
       && (!query || row.fullName.includes(query) || row.employeeCode.includes(query)))
   }, [data, search, branch, onlyPending])
+
+  // تقرير الفترة لحد امبارح: الصفوف الظاهرة بعد البحث والفلتر، بنفس أرقام الشاشة — تقديري زي الشاشة
+  const exportCsv = () => {
+    if (!data) return
+    downloadCsv(`payroll-live-${data.period}-until-${data.upTo}.csv`,
+      ['الرقم الوظيفي', 'الموظف', 'الفرع', 'القسم', 'المعادلة', 'الأيام', 'الاستحقاق', 'دقايق الإضافي', 'الإضافي', 'دقايق التأخير', 'التأخير', 'دقايق النقص', 'النقص والانصراف المبكر',
+        'أيام الغياب', 'الغياب', 'أيام بدون راتب', 'بدون راتب', 'أيام الإيقاف', 'الإيقاف', 'إجمالي الخصومات', 'الصافي التقديري', 'العملة', 'محسوب لحد', 'الحالة'],
+      rows.map(row => [row.employeeCode, row.fullName, row.branchName ?? '', row.departmentName ?? '', row.days > 0 ? row.formulaName ?? 'الإعدادات العامة' : '', row.days, row.earned,
+        row.overtimeMinutes, row.overtime, row.lateMinutes, row.lateness, row.shortfallMinutes, row.shortfall, row.absentDays, row.absence, row.unpaidLeaveDays, row.unpaidLeave,
+        row.suspendedDays, row.suspension, row.deductions, row.estimatedNet, currencyLabel(row.currency), row.lastDate ?? '', row.complete ? 'محسوب' : 'محتاج حساب']))
+  }
 
   return (
     <div className="space-y-4" data-testid="payroll-live-preview">
@@ -118,6 +130,7 @@ export function PayrollLivePreviewTab() {
             <input type="checkbox" checked={onlyPending} onChange={e => setOnlyPending(e.target.checked)} /> اللي لسه محتاجين حساب بس
           </label>
           <span className="text-xs text-gray-400">{rows.length} من {data.rows.length}</span>
+          <button type="button" onClick={exportCsv} disabled={rows.length === 0} className="btn-secondary text-sm disabled:opacity-50" data-testid="payroll-live-export">تنزيل تقرير (CSV)</button>
         </div>
         <div className="max-h-[32rem] overflow-auto rounded-xl border border-gray-100">
           <table className="w-full text-sm">

@@ -239,3 +239,44 @@ test('resubmit: a month HR chose (loans.exceptional) survives unchanged — a re
   const stored = await storedPayload(exceptional.id)
   assert.deepEqual([stored.exceptional, stored.months, stored.firstInstallmentPeriod, stored.exceptionalBy], [true, 3, month, f.hrDesk.id])
 })
+
+test('B-ADD.26: minimum service before a regular loan — off by default; a new hire is refused with the date he becomes eligible (himself, on behalf and in the preview), while an exceptional loan and a long-serving employee pass', async () => {
+  const { loanServiceDateAfter } = require('../src/loans/loan-request-caps')
+  const config = repo('RequestsConfig'), setMonths = value => config.update({ key: 'loan.min_service_months' }, { value: String(value) })
+  assert.equal((await config.findOneByOrFail({ key: 'loan.min_service_months' })).value, '0', 'seeded closed')
+  const monthsAgo = count => { const date = new Date(); date.setDate(1); date.setMonth(date.getMonth() - count); return localDate(date) }
+  const joined = monthsAgo(2)
+  const recruit = await repo('Employee').save({ employeeCode: 'SGLN', fullName: 'موظف جديد', branchId: f.branch.id, departmentId: f.department.id, managerEmployeeId: f.managerEmployee.id,
+    joinDate: joined, basicSalary: 8000, housingAllowance: 2000, transportAllowance: 0, phoneAllowance: 0, workNatureAllowance: 0, otherAllowance: 0,
+    status: 'active', isActive: true, payMethod: 'cash', annualLeaveEntitled: false })
+  const account = await repo('User').save({ employeeId: recruit.id, branchId: f.branch.id, email: 'sgl-recruit@test.invalid', displayName: 'recruit', role: 'employee', passwordHash: 'isolated-token-only', permissions: '[]' })
+  const windowOf = async (user, query = '') => expect(await http(user, 'GET', `/loans/cap-preview?amount=500${query}`), 200).requestWindow
+  // مقفول (صفر): الشاشة مفتوحة للموظف الجديد زي الأول
+  assert.deepEqual([(await windowOf(account)).open, (await windowOf(account)).minServiceMonths], [true, 0])
+  await setMonths(6)
+  try {
+    const eligibleFrom = loanServiceDateAfter(joined, 6), message = `طلب السلفة متاح بعد إكمال 6 شهر خدمة — متاح من ${eligibleFrom}`
+    // المعاينة قبل التقديم: مقفول بالرسالة وتاريخ الاستحقاق — للموظف نفسه وللي بيقدّم عنه
+    for (const [user, query] of [[account, ''], [f.hr, `&employeeId=${recruit.id}`]]) {
+      const window = await windowOf(user, query)
+      assert.deepEqual([window.open, window.minServiceMonths, window.eligibleFrom, window.message], [false, 6, eligibleFrom, message])
+    }
+    // التقديم مرفوض من غير ما يتساب طلب: الموظف نفسه، والنيابة
+    const before = await requestCount()
+    for (const refused of [await loan(account, { amount: '500.00', months: 1 }), await loan(f.desk, { amount: '500.00', months: 1 }, { onBehalfEmployeeId: recruit.id })]) {
+      const body = expect(refused, 400)
+      assert.deepEqual([body.code, body.message, body.eligibleFrom], ['LOAN_MIN_SERVICE', message, eligibleFrom])
+    }
+    assert.equal(await requestCount(), before)
+    // اللي كمّل المدة مش متأثر، وتاريخ المباشرة الفعلية بيتقدّم على تاريخ التعيين
+    assert.equal((await windowOf(f.owner)).open, true)
+    await repo('Employee').update({ id: recruit.id }, { actualStartDate: monthsAgo(7) })
+    assert.deepEqual([(await windowOf(account)).open, (await windowOf(account)).eligibleFrom], [true, loanServiceDateAfter(monthsAgo(7), 6)])
+    await repo('Employee').update({ id: recruit.id }, { actualStartDate: null })
+    // السلفة الاستثنائية من المخوّل برّه الشرط
+    const exceptional = expect(await loan(f.hr, { amount: '600.00', months: 2, exceptional: true, exceptionalCategory: 'MEDICAL', reason: 'علاج طارئ موثق بتقرير طبي', firstInstallmentPeriod: f.firstPeriod },
+      { onBehalfEmployeeId: recruit.id }), 201)
+    assert.equal(exceptional.status, 'COMPLETED')
+  } finally { await setMonths(0) }
+  assert.equal((await windowOf(account)).open, true)
+})

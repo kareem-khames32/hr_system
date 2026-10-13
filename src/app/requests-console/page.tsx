@@ -171,6 +171,9 @@ export default function RequestsConsolePage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [filterCategory, setFilterCategory] = useState<'' | RequestCategory>('')
   const [filterStatus, setFilterStatus] = useState<'' | RequestStatus>('')
+  // B-ADD.26: فلتر بنوع الطلب بالاسم، وباسم الموظف
+  const [filterTypeName, setFilterTypeName] = useState('')
+  const [employeeQuery, setEmployeeQuery] = useState('')
   // B2.6: تقرير «معتمد ومااتنفذش» — القايمة بتتحمّل من الخادم بالفلتر ده (مش من آخر 500 طلب بس)
   const [pendingExecution, setPendingExecution] = useState(false)
   // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد
@@ -267,9 +270,14 @@ export default function RequestsConsolePage() {
   // طلبات الفرع/الإدارة/القسم/الفريق المختار في الفلتر الموحد (بمكان صاحب الطلب) — الأرقام والجدول والتصدير منها.
   // السرّي بفرع الطلب بس: اختيار إدارة أو قسم أو فريق بيخفيه بدل ما يكشف مكان صاحبه
   const orgRequests = requests.filter((r) => (r.masked ? org.matchesPlacement({ branchId: r.branchId }) : org.matches(r.requesterId)))
+  const typeNameOf = (r: CompanyRequestRow) => requestDefinition(types, r)?.nameAr ?? getTypeByCode(r.typeCode)?.nameAr ?? 'نوع مؤرشف'
+  const typeNames = [...new Set(orgRequests.map(typeNameOf))].sort((a, b) => a.localeCompare(b, 'ar'))
+  const employeeNeedle = employeeQuery.trim()
   const filtered = orgRequests.filter((r) => {
     const type = requestDefinition(types, r)
     return (
+      (!filterTypeName || typeNameOf(r) === filterTypeName) &&
+      (!employeeNeedle || r.requesterName.includes(employeeNeedle)) &&
       (r.displayId.includes(searchQuery) ||
         r.requesterName.includes(searchQuery) ||
         (type?.nameAr ?? '').includes(searchQuery)) &&
@@ -410,6 +418,11 @@ export default function RequestsConsolePage() {
                     onChange={(e) => setSearchQuery(e.target.value)}
                   />
                 </div>
+                <input type="text" placeholder="اسم الموظف" className="input w-44" value={employeeQuery} onChange={(e) => setEmployeeQuery(e.target.value)} data-filter-employee />
+                <select value={filterTypeName} onChange={(e) => setFilterTypeName(e.target.value)} className="input w-52" data-filter-type>
+                  <option value="">كل أنواع الطلبات ({typeNames.length})</option>
+                  {typeNames.map((name) => <option key={name} value={name}>{name}</option>)}
+                </select>
                 <select
                   value={filterCategory}
                   onChange={(e) => setFilterCategory(e.target.value as '' | RequestCategory)}
