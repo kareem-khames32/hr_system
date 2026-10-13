@@ -95,7 +95,8 @@ test('MPD-02: المعامل مفعّل — يوم ببصمة واحدة ومن 
   // 5 أيام ناقصة: 8 و10 عليهم طلب ← 3 من غير طلب (3، 15، 22): الأول مسموح، و15 و22 بربع يوم لكل واحد
   const quarter = dayRate * 0.25, expected = Math.round(quarter * 2 * 100) / 100
   assert.deepEqual(breakdown.attendanceDeductions.missingPunch, { penaltyDays: 0.25, free: 1, missingDays: 5, withRequest: 2, count: 3, charged: 2,
-    days: [{ date: '2026-09-15', amount: quarter }, { date: '2026-09-22', amount: quarter }] })
+    days: [{ date: '2026-09-15', amount: quarter }, { date: '2026-09-22', amount: quarter }],
+    requestDates: ['2026-09-08', '2026-09-10'], countedDates: ['2026-09-03', '2026-09-15', '2026-09-22'] })
   assert.deepEqual([Number(item.latenessDeduction), breakdown.attendanceDeductions.totals.missingPunchDeduction, breakdown.attendanceDeductions.totals.latenessOnlyDeduction,
     breakdown.attendanceDeductions.totals.permissionDeduction], [expected, expected, 0, 0])
   assert.deepEqual(deductionKeys(item).filter(([key]) => ['LATENESS', 'DEDUCT_PERMISSION', 'MISSING_PUNCH'].includes(key)), [['MISSING_PUNCH', expected]])
@@ -110,4 +111,58 @@ test('MPD-02: المعامل مفعّل — يوم ببصمة واحدة ومن 
   t.expectStatus(await config('payroll.missing_punch.free_count', '5'), 200)
   const free = itemOf(await runFor([E.spare]), E.spare), freeBreakdown = JSON.parse(free.breakdown).attendanceDeductions.missingPunch
   assert.deepEqual([Number(free.latenessDeduction), freeBreakdown.count, freeBreakdown.charged], [0, 2, 0])
+})
+
+test('MPD-03 (P8A-B03): طلب تصحيح اتقدّم بعد الحساب (أو طلب اترفض بعده) بيوقّف اعتماد الحساب القديم لحد ما المسير يتحسب تاني', async () => {
+  t.expectStatus(await config('payroll.missing_punch.penalty_days', '0.25'), 200)
+  t.expectStatus(await config('payroll.missing_punch.free_count', '0'), 200)
+  const late = await employee('موظف قدّم بعد الحساب', ['2026-09-03']), denied = await employee('موظف طلبه اترفض بعد الحساب', ['2026-09-03'])
+  const pending = await correctionRequest(denied, '2026-09-03', 'UNDER_REVIEW')
+  const run = await runFor([late, denied])
+  const chargeOf = (body, emp) => JSON.parse(itemOf(body, emp).breakdown).attendanceDeductions.missingPunch
+  const recalculate = async reason => t.expectStatus(await t.request(admin, 'POST', `/payroll/runs/${run.id}/recalculate`, { reason }), 201)
+  const statusOf = async () => (await t.repo('PayrollRun').findOneBy({ id: run.id })).status
+  // مصدر الحكم محفوظ مع الحساب: مين كان عليه طلب ومين لأ
+  assert.deepEqual([Number(itemOf(run, late).latenessDeduction), chargeOf(run, late).countedDates, chargeOf(run, late).requestDates], [75, ['2026-09-03'], []])
+  assert.deepEqual([Number(itemOf(run, denied).latenessDeduction), chargeOf(run, denied).countedDates, chargeOf(run, denied).requestDates], [0, [], ['2026-09-03']])
+  // الموظف قدّم طلب التصحيح بعد الحساب: الاعتماد بالخصم القديم مرفوض، والمسير لسه محسوب بخصمه لحد ما يتحسب تاني
+  await correctionRequest(late, '2026-09-03', 'UNDER_REVIEW')
+  const stale = await approve(run)
+  assert.deepEqual([stale.status, stale.body.code, stale.body.message.includes(`#${late.id} `), await statusOf()], [409, 'PAYRUN-MISSING-PUNCH-STALE', true, 'CALCULATED'])
+  const second = await recalculate('طلب تصحيح بصمة اتقدّم بعد حساب المسير')
+  assert.deepEqual([Number(itemOf(second, late).latenessDeduction), chargeOf(second, late).requestDates, chargeOf(second, late).countedDates], [0, ['2026-09-03'], []])
+  // والعكس: طلب كان مستني وقت الحساب واترفض بعده — اليوم بقى من غير طلب، فالحساب القديم (من غير خصم) متقادم برضه
+  await t.repo('Request').update({ id: pending.id }, { status: 'REJECTED' })
+  const reversed = await approve(run)
+  assert.deepEqual([reversed.status, reversed.body.code, reversed.body.message.includes(`#${denied.id} `), await statusOf()], [409, 'PAYRUN-MISSING-PUNCH-STALE', true, 'CALCULATED'])
+  const third = await recalculate('طلب تصحيح بصمة اترفض بعد حساب المسير')
+  assert.deepEqual([Number(itemOf(third, late).latenessDeduction), Number(itemOf(third, denied).latenessDeduction), chargeOf(third, denied).countedDates], [0, 75, ['2026-09-03']])
+  // الطلبات زي ما الحساب شافها: المسير بيتعتمد
+  t.expectStatus(await approve(run), 201)
+})
+
+test('MPD-04 (P8A-B04): الإعفاء من التأخير — المعاينة والمنح بيقدّروا اللي التنفيذ هيشيله بالظبط، ومبلغ نسيان البصمة جواه', async () => {
+  t.expectStatus(await config('payroll.missing_punch.penalty_days', '0.25'), 200)
+  t.expectStatus(await config('payroll.missing_punch.free_count', '0'), 200)
+  t.expectStatus(await config('payroll.late_deduction_enabled', 'true'), 200)
+  // نفس اليوم عليه تأخير 30 دقيقة ونسيان بصمة: العمود = خصم التأخير + ربع يوم (75)
+  const emp = await employee('موظف إعفاء التأخير', ['2026-09-03'])
+  await t.repo('AttendanceDay').update({ employeeId: emp.id, date: '2026-09-03' }, { lateMinutes: 30 })
+  const run = await runFor([emp]), before = Number(itemOf(run, emp).latenessDeduction)
+  assert.ok(before > 75, `العمود فيه التأخير ونسيان البصمة: ${before}`)
+  const reason = 'تصحيح موثّق لحضور الموظف بعد مراجعة مستقلة من الإدارة — اختبار أساس تقدير الإعفاء'
+  const preview = async target => {
+    const response = await t.request(admin, 'POST', '/payroll/exemptions/preview', { runId: run.id, employeeId: emp.id, reason, ...target })
+    assert.ok([200, 201].includes(response.status), JSON.stringify(response.body))
+    return response.body
+  }
+  // إعفاء يوم واحد وإعفاء كل التأخير: التقدير = العمود كله (اليوم شايل الشقين)
+  assert.equal(Number((await preview({ scopeKind: 'SINGLE_ENTRY', targetKind: 'LATENESS_DAY', targetRef: '2026-09-03' })).estimatedAmount), before)
+  const all = { scopeKind: 'DEDUCTION_TYPE', targetKind: 'LATENESS' }, estimate = await preview(all)
+  assert.equal(Number(estimate.estimatedAmount), before)
+  const grant = t.expectStatus(await t.request(admin, 'POST', '/payroll/exemptions', { runId: run.id, employeeId: emp.id, reason, ...all, previewHash: estimate.previewHash }), 201)
+  const updated = t.expectStatus(await t.request(admin, 'POST', `/payroll/runs/${run.id}/recalculate`, { reason: 'بعد إعفاء معتمد من خصم التأخير' }), 201)
+  const after = Number(itemOf(updated, emp).latenessDeduction)
+  // اللي اتشال = اللي اتعرض واتوافق عليه، بالقرش
+  assert.deepEqual([after, before - after, Number(grant.estimatedAmount)], [0, before, before])
 })

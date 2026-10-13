@@ -33,10 +33,13 @@ export function signLivekitJwt(config: Pick<LivekitConfig, 'key' | 'secret'>, cl
   return `${body}.${createHmac('sha256', config.secret).update(body).digest('base64url')}`
 }
 
-export const LIVEKIT_TOKEN_TTL_SECONDS = 2 * 60 * 60
+// P8A-B05: عشر دقايق بدل ساعتين. خادم LiveKit بيفحص التذكرة وقت الاتصال بس، وبيجدّد للي جوه الغرفة تذاكر بنفس المدة (عشر دقايق)
+// من عنده، والواجهة بتطلب تذكرة جديدة مع كل دخول. فبعد «إنهاء للكل» أو الإخراج: مفيش تذكرة جديدة، وأي تذكرة لسه في إيد حد بتموت
+// في خلال عشر دقايق بالكتير — ده حد السماح كله.
+export const LIVEKIT_TOKEN_TTL_SECONDS = 10 * 60
 
 /**
- * تذكرة دخول مشارك لغرفة واحدة (ساعتين): الهوية = رقم الحساب، والاسم والمسمى من النظام بس (canUpdateOwnMetadata مقفولة: محدش يغيّر اسمه)،
+ * تذكرة دخول مشارك لغرفة واحدة (عشر دقايق): الهوية = رقم الحساب، والاسم والمسمى من النظام بس (canUpdateOwnMetadata مقفولة: محدش يغيّر اسمه)،
  * وroomAdmin لصاحب الاجتماع بس.
  */
 export function participantToken(config: Pick<LivekitConfig, 'key' | 'secret'>, input: { room: string; identity: string; name: string; metadata: Record<string, unknown>; host: boolean },

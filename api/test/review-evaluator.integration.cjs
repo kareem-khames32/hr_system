@@ -43,7 +43,7 @@ before(async () => {
     sections: [{ title: 'الجدارات', kind: 'COMPETENCIES', weight: 100, items: [{ label: 'التعاون', type: 'rating' }] }] }), 201)
   const cycle = t.expectStatus(await t.request(users.hr, 'POST', `${R}/cycles`, { name: 'تقييم الربع', kind: 'ANNUAL', templateId: template.id, periodStart: '2026-10-01', periodEnd: '2026-12-31',
     selfDueDate: '2027-01-10', managerDueDate: '2027-01-20', audienceMode: 'DEPARTMENTS', audienceIds: [org.sales.id] }), 201)
-  state.cycle = cycle.id
+  state.cycle = cycle.id; state.template = template.id
   state.itemKey = template.sections[0].items[0].key; state.sectionKey = template.sections[0].key
   t.expectStatus(await t.request(users.hr, 'POST', `${R}/cycles/${cycle.id}/launch`), 200)
 }, { timeout: 120000 })
@@ -94,4 +94,43 @@ test('RE-02: القواعد — الصلاحية والنطاق، مش نفسه�
   t.expectStatus(await t.request(users.hr, 'POST', `${R}/cycles/${state.cycle}/close`), 200)
   assert.deepEqual(answer(await setEvaluator(users.hr, rep.id, emps.boss.id)), [400, 'الدورة مش شغالة — المقيِّم مابيتغيرش'])
   assert.equal((await rowOf(emps.rep)).canChangeEvaluator, false)
+})
+
+test('RE-03 (P8A-B02): موظف اتنقل لفرع برّه نطاق الحساب والطلب في الطريق — الحكم بفرعه بعد القفل، فالمقيِّم مابيتغيرش', async () => {
+  const department = await t.repo('Department').save({ name: 'التسويق', code: 'RE_M', branchId: org.a.id })
+  const moved = await t.repo('Department').save({ name: 'تسويق فرع ب', code: 'RE_MB', branchId: org.b.id })
+  const chief = await employee({ fullName: 'مدير التسويق', departmentId: department.id })
+  const mover = await employee({ fullName: 'موظف هيتنقل', departmentId: department.id, managerEmployeeId: chief.id })
+  const spare = await employee({ fullName: 'مقيِّم بديل', departmentId: department.id, managerEmployeeId: chief.id })
+  const cycle = t.expectStatus(await t.request(users.hr, 'POST', `${R}/cycles`, { name: 'تقييم التسويق', kind: 'ANNUAL', templateId: state.template, periodStart: '2026-10-01', periodEnd: '2026-12-31',
+    selfDueDate: '2027-01-10', managerDueDate: '2027-01-20', audienceMode: 'DEPARTMENTS', audienceIds: [department.id] }), 201)
+  t.expectStatus(await t.request(users.hr, 'POST', `${R}/cycles/${cycle.id}/launch`), 200)
+  const assignment = await t.repo('ReviewAssignment').findOneByOrFail({ cycleId: cycle.id, employeeId: mover.id })
+  assert.equal(assignment.managerEmployeeId, chief.id)
+  const calendar = t.expectStatus(await t.request(users.admin, 'GET', `/attendance/calendar-context?scope=EMPLOYEE&sourceId=${mover.id}`), 200)
+  const calendarChange = { effectiveFrom: '2026-10-01', reason: 'نقل لفرع ب', expectedRevision: calendar.revision, expectedCurrentSourceHash: calendar.currentSourceHash }
+  const count = await audits()
+  // النقل بيكتمل بعد ما الطلب دخل وقبل ما ياخد أي قفل على صفوف الموظفين (أول قراءة مقفولة لموظف هي نقطة الوقوف)
+  const { Repository } = require('../node_modules/typeorm'), original = Repository.prototype.findOne
+  let hit = false
+  Repository.prototype.findOne = async function (options) {
+    if (!hit && this.metadata.name === 'Employee' && options?.lock?.mode === 'pessimistic_write' && [mover.id, spare.id].includes(options?.where?.id)) {
+      hit = true
+      t.expectStatus(await t.request(users.admin, 'PATCH', `/employees/${mover.id}`, { branchId: org.b.id, departmentId: moved.id, calendarChange }), 200)
+    }
+    return original.call(this, options)
+  }
+  let result
+  try { result = await setEvaluator(users.hr, assignment.id, spare.id) } finally { Repository.prototype.findOne = original }
+  assert.equal(hit, true)
+  assert.equal((await t.repo('Employee').findOneBy({ id: mover.id })).branchId, org.b.id)
+  // الطلب اللي كان في الطريق بيترد عليه زي أي طلب جديد من حساب الفرع القديم: مش موجود، ومن غير كتابة ولا تدقيق
+  assert.deepEqual(answer(result), [404, 'التقييم غير موجود'])
+  assert.deepEqual([(await t.repo('ReviewAssignment').findOneBy({ id: assignment.id })).managerEmployeeId, await audits()], [chief.id, count])
+  assert.deepEqual(answer(await setEvaluator(users.hr, assignment.id, spare.id)), [404, 'التقييم غير موجود'])
+  // وحساب كل الفروع يغيّره عادي
+  assert.deepEqual(t.expectStatus(await setEvaluator(users.admin, assignment.id, spare.id), 200), { changed: true, evaluatorName: 'مقيِّم بديل' })
+  // المصدر: صفوف الموظفين بتتقفل بترتيب الرقم قبل حكم الفرع
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'src/performance/reviews.service.ts'), 'utf8')
+  assert.ok(source.includes('[...new Set([assignment.employeeId, evaluatorId])].sort((a, b) => a - b)') && source.includes('const employee = assignment ? people.get(assignment.employeeId) ?? null : null'))
 })

@@ -221,7 +221,8 @@ test('SR-03: a scheduled report goes to its owner by mail once when due, built w
   assert.equal(outbox.length, 1)
   const message = outbox[0]
   assert.equal(message.to, reader.email); assert.equal(message.subject, 'تقرير مجدول: قوى فرعي')
-  assert.doesNotMatch(message.text, /3|موظف تقارير/, 'جسم الرسالة من غير أرقام التقرير')
+  // تاريخ اليوم في نص الرسالة مش رقم من التقرير (من غير شيله الاختبار بيفشل في أي يوم فيه الرقم 3)
+  assert.doesNotMatch(message.text.replace(today, ''), /3|موظف تقارير/, 'جسم الرسالة من غير أرقام التقرير')
   assert.equal(message.attachments.length, 1)
   assert.deepEqual([message.attachments[0].contentType, message.attachments[0].filename], [XLSX, `تقرير القوى العاملة-${today}.xlsx`])
   assert.deepEqual((await sheetRows(message.attachments[0].content))[1], ['الإجمالي', 'الموظفون الحاليون', 3, 3], 'بنطاق صاحبه وفلتره')

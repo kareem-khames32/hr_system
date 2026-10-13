@@ -99,8 +99,9 @@ export class MailSessionService {
         const payload = await this.jwt.verifyAsync<JwtPayload>(token).catch(() => null)
         if (payload && Number.isSafeInteger(payload.sub)) this.vault.drop(vaultScopeOf(payload))
       }
-      // البريد مش مضبوط على الخادم = مفيش مفتاح اتبعت أصلًا، فرد الخروج زي ما هو
-      if (this.config.enabled) appendSetCookie(res, clearedMailKeyCookieHeader(sessionCookieOptions()))
+      // البريد مش مضبوط على الخادم أو موديوله مقفول = مفيش مفتاح بيتبعت، فرد الخروج زي ما هو بالحرف (P8A-N01). المفتاح مساره
+      // /api/mail فمابيوصلش لطلب الخروج عشان نعرف منه؛ ولو الموديول اتقفل وفي متصفح مفتاح قديم، نصه على الخادم اتمسح فوق فمالوش قيمة.
+      if (await this.open()) appendSetCookie(res, clearedMailKeyCookieHeader(sessionCookieOptions()))
     } catch (error) {
       this.logger.warn(`تعذّر قفل البريد مع الخروج: ${String((error as Error)?.message ?? error).slice(0, 200)}`)
     }

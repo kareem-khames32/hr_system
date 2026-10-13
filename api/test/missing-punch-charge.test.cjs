@@ -20,7 +20,8 @@ test('MPC-02: اللي بيتخصم — أيام البصمة الناقصة ا�
   const charge = (missing, requests, free) => rules.missingPunchCharge(missing, new Set(requests), free, 300, 0.25)
   // مثال المالك: نسي 4 أيام، قدّم طلب عن واحد، والسماح مرتين ← التالت بس بيتخصم ربع يوم
   assert.deepEqual(charge(['2026-09-03', '2026-09-08', '2026-09-10', '2026-09-15'], ['2026-09-08'], 2),
-    { penaltyDays: 0.25, free: 2, missingDays: 4, withRequest: 1, count: 3, charged: 1, days: [{ date: '2026-09-15', amount: 75 }] })
+    { penaltyDays: 0.25, free: 2, missingDays: 4, withRequest: 1, count: 3, charged: 1, days: [{ date: '2026-09-15', amount: 75 }],
+      requestDates: ['2026-09-08'], countedDates: ['2026-09-03', '2026-09-10', '2026-09-15'] })
   assert.deepEqual(charge(['2026-09-10', '2026-09-03'], [], 0).days, [{ date: '2026-09-03', amount: 75 }, { date: '2026-09-10', amount: 75 }], 'بترتيب التاريخ')
   assert.deepEqual([charge(['2026-09-03', '2026-09-08'], [], 2).charged, charge(['2026-09-03'], ['2026-09-03'], 0).charged, charge([], ['2026-09-03'], 0).count], [0, 0, 0])
   // طلب عن يوم مش ناقص مابيأثرش، واليوم المكرر بيتعدّ مرة
@@ -52,4 +53,20 @@ test('MPC-04: مصدر الكود — المعامل بيدخل اللقطة ل�
   assert.ok(settings.includes("'payroll.missing_punch.penalty_days': 0,") && settings.includes("if (dto.key === 'payroll.missing_punch.free_count') {"))
   assert.ok(seed.includes("{ key: 'payroll.missing_punch.penalty_days', value: '0' },") && seed.includes("{ key: 'payroll.missing_punch.free_count', value: '0' },"), 'الافتراضي مقفول')
   assert.ok(charge.includes("const NOT_A_REQUEST = ['DRAFT', 'REJECTED', 'CANCELLED']") && charge.includes("const CORRECTION_HANDLER = 'attendance_corrections'"))
+})
+
+test('MPC-05 (P8A-B03، B04): مصدر حكم «من غير طلب» محفوظ مع الخصم، والاعتماد بيرفض لما الطلبات تتغيّر بعد الحساب؛ والإعفاء بنفس أساس التنفيذ', () => {
+  const charge = rules.missingPunchCharge(['2026-09-03', '2026-09-08', '2026-09-10'], new Set(['2026-09-08', '2026-09-20']), 1, 300, 0.25)
+  assert.deepEqual([charge.requestDates, charge.countedDates, charge.days], [['2026-09-08'], ['2026-09-03', '2026-09-10'], [{ date: '2026-09-10', amount: 75 }]])
+  const stale = dates => rules.missingPunchSourceStale(charge, new Set(dates))
+  // زي ما الحساب شافها (وطلب عن يوم مش ناقص مابيأثرش) = سليم؛ طلب جديد عن يوم مخصوم، أو عن يوم «المسموح» (بيحرّك مين يتخصم)، أو طلب راح = متقادم
+  assert.deepEqual([stale(['2026-09-08']), stale(['2026-09-08', '2026-09-20', '2026-09-25']), stale(['2026-09-08', '2026-09-10']), stale(['2026-09-08', '2026-09-03']), stale([])],
+    [false, false, true, true, true])
+  // تفصيل من غير مصدر الحكم (حساب أقدم) متقادم
+  assert.deepEqual([rules.missingPunchSourceStale({ ...charge, requestDates: undefined }, new Set(['2026-09-08'])), rules.missingPunchSourceStale({ ...charge, countedDates: 'x' }, new Set(['2026-09-08'])),
+    rules.missingPunchSourceStale(null, new Set())], [true, true, true])
+  const service = read('payroll/payroll.service.ts'), exemptions = read('payroll/financial-exemptions.service.ts')
+  assert.ok(service.includes('missingPunchSourceStale(missingPunchSaved, await readPunchRequestDates(em, item.employeeId, saved.coverFrom ?? run.startDate, saved.coverTo ?? run.endDate))'))
+  assert.ok(service.includes("code: 'PAYRUN-MISSING-PUNCH-STALE'") && service.includes('const missingPunchSaved = missingPunchSettled ? saved.attendanceDeductions?.missingPunch : null'), 'والخصم مقفول مفيش قراءة ولا رفض')
+  assert.ok(exemptions.includes('Number(day.latenessAmount ?? 0) + Number(day.permissionAmount ?? 0) + (missingPunch.get(String(day.date)) ?? 0)'), 'أساس تقدير الإعفاء = أساس تنفيذه')
 })

@@ -338,13 +338,20 @@ export class ReviewsService {
       await this.assertReady(em)
       const assignment = await em.getRepository(ReviewAssignment).findOne({ where: { id: assignmentId }, lock: { mode: 'pessimistic_write' } })
       const cycle = assignment ? await em.getRepository(ReviewCycle).findOne({ where: { id: assignment.cycleId } }) : null
-      const employee = assignment ? await em.getRepository(Employee).findOne({ where: { id: assignment.employeeId }, select: { id: true, fullName: true, branchId: true } }) : null
+      // P8A-B02: صف صاحب التقييم وصف المقيِّم بيتقفلوا الاتنين (بترتيب الرقم) قبل أي حكم بالفرع، وبيتقروا بعد القفل — نقل موظف
+      // لفرع تاني في النص يا يستنى الكتابة يا الحكم يشوفه. قراءة من غير قفل قبل انتظار قفل كانت بتحفظ بحكم فرع قديم.
+      const people = new Map<number, Employee>()
+      for (const id of assignment ? [...new Set([assignment.employeeId, evaluatorId])].sort((a, b) => a - b) : []) {
+        const row = await em.getRepository(Employee).findOne({ where: { id }, select: { id: true, fullName: true, branchId: true, isActive: true, status: true }, lock: { mode: 'pessimistic_write' } })
+        if (row) people.set(id, row)
+      }
+      const employee = assignment ? people.get(assignment.employeeId) ?? null : null
       // تكليف برّه نطاق الحساب (دورته أو فرع موظفه الحالي) زي اللي مش موجود
       if (!assignment || !cycle || !this.cycleInScope(user, cycle) || !employee || !inBranchScope(scope, employee.branchId)) throw new NotFoundException(REVIEW_NOT_FOUND)
       if (cycle.status !== 'ACTIVE') throw new BadRequestException('الدورة مش شغالة — المقيِّم مابيتغيرش')
       if (assignment.managerSubmittedAt) throw new ConflictException('تقييم المدير اتسلّم — المقيِّم مابيتغيرش')
       if (evaluatorId === assignment.employeeId) throw new BadRequestException('الموظف مايقيّمش نفسه')
-      const evaluator = await em.getRepository(Employee).findOne({ where: { id: evaluatorId }, select: { id: true, fullName: true, branchId: true, isActive: true, status: true }, lock: { mode: 'pessimistic_write' } })
+      const evaluator = people.get(evaluatorId) ?? null
       if (!evaluator || !inBranchScope(scope, evaluator.branchId)) throw new NotFoundException('الموظف غير موجود')
       if (evaluator.isActive !== true || ENDED.includes(evaluator.status)) throw new BadRequestException('المقيِّم لازم يكون موظف على رأس العمل')
       const before = assignment.managerEmployeeId

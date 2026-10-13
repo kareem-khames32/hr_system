@@ -98,7 +98,9 @@ test('MCU-02: the server — routes behind the meetings module, a call without a
   assert.doesNotMatch(service, /\.save\(/, 'الكتابة بالخانات بس')
   // التذكرة: بعد الرد بس، لغرفة المكالمة، ومن غير إدارة غرفة لحد
   const token = part('async token', null)
-  ordered(token, ['await this.load(em, user, code)', "code: 'CALL_NOT_ANSWERED'", "code: 'CALL_OVER'", 'participantToken(config, { room: code, identity: String(user.sub)', 'host: false })', 'return { token, url: config.url }'], 'token')
+  // P8A-B05: التذكرة بتتوقّع تحت قفل صف المكالمة وبحالة متقرية بعد القفل — قراءة الاسم قبل المعاملة
+  ordered(token, ['await this.load(em, user, code)', "code: 'CALL_NOT_ANSWERED'", "code: 'CALL_OVER'", 'await this.people(em, [user.sub])', 'this.ds.transaction(', 'await this.load(tx, user, code, true)',
+    "if (held === 'ringing')", "if (held !== 'active')", 'participantToken(config, { room: code, identity: String(user.sub)', 'host: false })', 'url: config.url }'], 'token')
   assert.doesNotMatch(service, /host: true|config\.secret|config\.key|console\.log/)
   // من غير تسجيل ومن غير سنترال: نفس نداءات RoomService القايمة بس
   assert.deepEqual([...new Set([...(service + helper).matchAll(/livekit(RoomCounts|DeleteRoom|RemoveParticipant|MuteParticipant|Call)\b/g)].map(match => match[1]))].sort(), ['Call', 'DeleteRoom', 'MuteParticipant', 'RemoveParticipant', 'RoomCounts'])

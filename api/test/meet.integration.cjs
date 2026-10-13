@@ -295,14 +295,14 @@ test('MT-03: الدليل (الاسم والمسمى بس)، والإنشاء ب
   assert.deepEqual([asOutsider.access, asOutsider.title, asOutsider.host.displayName, asOutsider.status, asOutsider.lobby, 'invitees' in asOutsider], ['knock', 'متابعة المشروع', 'أحمد صاحب الاجتماع', 'live', true, false])
   assert.deepEqual([answer(await request(users.host, 'GET', room(crypto.randomUUID()))), (await request(users.host, 'GET', room('5'))).status], [[404, rules.MEET_NOT_FOUND], 400])
 
-  // تذكرة الدخول: موقّعة بسر الخادم، هويتها رقم الحساب، لغرفة الاجتماع ده بس، ساعتين، وإدارة الغرفة لصاحبه بس
+  // تذكرة الدخول: موقّعة بسر الخادم، هويتها رقم الحساب، لغرفة الاجتماع ده بس، عشر دقايق، وإدارة الغرفة لصاحبه بس
   const before = calls.length
   const hostTicket = expectStatus(await request(users.host, 'POST', room(made.id, '/token')), 200), guestTicket = expectStatus(await request(users.guest, 'POST', room(made.id, '/token')), 200)
   assert.deepEqual([hostTicket.url, hostTicket.host, guestTicket.host, Object.keys(guestTicket).sort()], [process.env.LIVEKIT_URL, true, false, ['host', 'token', 'url']])
   const hostClaims = decode(hostTicket.token), guestClaims = decode(guestTicket.token)
   const grant = admin => ({ room: made.id, roomJoin: true, canPublish: true, canSubscribe: true, canPublishData: true, canUpdateOwnMetadata: false, roomAdmin: admin })
   assert.deepEqual([hostClaims.iss, hostClaims.sub, hostClaims.jti, hostClaims.name, JSON.parse(hostClaims.metadata), hostClaims.video], [LK.key, String(users.host.id), String(users.host.id), 'أحمد صاحب الاجتماع', { jobTitle: 'مدير مشروعات' }, grant(true)])
-  assert.deepEqual([guestClaims.sub, guestClaims.name, guestClaims.video, guestClaims.exp - guestClaims.nbf], [String(users.guest.id), 'بسمة المدعوة', grant(false), 7200])
+  assert.deepEqual([guestClaims.sub, guestClaims.name, guestClaims.video, guestClaims.exp - guestClaims.nbf], [String(users.guest.id), 'بسمة المدعوة', grant(false), 600])
   assert.ok(Math.abs(guestClaims.nbf - Date.now() / 1000) < 60)
   assert.equal(JSON.stringify(guestTicket).includes(LK.secret), false)
   assert.equal(calls.length, before, 'التذكرة من غير أي نداء على الخادم')
@@ -485,4 +485,39 @@ test('MT-05: تحكم صاحب الاجتماع بس — كتم وإخراج و�
   // الموديول لما يتقفل: المسارات مقفولة
   expectStatus(await request(users.admin, 'PUT', '/modules/meet', { enabled: false }), 200); modules.invalidate()
   assert.deepEqual([(await request(users.host, 'GET', R)).status, (await request(users.host, 'GET', M + '/inbox')).status, (await request(users.host, 'POST', room(id, '/token'))).status], [404, 404, 404])
+})
+
+test('MT-06 (P8A-B05): الاجتماع اتنهى وطلب التذكرة في الطريق — مفيش تذكرة بعد إنهاء اكتمل؛ والتذكرة عشر دقايق', async () => {
+  expectStatus(await request(users.admin, 'PUT', '/modules/meet', { enabled: true }), 200); modules.invalidate()
+  const made = expectStatus(await request(users.host, 'POST', R, { title: 'سباق الإنهاء', inviteUserIds: [users.guest.id] }), 201)
+  const row = await repo('Meeting').findOneByOrFail({ code: made.id })
+  // «إنهاء للكل» بيكتمل بعد ما طلب المدعو اتحكم عليه وقبل ما التذكرة تتوقّع (قراءة الاسم هي نقطة الانتظار)
+  const original = meet.people
+  let hit = false
+  meet.people = async function (...args) {
+    if (!hit) { hit = true; expectStatus(await request(users.host, 'POST', room(made.id, '/end')), 200) }
+    return original.apply(this, args)
+  }
+  let late
+  try { late = await request(users.guest, 'POST', room(made.id, '/token')) } finally { meet.people = original }
+  assert.equal(hit, true)
+  assert.ok((await repo('Meeting').findOneByOrFail({ id: row.id })).endedAt)
+  assert.deepEqual([coded(late).slice(0, 2), 'token' in late.body, await repo('MeetingAttendance').countBy({ meetingId: row.id, userId: users.guest.id })], [[410, 'MEET_ENDED'], false, 0])
+  // والإخراج في نفس النقطة: المُخرَج مابياخدش تذكرة
+  const kicked = expectStatus(await request(users.host, 'POST', R, { title: 'سباق الإخراج', inviteUserIds: [users.guest.id] }), 201)
+  hit = false
+  meet.people = async function (...args) {
+    if (!hit) { hit = true; expectStatus(await request(users.host, 'POST', room(kicked.id, '/remove'), { userId: users.guest.id }), 200) }
+    return original.apply(this, args)
+  }
+  let removed
+  try { removed = await request(users.guest, 'POST', room(kicked.id, '/token')) } finally { meet.people = original }
+  assert.deepEqual([hit, coded(removed).slice(0, 2), 'token' in removed.body], [true, [403, 'MEET_KNOCK_REQUIRED'], false])
+  // من غير سباق: التذكرة بتطلع، ومدتها عشر دقايق (زي تذاكر التجديد اللي خادم الاجتماعات بيديها للي جوه الغرفة)
+  const open = expectStatus(await request(users.host, 'POST', R, { title: 'اجتماع عادي', inviteUserIds: [users.guest.id] }), 201)
+  const claims = decode(expectStatus(await request(users.guest, 'POST', room(open.id, '/token')), 200).token)
+  assert.deepEqual([claims.exp - claims.nbf, claims.video.roomJoin, require('../src/meet/livekit').LIVEKIT_TOKEN_TTL_SECONDS], [600, true, 600])
+  expectStatus(await request(users.host, 'POST', room(open.id, '/end')), 200)
+  expectStatus(await request(users.host, 'POST', room(kicked.id, '/end')), 200)
+  expectStatus(await request(users.admin, 'PUT', '/modules/meet', { enabled: false }), 200); modules.invalidate()
 })

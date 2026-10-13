@@ -199,8 +199,12 @@ export class FinancialExemptionsService {
     if (!snapshot || !Number.isFinite(gross) || gross < 0) conflict('EXEMPTION_RECALC_REQUIRED', 'حساب هذا المسير أقدم من لقطة السياسة؛ أعد حسابه قبل منح الإعفاء')
     const dayRate = gross / monthlyDays
     const penalty = Number(snapshot!.values.absencePenaltyDays)
+    // P8A-B04: مبلغ «نسيان البصمة» على يومه جوه عمود التأخير (B-ADD.14) — نفس أساس تنفيذ الإعفاء في حساب المسير، فالمعاينة والمنح
+    // والسقف بيشوفوا اللي هيتشال بالظبط. والخصم مقفول مفيش missingPunch في التفصيل فالأساس زي ما كان.
+    const missingPunch = new Map<string, number>((Array.isArray(breakdown.attendanceDeductions?.missingPunch?.days) ? breakdown.attendanceDeductions.missingPunch.days : [])
+      .map((day: Record<string, unknown>) => [String(day.date), Number(day.amount ?? 0)]))
     const days = (Array.isArray(breakdown.attendanceDeductions?.days) ? breakdown.attendanceDeductions.days : []).map((day: Record<string, unknown>) => ({ date: String(day.date),
-      lateness: Number(day.latenessAmount ?? 0) + Number(day.permissionAmount ?? 0), shortfall: Number(day.shortfallAmount ?? 0) }))
+      lateness: Number(day.latenessAmount ?? 0) + Number(day.permissionAmount ?? 0) + (missingPunch.get(String(day.date)) ?? 0), shortfall: Number(day.shortfallAmount ?? 0) }))
     const absentDates: string[] = Array.isArray(breakdown.absentDates) ? breakdown.absentDates.map(String) : []
     const absenceDayAmount = dayRate * penalty
     const requested = { lateness: roundPayrollMoney(days.reduce((sum: number, day: { lateness: number }) => sum + day.lateness, 0)),

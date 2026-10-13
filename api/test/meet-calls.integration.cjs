@@ -254,7 +254,7 @@ test('MC-03: الاتصال بالتحويلة — بيرن عند صاحبها 
     const ticket = await ok(U[key], call(made.id, '/token'))
     const claims = decode(ticket.token)
     assert.deepEqual([Object.keys(ticket).sort(), ticket.url, claims.iss, claims.sub, claims.name, JSON.parse(claims.metadata), claims.video, claims.exp - claims.nbf],
-      [['token', 'url'], process.env.LIVEKIT_URL, LK.key, String(U[key].id), U[key].displayName, { jobTitle: E[key].jobTitle }, grant, 7200], key)
+      [['token', 'url'], process.env.LIVEKIT_URL, LK.key, String(U[key].id), U[key].displayName, { jobTitle: E[key].jobTitle }, grant, 600], key)
     assert.equal(JSON.stringify(ticket).includes(LK.secret), false)
   }
   assert.equal(calls.length, before, 'الاتصال والرد والتذاكر من غير أي نداء على خادم الاجتماعات')
@@ -404,4 +404,29 @@ test('MC-07: مكالمة اتردّ عليها ومحدش قفلها — غرف
   // الموديول لما يتقفل: المسارات مقفولة
   await modules.disable('meet')
   assert.deepEqual([(await t.request(U.amal, 'GET', C)).status, (await post(U.amal, C, { extension: '1002' })).status, (await t.request(U.amal, 'GET', call(made.id))).status, (await t.request(U.amal, 'GET', '/meet/inbox')).status], [404, 404, 404, 404])
+})
+
+test('MC-08 (P8A-B05): المكالمة اتقفلت وطلب التذكرة في الطريق — مفيش تذكرة بعد إنهاء اكتمل', async () => {
+  await modules.enable('meet')
+  const made = await dial(U.amal, { userId: U.basem.id })
+  await ok(U.basem, call(made.id, '/accept'))
+  // الطرف التاني بيقفل بعد ما طلب التذكرة اتحكم عليه وقبل ما تتوقّع (قراءة الاسم هي نقطة الانتظار)
+  const original = service.people
+  let hit = false
+  service.people = async function (...args) {
+    if (!hit) { hit = true; await ok(U.basem, call(made.id, '/hangup')) }
+    return original.apply(this, args)
+  }
+  let late
+  try { late = await post(U.amal, call(made.id, '/token')) } finally { service.people = original }
+  assert.equal(hit, true)
+  assert.ok((await rowOf(made.id)).endedAt)
+  assert.deepEqual([coded(late).slice(0, 2), 'token' in late.body], [[410, 'CALL_OVER'], false])
+  // من غير سباق: التذكرة بتطلع للطرفين وهي شغالة
+  const next = await dial(U.amal, { userId: U.basem.id })
+  await ok(U.basem, call(next.id, '/accept'))
+  const claims = decode((await ok(U.amal, call(next.id, '/token'))).token)
+  assert.deepEqual([claims.video.roomJoin, claims.exp - claims.nbf], [true, 600])
+  await ok(U.amal, call(next.id, '/hangup'))
+  await modules.disable('meet')
 })

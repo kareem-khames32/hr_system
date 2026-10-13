@@ -279,7 +279,8 @@ export class PositionsService {
   async hiringSuggestions(user: JwtPayload) {
     const em = this.ds.manager
     if (!(await positionsReady(em))) return { available: false, recruitment: false, canOpen: false, suggestions: [] }
-    const recruitment = (await this.modules.isEnabled('recruitment')) && (await recruitmentJobsReady(em))
+    // P8A-B01: التوظيف متاح **للحساب ده** (جمهور الموديول)، مش مفعّل للشركة وخلاص — زي ما مسارات التوظيف نفسها بتحكم
+    const recruitment = (await this.modules.allowedFor('recruitment', user)) && (await recruitmentJobsReady(em))
     const rows = await this.scoped(em, branchScopeOf(user)).andWhere('p.status = :status', { status: 'ACTIVE' }).orderBy('p.id', 'ASC').getMany()
     const views = (await this.views(em, rows)).filter(row => !row.unitHidden && row.vacant > 0)
     const open = recruitment && views.length ? await this.openJobOpenings(em, views.map(row => row.branchId)) : new Map<string, number>()
@@ -299,7 +300,8 @@ export class PositionsService {
    */
   async openJob(user: JwtPayload, id: number, rawOpenings: unknown) {
     if (!userHasPerm(user, 'candidates.manage')) throw new ForbiddenException(HIRING_NEEDS_RECRUITER)
-    if (!(await this.modules.isEnabled('recruitment'))) throw new BadRequestException(HIRING_NO_RECRUITMENT)
+    // P8A-B01: حساب برّه جمهور موديول التوظيف زي الموديول المقفول — مايفتحش وظيفة من هنا وهو مرفوض في التوظيف نفسه
+    if (!(await this.modules.allowedFor('recruitment', user))) throw new BadRequestException(HIRING_NO_RECRUITMENT)
     return this.ds.transaction(async em => {
       if (!(await recruitmentJobsReady(em))) throw new BadRequestException(HIRING_NO_RECRUITMENT)
       const position = await this.loadScoped(em, user, id, true)

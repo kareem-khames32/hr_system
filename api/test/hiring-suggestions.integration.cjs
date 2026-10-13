@@ -99,3 +99,24 @@ test('HS-02: فتح وظيفة من الشاغر — مسودة بعدد الن�
   assert.equal(t.expectStatus(await openJob(U.jeddah, P.jeddah, 1), 201).openings, 1)
   assert.equal(await t.repo('AuditLog').countBy({ action: 'RECRUITMENT_JOB_CREATED' }), 3)
 })
+
+test('HS-03 (P8A-B01): حساب برّه جمهور موديول التوظيف — مايفتحش وظيفة من الشاغر ولا بيتعرض عليه الفتح، زي ما التوظيف نفسه بيرفضه', async () => {
+  const insider = await employee('مسؤول توظيف الرياض', B.riyadh, D.sales)
+  const outsider = await t.user({ role: 'employee', branchId: B.riyadh.id, employeeId: insider.id, permissions: JSON.stringify(['positions.view', 'positions.manage', 'candidates.manage']), isActive: true })
+  const extra = await position(T.driver, B.riyadh, null, 2)
+  // التوظيف مفعّل للشركة بس متاح لفرع جدة لوحده
+  await modules.enable('recruitment', { who: { mode: 'all' }, where: { mode: 'branches', ids: [B.jeddah.id] } })
+  const before = (await jobs()).length, audits = await t.repo('AuditLog').countBy({ action: 'RECRUITMENT_JOB_CREATED' })
+  assert.equal((await t.request(outsider, 'GET', '/recruitment/jobs')).status, 404, 'التوظيف نفسه مقفول عليه')
+  const seen = await suggestions(outsider)
+  assert.deepEqual([seen.available, seen.recruitment, seen.canOpen], [true, false, false])
+  assert.ok(seen.suggestions.some(row => row.positionId === extra.id && row.openJobs === 0), 'الشاغر بيظهر له من الوظائف المعتمدة، من غير أرقام التوظيف')
+  assert.deepEqual(answer(await openJob(outsider, extra, 1)), [400, 'موديول التوظيف مقفول أو جداوله ناقصة — فعّله الأول'])
+  assert.deepEqual([(await jobs()).length, await t.repo('AuditLog').countBy({ action: 'RECRUITMENT_JOB_CREATED' })], [before, audits], 'ولا وظيفة ولا سطر تدقيق')
+  // واللي جوه الجمهور (فرع جدة) شغال زي ما هو
+  const inside = await suggestions(U.jeddah)
+  assert.deepEqual([inside.recruitment, inside.canOpen], [true, true])
+  // الجمهور لما يرجع للكل: نفس الحساب يفتح
+  await modules.enable('recruitment', { who: { mode: 'all' }, where: { mode: 'all' } })
+  assert.equal(t.expectStatus(await openJob(outsider, extra, 1), 201).openings, 1)
+})

@@ -634,7 +634,8 @@ test('MB-08: «الدخول بحساب الشركة» بيمسك كلمة الس
   assert.deepEqual([closed.setCookie.length, closed.setCookie[0].startsWith('hr_session='), (await ds.query('SELECT COUNT(*) AS [n] FROM [mail_accounts]'))[0].n], [1, true, 0])
   const closedSession = closed.setCookie[0].split(';')[0]
   const closedOut = await request(null, 'POST', '/auth/logout', undefined, { cookie: closedSession, headers: { 'X-CSRF-Token': closed.body.csrfToken } })
-  assert.deepEqual([closedOut.status, closedOut.setCookie.length], [200, 2], 'cookie الجلسة اتمسحت (ومفتاح البريد لو كان فيه)')
+  // P8A-N01: والموديول مقفول رد الخروج زي ما كان بالحرف — cookie الجلسة بس، من غير سطر مفتاح البريد (حتى لو Exchange مضبوط على الخادم)
+  assert.deepEqual([closedOut.status, closedOut.setCookie], [200, ['hr_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0']])
   expectStatus(await request(users.admin, 'PUT', '/modules/mail', { enabled: true }), 200); modules.invalidate()
 
   // الموديول مفعّل: جلسة cookie + مفتاح البريد في نفس الرد، والرد من غير توكن ولا مفتاح ولا كلمة سر

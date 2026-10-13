@@ -68,9 +68,9 @@ test('MTU-02: the LiveKit helper without a library — config from the environme
   const room = crypto.randomUUID()
   const guest = decode(livekit.participantToken(config, { room, identity: '42', name: 'بسمة', metadata: { jobTitle: 'محاسبة' }, host: false }, now))
   assert.deepEqual(guest, { sub: '42', jti: '42', name: 'بسمة', metadata: '{"jobTitle":"محاسبة"}',
-    video: { room, roomJoin: true, canPublish: true, canSubscribe: true, canPublishData: true, canUpdateOwnMetadata: false, roomAdmin: false }, iss: 'APItest', nbf: now / 1000, exp: now / 1000 + 7200 })
+    video: { room, roomJoin: true, canPublish: true, canSubscribe: true, canPublishData: true, canUpdateOwnMetadata: false, roomAdmin: false }, iss: 'APItest', nbf: now / 1000, exp: now / 1000 + 600 })
   assert.equal(decode(livekit.participantToken(config, { room, identity: '7', name: 'أحمد', metadata: {}, host: true }, now)).video.roomAdmin, true)
-  assert.equal(livekit.LIVEKIT_TOKEN_TTL_SECONDS, 7200)
+  assert.equal(livekit.LIVEKIT_TOKEN_TTL_SECONDS, 600)
   assert.notEqual(livekit.signLivekitJwt({ ...config, secret: 'x' }, { sub: '1' }, 60, now).split('.')[2], livekit.signLivekitJwt(config, { sub: '1' }, 60, now).split('.')[2])
 
   // نداءات Twirp على خادم وهمي
@@ -148,7 +148,7 @@ test('MTU-03: a new closed module and its route, guarded routes, writes under th
   assert.doesNotMatch(helper + service, /livekit\.Egress|console\.log|this\.log\.\w+\([^)]*secret/)
   // الإعداد من البيئة وقت النداء (مش متخزّن)، والسر مابيرجعش في رد
   assert.match(service, /const config = livekitConfig\(\)\n\s+if \(!config\) throw new ServiceUnavailableException\(\{ code: 'MEET_NOT_CONFIGURED', message: MEET_NOT_CONFIGURED \}\)/)
-  assert.match(service, /return \{ token, url: config\.url, host: role === 'host' \}/)
+  assert.match(service, /return \{ token, url: config\.url, host: heldRole === 'host' \}/)
   assert.doesNotMatch(service, /config\.secret|config\.key/)
   // كل كتابة لصاحب الاجتماع: جوه معاملة، تحت قفل صف الاجتماع، والحكم بعد القفل؛ ونداء خادم الاجتماعات برّه المعاملة
   const part = (name, next) => service.slice(service.indexOf(`  async ${name}(`), service.indexOf(`  async ${next}(`))
@@ -156,6 +156,9 @@ test('MTU-03: a new closed module and its route, guarded routes, writes under th
     ['update', 'cancel', ['this.ds.transaction(', 'await this.guard(em)', 'await this.load(em, code, true)', 'this.hostOnly(user, meeting)', 'this.open(meeting)', 'getRepository(Meeting).update({ id: meeting.id }, changes)']],
     ['cancel', 'end', ['this.ds.transaction(', 'await this.load(em, code, true)', 'this.hostOnly(user, meeting)', 'this.open(meeting)', 'cancelledAt: new Date()', '})\n', 'await this.closeRoom(config, code)', 'this.clearMeeting(code)']],
     ['end', 'token', ['this.ds.transaction(', 'await this.load(em, code, true)', 'this.hostOnly(user, meeting)', 'endedAt: new Date()', '})\n', 'await this.closeRoom(config, code)', 'this.clearMeeting(code)']],
+    // P8A-B05: التذكرة بتتوقّع تحت قفل صف الاجتماع وبحكم متعاد بعد القفل (الحالة والدور والإخراج) — قراءة الاسم قبل المعاملة
+    ['token', 'knock', ['await this.people(em, [user.sub])', 'this.ds.transaction(', 'await this.load(tx, code, true)', 'this.open(held)', 'await this.roleOf(tx, user, held)',
+      'this.mayEnter(heldRole, held, user.sub)', 'participantToken(config,', 'tx.getRepository(MeetingAttendance)']],
     ['admit', 'deny', ['this.ds.transaction(', 'await this.load(em, code, true)', 'this.hostOnly(user, meeting)', 'this.open(meeting)', 'invites.insert(', '})\n', 'this.removeKnock(code, userId)']],
     ['remove', 'zzz', ['this.ds.transaction(', 'await this.load(em, code, true)', 'this.hostOnly(user, meeting)', 'this.open(meeting)', 'this.mark(this.blocked, code, userId)', 'getRepository(MeetingInvite).delete(', '})\n', 'livekitRemoveParticipant(config, code, String(userId))']],
   ]) {

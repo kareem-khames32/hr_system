@@ -38,7 +38,9 @@ export async function readPunchRequestDates(em: EntityManager, employeeId: numbe
   return new Set(rows.map(row => String(row.date ?? '').slice(0, 10)).filter(date => /^\d{4}-\d{2}-\d{2}$/.test(date)))
 }
 
-export interface MissingPunchCharge { penaltyDays: number; free: number; missingDays: number; withRequest: number; count: number; charged: number; days: Array<{ date: string; amount: number }> }
+export interface MissingPunchCharge { penaltyDays: number; free: number; missingDays: number; withRequest: number; count: number; charged: number; days: Array<{ date: string; amount: number }>
+  /** P8A-B03: مصدر الحكم — أيام البصمة الناقصة اللي كان عليها طلب وقت الحساب، واللي من غير طلب (المسموح والمخصوم). الاعتماد بيقارنهم بالطلبات دلوقتي */
+  requestDates: string[]; countedDates: string[] }
 
 /**
  * اللي بيتخصم: أيام «بصمة ناقصة» (من أيام خصم الحضور — مش مستثنى ولا إيقاف) اللي مالهاش طلب، بترتيب التاريخ — الأوائل لحد «المسموح»
@@ -49,7 +51,18 @@ export function missingPunchCharge(missingDates: readonly string[], requestDates
   const counted = sorted.filter(date => !requestDates.has(date))
   const amount = Math.max(0, dayRate) * Math.max(0, penaltyDays)
   const days = counted.slice(Math.max(0, free)).map(date => ({ date, amount }))
-  return { penaltyDays, free, missingDays: sorted.length, withRequest: sorted.length - counted.length, count: counted.length, charged: days.length, days }
+  return { penaltyDays, free, missingDays: sorted.length, withRequest: sorted.length - counted.length, count: counted.length, charged: days.length, days,
+    requestDates: sorted.filter(date => requestDates.has(date)), countedDates: counted }
+}
+
+/**
+ * P8A-B03: حكم «من غير طلب» اللي الحساب اتبنى عليه لسه هو هو؟ طلب تصحيح اتقدّم بعد الحساب (أو طلب اترفض أو اتلغى بعده) بيغيّر مين
+ * يتخصم منه ومين في «المسموح»، فالاعتماد مايعدّيش بالحساب القديم. تفصيل من غير مصدر الحكم (حساب أقدم من التصليح ده) متقادم برضه.
+ */
+export function missingPunchSourceStale(saved: unknown, requestDatesNow: ReadonlySet<string>): boolean {
+  const charge = saved as Partial<MissingPunchCharge> | null | undefined
+  if (!charge || !Array.isArray(charge.requestDates) || !Array.isArray(charge.countedDates)) return true
+  return charge.countedDates.some(date => requestDatesNow.has(String(date))) || charge.requestDates.some(date => !requestDatesNow.has(String(date)))
 }
 
 /** سبب المراجعة اللي محرك الحضور بيكتبه على يوم البصمة الناقصة (attendance-flex-calculator) — بيه اعتماد المسير بيعرف إن وقف اليوم سببه النسيان بس */

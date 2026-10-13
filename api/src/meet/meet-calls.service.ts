@@ -243,7 +243,7 @@ export class MeetCallsService {
     return { ok: true }
   }
 
-  /** تذكرة دخول غرفة المكالمة (ساعتين) لطرفيها بس وبعد الرد — من غير إدارة غرفة لحد */
+  /** تذكرة دخول غرفة المكالمة (عشر دقايق) لطرفيها بس وبعد الرد — من غير إدارة غرفة لحد */
   async token(user: JwtPayload, code: string) {
     const em = this.ds.manager
     const config = await this.guard(em)
@@ -252,7 +252,13 @@ export class MeetCallsService {
     if (state === 'ringing') throw new ConflictException({ code: 'CALL_NOT_ANSWERED', message: CALL_NOT_ANSWERED })
     if (state !== 'active') throw new GoneException({ code: 'CALL_OVER', message: CALL_OVER })
     const me = (await this.people(em, [user.sub])).get(user.sub) ?? unknownPerson(user.sub)
-    const token = participantToken(config, { room: code, identity: String(user.sub), name: me.displayName, metadata: { jobTitle: me.jobTitle ?? '' }, host: false })
-    return { token, url: config.url }
+    // P8A-B05: الحكم اللي فوق اتاخد قبل انتظار، فالتذكرة بتتوقّع تحت قفل صف المكالمة (نفس قفل «إنهاء») وبحالة متقرية بعد القفل —
+    // مفيش تذكرة بعد إنهاء اكتمل.
+    return this.ds.transaction(async (tx) => {
+      const held = this.stateOf(await this.load(tx, user, code, true))
+      if (held === 'ringing') throw new ConflictException({ code: 'CALL_NOT_ANSWERED', message: CALL_NOT_ANSWERED })
+      if (held !== 'active') throw new GoneException({ code: 'CALL_OVER', message: CALL_OVER })
+      return { token: participantToken(config, { room: code, identity: String(user.sub), name: me.displayName, metadata: { jobTitle: me.jobTitle ?? '' }, host: false }), url: config.url }
+    })
   }
 }

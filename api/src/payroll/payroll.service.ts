@@ -53,7 +53,7 @@ import { CostCenter } from '../assets/assets.entities'
 import { loadAttendanceExemptions, exemptionPolicyOnDate } from '../attendance/attendance-exemption-resolver'
 import { Request } from '../requests/entities/request.entity'
 import { attendanceDeductionDay, AttendanceDeductionPolicy, splitLatenessPermission } from './attendance-deductions'
-import { missingPunchCharge, readPunchRequestDates, reviewIsMissingPunchOnly } from './missing-punch-charge'
+import { missingPunchCharge, missingPunchSourceStale, readPunchRequestDates, reviewIsMissingPunchOnly } from './missing-punch-charge'
 import { computeSocialInsurance } from './social-insurance'
 import { readSocialInsuranceContext } from './social-insurance.service'
 import { readGosiFirstRegistered } from '../employees/employee-gosi-registration'
@@ -488,6 +488,14 @@ export class PayrollService {
       if (!Array.isArray(saved.attendanceRules)) continue
       // B-ADD.14: والخصم مفعّل في لقطة المسير، يوم مراجعته سببها البصمة الناقصة بس اتحاسب في الحساب (خصم أو سماح أو طلب مقدَّم) فمايوقّفش الاعتماد
       const missingPunchSettled = Number(parsePayrollRunPolicySnapshot(run)?.values.missingPunchPenaltyDays ?? 0) > 0
+      // P8A-B03: واليوم ده اتحاسب على إن الموظف «ماقدّمش طلب تصحيح» — لو الطلبات اتغيّرت بعد الحساب (طلب اتقدّم، أو طلب اترفض أو اتلغى)
+      // الحساب متقادم: الاعتماد بيقف لحد ما المسير يتحسب تاني. بيتقري لبنود فيها أيام بصمة ناقصة بس.
+      const missingPunchSaved = missingPunchSettled ? saved.attendanceDeductions?.missingPunch : null
+      if (missingPunchSaved && Number(missingPunchSaved.missingDays ?? 0) > 0
+        && missingPunchSourceStale(missingPunchSaved, await readPunchRequestDates(em, item.employeeId, saved.coverFrom ?? run.startDate, saved.coverTo ?? run.endDate))) {
+        throw new ConflictException({ code: 'PAYRUN-MISSING-PUNCH-STALE',
+          message: `طلبات تصحيح البصمة للموظف #${item.employeeId} اتغيّرت بعد حساب المسير؛ أعد الحساب قبل الاعتماد عشان خصم «نسيان البصمة» يتحسب عليها` })
+      }
       if (saved.attendanceRules.some((day: { reviewRequired: boolean }) => day.reviewRequired && !(missingPunchSettled && reviewIsMissingPunchOnly(day)))) {
         throw new ConflictException({ code: 'PAYRUN-ATTENDANCE-REVIEW',
           message: `حضور الموظف #${item.employeeId} يحتاج مراجعة؛ صحح البصمة أو إعداد الدوام ثم أعد حساب المسودة` })

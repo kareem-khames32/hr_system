@@ -412,7 +412,7 @@ export class MeetService {
   // ---------------------------------------------------------------- الدخول
 
   /**
-   * تذكرة الدخول لغرفة الاجتماع (ساعتين): لصاحبه والمدعوين، أو لأي حد لو من غير غرفة انتظار؛ غير كده (أو لو صاحب الاجتماع خرّجه) لازم يطلب الدخول.
+   * تذكرة الدخول لغرفة الاجتماع (عشر دقايق): لصاحبه والمدعوين، أو لأي حد لو من غير غرفة انتظار؛ غير كده (أو لو صاحب الاجتماع خرّجه) لازم يطلب الدخول.
    * وبتتسجّل صف حضور (الرجوع في خلال دقيقتين مش دخول جديد).
    */
   async token(user: JwtPayload, code: string) {
@@ -423,13 +423,21 @@ export class MeetService {
     const role = await this.roleOf(em, user, meeting)
     if (!this.mayEnter(role, meeting, user.sub)) throw new ForbiddenException({ code: 'MEET_KNOCK_REQUIRED', message: MEET_KNOCK_REQUIRED })
     const me = (await this.people(em, [user.sub])).get(user.sub) ?? unknownPerson(user.sub)
-    const token = participantToken(config, { room: code, identity: String(user.sub), name: me.displayName, metadata: { jobTitle: me.jobTitle ?? '' }, host: role === 'host' })
-    const attendance = em.getRepository(MeetingAttendance)
-    if (!(await attendance.count({ where: { meetingId: meeting.id, userId: user.sub, joinedAt: MoreThanOrEqual(new Date(Date.now() - MEET_REJOIN_MS)) } }))) {
-      await attendance.insert({ meetingId: meeting.id, userId: user.sub, joinedAt: new Date() })
-    }
-    this.removeKnock(code, user.sub)
-    return { token, url: config.url, host: role === 'host' }
+    // P8A-B05: الحكم اللي فوق اتاخد قبل انتظار، فالتذكرة بتتوقّع تحت قفل صف الاجتماع وبحكم متعاد بعد القفل — نفس القفل اللي
+    // «إنهاء للكل» والإخراج والإلغاء بيمسكوه: يا التذكرة تطلع قبل ما الإنهاء يكتمل، يا الطلب يترفض. مفيش تذكرة بعد إنهاء اكتمل.
+    return this.ds.transaction(async (tx) => {
+      const held = await this.load(tx, code, true)
+      this.open(held)
+      const heldRole = await this.roleOf(tx, user, held)
+      if (!this.mayEnter(heldRole, held, user.sub)) throw new ForbiddenException({ code: 'MEET_KNOCK_REQUIRED', message: MEET_KNOCK_REQUIRED })
+      const token = participantToken(config, { room: code, identity: String(user.sub), name: me.displayName, metadata: { jobTitle: me.jobTitle ?? '' }, host: heldRole === 'host' })
+      const attendance = tx.getRepository(MeetingAttendance)
+      if (!(await attendance.count({ where: { meetingId: held.id, userId: user.sub, joinedAt: MoreThanOrEqual(new Date(Date.now() - MEET_REJOIN_MS)) } }))) {
+        await attendance.insert({ meetingId: held.id, userId: user.sub, joinedAt: new Date() })
+      }
+      this.removeKnock(code, user.sub)
+      return { token, url: config.url, host: heldRole === 'host' }
+    })
   }
 
   /** اللي مش مدعو بيطلب الدخول: صاحب الاجتماع بيشوف الطلب في صندوقه */
